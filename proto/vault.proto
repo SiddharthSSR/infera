@@ -1,0 +1,176 @@
+syntax = "proto3";
+
+package infera.vault;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/infera/infera/go/pkg/proto/vault";
+
+// Model Metadata
+enum Quantization {
+    QUANTIZATION_UNSPECIFIED = 0;
+    QUANTIZATION_FP32 = 1;
+    QUANTIZATION_FP16 = 2;
+    QUANTIZATION_BF16 = 3;
+    QUANTIZATION_INT8 = 4;
+    QUANTIZATION_INT4 = 5;
+    QUANTIZATION_AWQ = 6;
+    QUANTIZATION_GPTQ = 7;
+}
+
+enum Feature {
+    FEATURE_UNSPECIFIED = 0;
+    FEATURE_CHAT = 1;
+    FEATURE_COMPLETION = 2;
+    FEATURE_EMBEDDING = 3;
+    FEATURE_FUNCTION_CALLING = 4;
+    FEATURE_VISION = 5;
+}
+
+message ModelMetadata {
+    string architecture = 1;
+    int64 parameter_count = 2;
+    int32 context_length = 3;
+    int32 vocab_size = 4;
+    Quantization quantization = 5;
+    int64 memory_required_bytes = 6;
+    repeated Feature supported_features = 7;
+}
+
+// Model Versioning
+enum Stage {
+    STAGE_UNSPECIFIED = 0;
+    STAGE_DEVELOPMENT = 1;
+    STAGE_STAGING = 2;
+    STAGE_PRODUCTION = 3;
+    STAGE_ARCHIVED = 4;
+    STAGE_DEPRECATED = 5;
+}
+
+message ModelVersion {
+    string version = 1;
+    string model_id = 2;
+    Stage stage = 3;
+    ArtifactRef artifact_ref = 4;
+    string changelog = 5;
+    map<string, string> metadata_overrides = 6;
+    google.protobuf.Timestamp created_at = 7;
+    string created_by = 8;
+    string checksum = 9;
+    int64 size_bytes = 10;
+}
+
+// Model Entry
+enum Visibility {
+    VISIBILITY_UNSPECIFIED = 0;
+    VISIBILITY_PUBLIC = 1;
+    VISIBILITY_PRIVATE = 2;
+    VISIBILITY_INTERNAL = 3;
+}
+
+message ModelEntry {
+    string model_id = 1;
+    string name = 2;
+    repeated string aliases = 3;
+    string description = 4;
+    ModelMetadata metadata = 5;
+    repeated ModelVersion versions = 6;
+    string active_version = 7;
+    string owner = 8;
+    Visibility visibility = 9;
+    google.protobuf.Timestamp created_at = 10;
+    google.protobuf.Timestamp updated_at = 11;
+    map<string, string> tags = 12;
+}
+
+// Artifacts
+message ArtifactRef {
+    string artifact_id = 1;
+    string storage_path = 2;
+    string checksum = 3;
+    int64 size_bytes = 4;
+    google.protobuf.Timestamp created_at = 5;
+}
+
+enum ArtifactFormat {
+    ARTIFACT_FORMAT_UNSPECIFIED = 0;
+    ARTIFACT_FORMAT_SAFETENSORS = 1;
+    ARTIFACT_FORMAT_GGUF = 2;
+    ARTIFACT_FORMAT_PYTORCH = 3;
+    ARTIFACT_FORMAT_MLX = 4;
+    ARTIFACT_FORMAT_ONNX = 5;
+}
+
+message ArtifactManifest {
+    repeated ArtifactFile files = 1;
+    int64 total_size_bytes = 2;
+    ArtifactFormat format = 3;
+    string checksum = 4;
+}
+
+message ArtifactFile {
+    string path = 1;
+    int64 size_bytes = 2;
+    string checksum = 3;
+}
+
+// Model Source
+enum SourceType {
+    SOURCE_TYPE_UNSPECIFIED = 0;
+    SOURCE_TYPE_HUGGINGFACE = 1;
+    SOURCE_TYPE_S3 = 2;
+    SOURCE_TYPE_GCS = 3;
+    SOURCE_TYPE_HTTP = 4;
+    SOURCE_TYPE_LOCAL = 5;
+}
+
+message ModelSource {
+    SourceType source_type = 1;
+    string uri = 2;
+    map<string, string> credentials = 3;
+}
+
+message ModelSpec {
+    string name = 1;
+    string description = 2;
+    ModelSource source = 3;
+    ModelMetadata metadata = 4;
+    map<string, string> tags = 5;
+    Visibility visibility = 6;
+}
+
+// Vault Service
+service VaultService {
+    rpc RegisterModel(RegisterModelRequest) returns (RegisterModelResponse);
+    rpc GetModel(GetModelRequest) returns (GetModelResponse);
+    rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+    rpc DeleteModel(DeleteModelRequest) returns (DeleteModelResponse);
+    rpc CreateVersion(CreateVersionRequest) returns (CreateVersionResponse);
+    rpc DownloadArtifact(DownloadArtifactRequest) returns (stream ArtifactChunk);
+    rpc GetMetadata(GetMetadataRequest) returns (GetMetadataResponse);
+    rpc ResolveAlias(ResolveAliasRequest) returns (ResolveAliasResponse);
+}
+
+message RegisterModelRequest { ModelSpec spec = 1; }
+message RegisterModelResponse { oneof result { ModelEntry model = 1; string error = 2; } }
+
+message GetModelRequest { string model_id = 1; optional string version = 2; }
+message GetModelResponse { oneof result { ModelEntry model = 1; string error = 2; } }
+
+message ListModelsRequest { int32 limit = 1; int32 offset = 2; }
+message ListModelsResponse { repeated ModelEntry models = 1; int32 total_count = 2; }
+
+message DeleteModelRequest { string model_id = 1; }
+message DeleteModelResponse { bool success = 1; string message = 2; }
+
+message CreateVersionRequest { string model_id = 1; string version = 2; string changelog = 3; }
+message CreateVersionResponse { oneof result { ModelVersion version = 1; string error = 2; } }
+
+message DownloadArtifactRequest { string model_id = 1; string version = 2; }
+message ArtifactChunk { bytes data = 1; int64 offset = 2; int64 total_size = 3; bool is_last = 4; }
+
+message GetMetadataRequest { string model_id = 1; }
+message GetMetadataResponse { ModelMetadata metadata = 1; }
+
+message ResolveAliasRequest { string alias = 1; }
+message ResolveAliasResponse { string model_id = 1; bool found = 2; }

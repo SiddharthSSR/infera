@@ -1,0 +1,26 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/infera/infera/go/pkg/proto
+plugins:
+  # Go code generation
+  - remote: buf.build/protocolbuffers/go
+    out: ../go/pkg/proto
+    opt:
+      - paths=source_relative
+
+  # Go gRPC code generation
+  - remote: buf.build/grpc/go
+    out: ../go/pkg/proto
+    opt:
+      - paths=source_relative
+
+  # Python code generation
+  - remote: buf.build/protocolbuffers/python
+    out: ../python/src/infera_proto
+
+  # Python gRPC code generation
+  - remote: buf.build/grpc/python
+    out: ../python/src/infera_proto

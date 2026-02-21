@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package infera.inference;
+
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/infera/infera/go/pkg/proto/inference";
+
+// Inference Request
+message InferenceRequest {
+  string request_id = 1;
+  string model_id = 2;
+  repeated infera.common.Message message = 3;
+  infera.common.InferenceParameters parameters = 4;
+  bool stream = 5;
+  infera.common.Priority priority = 6;
+  map<string, string> metadata = 7;
+  google.protobuf.Timestamp timestamp = 8;
+  optional string api_key_id = 9;
+}
+
+// Inference Response (non-streaming)
+message InferenceResponse {
+  string request_id = 1;
+  string model_id = 2;
+  repeated Choice choices = 3;
+  infera.common.UsageStats usage = 4;
+  infera.common.LatencyStats latency = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message Choice {
+  int32 index = 1;
+  infera.common.Message message = 2;
+  infera.common.FinishReason finish_reason = 3;
+}
+
+// Streaming Response
+message TokenChunk {
+  string request_id = 1;
+  int32 index = 2;
+  string delta = 3;
+  optional infera.common.FinishReason finish_reason = 4;
+  optional infera.common.UsageStats usage = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// Batch Inference
+message BatchInferenceRequest {
+  string batch_id = 1;
+  repeated InferenceRequest requests = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+message BatchInferenceResponse {
+  string batch_id = 1;
+  repeated InferenceResponse responses = 2;
+  google.protobuf.Timestamp completed_at = 3;
+}
+
+// Inference Service
+service InferenceService {
+  rpc Infer(InferenceRequest) returns (InferenceResponse);
+  rpc InferStream(InferenceRequest) returns (stream TokenChunk);
+  rpc InferBatch(BatchInferenceRequest) returns (BatchInferenceResponse);
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+}
+
+message CancelRequest {
+  string request_id = 1;
+}
+
+message CancelResponse {
+  bool cancelled = 1;
+  string message = 2;
+}

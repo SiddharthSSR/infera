@@ -1,0 +1,182 @@
+syntax = "proto3";
+
+package infera.router;
+
+import "common.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "inference.proto";
+import "worker.proto";
+
+option go_package = "github.com/infera/infera/go/pkg/proto/router";
+
+// Worker Status
+enum WorkerStatus {
+  WORKER_STATUS_UNSPECIFIED = 0;
+  WORKER_STATUS_HEALTHY = 1;
+  WORKER_STATUS_DEGRADED = 2;
+  WORKER_STATUS_UNHEALTHY = 3;
+  WORKER_STATUS_DRAINING = 4;
+  WORKER_STATUS_OFFLINE = 5;
+}
+
+message LoadedModel {
+  string model_id = 1;
+  string version = 2;
+  google.protobuf.Timestamp loaded_at = 3;
+  int64 memory_bytes = 4;
+  int32 max_batch_size = 5;
+  int32 max_sequence_length = 6;
+}
+
+message WorkerStats {
+  int32 queue_depth = 1;
+  int32 active_requests = 2;
+  float gpu_utilization = 3;
+  int64 memory_used_bytes = 4;
+  int64 memory_total_bytes = 5;
+  float requests_per_second = 6;
+  float avg_latency_ms = 7;
+  float p50_latency_ms = 8;
+  float p99_latency_ms = 9;
+  float error_rate = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message WorkerInfo {
+  string worker_id = 1;
+  string address = 2;
+  WorkerStatus status = 3;
+  repeated LoadedModel loaded_models = 4;
+  WorkerStats stats = 5;
+  google.protobuf.Timestamp last_health_check = 6;
+  google.protobuf.Timestamp registered_at = 7;
+  map<string, string> tag = 8;
+}
+
+// Routing
+enum StrategyType {
+  STRATEGY_TYPE_UNSPECIFIED = 0;
+  STRATEGY_TYPE_LEAST_LOADED = 1;
+  STRATEGY_TYPE_ROUND_ROBIN = 2;
+  STRATEGY_TYPE_LATENCY_BASED = 3;
+  STRATEGY_TYPE_AFFINITY = 4;
+  STRATEGY_TYPE_EXPERIMENT = 5;
+  STRATEGY_TYPE_FALLBACK = 6;
+}
+
+message RoutingDecision {
+  StrategyType strategy = 1;
+  string reason = 2;
+  int32 candidates_evaluated = 3;
+  float selected_worker_score = 4;
+  optional string experiment_id = 5;
+  optional string variant = 6;
+}
+
+message RoutedRequest {
+  infera.inference.InferenceRequest request = 1;
+  string worker_id = 2;
+  optional string batch_id = 3;
+  RoutingDecision routing_decision = 4;
+  google.protobuf.Timestamp routed_at = 5;
+  int32 attempt = 6;
+  int32 max_attempts = 7;
+  google.protobuf.Timestamp deadline = 8;
+}
+
+// Batching
+message BatchContext {
+  string batch_id = 1;
+  repeated RoutedRequest requests = 2;
+  string model_id = 3;
+  google.protobuf.Timestamp created_at = 4;
+  optional google.protobuf.Timestamp sealed_at = 5;
+  int32 max_size = 6;
+  int32 max_wait_ms = 7;
+}
+
+// Request State
+enum RequestState {
+    REQUEST_STATE_UNSPECIFIED = 0;
+    REQUEST_STATE_RECEIVED = 1;
+    REQUEST_STATE_VALIDATED = 2;
+    REQUEST_STATE_QUEUED = 3;
+    REQUEST_STATE_BATCHED = 4;
+    REQUEST_STATE_PROCESSING = 5;
+    REQUEST_STATE_STREAMING = 6;
+    REQUEST_STATE_COMPLETED = 7;
+    REQUEST_STATE_FAILED = 8;
+    REQUEST_STATE_TIMED_OUT = 9;
+    REQUEST_STATE_CANCELLED = 10;
+}
+
+// Router Service
+service RouterService {
+    rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+    rpc DeregisterWorker(DeregisterWorkerRequest) returns (DeregisterWorkerResponse);
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+    rpc Route(RouteRequest) returns (RouteResponse);
+    rpc GetQueueDepth(GetQueueDepthRequest) returns (GetQueueDepthResponse);
+    rpc GetWorkers(GetWorkersRequest) returns (GetWorkersResponse);
+}
+
+message RegisterWorkerRequest {
+    WorkerInfo worker = 1;
+}
+
+message RegisterWorkerResponse {
+    bool success = 1;
+    string message = 2;
+    google.protobuf.Duration heartbeat_interval = 3;
+}
+
+message DeregisterWorkerRequest {
+    string worker_id = 1;
+    string reason = 2;
+}
+
+message DeregisterWorkerResponse {
+    bool success = 1;
+}
+
+message HeartbeatRequest {
+    string worker_id = 1;
+    WorkerState stats = 2;
+    repeated LoadedModel loaded_models = 3;
+}
+
+message HeartbeatResponse {
+    bool acknowledged = 1;
+    repeated string model_to_load = 2;
+    repeated string model_to_unload = 3;
+}
+
+message RouteRequest {
+    infera.inference.InferenceRequest request = 1;
+}
+
+message RouteResponse {
+    oneof result {
+        RoutedRequest routed_request = 1;
+        infera.common.InferaError error = 2;
+    }
+}
+
+message GetQueueDepthRequest {
+    optional string model_id = 1;
+}
+
+message GetQueueDepthResponse {
+    int32 depth = 1;
+    map<string, int32> per_model = 2;
+}
+
+message GetWorkersRequest {
+    optional string model_id = 1;
+    bool healthy_only = 2;
+}
+
+message GetWorkersResponse {
+    repeated WorkerInfo workers = 1;
+}

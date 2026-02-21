@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package infera.worker;
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+import "router.proto";
+
+option go_package = "github.com/infera/infera/go/pkg/proto/worker";
+
+
+// Model Management
+message LoadModelRequest {
+    string model_id = 1;
+    optional string version = 2;
+    bool preload_only = 3;
+}
+
+message LoadModelResponse {
+    bool success = 1;
+    string message = 2;
+    optional infera.router.LoadedModel loaded_model = 3;
+    int64 load_time_ms = 4;
+}
+
+message UnloadModelRequest {
+    string model_id = 1;
+    bool force = 2;
+}
+
+message UnloadModelResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message ListLoadedModelsRequest {}
+
+message ListLoadedModelsResponse {
+    repeated infera.router.LoadedModel models = 1;
+    int64 total_memory_used = 2;
+    int64 total_memory_available = 3;
+}
+
+// Worker State
+enum WorkerState {
+    WORKER_STATE_UNSPECIFIED = 0;
+    WORKER_STATE_INITIALIZING = 1;
+    WORKER_STATE_READY = 2;
+    WORKER_STATE_BUSY = 3;
+    WORKER_STATE_DRAINING = 4;
+    WORKER_STATE_SHUTTING_DOWN = 5;
+    WORKER_STATE_ERROR = 6;
+}
+
+message GetWorkerStateRequest {}
+
+message GetWorkerStateResponse {
+    WorkerState state = 1;
+    infera.router.WorkerStats stats = 2;
+    repeated infera.router.LoadedModel loaded_models = 3;
+    string worker_id = 4;
+    google.protobuf.Timestamp started_at = 5;
+}
+
+// Worker Service
+service WorkerService {
+    rpc LoadModel(LoadModelRequest) returns (LoadModelResponse);
+    rpc UnloadModel(UnloadModelRequest) returns (UnloadModelResponse);
+    rpc ListLoadedModels(ListLoadedModelsRequest) returns (ListLoadedModelsResponse);
+    rpc GetWorkerState(GetWorkerStateRequest) returns (GetWorkerStateResponse);
+    rpc HealthCheck(HealthCheckRequest) returns (infera.common.HealthStatus);
+}
+
+message HealthCheckRequest {}

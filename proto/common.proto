@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package infera.common;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/infera/infera/go/pkg/proto/common";
+
+// Role in a conversation
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_SYSTEM = 1;
+  ROLE_USER = 2;
+  ROLE_ASSISTANT = 3;
+}
+
+// Single message in a conversation
+message Message {
+  Role role = 1;
+  string content = 2;
+  optional string name = 3;
+}
+
+// Inference Parameters
+message InferenceParameters {
+  int32 max_tokens = 1;
+  float temperature = 2;
+  float top_p = 3;
+  optional int32 top_k = 4;
+  repeated string stop_sequences = 5;
+  float presence_penalty = 6;
+  float frequency_penalty = 7;
+  optional int64 seed = 8;
+}
+
+// Usage Stats
+message UsageStats {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+// Latency Stats
+message LatencyStats {
+  int64 queue_ms = 1;
+  int64 inference_ms = 2;
+  int64 total_ms = 3;
+  int64 time_to_first_token_ms = 4;
+}
+
+// Finish Reasons
+enum FinishReason {
+  FINISH_REASON_UNSPECIFIED = 0;
+  FINISH_REASON_STOP = 1;
+  FINISH_REASON_LENGTH = 2;
+  FINISH_REASON_CONTENT_FILTER = 3;
+  FINISH_REASON_ERROR = 4;
+}
+
+// Priority
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_LOW = 1;
+  PRIORITY_MEDIUM = 2;
+  PRIORITY_HIGH = 3;
+}
+
+// Error Handling
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_INVALID_REQUEST = 1;
+  ERROR_CODE_AUTHENTICATION_FAILED = 2;
+  ERROR_CODE_FORBIDDEN = 3;
+  ERROR_CODE_MODEL_NOT_FOUND = 4;
+  ERROR_CODE_RATE_LIMITED = 5;
+  ERROR_CODE_MODEL_OVERLOADED = 6;
+  ERROR_CODE_INTERNAL_ERROR = 7;
+  ERROR_CODE_TIMEOUT = 8;
+  ERROR_CODE_CANCELLED = 9;
+}
+
+message InferaError {
+  ErrorCode code = 1;
+  string message = 2;
+  optional string request_id = 3;
+  optional int32 retry_after_seconds = 4;
+  map<string, string> details = 5;
+}
+
+// Health
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_HEALTHY = 1;
+  HEALTH_STATE_DEGRADED = 2;
+  HEALTH_STATE_UNHEALTHY = 3;
+}
+
+message HealthCheck {
+  string name = 1;
+  bool passed = 2;
+  string message = 3;
+}
+
+message HealthStatus {
+  HealthState state = 1;
+  repeated HealthCheck checks = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}

@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package infera.gateway;
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+import "router.proto";
+
+option go_package = "github.com/infera/infera/go/pkg/proto/gateway";
