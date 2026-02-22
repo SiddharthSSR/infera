@@ -6,8 +6,8 @@ import "time"
 type StrategyType string
 
 const (
-	StrategyRoundRobin   StrategyType = "round_robin"
 	StrategyLeastLoaded  StrategyType = "least_loaded"
+	StrategyRoundRobin   StrategyType = "round_robin"
 	StrategyLatencyBased StrategyType = "latency_based"
 	StrategyAffinity     StrategyType = "affinity"
 )
@@ -20,35 +20,35 @@ type RoutingDecision struct {
 	SelectedWorkerScore float64      `json:"selected_worker_score"`
 }
 
-// RoutedRequest wraps a InferenceRequest with routing metadata.
+// RoutedRequest wraps an InferenceRequest with routing metadata.
 type RoutedRequest struct {
 	Request         *InferenceRequest `json:"request"`
 	WorkerID        string            `json:"worker_id"`
-	BatchID         string            `json:"batch_id"`
-	RoutingDecision *RoutingDecision  `json:"routing_decision"`
+	BatchID         string            `json:"batch_id,omitempty"`
+	RoutingDecision RoutingDecision   `json:"routing_decision"`
 	RoutedAt        time.Time         `json:"routed_at"`
 	Attempt         int               `json:"attempt"`
 	MaxAttempts     int               `json:"max_attempts"`
 	Deadline        time.Time         `json:"deadline"`
 }
 
-// isBatched returns True if this request is part of a batch.
-func (r *RoutedRequest) isBatched() bool {
+// IsBatched returns true if this request is part of a batch.
+func (r *RoutedRequest) IsBatched() bool {
 	return r.BatchID != ""
 }
 
-// isRetriable returns true if the request can be retried.
-func (r *RoutedRequest) isRetriable() bool {
+// IsRetriable returns true if the request can be retried.
+func (r *RoutedRequest) IsRetriable() bool {
 	return r.Attempt < r.MaxAttempts
 }
 
-// isExpired returns true if the request has exceeded its deadline.
-func (r *RoutedRequest) isExpired() bool {
+// IsExpired returns true if the request has exceeded its deadline.
+func (r *RoutedRequest) IsExpired() bool {
 	return time.Now().After(r.Deadline)
 }
 
-// withRetry creates a new RoutedRequest with incremented attempt.
-func (r *RoutedRequest) withRetry() *RoutedRequest {
+// WithRetry creates a new RoutedRequest with incremented attempt.
+func (r *RoutedRequest) WithRetry() *RoutedRequest {
 	return &RoutedRequest{
 		Request:     r.Request,
 		Attempt:     r.Attempt + 1,
@@ -70,26 +70,26 @@ type BatchContext struct {
 
 // Add adds a request to the batch if there's room.
 func (b *BatchContext) Add(req *RoutedRequest) bool {
-	if b.isFull() || b.isSealed() {
+	if b.IsFull() || b.IsSealed() {
 		return false
 	}
 	b.Requests = append(b.Requests, req)
 	return true
 }
 
-// isFull returns true if the batch is at capacity.
-func (b *BatchContext) isFull() bool {
+// IsFull returns true if the batch is at capacity.
+func (b *BatchContext) IsFull() bool {
 	return len(b.Requests) >= b.MaxSize
 }
 
-// isExpired returns true if the batch has exceeded its max wait time.
-func (b *BatchContext) isExpired() bool {
+// IsExpired returns true if the batch has waited too long.
+func (b *BatchContext) IsExpired() bool {
 	maxWait := time.Duration(b.MaxWaitMS) * time.Millisecond
 	return time.Since(b.CreatedAt) > maxWait
 }
 
-// isSealed returns true if the batch has been sealed.
-func (b *BatchContext) isSealed() bool {
+// IsSealed returns true if the batch is closed for new requests.
+func (b *BatchContext) IsSealed() bool {
 	return b.SealedAt != nil
 }
 
@@ -99,7 +99,7 @@ func (b *BatchContext) Seal() {
 	b.SealedAt = &now
 }
 
-// Size returns the number of requests in a batch.
+// Size returns the number of requests in the batch.
 func (b *BatchContext) Size() int {
 	return len(b.Requests)
 }
@@ -125,6 +125,6 @@ type RequestTracker struct {
 }
 
 // Transition moves the request to a new state.
-func (t *RequestTracker) Transition(state RequestState) {
-	t.State = state
+func (t *RequestTracker) Transition(newState RequestState, reason string) {
+	t.State = newState
 }

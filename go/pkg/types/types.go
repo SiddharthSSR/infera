@@ -6,13 +6,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// Role represents a participant in a conversation
+// Role represents a participant in a conversation.
 type Role string
 
 const (
 	RoleSystem    Role = "system"
-	RoleAssistant Role = "assistant"
 	RoleUser      Role = "user"
+	RoleAssistant Role = "assistant"
 )
 
 // Message represents a single message in a conversation.
@@ -22,19 +22,19 @@ type Message struct {
 	Name    string `json:"name,omitempty"`
 }
 
-// InferenceParameters controls Generation Behaviour.
+// InferenceParameters controls generation behavior.
 type InferenceParameters struct {
 	MaxTokens        int      `json:"max_tokens"`
 	Temperature      float64  `json:"temperature"`
 	TopP             float64  `json:"top_p"`
-	TopK             *int     `json:"top_k"`
-	StopSequences    []string `json:"stop_sequences"`
+	TopK             *int     `json:"top_k,omitempty"`
+	StopSequences    []string `json:"stop_sequences,omitempty"`
 	PresencePenalty  float64  `json:"presence_penalty"`
 	FrequencyPenalty float64  `json:"frequency_penalty"`
-	Seed             *int64   `json:"seed"`
+	Seed             *int64   `json:"seed,omitempty"`
 }
 
-// DefaultInferenceParameters returns default inference parameters.
+// DefaultInferenceParameters returns sensible defaults.
 func DefaultInferenceParameters() InferenceParameters {
 	return InferenceParameters{
 		MaxTokens:   256,
@@ -65,7 +65,7 @@ type InferenceRequest struct {
 	APIKeyID   string              `json:"api_key_id,omitempty"`
 }
 
-// NewInferenceRequest created a new request with generated ID.
+// NewInferenceRequest creates a new request with generated ID.
 func NewInferenceRequest(modelID string, messages []Message) *InferenceRequest {
 	return &InferenceRequest{
 		RequestID:  uuid.New().String(),
@@ -97,7 +97,7 @@ const (
 
 // UsageStats tracks token usage.
 type UsageStats struct {
-	InputTokens      int `json:"input_tokens"`
+	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
 }
@@ -132,13 +132,13 @@ type TokenChunk struct {
 	RequestID    string        `json:"request_id"`
 	Index        int           `json:"index"`
 	Delta        string        `json:"delta"`
-	FinishReason *FinishReason `json:"finish_reason"`
-	Usage        *UsageStats   `json:"usage"`
+	FinishReason *FinishReason `json:"finish_reason,omitempty"`
+	Usage        *UsageStats   `json:"usage,omitempty"`
 	CreatedAt    time.Time     `json:"created_at"`
 }
 
-// isFinal returns true if this is the last chunk.
-func (c *TokenChunk) isFinal() bool {
+// IsFinal returns true if this is the last chunk.
+func (c *TokenChunk) IsFinal() bool {
 	return c.FinishReason != nil
 }
 
@@ -150,15 +150,15 @@ const (
 	ErrorCodeModelNotFound   ErrorCode = "model_not_found"
 	ErrorCodeRateLimited     ErrorCode = "rate_limited"
 	ErrorCodeModelOverloaded ErrorCode = "model_overloaded"
-	ErrorCodeTimeout         ErrorCode = "timeout"
 	ErrorCodeInternalError   ErrorCode = "internal_error"
+	ErrorCodeTimeout         ErrorCode = "timeout"
 )
 
 // InferaError represents an API error.
 type InferaError struct {
 	Code              ErrorCode         `json:"code"`
 	Message           string            `json:"message"`
-	RequestID         string            `json:"request_id"`
+	RequestID         string            `json:"request_id,omitempty"`
 	RetryAfterSeconds *int              `json:"retry_after_seconds,omitempty"`
 	Details           map[string]string `json:"details,omitempty"`
 }
@@ -169,13 +169,10 @@ func (e *InferaError) Error() string {
 
 // NewInferaError creates a new error.
 func NewInferaError(code ErrorCode, message string) *InferaError {
-	return &InferaError{
-		Code:    code,
-		Message: message,
-	}
+	return &InferaError{Code: code, Message: message}
 }
 
-// WithRequestID adds RequestID to the error.
+// WithRequestID adds request ID to error.
 func (e *InferaError) WithRequestID(requestID string) *InferaError {
 	e.RequestID = requestID
 	return e

@@ -16,7 +16,7 @@ const (
 	WorkerStatusOffline   WorkerStatus = "offline"
 )
 
-// LoadedModel represents a model loaded in a worker.
+// LoadedModel represents a model loaded on a worker.
 type LoadedModel struct {
 	ModelID           string    `json:"model_id"`
 	Version           string    `json:"version"`
@@ -41,7 +41,7 @@ type WorkerStats struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
-// CurrentLoad returns a normalized load score (0.0 to 1.0).
+// CurrentLoad returns a normalized load score (0.0 - 1.0).
 func (s *WorkerStats) CurrentLoad() float64 {
 	gpuLoad := s.GPUUtilization * 0.5
 	queueLoad := min(float64(s.QueueDepth)/100.0, 1.0) * 0.3
@@ -52,8 +52,8 @@ func (s *WorkerStats) CurrentLoad() float64 {
 	return gpuLoad + queueLoad + memoryLoad
 }
 
-// isOverloaded returns true if the worker is at capacity.
-func (s *WorkerStats) isOverloaded() bool {
+// IsOverloaded returns true if the worker is at capacity.
+func (s *WorkerStats) IsOverloaded() bool {
 	return s.CurrentLoad() > 0.9 || s.ErrorRate > 0.1
 }
 
@@ -74,8 +74,8 @@ type WorkerInfo struct {
 func (w *WorkerInfo) HasModel(modelID string) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	for _, model := range w.LoadedModels {
-		if model.ModelID == modelID {
+	for _, m := range w.LoadedModels {
+		if m.ModelID == modelID {
 			return true
 		}
 	}
@@ -86,7 +86,7 @@ func (w *WorkerInfo) HasModel(modelID string) bool {
 func (w *WorkerInfo) HasCapacity() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return !w.Stats.isOverloaded() && w.Status == WorkerStatusHealthy
+	return !w.Stats.IsOverloaded() && w.Status == WorkerStatusHealthy
 }
 
 // IsHealthy returns true if the worker is healthy.
@@ -109,6 +109,13 @@ func (w *WorkerInfo) UpdateStats(stats WorkerStats) {
 	defer w.mu.Unlock()
 	w.Stats = stats
 	w.LastHealthCheck = time.Now()
+}
+
+// UpdateStatus updates the worker status.
+func (w *WorkerInfo) UpdateStatus(status WorkerStatus) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.Status = status
 }
 
 // Clone creates a copy of WorkerInfo.
