@@ -1,3 +1,4 @@
+// Infera Gateway - HTTP API server
 package main
 
 import (
@@ -13,10 +14,12 @@ import (
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/providers/mock"
 	_ "github.com/infera/infera/go/internal/providers/runpod"
+	_ "github.com/infera/infera/go/internal/providers/vastai"
 	"github.com/infera/infera/go/internal/router"
 )
 
 func main() {
+	// Parse flags
 	httpPort := flag.Int("port", 8080, "HTTP port")
 	runpodKey := flag.String("runpod-key", os.Getenv("RUNPOD_API_KEY"), "RunPod API key")
 	vastaiKey := flag.String("vastai-key", os.Getenv("VASTAI_API_KEY"), "Vast.ai API key")
@@ -28,14 +31,19 @@ func main() {
 	routerConfig := router.DefaultConfig()
 	r := router.New(routerConfig)
 
-	// Create instance manager
+	// Get worker image from env or use default
+	workerImage := os.Getenv("INFERA_WORKER_IMAGE")
+	if workerImage == "" {
+		workerImage = "infera/worker:latest"
+	}
+
 	instanceMgr := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider: providers.ProviderMock,
-		WorkerImage:     "infera/worker:latest",
+		WorkerImage:     workerImage,
 		GatewayAddress:  "localhost:8080",
 	})
 
-	// Register mock provider (always available)
+	// Register mock provider (always available for testing)
 	instanceMgr.RegisterProvider(mock.New())
 
 	// Register RunPod if API key provided
@@ -66,7 +74,7 @@ func main() {
 		}
 	}
 
-	// Create gateway with instance manager
+	// Create gateway
 	gatewayConfig := gateway.DefaultConfig()
 	gatewayConfig.HTTPPort = *httpPort
 	gw := gateway.New(gatewayConfig, r, instanceMgr)
@@ -81,13 +89,19 @@ func main() {
 	go func() {
 		<-sigChan
 		log.Println("Shutting down...")
+
 		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer shutdownCancel()
-		gw.Stop(shutdownCtx)
+
+		if err := gw.Stop(shutdownCtx); err != nil {
+			log.Printf("Error during shutdown: %v", err)
+		}
+
 		r.Stop()
 		cancel()
 	}()
 
+	// Start gateway
 	log.Printf("Gateway listening on :%d", *httpPort)
 	log.Printf("Registered providers: %v", instanceMgr.ListProviders())
 	if err := gw.Start(); err != nil {

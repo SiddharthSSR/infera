@@ -1,0 +1,51 @@
+# Infera Worker - vLLM Production Image for RunPod
+# This image includes vLLM for real GPU inference
+
+FROM runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip
+RUN pip install --upgrade pip
+
+# Install vLLM with CUDA support
+RUN pip install vllm>=0.4.0
+
+# Copy worker source code
+COPY python/pyproject.toml .
+COPY python/src/ ./src/
+
+# Install the worker package
+RUN pip install --no-cache-dir .
+
+# Environment variables for vLLM
+ENV INFERA_ENGINE=vllm
+ENV INFERA_HTTP_PORT=8081
+ENV INFERA_GRPC_PORT=50051
+ENV INFERA_LOG_LEVEL=INFO
+ENV INFERA_LOG_FORMAT=json
+
+# vLLM specific settings
+ENV VLLM_USE_MODELSCOPE=false
+
+# Gateway address - will be set at runtime
+ENV INFERA_ROUTER_ADDRESS=""
+
+# Models to preload - can be set at runtime
+ENV INFERA_PRELOAD_MODELS=""
+
+# Expose ports
+EXPOSE 8081 50051
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8081/health || exit 1
+
+# Run the worker
+CMD ["python", "-m", "infera_worker.cli"]
