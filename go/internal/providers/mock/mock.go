@@ -2,6 +2,7 @@ package mock
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,7 +77,13 @@ func (p *Provider) Terminate(ctx context.Context, instanceID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	instance, exists := p.instances[instanceID]
+	// Handle both "mock-xxx" and "xxx" formats
+	lookupID := instanceID
+	if strings.HasPrefix(instanceID, "mock-") {
+		lookupID = strings.TrimPrefix(instanceID, "mock-")
+	}
+
+	instance, exists := p.instances[lookupID]
 	if !exists {
 		return &providers.ProviderError{
 			Provider: providers.ProviderMock,
@@ -95,7 +102,13 @@ func (p *Provider) Start(ctx context.Context, instanceID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	instance, exists := p.instances[instanceID]
+	// Handle both "mock-xxx" and "xxx" formats
+	lookupID := instanceID
+	if strings.HasPrefix(instanceID, "mock-") {
+		lookupID = strings.TrimPrefix(instanceID, "mock-")
+	}
+
+	instance, exists := p.instances[lookupID]
 	if !exists {
 		return &providers.ProviderError{Provider: providers.ProviderMock, Code: "not_found", Message: "instance not found"}
 	}
@@ -111,7 +124,13 @@ func (p *Provider) Stop(ctx context.Context, instanceID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	instance, exists := p.instances[instanceID]
+	// Handle both "mock-xxx" and "xxx" formats
+	lookupID := instanceID
+	if strings.HasPrefix(instanceID, "mock-") {
+		lookupID = strings.TrimPrefix(instanceID, "mock-")
+	}
+
+	instance, exists := p.instances[lookupID]
 	if !exists {
 		return &providers.ProviderError{Provider: providers.ProviderMock, Code: "not_found", Message: "instance not found"}
 	}
@@ -126,7 +145,13 @@ func (p *Provider) GetInstance(ctx context.Context, instanceID string) (*provide
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	instance, exists := p.instances[instanceID]
+	// Handle both "mock-xxx" and "xxx" formats
+	lookupID := instanceID
+	if strings.HasPrefix(instanceID, "mock-") {
+		lookupID = strings.TrimPrefix(instanceID, "mock-")
+	}
+
+	instance, exists := p.instances[lookupID]
 	if !exists {
 		return nil, &providers.ProviderError{Provider: providers.ProviderMock, Code: "not_found", Message: "instance not found"}
 	}

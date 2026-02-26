@@ -1,3 +1,4 @@
+// Package providers implements GPU instance management.
 package providers
 
 import (
@@ -12,10 +13,11 @@ import (
 // Manager orchestrates multiple GPU providers.
 type Manager struct {
 	providers map[ProviderType]Provider
-	instances map[string]*Instance
+	instances map[string]*Instance // instanceID -> Instance
 	costs     *CostTracker
 	mu        sync.RWMutex
 
+	// Configuration
 	defaultProvider ProviderType
 	workerImage     string
 	gatewayAddress  string
@@ -24,8 +26,8 @@ type Manager struct {
 // ManagerConfig configures the instance manager.
 type ManagerConfig struct {
 	DefaultProvider ProviderType
-	WorkerImage     string
-	GatewayAddress  string
+	WorkerImage     string // Docker image for workers
+	GatewayAddress  string // Gateway address for workers to connect
 }
 
 // NewManager creates a new instance manager.
@@ -69,6 +71,7 @@ func (m *Manager) ListProviders() []ProviderType {
 
 // Provision creates a new GPU instance.
 func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instance, error) {
+	// Determine provider
 	providerType := req.Provider
 	if providerType == "" {
 		providerType = m.defaultProvider
@@ -79,6 +82,7 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 		return nil, fmt.Errorf("provider %s not registered", providerType)
 	}
 
+	// Set defaults
 	if req.DockerImage == "" {
 		req.DockerImage = m.workerImage
 	}
@@ -86,19 +90,23 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 		req.GPUCount = 1
 	}
 
+	// Create instance via provider
 	instance, err := provider.Provision(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
+	// Generate internal ID if not set
 	if instance.ID == "" {
 		instance.ID = uuid.New().String()[:8]
 	}
 
+	// Track instance
 	m.mu.Lock()
 	m.instances[instance.ID] = instance
 	m.mu.Unlock()
 
+	// Start cost tracking
 	m.costs.StartTracking(instance)
 
 	return instance, nil
@@ -116,12 +124,15 @@ func (m *Manager) Terminate(ctx context.Context, instanceID string) error {
 		return fmt.Errorf("provider %s not registered", instance.Provider)
 	}
 
+	// Terminate via provider
 	if err := provider.Terminate(ctx, instance.ProviderID); err != nil {
 		return err
 	}
 
+	// Stop cost tracking
 	m.costs.StopTracking(instanceID)
 
+	// Update status
 	m.mu.Lock()
 	instance.Status = InstanceStatusTerminated
 	now := time.Now()
@@ -147,7 +158,9 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 		return err
 	}
 
+	// Resume cost tracking
 	m.costs.StartTracking(instance)
+
 	return nil
 }
 
@@ -167,7 +180,9 @@ func (m *Manager) Stop(ctx context.Context, instanceID string) error {
 		return err
 	}
 
+	// Stop cost tracking
 	m.costs.StopTracking(instanceID)
+
 	return nil
 }
 
@@ -191,6 +206,52 @@ func (m *Manager) ListInstances() []*Instance {
 	return instances
 }
 
+// ListInstancesByProvider returns instances for a specific provider.
+func (m *Manager) ListInstancesByProvider(providerType ProviderType) []*Instance {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var instances []*Instance
+	for _, inst := range m.instances {
+		if inst.Provider == providerType {
+			instances = append(instances, inst)
+		}
+	}
+	return instances
+}
+
+// RefreshInstances updates instance status from providers.
+func (m *Manager) RefreshInstances(ctx context.Context) error {
+	m.mu.RLock()
+	providers := make([]Provider, 0, len(m.providers))
+	for _, p := range m.providers {
+		providers = append(providers, p)
+	}
+	m.mu.RUnlock()
+
+	for _, provider := range providers {
+		instances, err := provider.ListInstances(ctx)
+		if err != nil {
+			continue // Skip failed providers
+		}
+
+		m.mu.Lock()
+		for _, inst := range instances {
+			// Update or add instance
+			if existing, exists := m.instances[inst.ID]; exists {
+				existing.Status = inst.Status
+				existing.PublicIP = inst.PublicIP
+				existing.ErrorMessage = inst.ErrorMessage
+			} else {
+				m.instances[inst.ID] = inst
+			}
+		}
+		m.mu.Unlock()
+	}
+
+	return nil
+}
+
 // ListOfferings returns available GPU configurations across all providers.
 func (m *Manager) ListOfferings(ctx context.Context) ([]*GPUOffering, error) {
 	m.mu.RLock()
@@ -204,7 +265,9 @@ func (m *Manager) ListOfferings(ctx context.Context) ([]*GPUOffering, error) {
 	for _, provider := range providers {
 		offerings, err := provider.ListOfferings(ctx)
 		if err != nil {
-			continue
+			// Log the error for debugging
+			fmt.Printf("Warning: Failed to get offerings from %s: %v\n", provider.Name(), err)
+			continue // Skip failed providers
 		}
 		allOfferings = append(allOfferings, offerings...)
 	}
@@ -255,4 +318,27 @@ func (m *Manager) LinkWorker(instanceID, workerID string) error {
 
 	instance.WorkerID = workerID
 	return nil
+}
+
+// UnlinkWorker removes worker association from an instance.
+func (m *Manager) UnlinkWorker(instanceID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if instance, exists := m.instances[instanceID]; exists {
+		instance.WorkerID = ""
+	}
+}
+
+// GetInstanceByWorker finds an instance by its linked worker ID.
+func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, inst := range m.instances {
+		if inst.WorkerID == workerID {
+			return inst, true
+		}
+	}
+	return nil, false
 }

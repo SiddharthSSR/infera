@@ -145,6 +145,11 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *InstanceHandlers) handleOfferings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+
 	offerings, _ := h.manager.ListOfferings(r.Context())
 
 	response := make([]map[string]interface{}, 0, len(offerings))

@@ -1,0 +1,440 @@
+package gateway
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/infera/infera/go/internal/providers"
+	"github.com/infera/infera/go/internal/providers/mock"
+)
+
+func setupTestHandlers() *InstanceHandlers {
+	mgr := providers.NewManager(providers.ManagerConfig{
+		DefaultProvider: providers.ProviderMock,
+	})
+	mgr.RegisterProvider(mock.New())
+	return NewInstanceHandlers(mgr)
+}
+
+func TestHandleInstances(t *testing.T) {
+	h := setupTestHandlers()
+
+	t.Run("GET empty list", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/instances", nil)
+		w := httptest.NewRecorder()
+
+		h.handleInstances(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", w.Code)
+		}
+
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+
+		instances := resp["instances"].([]interface{})
+		if len(instances) != 0 {
+			t.Errorf("expected 0 instances, got %d", len(instances))
+		}
+	})
+
+	t.Run("Method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/instances", nil)
+		w := httptest.NewRecorder()
+
+		h.handleInstances(w, req)
+
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405, got %d", w.Code)
+		}
+	})
+}
+
+func TestHandleProvision(t *testing.T) {
+	h := setupTestHandlers()
+
+	t.Run("Successful provision", func(t *testing.T) {
+		body := map[string]interface{}{
+			"name":      "test-worker",
+			"provider":  "mock",
+			"gpu_type":  "RTX_4090",
+			"gpu_count": 1,
+		}
+		bodyBytes, _ := json.Marshal(body)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		h.handleProvision(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Errorf("expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+
+		if resp["success"] != true {
+			t.Error("expected success to be true")
+		}
+		if resp["instance"] == nil {
+			t.Error("expected instance in response")
+		}
+	})
+
+	t.Run("Missing gpu_type", func(t *testing.T) {
+		body := map[string]interface{}{
+			"name":     "test-worker",
+			"provider": "mock",
+		}
+		bodyBytes, _ := json.Marshal(body)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		h.handleProvision(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("Invalid JSON", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader([]byte("invalid")))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		h.handleProvision(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("Method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/instances/provision", nil)
+		w := httptest.NewRecorder()
+
+		h.handleProvision(w, req)
+
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405, got %d", w.Code)
+		}
+	})
+}
+
+func TestHandleInstanceByID(t *testing.T) {
+	h := setupTestHandlers()
+
+	// First provision an instance
+	body := map[string]interface{}{
+		"name":     "test-instance",
+		"provider": "mock",
+		"gpu_type": "RTX_4090",
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	provReq := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+	provReq.Header.Set("Content-Type", "application/json")
+	provW := httptest.NewRecorder()
+	h.handleProvision(provW, provReq)
+
+	var provResp map[string]interface{}
+	json.Unmarshal(provW.Body.Bytes(), &provResp)
+	instance := provResp["instance"].(map[string]interface{})
+	instanceID := instance["id"].(string)
+
+	t.Run("GET instance", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/instances/"+instanceID, nil)
+		w := httptest.NewRecorder()
+
+		h.handleInstanceByID(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+
+		if resp["id"] != instanceID {
+			t.Errorf("expected %s, got %s", instanceID, resp["id"])
+		}
+	})
+
+	t.Run("GET non-existent", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/instances/non-existent", nil)
+		w := httptest.NewRecorder()
+
+		h.handleInstanceByID(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d", w.Code)
+		}
+	})
+
+	t.Run("DELETE instance", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodDelete, "/api/instances/"+instanceID, nil)
+		w := httptest.NewRecorder()
+
+		h.handleInstanceByID(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+
+		if resp["success"] != true {
+			t.Error("expected success to be true")
+		}
+	})
+}
+
+func TestHandleStartStop(t *testing.T) {
+	h := setupTestHandlers()
+
+	// Provision an instance
+	body := map[string]interface{}{
+		"name":     "start-stop-test",
+		"provider": "mock",
+		"gpu_type": "RTX_4090",
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	provReq := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+	provReq.Header.Set("Content-Type", "application/json")
+	provW := httptest.NewRecorder()
+	h.handleProvision(provW, provReq)
+
+	var provResp map[string]interface{}
+	json.Unmarshal(provW.Body.Bytes(), &provResp)
+	instance := provResp["instance"].(map[string]interface{})
+	instanceID := instance["id"].(string)
+
+	t.Run("Stop instance", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/instances/"+instanceID+"/stop", nil)
+		w := httptest.NewRecorder()
+
+		h.handleInstanceByID(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("Start instance", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/instances/"+instanceID+"/start", nil)
+		w := httptest.NewRecorder()
+
+		h.handleInstanceByID(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("Unknown action", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/instances/"+instanceID+"/unknown", nil)
+		w := httptest.NewRecorder()
+
+		h.handleInstanceByID(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", w.Code)
+		}
+	})
+}
+
+func TestHandleOfferings(t *testing.T) {
+	h := setupTestHandlers()
+
+	t.Run("GET offerings", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/offerings", nil)
+		w := httptest.NewRecorder()
+
+		h.handleOfferings(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", w.Code)
+		}
+
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+
+		offerings := resp["offerings"].([]interface{})
+		if len(offerings) == 0 {
+			t.Error("expected at least one offering")
+		}
+	})
+
+	t.Run("Method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/offerings", nil)
+		w := httptest.NewRecorder()
+
+		h.handleOfferings(w, req)
+
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405, got %d", w.Code)
+		}
+	})
+}
+
+func TestHandleProviders(t *testing.T) {
+	h := setupTestHandlers()
+
+	t.Run("GET providers", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/providers", nil)
+		w := httptest.NewRecorder()
+
+		h.handleProviders(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", w.Code)
+		}
+
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+
+		providers := resp["providers"].([]interface{})
+		if len(providers) == 0 {
+			t.Error("expected at least one provider")
+		}
+
+		// Check mock provider is connected
+		mockProvider := providers[0].(map[string]interface{})
+		if mockProvider["connected"] != true {
+			t.Error("mock provider should be connected")
+		}
+	})
+}
+
+func TestHandleCosts(t *testing.T) {
+	h := setupTestHandlers()
+
+	t.Run("GET costs - empty", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/costs", nil)
+		w := httptest.NewRecorder()
+
+		h.handleCosts(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", w.Code)
+		}
+
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+
+		if resp["current_hourly"].(float64) != 0 {
+			t.Errorf("expected 0 hourly cost with no instances, got %f", resp["current_hourly"])
+		}
+	})
+
+	t.Run("GET costs - with instances", func(t *testing.T) {
+		// Provision an instance first
+		body := map[string]interface{}{
+			"name":     "cost-test",
+			"provider": "mock",
+			"gpu_type": "RTX_4090",
+		}
+		bodyBytes, _ := json.Marshal(body)
+
+		provReq := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+		provReq.Header.Set("Content-Type", "application/json")
+		provW := httptest.NewRecorder()
+		h.handleProvision(provW, provReq)
+
+		// Now check costs
+		req := httptest.NewRequest(http.MethodGet, "/api/costs", nil)
+		w := httptest.NewRecorder()
+
+		h.handleCosts(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", w.Code)
+		}
+
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+
+		if resp["current_hourly"].(float64) <= 0 {
+			t.Error("expected positive hourly cost with running instance")
+		}
+	})
+}
+
+func TestInstanceToMap(t *testing.T) {
+	now := time.Now()
+	instance := &providers.Instance{
+		ID:           "map-test",
+		ProviderID:   "mock-map-test",
+		Provider:     providers.ProviderMock,
+		Name:         "Test Instance",
+		Status:       providers.InstanceStatusRunning,
+		GPUType:      providers.GPURTX4090,
+		GPUCount:     2,
+		VCPU:         16,
+		MemoryGB:     64,
+		StorageGB:    200,
+		PublicIP:     "192.168.1.1",
+		HTTPPort:     8080,
+		SSHPort:      22,
+		WorkerID:     "worker-123",
+		Models:       []string{"llama-3-8b"},
+		CostPerHour:  0.80,
+		SpotInstance: true,
+		CreatedAt:    now,
+		StartedAt:    &now,
+	}
+
+	m := instanceToMap(instance)
+
+	tests := []struct {
+		key      string
+		expected interface{}
+	}{
+		{"id", "map-test"},
+		{"provider_id", "mock-map-test"},
+		{"provider", providers.ProviderMock},
+		{"name", "Test Instance"},
+		{"status", providers.InstanceStatusRunning},
+		{"gpu_type", providers.GPURTX4090},
+		{"gpu_count", 2},
+		{"vcpu", 16},
+		{"memory_gb", 64},
+		{"storage_gb", 200},
+		{"public_ip", "192.168.1.1"},
+		{"http_port", 8080},
+		{"ssh_port", 22},
+		{"worker_id", "worker-123"},
+		{"cost_per_hour", 0.80},
+		{"spot_instance", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			if m[tt.key] != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, m[tt.key])
+			}
+		})
+	}
+
+	t.Run("started_at is set", func(t *testing.T) {
+		if m["started_at"] == nil {
+			t.Error("started_at should be set")
+		}
+	})
+
+	t.Run("stopped_at is nil", func(t *testing.T) {
+		if _, exists := m["stopped_at"]; exists {
+			t.Error("stopped_at should not exist when nil")
+		}
+	})
+}

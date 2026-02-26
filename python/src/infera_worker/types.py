@@ -14,6 +14,7 @@ class Role(str, Enum):
 class FinishReason(str, Enum):
     STOP = "stop"
     LENGTH = "length"
+    CONTENT_FILTER = "content_filter"
     ERROR = "error"
 
 
@@ -68,7 +69,7 @@ class InferenceRequest:
     request_id: str
     model_id: str
     messages: list[Message]
-    parameters: InferenceParameters
+    parameters: InferenceParameters = field(default_factory=InferenceParameters)
     stream: bool = False
     priority: Priority = Priority.NORMAL
     metadata: dict[str, str] = field(default_factory=dict)
