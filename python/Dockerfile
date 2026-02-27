@@ -1,6 +1,7 @@
 # Infera Worker - vLLM Inference Engine
 # Base image with CUDA support for vLLM
-FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
+# Use --platform=linux/amd64 when building on ARM Macs
+FROM --platform=linux/amd64 runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
 
 WORKDIR /app
 
@@ -19,6 +20,7 @@ RUN pip install vllm==0.3.3
 
 # Copy worker source code
 COPY pyproject.toml .
+COPY README.md .
 COPY src/ ./src/
 
 # Install the worker package
@@ -35,7 +37,7 @@ ENV INFERA_LOG_FORMAT=json
 ENV INFERA_PRELOAD_MODELS=""
 
 # Gateway address (set at runtime)
-ENV INFERA_ROUTER_ADDRESS=localhost:8080
+ENV INFERA_ROUTER_ADDRESS=""
 
 # Expose ports
 EXPOSE 8081 50051

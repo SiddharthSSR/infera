@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Cpu, DollarSign, Loader2 } from 'lucide-react';
+import { X, Cpu, DollarSign, Loader2, Box } from 'lucide-react';
 import type { GPUOffering, ProvisionRequest, ProviderType, GPUType } from '../types';
 import { useProvisionInstance } from '../hooks/useApi';
 
@@ -25,24 +25,43 @@ const PROVIDER_LABELS: Record<ProviderType, string> = {
   mock: 'Mock (Testing)',
 };
 
+// Available models with their requirements
+const AVAILABLE_MODELS = [
+  { id: 'mistralai/Mistral-7B-Instruct-v0.2', name: 'Mistral 7B Instruct', vram: 16, gated: false },
+  { id: 'meta-llama/Llama-3-8B-Instruct', name: 'Llama 3 8B Instruct', vram: 18, gated: true },
+  { id: 'microsoft/phi-2', name: 'Phi-2 (2.7B)', vram: 6, gated: false },
+  { id: 'google/gemma-7b-it', name: 'Gemma 7B Instruct', vram: 16, gated: true },
+];
+
+// GPU VRAM in GB
+const GPU_VRAM: Record<GPUType, number> = {
+  RTX_4090: 24,
+  RTX_4080: 16,
+  A100_40GB: 40,
+  A100_80GB: 80,
+  H100: 80,
+  L40S: 48,
+};
+
 export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalProps) {
   const [name, setName] = useState('infera-worker');
   const [provider, setProvider] = useState<ProviderType>('mock');
   const [gpuType, setGpuType] = useState<GPUType>('RTX_4090');
   const [gpuCount, setGpuCount] = useState(1);
   const [spotInstance, setSpotInstance] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('mistralai/Mistral-7B-Instruct-v0.2');
   const [error, setError] = useState<string | null>(null);
 
   const provisionMutation = useProvisionInstance();
 
-  // Get unique providers from offerings
-  const availableProviders = [...new Set(offerings?.map(o => o.provider) || ['mock'])];
+  // Get unique providers from offerings (cast to ProviderType[])
+  const availableProviders: ProviderType[] = [...new Set(offerings?.map(o => o.provider) || ['mock' as ProviderType])];
   
   // Get offerings for selected provider
   const providerOfferings = offerings?.filter(o => o.provider === provider) || [];
   
-  // Get unique GPU types for selected provider
-  const availableGPUs = [...new Set(providerOfferings.map(o => o.gpu_type))];
+  // Get unique GPU types for selected provider (cast to GPUType[])
+  const availableGPUs: GPUType[] = [...new Set(providerOfferings.map(o => o.gpu_type))];
 
   // Get selected offering
   const selectedOffering = providerOfferings.find(
@@ -52,6 +71,10 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
   const estimatedCost = selectedOffering 
     ? (spotInstance ? selectedOffering.spot_price : selectedOffering.cost_per_hour) || selectedOffering.cost_per_hour
     : 0;
+
+  // Filter models that fit in selected GPU
+  const gpuVram = GPU_VRAM[gpuType] || 24;
+  const compatibleModels = AVAILABLE_MODELS.filter(m => m.vram <= gpuVram * gpuCount);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,7 +86,8 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
       gpu_type: gpuType,
       gpu_count: gpuCount,
       spot_instance: spotInstance,
-      max_cost_hour: estimatedCost * 1.5, // Allow some buffer
+      max_cost_hour: estimatedCost * 1.5,
+      models: provider !== 'mock' ? [selectedModel] : undefined,
     };
 
     try {
@@ -186,6 +210,38 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
               ))}
             </select>
           </div>
+
+          {/* Model Selection - Only show for non-mock providers */}
+          {provider !== 'mock' && (
+            <div>
+              <label className="block text-sm text-gray-400 mb-1.5">
+                <div className="flex items-center gap-2">
+                  <Box className="w-4 h-4" />
+                  Model to Load
+                </div>
+              </label>
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="input w-full"
+              >
+                {compatibleModels.map(model => (
+                  <option key={model.id} value={model.id}>
+                    {model.name} ({model.vram}GB VRAM)
+                    {model.gated ? ' 🔒' : ''}
+                  </option>
+                ))}
+              </select>
+              {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.gated && (
+                <p className="text-xs text-amber-400 mt-1">
+                  ⚠️ This model requires HuggingFace authentication. Set HF_TOKEN env var.
+                </p>
+              )}
+              <p className="text-xs text-gray-500 mt-1">
+                Model will be downloaded and loaded on startup (~5-15 min)
+              </p>
+            </div>
+          )}
 
           {/* Spot Instance */}
           <div className="flex items-center gap-3">

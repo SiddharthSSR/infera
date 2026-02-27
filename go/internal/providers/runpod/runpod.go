@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/infera/infera/go/internal/providers"
@@ -92,47 +93,105 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 	// Map our GPU types to RunPod GPU IDs
 	gpuTypeID := mapGPUType(req.GPUType)
 
-	// Set default docker image if not provided
-	dockerImage := req.DockerImage
-	if dockerImage == "" {
-		dockerImage = "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04"
+	// Use RunPod's base image with vLLM pre-installed for faster startup
+	dockerImage := "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04"
+
+	// If custom image provided, use it
+	if req.DockerImage != "" {
+		dockerImage = req.DockerImage
+	}
+
+	// Build environment variables
+	env := []map[string]string{
+		{"key": "INFERA_ENGINE", "value": "vllm"},
+		{"key": "INFERA_HTTP_PORT", "value": "8081"},
+		{"key": "INFERA_LOG_LEVEL", "value": "INFO"},
+	}
+
+	// Add gateway address for worker registration
+	gatewayAddress := req.GatewayAddress
+	if gatewayAddress == "" {
+		gatewayAddress = os.Getenv("INFERA_GATEWAY_ADDRESS")
+	}
+	if gatewayAddress != "" {
+		env = append(env, map[string]string{
+			"key": "INFERA_ROUTER_ADDRESS", "value": gatewayAddress,
+		})
+	}
+
+	// Add models to preload
+	if len(req.Models) > 0 {
+		// Convert to JSON array string
+		modelsJSON, err := json.Marshal(req.Models)
+		if err == nil {
+			env = append(env, map[string]string{
+				"key": "INFERA_PRELOAD_MODELS", "value": string(modelsJSON),
+			})
+		}
+	} else {
+		// Default model if none specified
+		defaultModel := os.Getenv("INFERA_DEFAULT_MODEL")
+		if defaultModel == "" {
+			defaultModel = "mistralai/Mistral-7B-Instruct-v0.2"
+		}
+		env = append(env, map[string]string{
+			"key": "INFERA_PRELOAD_MODELS", "value": defaultModel,
+		})
+	}
+
+	// Add HuggingFace token if available (needed for gated models like Llama)
+	if hfToken := os.Getenv("HF_TOKEN"); hfToken != "" {
+		env = append(env, map[string]string{
+			"key": "HF_TOKEN", "value": hfToken,
+		})
+		// Also set as HUGGING_FACE_HUB_TOKEN for compatibility
+		env = append(env, map[string]string{
+			"key": "HUGGING_FACE_HUB_TOKEN", "value": hfToken,
+		})
 	}
 
 	// Build mutation - use the current RunPod API
 	query := `
-		mutation CreatePod($input: PodFindAndDeployOnDemandInput!) {
-			podFindAndDeployOnDemand(input: $input) {
-				id
-				name
-				desiredStatus
-				imageName
-				machineId
-				machine {
-					gpuDisplayName
-				}
-			}
-		}
-	`
+    mutation CreatePod($input: PodFindAndDeployOnDemandInput!) {
+        podFindAndDeployOnDemand(input: $input) {
+            id
+            name
+            desiredStatus
+            imageName
+            machineId
+            machine {
+                gpuDisplayName
+            }
+        }
+    }
+`
 
+	// Calculate container disk size based on model (larger models need more space)
+	// 50GB base + 20GB per model for HuggingFace cache
+	containerDiskSize := 50
+	if len(req.Models) > 0 {
+		containerDiskSize = 50 + (len(req.Models) * 20)
+	}
+
+	// Build the input for RunPod API
+	// We use containerDiskInGb for model storage (no persistent volume)
+	// This avoids the "volume cannot be default" error
 	input := map[string]interface{}{
 		"name":              req.Name,
 		"imageName":         dockerImage,
 		"gpuTypeId":         gpuTypeID,
 		"gpuCount":          req.GPUCount,
-		"volumeInGb":        50,
-		"containerDiskInGb": 20,
+		"containerDiskInGb": containerDiskSize,
 		"minVcpuCount":      4,
 		"minMemoryInGb":     16,
 		"ports":             "8081/http,22/tcp",
-		"env": []map[string]string{
-			{"key": "INFERA_ENGINE", "value": "vllm"},
-			{"key": "INFERA_HTTP_PORT", "value": "8081"},
-		},
+		"env":               env,
+		"supportPublicIp":   true, // Ensure we get a public IP for worker registration
 	}
 
-	// Note: Spot instances in RunPod are now handled differently
-	// The API will automatically find the best price
-	// We no longer pass bidPerGpu
+	// Log the request for debugging
+	inputJSON, _ := json.Marshal(input)
+	fmt.Printf("[RunPod] Provisioning pod with input: %s\n", string(inputJSON))
 
 	variables := map[string]interface{}{
 		"input": input,
@@ -169,6 +228,16 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		shortID = podID[:8]
 	}
 
+	// Use provided models or default
+	models := req.Models
+	if len(models) == 0 {
+		defaultModel := os.Getenv("INFERA_DEFAULT_MODEL")
+		if defaultModel == "" {
+			defaultModel = "mistralai/Mistral-7B-Instruct-v0.2"
+		}
+		models = []string{defaultModel}
+	}
+
 	return &providers.Instance{
 		ID:           shortID,
 		ProviderID:   podID,
@@ -179,7 +248,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		GPUCount:     req.GPUCount,
 		CostPerHour:  getEstimatedPrice(req.GPUType) * float64(req.GPUCount),
 		SpotInstance: req.SpotInstance,
-		Models:       req.Models,
+		Models:       models,
 		CreatedAt:    time.Now(),
 		Metadata: map[string]string{
 			"machine_id": pod.MachineID,

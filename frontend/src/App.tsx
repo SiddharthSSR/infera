@@ -22,7 +22,7 @@ function Dashboard() {
   const [showProvisionModal, setShowProvisionModal] = useState(false);
   
   const { data: workers, isLoading: workersLoading } = useWorkers();
-  const { data: models, isLoading: modelsLoading } = useModels();
+  const { data: models } = useModels();
   const { data: stats, isLoading: statsLoading } = useStats();
   const { data: instances, isLoading: instancesLoading } = useInstances();
   const { data: offerings } = useOfferings();

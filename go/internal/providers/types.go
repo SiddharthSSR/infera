@@ -99,17 +99,24 @@ type Instance struct {
 
 // ProvisionRequest contains parameters for creating a new instance.
 type ProvisionRequest struct {
-	Name         string            `json:"name"`
-	Provider     ProviderType      `json:"provider"`
-	GPUType      GPUType           `json:"gpu_type"`
-	GPUCount     int               `json:"gpu_count"`
-	Region       string            `json:"region,omitempty"`
-	SpotInstance bool              `json:"spot_instance"`
-	MaxCostHour  float64           `json:"max_cost_hour,omitempty"`
-	Models       []string          `json:"models,omitempty"`
-	DockerImage  string            `json:"docker_image,omitempty"`
-	SSHPublicKey string            `json:"ssh_public_key,omitempty"`
-	Options      map[string]string `json:"options,omitempty"`
+	Name         string       `json:"name"`
+	Provider     ProviderType `json:"provider"`
+	GPUType      GPUType      `json:"gpu_type"`
+	GPUCount     int          `json:"gpu_count"`
+	Region       string       `json:"region,omitempty"`
+	SpotInstance bool         `json:"spot_instance"`
+	MaxCostHour  float64      `json:"max_cost_hour,omitempty"` // Budget limit
+
+	// Worker configuration
+	Models         []string `json:"models,omitempty"`
+	DockerImage    string   `json:"docker_image,omitempty"`
+	GatewayAddress string   `json:"gateway_address,omitempty"` // Address for worker to connect back
+
+	// SSH key for access
+	SSHPublicKey string `json:"ssh_public_key,omitempty"`
+
+	// Provider-specific options
+	Options map[string]string `json:"options,omitempty"`
 }
 
 // GPUOffering represents an available GPU configuration from a provider.

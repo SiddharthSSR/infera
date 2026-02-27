@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/infera/infera/go/internal/providers"
@@ -90,6 +91,7 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// handleProvision handles POST /api/instances/provision
 func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed")
@@ -97,14 +99,15 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req struct {
-		Name         string   `json:"name"`
-		Provider     string   `json:"provider"`
-		GPUType      string   `json:"gpu_type"`
-		GPUCount     int      `json:"gpu_count"`
-		Region       string   `json:"region"`
-		SpotInstance bool     `json:"spot_instance"`
-		MaxCostHour  float64  `json:"max_cost_hour"`
-		Models       []string `json:"models"`
+		Name           string   `json:"name"`
+		Provider       string   `json:"provider"`
+		GPUType        string   `json:"gpu_type"`
+		GPUCount       int      `json:"gpu_count"`
+		Region         string   `json:"region"`
+		SpotInstance   bool     `json:"spot_instance"`
+		MaxCostHour    float64  `json:"max_cost_hour"`
+		Models         []string `json:"models"`
+		GatewayAddress string   `json:"gateway_address"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -112,20 +115,28 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Validate required fields
 	if req.GPUType == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request", "gpu_type is required")
 		return
 	}
 
+	// Get gateway address from request, env, or default
+	gatewayAddress := req.GatewayAddress
+	if gatewayAddress == "" {
+		gatewayAddress = os.Getenv("INFERA_GATEWAY_ADDRESS")
+	}
+
 	provisionReq := &providers.ProvisionRequest{
-		Name:         req.Name,
-		Provider:     providers.ProviderType(req.Provider),
-		GPUType:      providers.GPUType(req.GPUType),
-		GPUCount:     req.GPUCount,
-		Region:       req.Region,
-		SpotInstance: req.SpotInstance,
-		MaxCostHour:  req.MaxCostHour,
-		Models:       req.Models,
+		Name:           req.Name,
+		Provider:       providers.ProviderType(req.Provider),
+		GPUType:        providers.GPUType(req.GPUType),
+		GPUCount:       req.GPUCount,
+		Region:         req.Region,
+		SpotInstance:   req.SpotInstance,
+		MaxCostHour:    req.MaxCostHour,
+		Models:         req.Models,
+		GatewayAddress: gatewayAddress,
 	}
 
 	if provisionReq.Name == "" {
@@ -141,7 +152,10 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{"success": true, "instance": instanceToMap(instance)})
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"success":  true,
+		"instance": instanceToMap(instance),
+	})
 }
 
 func (h *InstanceHandlers) handleOfferings(w http.ResponseWriter, r *http.Request) {
