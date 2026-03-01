@@ -54,8 +54,26 @@ export async function* streamChatCompletion(
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Request failed');
+    // Try to parse as JSON, but handle non-JSON responses gracefully
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      try {
+        const error = await response.json();
+        throw new Error(error.error?.message || `Request failed with status ${response.status}`);
+      } catch (e) {
+        if (e instanceof SyntaxError) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+        throw e;
+      }
+    } else {
+      // Non-JSON response (could be HTML error page from ngrok, etc.)
+      const text = await response.text();
+      if (text.includes('ngrok')) {
+        throw new Error('Please visit the ngrok URL directly in your browser first to bypass the interstitial page');
+      }
+      throw new Error(`Request failed with status ${response.status}`);
+    }
   }
 
   const reader = response.body?.getReader();
@@ -82,7 +100,7 @@ export async function* streamChatCompletion(
           const content = parsed.choices?.[0]?.delta?.content;
           if (content) yield content;
         } catch {
-          // Ignore parse errors
+          // Ignore parse errors for individual chunks
         }
       }
     }

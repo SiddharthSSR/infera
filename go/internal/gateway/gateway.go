@@ -293,10 +293,20 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, client *Wor
 }
 
 func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) {
-	// Set SSE headers
+	// First, try to get the stream from worker
+	// This validates the request before we commit to SSE
+	chunks, err := client.InferStream(r.Context(), req)
+	if err != nil {
+		// Return regular error response (not SSE) since we haven't committed to streaming yet
+		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
+		return
+	}
+
+	// Now commit to SSE
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // For nginx proxies
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -304,15 +314,27 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Stream from worker
-	chunks, err := client.InferStream(r.Context(), req)
-	if err != nil {
-		g.writeSSEError(w, flusher, err.Error())
-		return
-	}
-
 	requestID := "chatcmpl-" + req.RequestID
 	created := time.Now().Unix()
+
+	// Send initial role chunk (OpenAI format)
+	initialChunk := ChatCompletionChunk{
+		ID:      requestID,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   model,
+		Choices: []ChatChunkChoice{
+			{
+				Index: 0,
+				Delta: ChatDelta{
+					Role: "assistant",
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(initialChunk)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
 
 	for chunk := range chunks {
 		openAIChunk := ChatCompletionChunk{

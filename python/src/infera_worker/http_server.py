@@ -23,6 +23,27 @@ from .types import (
 logger = structlog.get_logger()
 
 
+def build_gateway_url(router_address: str, path: str) -> str:
+    """Build a gateway URL with proper protocol.
+    
+    Uses HTTPS for ngrok and other public URLs, HTTP for localhost.
+    """
+    if not router_address:
+        return ""
+    
+    # If protocol is already included, use it
+    if router_address.startswith("https://"):
+        return f"{router_address}{path}"
+    elif router_address.startswith("http://"):
+        return f"{router_address}{path}"
+    
+    # Default to HTTPS for public URLs (ngrok, etc.), HTTP for localhost
+    if "localhost" in router_address or "127.0.0.1" in router_address:
+        return f"http://{router_address}{path}"
+    else:
+        return f"https://{router_address}{path}"
+
+
 class HTTPServer:
     """HTTP server for the worker."""
 
@@ -77,7 +98,7 @@ class HTTPServer:
 
     async def _register_with_gateway(self) -> None:
         """Register this worker with the gateway."""
-        gateway_url = f"http://{self.config.router_address}/api/workers/register"
+        gateway_url = build_gateway_url(self.config.router_address, "/api/workers/register")
         
         # Get public IP/hostname for the gateway to reach us
         worker_address = self._get_worker_address()
@@ -132,8 +153,11 @@ class HTTPServer:
         """Deregister this worker from the gateway."""
         if not self.config.router_address:
             return
-            
-        gateway_url = f"http://{self.config.router_address}/api/workers/{self.worker.worker_id}"
+        
+        gateway_url = build_gateway_url(
+            self.config.router_address, 
+            f"/api/workers/{self.worker.worker_id}"
+        )
         
         try:
             async with httpx.AsyncClient() as client:
@@ -144,7 +168,10 @@ class HTTPServer:
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeats to the gateway."""
-        gateway_url = f"http://{self.config.router_address}/api/workers/{self.worker.worker_id}/heartbeat"
+        gateway_url = build_gateway_url(
+            self.config.router_address,
+            "/api/workers/heartbeat"
+        )
         interval = self.config.health_report_interval_ms / 1000.0
         
         while True:
@@ -155,22 +182,32 @@ class HTTPServer:
                 heartbeat_data = {
                     "worker_id": self.worker.worker_id,
                     "status": self.worker.get_state().value,
-                    "models": [m.model_id for m in self.worker.get_loaded_models()],
-                    "gpu_utilization": stats.gpu_utilization,
-                    "memory_used": stats.memory_used_bytes,
-                    "memory_total": stats.memory_total_bytes,
-                    "queue_depth": stats.queue_depth,
-                    "requests_per_sec": stats.requests_per_second,
-                    "avg_latency_ms": stats.avg_latency_ms,
-                    "error_rate": stats.error_rate,
+                    "stats": {
+                        "queue_depth": stats.queue_depth,
+                        "active_requests": stats.active_requests,
+                        "gpu_utilization": stats.gpu_utilization,
+                        "memory_used_bytes": stats.memory_used_bytes,
+                        "memory_total_bytes": stats.memory_total_bytes,
+                        "requests_per_second": stats.requests_per_second,
+                        "avg_latency_ms": stats.avg_latency_ms,
+                        "p50_latency_ms": stats.p50_latency_ms,
+                        "p99_latency_ms": stats.p99_latency_ms,
+                        "error_rate": stats.error_rate,
+                    },
+                    "loaded_models": [
+                        {"model_id": m.model_id, "version": m.version}
+                        for m in self.worker.get_loaded_models()
+                    ],
                 }
                 
                 async with httpx.AsyncClient() as client:
-                    await client.post(
+                    response = await client.post(
                         gateway_url,
                         json=heartbeat_data,
                         timeout=5.0,
                     )
+                    if response.status_code == 200:
+                        logger.debug("Heartbeat sent successfully")
                     
             except asyncio.CancelledError:
                 break
@@ -179,10 +216,13 @@ class HTTPServer:
 
     def _get_worker_address(self) -> str:
         """Get the address where the gateway can reach this worker."""
-        # Check for RunPod public IP
+        # Check for RunPod pod ID to construct proxy URL
         runpod_pod_id = os.environ.get("RUNPOD_POD_ID")
-        runpod_public_ip = os.environ.get("RUNPOD_PUBLIC_IP")
+        if runpod_pod_id:
+            return f"{runpod_pod_id}-{self.config.http_port}.proxy.runpod.net"
         
+        # Check for RunPod public IP
+        runpod_public_ip = os.environ.get("RUNPOD_PUBLIC_IP")
         if runpod_public_ip:
             return runpod_public_ip
         
@@ -192,7 +232,7 @@ class HTTPServer:
             return explicit_address
         
         # Default to localhost for local development
-        return "localhost"
+        return f"localhost:{self.config.http_port}"
 
     async def handle_infer(self, request: web.Request) -> web.Response:
         """Handle non-streaming inference request."""

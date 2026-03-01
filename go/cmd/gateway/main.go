@@ -31,6 +31,7 @@ func main() {
 	routerConfig := router.DefaultConfig()
 	r := router.New(routerConfig)
 
+	// Create instance manager
 	// Get worker image from env or use default
 	workerImage := os.Getenv("INFERA_WORKER_IMAGE")
 	if workerImage == "" {
@@ -85,6 +86,23 @@ func main() {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start background instance refresh loop
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := instanceMgr.RefreshInstances(ctx); err != nil {
+					log.Printf("Warning: Failed to refresh instances: %v", err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	go func() {
 		<-sigChan

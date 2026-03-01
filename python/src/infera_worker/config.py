@@ -16,6 +16,7 @@ class WorkerConfig(BaseSettings):
     http_port: int = Field(default=8081, description="HTTP server port")
     grpc_port: int = Field(default=50051, description="gRPC server port")
     router_address: str = Field(default="", description="Router/Gateway address")
+    worker_address: str = Field(default="", description="Public address of this worker (for registration)")
     vault_address: str = Field(default="localhost:50053", description="Vault address")
     
     # Capacity

@@ -11,6 +11,19 @@ interface Message extends ChatMessage {
   id: string;
 }
 
+// Fallback UUID generator for environments where crypto.randomUUID is not available
+function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback implementation
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 export function ChatPlayground({ models }: ChatPlaygroundProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -38,7 +51,7 @@ export function ChatPlayground({ models }: ChatPlaygroundProps) {
     if (!input.trim() || isLoading || !selectedModel) return;
 
     const userMessage: Message = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       role: 'user',
       content: input.trim(),
     };
@@ -48,7 +61,7 @@ export function ChatPlayground({ models }: ChatPlaygroundProps) {
     setIsLoading(true);
 
     const assistantMessage: Message = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       role: 'assistant',
       content: '',
     };

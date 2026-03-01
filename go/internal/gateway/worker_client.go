@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/infera/infera/go/pkg/types"
@@ -96,7 +97,12 @@ func (c *WorkerClient) Infer(req *types.InferenceRequest) (*types.InferenceRespo
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("http://%s/infer", c.address)
+	// Use HTTPS for RunPod proxy URLs, HTTP for localhost
+	protocol := "http"
+	if strings.Contains(c.address, ".proxy.runpod.net") || strings.Contains(c.address, ".runpod.") {
+		protocol = "https"
+	}
+	url := fmt.Sprintf("%s://%s/infer", protocol, c.address)
 	resp, err := c.httpClient.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to call worker: %w", err)
@@ -171,7 +177,12 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("http://%s/infer/stream", c.address)
+	// Use HTTPS for RunPod proxy URLs, HTTP for localhost
+	protocol := "http"
+	if strings.Contains(c.address, ".proxy.runpod.net") || strings.Contains(c.address, ".runpod.") {
+		protocol = "https"
+	}
+	url := fmt.Sprintf("%s://%s/infer/stream", protocol, c.address)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -258,7 +269,12 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 
 // HealthCheck checks if the worker is healthy.
 func (c *WorkerClient) HealthCheck() error {
-	url := fmt.Sprintf("http://%s/health", c.address)
+	// Use HTTPS for RunPod proxy URLs, HTTP for localhost
+	protocol := "http"
+	if strings.Contains(c.address, ".proxy.runpod.net") || strings.Contains(c.address, ".runpod.") {
+		protocol = "https"
+	}
+	url := fmt.Sprintf("%s://%s/health", protocol, c.address)
 	resp, err := c.httpClient.Get(url)
 	if err != nil {
 		return fmt.Errorf("health check failed: %w", err)

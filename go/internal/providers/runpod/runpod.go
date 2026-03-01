@@ -152,19 +152,19 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 
 	// Build mutation - use the current RunPod API
 	query := `
-    mutation CreatePod($input: PodFindAndDeployOnDemandInput!) {
-        podFindAndDeployOnDemand(input: $input) {
-            id
-            name
-            desiredStatus
-            imageName
-            machineId
-            machine {
-                gpuDisplayName
-            }
-        }
-    }
-`
+		mutation CreatePod($input: PodFindAndDeployOnDemandInput!) {
+			podFindAndDeployOnDemand(input: $input) {
+				id
+				name
+				desiredStatus
+				imageName
+				machineId
+				machine {
+					gpuDisplayName
+				}
+			}
+		}
+	`
 
 	// Calculate container disk size based on model (larger models need more space)
 	// 50GB base + 20GB per model for HuggingFace cache
@@ -221,12 +221,8 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 
 	pod := result.PodFindAndDeployOnDemand
 
-	// Handle case where pod ID might be empty
+	// Use full pod ID for consistency
 	podID := pod.ID
-	shortID := podID
-	if len(podID) >= 8 {
-		shortID = podID[:8]
-	}
 
 	// Use provided models or default
 	models := req.Models
@@ -239,7 +235,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 	}
 
 	return &providers.Instance{
-		ID:           shortID,
+		ID:           podID, // Use full ID, not truncated
 		ProviderID:   podID,
 		Provider:     providers.ProviderRunPod,
 		Name:         pod.Name,
@@ -741,7 +737,7 @@ type runpodPod struct {
 
 func (p *Provider) convertPod(pod *runpodPod) *providers.Instance {
 	instance := &providers.Instance{
-		ID:         pod.ID[:8],
+		ID:         pod.ID, // Use full ID, not truncated
 		ProviderID: pod.ID,
 		Provider:   providers.ProviderRunPod,
 		Name:       pod.Name,
