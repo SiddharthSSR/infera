@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { 
-  Server, Plus, Cpu, DollarSign, Clock, 
+import {
+  Server, Plus, Cpu, DollarSign, Clock,
   AlertCircle, CheckCircle2, Loader2, Play, Square, Trash2,
   Copy, Check, ExternalLink, Zap, Filter
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 import type { Instance, GPUOffering, InstanceStatus } from '../types';
 import { useInstances, useOfferings, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance } from '../hooks/useApi';
@@ -38,12 +39,36 @@ function InstanceCard({ instance }: { instance: Instance }) {
 
   const handleTerminate = async () => {
     if (!confirm('Terminate this instance?')) return;
-    await terminateMutation.mutateAsync(instance.id);
+    try {
+      await terminateMutation.mutateAsync(instance.id);
+      toast.success('Instance terminated');
+    } catch {
+      toast.error('Failed to terminate instance');
+    }
+  };
+
+  const handleStart = async () => {
+    try {
+      await startMutation.mutateAsync(instance.id);
+      toast.success('Instance started');
+    } catch {
+      toast.error('Failed to start instance');
+    }
+  };
+
+  const handleStop = async () => {
+    try {
+      await stopMutation.mutateAsync(instance.id);
+      toast.success('Instance stopped');
+    } catch {
+      toast.error('Failed to stop instance');
+    }
   };
 
   const copyEndpoint = () => {
     navigator.clipboard.writeText(`${instance.public_ip}:${instance.http_port}`);
     setCopied(true);
+    toast.success('Copied to clipboard');
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -115,19 +140,19 @@ function InstanceCard({ instance }: { instance: Instance }) {
       <div className="flex items-center justify-between pt-4 border-t border-border">
         <div className="flex items-center gap-1.5">
           <DollarSign className="w-4 h-4 text-success" />
-          <span className="text-lg font-semibold text-foreground tabular-nums">{instance.cost_per_hour.toFixed(2)}</span>
+          <span className="text-lg font-semibold text-foreground font-mono tabular-nums">{instance.cost_per_hour.toFixed(2)}</span>
           <span className="text-sm text-muted-foreground">/hr</span>
         </div>
 
         <div className="flex items-center gap-2">
           {isStopped && (
-            <button onClick={() => startMutation.mutate(instance.id)} disabled={isLoading} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-success/10 text-success border border-success/20 hover:bg-success hover:text-success-foreground transition-colors disabled:opacity-50">
+            <button onClick={handleStart} disabled={isLoading} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-success/10 text-success border border-success/20 hover:bg-success hover:text-success-foreground transition-colors disabled:opacity-50">
               {startMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
               <span>Start</span>
             </button>
           )}
           {isRunning && (
-            <button onClick={() => stopMutation.mutate(instance.id)} disabled={isLoading} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-secondary text-secondary-foreground border border-border hover:bg-accent transition-colors disabled:opacity-50">
+            <button onClick={handleStop} disabled={isLoading} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-secondary text-secondary-foreground border border-border hover:bg-accent transition-colors disabled:opacity-50">
               {stopMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
               <span>Stop</span>
             </button>
@@ -148,8 +173,7 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
   const [spotInstance, setSpotInstance] = useState(false);
   const provisionMutation = useProvisionInstance();
 
-  // Create a unique key for each offering
-  const getOfferingKey = (o: GPUOffering) => 
+  const getOfferingKey = (o: GPUOffering) =>
     `${o.provider}-${o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}`;
 
   const handleProvision = async () => {
@@ -165,15 +189,15 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
         gpu_count: offering.gpu_count,
         spot_instance: spotInstance,
       });
+      toast.success('Instance provisioned');
       onClose();
       setName('');
       setSelectedGPU('');
-    } catch (error) {
-      console.error('Provision failed:', error);
+    } catch {
+      toast.error('Failed to provision instance');
     }
   };
 
-  // Toggle selection - click again to deselect
   const handleSelectGPU = (key: string) => {
     setSelectedGPU(prev => prev === key ? '' : key);
   };
@@ -196,25 +220,23 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
           <p className="text-sm text-muted-foreground mt-1">Select a GPU configuration to deploy your inference worker</p>
         </div>
 
-        {/* Content - scrollable if needed */}
+        {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
           <div className="max-w-5xl mx-auto space-y-8">
-            {/* Instance Name */}
             <div className="max-w-md">
               <label className="block text-sm font-medium text-foreground mb-2">Instance Name</label>
-              <input 
-                type="text" 
-                value={name} 
-                onChange={(e) => setName(e.target.value)} 
-                placeholder="infera-worker" 
-                className="w-full bg-input border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring" 
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="infera-worker"
+                className="w-full bg-input border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
 
-            {/* GPU Configuration */}
             <div>
               <label className="block text-sm font-medium text-foreground mb-4">GPU Configuration</label>
-              
+
               {groupedOfferings && Object.entries(groupedOfferings).map(([provider, providerOfferings]) => (
                 <div key={provider} className="mb-6">
                   <div className="flex items-center gap-2 mb-3">
@@ -222,19 +244,19 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
                     <span className="text-sm font-semibold text-foreground uppercase tracking-wide">{provider}</span>
                     <span className="text-xs text-muted-foreground">({providerOfferings.length} options)</span>
                   </div>
-                  
+
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     {providerOfferings.map((offering) => {
                       const key = getOfferingKey(offering);
                       const isSelected = selectedGPU === key;
                       return (
-                        <button 
-                          key={key} 
-                          onClick={() => handleSelectGPU(key)} 
+                        <button
+                          key={key}
+                          onClick={() => handleSelectGPU(key)}
                           className={cn(
                             "p-4 rounded-xl border-2 text-left transition-all duration-200",
-                            isSelected 
-                              ? "bg-primary/15 border-primary shadow-[0_0_0_1px_var(--primary),0_0_16px_-4px_var(--primary)] scale-[1.02]" 
+                            isSelected
+                              ? "bg-primary/15 border-primary shadow-[0_0_0_1px_var(--primary),0_0_16px_-4px_var(--primary)] scale-[1.02]"
                               : "bg-card border-border hover:border-primary/50 hover:bg-muted/30"
                           )}
                         >
@@ -252,11 +274,11 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
                               </div>
                             )}
                           </div>
-                          
+
                           <div className={cn("font-semibold text-lg mb-1", isSelected ? "text-primary" : "text-foreground")}>
                             {offering.gpu_count}x {offering.gpu_type.replace('_', ' ')}
                           </div>
-                          
+
                           <div className="flex flex-wrap gap-2 mb-3">
                             <span className="px-2 py-0.5 rounded-md bg-muted text-xs text-muted-foreground">
                               {offering.vcpu} vCPU
@@ -265,8 +287,8 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
                               {offering.memory_gb}GB RAM
                             </span>
                           </div>
-                          
-                          <div className={cn("text-xl font-bold", isSelected ? "text-primary" : "text-success")}>
+
+                          <div className={cn("text-xl font-bold font-mono tabular-nums", isSelected ? "text-primary" : "text-success")}>
                             ${offering.cost_per_hour.toFixed(2)}
                             <span className="text-sm font-normal text-muted-foreground">/hr</span>
                           </div>
@@ -278,7 +300,6 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
               ))}
             </div>
 
-            {/* Spot Instance Toggle */}
             <div className="flex items-center justify-between p-5 bg-muted/30 rounded-xl border border-border max-w-md">
               <div>
                 <div className="flex items-center gap-2">
@@ -287,8 +308,8 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
                 </div>
                 <p className="text-sm text-muted-foreground mt-1">Up to 70% cheaper, but may be interrupted</p>
               </div>
-              <button 
-                onClick={() => setSpotInstance(!spotInstance)} 
+              <button
+                onClick={() => setSpotInstance(!spotInstance)}
                 className={cn(
                   "w-14 h-7 rounded-full transition-colors relative",
                   spotInstance ? "bg-primary" : "bg-muted"
@@ -315,15 +336,15 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
             )}
           </div>
           <div className="flex gap-3">
-            <button 
-              onClick={onClose} 
+            <button
+              onClick={onClose}
               className="px-5 py-2.5 rounded-lg bg-secondary text-secondary-foreground border border-border hover:bg-accent transition-colors"
             >
               Cancel
             </button>
-            <button 
-              onClick={handleProvision} 
-              disabled={!selectedGPU || provisionMutation.isPending} 
+            <button
+              onClick={handleProvision}
+              disabled={!selectedGPU || provisionMutation.isPending}
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {provisionMutation.isPending ? (

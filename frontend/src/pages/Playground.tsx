@@ -1,8 +1,12 @@
-import { useState, useRef, useEffect } from 'react';
-import { 
+import { useState, useRef, useEffect, useCallback } from 'react';
+import {
   Send, Loader2, User, Bot, Settings2, Maximize2, Minimize2,
   Trash2, Copy, Check, Sparkles, ChevronDown, X
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 import { streamChatCompletion } from '../lib/api';
 import { useModels } from '../hooks/useApi';
@@ -25,7 +29,7 @@ function generateUUID(): string {
   });
 }
 
-function ModelSelector({ models, selectedModel, onSelect, disabled }: { 
+function ModelSelector({ models, selectedModel, onSelect, disabled }: {
   models: Model[] | undefined;
   selectedModel: string;
   onSelect: (model: string) => void;
@@ -33,6 +37,14 @@ function ModelSelector({ models, selectedModel, onSelect, disabled }: {
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const modelName = selectedModel?.split('/').pop() || 'Select Model';
+
+  if (!models) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 bg-input border border-border rounded-lg">
+        <div className="h-4 w-24 bg-muted rounded animate-pulse" />
+      </div>
+    );
+  }
 
   return (
     <div className="relative">
@@ -128,6 +140,7 @@ function ChatMessageBubble({ message, onCopy }: { message: Message; onCopy: (tex
   const handleCopy = () => {
     onCopy(message.content);
     setCopied(true);
+    toast.success('Copied to clipboard');
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -139,17 +152,27 @@ function ChatMessageBubble({ message, onCopy }: { message: Message; onCopy: (tex
       )}>
         {isUser ? <User className="w-4 h-4 text-primary-foreground" /> : <Bot className="w-4 h-4 text-primary" />}
       </div>
-      
+
       <div className={cn("relative max-w-[80%]", isUser ? "items-end" : "items-start")}>
         <div className={cn(
           "rounded-2xl px-4 py-3",
           isUser ? "bg-primary text-primary-foreground rounded-br-md" : "bg-card border border-border text-card-foreground rounded-bl-md"
         )}>
-          <p className="text-sm whitespace-pre-wrap leading-relaxed">
-            {message.content || <span className="typing-indicator"><span></span><span></span><span></span></span>}
-          </p>
+          {isUser ? (
+            <p className="text-sm whitespace-pre-wrap leading-relaxed">
+              {message.content}
+            </p>
+          ) : message.content ? (
+            <div className="prose-chat text-sm leading-relaxed">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                {message.content}
+              </ReactMarkdown>
+            </div>
+          ) : (
+            <span className="typing-indicator"><span></span><span></span><span></span></span>
+          )}
         </div>
-        
+
         {message.content && (
           <div className={cn("flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity", isUser ? "justify-end" : "justify-start")}>
             <button onClick={handleCopy} className="p-1 text-muted-foreground hover:text-foreground transition-colors">
@@ -167,21 +190,19 @@ function ChatMessageBubble({ message, onCopy }: { message: Message; onCopy: (tex
 
 export function Playground() {
   const { data: models } = useModels();
-  
-  // Use chat context for persistent state
-  const { 
-    messages, setMessages, 
+
+  const {
+    messages, setMessages,
     selectedModel, setSelectedModel,
     temperature, setTemperature,
     maxTokens, setMaxTokens
   } = useChat();
-  
-  // Local state (doesn't need to persist)
+
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -195,6 +216,14 @@ export function Playground() {
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
+  // Auto-resize textarea
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    const el = e.target;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 128) + 'px';
+  }, []);
+
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!input.trim() || isLoading || !selectedModel) return;
@@ -203,6 +232,9 @@ export function Playground() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
+
+    // Reset textarea height
+    if (inputRef.current) inputRef.current.style.height = 'auto';
 
     const assistantMessage: Message = { id: generateUUID(), role: 'assistant', content: '', timestamp: new Date() };
     setMessages(prev => [...prev, assistantMessage]);
@@ -241,7 +273,7 @@ export function Playground() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
   };
 
-  const containerClass = isFullscreen 
+  const containerClass = isFullscreen
     ? "fixed inset-0 z-50 bg-background flex flex-col"
     : "bg-card border border-border rounded-xl flex flex-col h-[calc(100vh-12rem)]";
 
@@ -259,7 +291,7 @@ export function Playground() {
               <Trash2 className="w-4 h-4" /><span className="hidden sm:inline">Clear</span>
             </button>
           )}
-          
+
           <div className="relative">
             <button onClick={() => setShowSettings(!showSettings)} className={cn("p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors", showSettings && "bg-accent")}>
               <Settings2 className="w-4 h-4" />
@@ -314,7 +346,7 @@ export function Playground() {
             <textarea
               ref={inputRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               placeholder={selectedModel ? "Type a message..." : "Select a model first"}
               className="w-full bg-input border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary resize-none min-h-[52px] max-h-32"
@@ -322,7 +354,7 @@ export function Playground() {
               disabled={isLoading || !selectedModel}
             />
           </div>
-          
+
           <button
             type="submit"
             disabled={isLoading || !input.trim() || !selectedModel}
