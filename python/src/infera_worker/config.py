@@ -1,9 +1,10 @@
 """Configuration for Infera Worker."""
 
 import json
+import os
 from typing import Any
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic import Field, computed_field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class WorkerConfig(BaseSettings):
@@ -26,7 +27,7 @@ class WorkerConfig(BaseSettings):
     
     # Model management
     model_cache_size: int = Field(default=2, description="Max models in memory")
-    preload_models: list[str] = Field(default_factory=list, description="Models to preload")
+    # NOTE: preload_models is handled via computed_field to avoid pydantic-settings JSON parsing issues
     
     # GPU/Device
     device: str = Field(default="auto", description="Device: auto, cuda, mps, cpu")
@@ -47,29 +48,46 @@ class WorkerConfig(BaseSettings):
     log_level: str = Field(default="INFO", description="Log level")
     log_format: str = Field(default="json", description="Log format: json, console")
 
-    @field_validator("preload_models", mode="before")
-    @classmethod
-    def parse_preload_models(cls, v: Any) -> list[str]:
-        """Parse preload_models from JSON string or list."""
-        if isinstance(v, str):
-            if not v:
-                return []
+    @computed_field
+    @property
+    def preload_models(self) -> list[str]:
+        """
+        Get preload_models from environment variable.
+        
+        This is a computed field that reads directly from os.environ
+        to avoid pydantic-settings trying to JSON parse the value.
+        
+        Supports:
+        - Empty string: ""
+        - Comma-separated: "model1,model2"
+        - JSON array: '["model1","model2"]'
+        """
+        value = os.environ.get("INFERA_PRELOAD_MODELS", "")
+        
+        if not value:
+            return []
+        
+        value = value.strip()
+        if not value:
+            return []
+        
+        # Try JSON array first
+        if value.startswith("["):
             try:
-                parsed = json.loads(v)
+                parsed = json.loads(value)
                 if isinstance(parsed, list):
-                    return parsed
-                return [parsed]
+                    return [str(m) for m in parsed if m]
             except json.JSONDecodeError:
-                # Treat as comma-separated list
-                return [m.strip() for m in v.split(",") if m.strip()]
-        if isinstance(v, list):
-            return v
-        return []
+                pass
+        
+        # Comma-separated
+        return [m.strip() for m in value.split(",") if m.strip()]
 
-    model_config = {
-        "env_prefix": "INFERA_",
-        "env_file": ".env",
-    }
+    model_config = SettingsConfigDict(
+        env_prefix="INFERA_",
+        env_file=".env",
+        extra="ignore",
+    )
 
 
 class ModelConfig(BaseSettings):
