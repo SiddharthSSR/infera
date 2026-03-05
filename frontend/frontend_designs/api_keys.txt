@@ -1,0 +1,346 @@
+The code below contains a design. This design should be used to create a new app or be added to an existing one.
+
+Look at the current open project to determine if a project exists. If no project is open, create a new Vite project then create this view in React after componentizing it.
+
+If a project does exist, determine the framework being used and implement the design within that framework. Identify whether reusable components already exist that can be used to implement the design faithfully and if so use them, otherwise create new components. If other views already exist in the project, make sure to place the view in a sensible route and connect it to the other views.
+
+Ensure the visual characteristics, layout, and interactions in the design are preserved with perfect fidelity.
+
+Run the dev command so the user can see the app once finished.
+
+```
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">API Keys | INFERA.AI</title>
+    <style vid="5">
+        :root {
+            --bg-paper: #FDFBF8;
+            --bg-accent: #F4F2EE;
+            --text-primary: #050505;
+            --text-secondary: #555555;
+            --border-color: #D8D6D4;
+            --grid-line: 1px solid var(--border-color);
+            --font-main: "DM Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --font-mono: "Space Mono", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-paper);
+            color: var(--text-primary);
+            font-family: var(--font-main);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            border-left: var(--grid-line);
+            border-right: var(--grid-line);
+            max-width: 1280px;
+            margin: 0 auto;
+            line-height: 1.4;
+            border-radius: 20px;
+            overflow: hidden;
+        }
+
+        .display-text {
+            font-size: 6rem;
+            line-height: 0.9;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: -0.04em;
+            padding: 3rem 0;
+            text-align: center;
+            border-bottom: var(--grid-line);
+        }
+
+        .label-text {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+            transition: opacity 0.2s;
+        }
+        
+        a:hover {
+            opacity: 0.6;
+        }
+
+        a.nav-link {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            font-weight: 600;
+        }
+
+        .grid-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            border-bottom: var(--grid-line);
+        }
+
+        .cell {
+            padding: 2rem;
+            border-right: var(--grid-line);
+            position: relative;
+        }
+
+        .cell:last-child {
+            border-right: none;
+        }
+
+        .top-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 2rem;
+            border-bottom: var(--grid-line);
+        }
+
+        .nav-group {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .nav-diamond {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            vertical-align: middle;
+            margin: 0 4px;
+        }
+
+        .action-btn {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            background: none;
+            border: none;
+            padding: 0;
+            cursor: pointer;
+            border-bottom: 1px solid var(--text-primary);
+            padding-bottom: 2px;
+            font-weight: 600;
+        }
+
+        .btn-revoke {
+            color: #C62828;
+            border-bottom-color: #C62828;
+        }
+
+        .keys-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .keys-table th {
+            text-align: left;
+            padding: 1rem 0;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--text-primary);
+        }
+
+        .keys-table td {
+            padding: 1.5rem 0;
+            border-bottom: 1px solid #EEEEEC;
+            font-size: 0.9rem;
+        }
+
+        .keys-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .mono {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+        }
+
+        .scope-tag {
+            font-size: 0.7rem;
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            color: var(--text-secondary);
+            margin-right: 0.5rem;
+        }
+
+        .control-input {
+            width: 100%;
+            border: none;
+            border-bottom: 1px solid var(--text-primary);
+            background: transparent;
+            padding: 0.5rem 0;
+            font-family: var(--font-main);
+            font-size: 1rem;
+            outline: none;
+            border-radius: 0;
+        }
+
+        .icon {
+            width: 14px;
+            height: 14px;
+            stroke: currentColor;
+            stroke-width: 1.5;
+            fill: none;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&amp;family=Space+Mono&amp;display=swap" rel="stylesheet" vid="6">
+</head>
+<body vid="7">
+
+    <nav class="top-nav" vid="8">
+        <div style="font-weight: 700; letter-spacing: -0.02em;" vid="9">INFERA.AI</div>
+        <div class="nav-group" vid="10">
+            <a href="#" class="nav-link" vid="11">MODELS</a>
+            <span class="nav-diamond" vid="12">◇</span>
+            <a href="#" class="nav-link" vid="13">CLUSTERS</a>
+            <span class="nav-diamond" vid="14">◇</span>
+            <a href="#" class="nav-link" vid="15">LOGS</a>
+            <span class="nav-diamond" vid="16">◇</span>
+            <a href="#" class="nav-link" style="border-bottom: 1px solid currentColor;" vid="17">API KEYS</a>
+        </div>
+        <div class="nav-group" style="gap: 1rem;" vid="18">
+            <a href="#" class="nav-link" vid="19">DOCS</a>
+            <a href="#" class="nav-link" vid="20">ACCOUNT (2)</a>
+        </div>
+    </nav>
+
+    <header class="display-text" vid="21">
+        API KEYS
+    </header>
+
+    <div class="grid-row" vid="22">
+        <div class="cell" style="grid-column: span 3;" vid="23">
+            <div class="label-text" style="margin-bottom: 2rem;" vid="24">
+                ACTIVE AUTHENTICATION TOKENS
+            </div>
+
+            <table class="keys-table" vid="25">
+                <thead vid="26">
+                    <tr vid="27">
+                        <th vid="28">Name / Prefix</th>
+                        <th vid="29">Created</th>
+                        <th vid="30">Last Used</th>
+                        <th vid="31">Scope</th>
+                        <th style="text-align: right;" vid="32">Action</th>
+                    </tr>
+                </thead>
+                <tbody vid="33">
+                    <tr vid="34">
+                        <td vid="35">
+                            <div style="font-weight: 500;" vid="36">Production-Main</div>
+                            <div class="mono" style="color: var(--text-secondary); margin-top: 4px;" vid="37">sk_live_4f92...</div>
+                        </td>
+                        <td vid="38">June 14, 2024</td>
+                        <td vid="39">2 mins ago</td>
+                        <td vid="40">
+                            <span class="scope-tag" vid="41">Inference</span>
+                            <span class="scope-tag" vid="42">Logs</span>
+                        </td>
+                        <td style="text-align: right;" vid="43">
+                            <button class="action-btn btn-revoke" vid="44">REVOKE</button>
+                        </td>
+                    </tr>
+                    <tr vid="45">
+                        <td vid="46">
+                            <div style="font-weight: 500;" vid="47">Staging-Worker</div>
+                            <div class="mono" style="color: var(--text-secondary); margin-top: 4px;" vid="48">sk_test_a2b1...</div>
+                        </td>
+                        <td vid="49">June 10, 2024</td>
+                        <td vid="50">Yesterday</td>
+                        <td vid="51">
+                            <span class="scope-tag" vid="52">Inference</span>
+                        </td>
+                        <td style="text-align: right;" vid="53">
+                            <button class="action-btn btn-revoke" vid="54">REVOKE</button>
+                        </td>
+                    </tr>
+                    <tr vid="55">
+                        <td vid="56">
+                            <div style="font-weight: 500;" vid="57">CI-Deployment-Key</div>
+                            <div class="mono" style="color: var(--text-secondary); margin-top: 4px;" vid="58">sk_live_9e31...</div>
+                        </td>
+                        <td vid="59">May 28, 2024</td>
+                        <td vid="60">June 12, 2024</td>
+                        <td vid="61">
+                            <span class="scope-tag" vid="62">Full Access</span>
+                        </td>
+                        <td style="text-align: right;" vid="63">
+                            <button class="action-btn btn-revoke" vid="64">REVOKE</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="cell" style="background-color: var(--bg-accent);" vid="65">
+            <div class="label-text" style="margin-bottom: 1.5rem;" vid="66">
+                <svg class="icon" viewBox="0 0 24 24" vid="67"><path d="M12 2v20M2 12h20" vid="68"></path></svg>
+                CREATE NEW KEY
+            </div>
+            
+            <div style="margin-bottom: 2rem;" vid="69">
+                <div class="label-text" vid="70">KEY NAME</div>
+                <input type="text" class="control-input" placeholder="e.g. Development" vid="71">
+            </div>
+
+            <div style="margin-bottom: 2rem;" vid="72">
+                <div class="label-text" vid="73">PERMISSIONS SCOPE</div>
+                <div style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem;" vid="74">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;" vid="75">
+                        <input type="checkbox" checked="" vid="76"> Inference
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;" vid="77">
+                        <input type="checkbox" vid="78"> Logs &amp; Metrics
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;" vid="79">
+                        <input type="checkbox" vid="80"> Cluster Management
+                    </label>
+                </div>
+            </div>
+
+            <button class="action-btn" style="width: 100%; text-align: left; padding: 1rem 0;" vid="81">GENERATE NEW KEY</button>
+            
+            <div style="margin-top: 4rem; font-size: 0.75rem; color: var(--text-secondary);" vid="82">
+                <p vid="83">Security Note: Keys are only displayed once upon creation. Store them securely in your vault.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid-row" style="border-bottom: none;" vid="84">
+        <div class="cell" vid="85">
+            <div class="label-text" vid="86">QUOTA</div>
+            <div style="margin-top: 0.5rem; font-size: 0.8rem;" vid="87">3 of 10 keys used</div>
+        </div>
+        <div class="cell" vid="88">
+            <div class="label-text" vid="89">ENCRYPTION</div>
+            <div style="margin-top: 0.5rem; font-size: 0.8rem;" vid="90">AES-256-GCM</div>
+        </div>
+        <div class="cell" style="grid-column: span 2;" vid="91">
+            <div class="label-text" vid="92">DOCUMENTATION</div>
+            <div style="margin-top: 0.5rem; font-size: 0.9rem;" vid="93">
+                Learn how to authenticate your requests using the Bearer scheme.
+                <div style="margin-top: 1rem;" vid="94">
+                    <a href="#" class="action-btn" vid="95">VIEW AUTH GUIDE</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</body></html>
+```

@@ -1,176 +1,8 @@
-import { useState } from 'react';
-import {
-  Server, Plus, Cpu, DollarSign, Clock,
-  AlertCircle, CheckCircle2, Loader2, Play, Square, Trash2,
-  Copy, Check, ExternalLink, Zap, Filter
-} from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { cn } from '../lib/utils';
-import type { Instance, GPUOffering, GPUType, InstanceStatus, VaultModel } from '../types';
-import { useInstances, useOfferings, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels } from '../hooks/useApi';
-
-function StatusBadge({ status }: { status: InstanceStatus }) {
-  const config: Record<InstanceStatus, { variant: string; icon: typeof CheckCircle2; spin?: boolean }> = {
-    pending: { variant: 'bg-warning/10 text-warning border-warning/20', icon: Clock },
-    provisioning: { variant: 'bg-primary/10 text-primary border-primary/20', icon: Loader2, spin: true },
-    running: { variant: 'bg-success/10 text-success border-success/20', icon: CheckCircle2 },
-    stopping: { variant: 'bg-warning/10 text-warning border-warning/20', icon: Clock },
-    stopped: { variant: 'bg-muted text-muted-foreground border-border', icon: Square },
-    terminating: { variant: 'bg-destructive/10 text-destructive border-destructive/20', icon: Loader2, spin: true },
-    terminated: { variant: 'bg-muted text-muted-foreground border-border', icon: Square },
-    error: { variant: 'bg-destructive/10 text-destructive border-destructive/20', icon: AlertCircle },
-  };
-
-  const { variant, icon: Icon, spin } = config[status];
-
-  return (
-    <span className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border", variant)}>
-      <Icon className={cn("w-3 h-3", spin && "animate-spin")} />
-      <span className="capitalize">{status}</span>
-    </span>
-  );
-}
-
-function InstanceCard({ instance }: { instance: Instance }) {
-  const [copied, setCopied] = useState(false);
-  const terminateMutation = useTerminateInstance();
-  const startMutation = useStartInstance();
-  const stopMutation = useStopInstance();
-
-  const handleTerminate = async () => {
-    if (!confirm('Terminate this instance?')) return;
-    try {
-      await terminateMutation.mutateAsync(instance.id);
-      toast.success('Instance terminated');
-    } catch {
-      toast.error('Failed to terminate instance');
-    }
-  };
-
-  const handleStart = async () => {
-    try {
-      await startMutation.mutateAsync(instance.id);
-      toast.success('Instance started');
-    } catch {
-      toast.error('Failed to start instance');
-    }
-  };
-
-  const handleStop = async () => {
-    try {
-      await stopMutation.mutateAsync(instance.id);
-      toast.success('Instance stopped');
-    } catch {
-      toast.error('Failed to stop instance');
-    }
-  };
-
-  const copyEndpoint = () => {
-    navigator.clipboard.writeText(`${instance.public_ip}:${instance.http_port}`);
-    setCopied(true);
-    toast.success('Copied to clipboard');
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const isRunning = instance.status === 'running';
-  const isStopped = instance.status === 'stopped';
-  const isLoading = terminateMutation.isPending || startMutation.isPending || stopMutation.isPending;
-
-  return (
-    <div className="bg-card border border-border rounded-xl p-6 hover:border-primary/30 transition-all animate-fade-in">
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center", isRunning ? "bg-success/10 border border-success/20" : "bg-muted border border-border")}>
-            <Server className={cn("w-6 h-6", isRunning ? "text-success" : "text-muted-foreground")} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-foreground">{instance.name}</span>
-              {instance.spot_instance && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-warning/10 text-warning border border-warning/20">
-                  <Zap className="w-2.5 h-2.5" />Spot
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
-              <span className="capitalize">{instance.provider}</span>
-              <span>•</span>
-              <span className="font-mono">{instance.id.slice(0, 12)}</span>
-            </div>
-          </div>
-        </div>
-        <StatusBadge status={instance.status} />
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-accent text-accent-foreground border border-border">
-          <Cpu className="w-3 h-3" />
-          {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
-        </span>
-        {instance.models && instance.models.length > 0 && instance.models.map(model => (
-          <span key={model} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary border border-primary/20">
-            {model.split('/').pop()}
-          </span>
-        ))}
-      </div>
-
-      {isRunning && instance.public_ip && (
-        <div className="mb-4 p-3 bg-muted/50 rounded-lg border border-border">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-xs text-muted-foreground mb-1">HTTP Endpoint</div>
-              <code className="text-sm text-primary font-mono">{instance.public_ip}:{instance.http_port}</code>
-            </div>
-            <div className="flex items-center gap-1">
-              <button onClick={copyEndpoint} className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-                {copied ? <Check className="w-4 h-4 text-success" /> : <Copy className="w-4 h-4" />}
-              </button>
-              <a href={`http://${instance.public_ip}:${instance.http_port}/health`} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-                <ExternalLink className="w-4 h-4" />
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {instance.error && (
-        <div className="mb-4 p-3 bg-destructive/5 border border-destructive/20 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
-            <p className="text-sm text-destructive">{instance.error}</p>
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center justify-between pt-4 border-t border-border">
-        <div className="flex items-center gap-1.5">
-          <DollarSign className="w-4 h-4 text-success" />
-          <span className="text-lg font-semibold text-foreground font-mono tabular-nums">{instance.cost_per_hour.toFixed(2)}</span>
-          <span className="text-sm text-muted-foreground">/hr</span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {isStopped && (
-            <button onClick={handleStart} disabled={isLoading} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-success/10 text-success border border-success/20 hover:bg-success hover:text-success-foreground transition-colors disabled:opacity-50">
-              {startMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              <span>Start</span>
-            </button>
-          )}
-          {isRunning && (
-            <button onClick={handleStop} disabled={isLoading} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-secondary text-secondary-foreground border border-border hover:bg-accent transition-colors disabled:opacity-50">
-              {stopMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
-              <span>Stop</span>
-            </button>
-          )}
-          <button onClick={handleTerminate} disabled={isLoading} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-destructive/10 text-destructive border border-destructive/20 hover:bg-destructive hover:text-destructive-foreground transition-colors disabled:opacity-50">
-            {terminateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-            <span>Terminate</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+import type { Instance, GPUOffering, GPUType, VaultModel } from '../types';
+import { useInstances, useOfferings, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
 
 const GPU_VRAM_GB: Record<GPUType, number> = {
   RTX_4090: 24,
@@ -181,7 +13,89 @@ const GPU_VRAM_GB: Record<GPUType, number> = {
   L40S: 48,
 };
 
-function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClose: () => void; offerings: GPUOffering[] | undefined }) {
+function InstanceRow({ instance }: { instance: Instance }) {
+  const terminateMutation = useTerminateInstance();
+  const startMutation = useStartInstance();
+  const stopMutation = useStopInstance();
+  const isLoading = terminateMutation.isPending || startMutation.isPending || stopMutation.isPending;
+
+  const statusClass = instance.status === 'running' ? '' :
+    instance.status === 'error' ? 'error' :
+    ['stopping', 'pending', 'provisioning'].includes(instance.status) ? 'warning' : 'inactive';
+
+  const statusLabel = instance.status.charAt(0).toUpperCase() + instance.status.slice(1);
+
+  return (
+    <tr style={{ borderBottom: '1px solid #EEEEEC' }}>
+      <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
+        <div className="mono">{instance.name || instance.id.slice(0, 16)}</div>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+          {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
+          {instance.models && instance.models.length > 0 && (
+            <> &middot; {instance.models[0].split('/').pop()}</>
+          )}
+        </div>
+      </td>
+      <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
+          <span className={`status-dot ${statusClass}`} />
+          {statusLabel}
+        </div>
+      </td>
+      <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
+        <div className="mono">${instance.cost_per_hour.toFixed(2)}/hr</div>
+      </td>
+      <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
+        {instance.public_ip ? (
+          <div className="mono" style={{ fontSize: '0.8rem' }}>{instance.public_ip}</div>
+        ) : (
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>-</span>
+        )}
+      </td>
+      <td style={{ padding: '1.5rem 0', verticalAlign: 'middle', textAlign: 'right' }}>
+        {instance.status === 'stopped' && (
+          <button
+            className="action-btn"
+            style={{ fontSize: '0.65rem', marginRight: '1rem' }}
+            disabled={isLoading}
+            onClick={async () => {
+              try { await startMutation.mutateAsync(instance.id); toast.success('Instance started'); }
+              catch { toast.error('Failed to start'); }
+            }}
+          >START</button>
+        )}
+        {instance.status === 'running' && (
+          <button
+            className="action-btn"
+            style={{ fontSize: '0.65rem', marginRight: '1rem' }}
+            disabled={isLoading}
+            onClick={async () => {
+              try { await stopMutation.mutateAsync(instance.id); toast.success('Instance stopped'); }
+              catch { toast.error('Failed to stop'); }
+            }}
+          >STOP</button>
+        )}
+        <button
+          className="action-btn destructive"
+          style={{ fontSize: '0.65rem' }}
+          disabled={isLoading}
+          onClick={async () => {
+            if (!confirm('Terminate this instance?')) return;
+            try { await terminateMutation.mutateAsync(instance.id); toast.success('Terminated'); }
+            catch { toast.error('Failed to terminate'); }
+          }}
+        >TERMINATE</button>
+      </td>
+    </tr>
+  );
+}
+
+function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
+  isOpen: boolean;
+  onClose: () => void;
+  offerings: GPUOffering[] | undefined;
+  preselectedModel?: string | null;
+}) {
   const [selectedGPU, setSelectedGPU] = useState<string>('');
   const [name, setName] = useState('');
   const [spotInstance, setSpotInstance] = useState(false);
@@ -189,263 +103,157 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
   const provisionMutation = useProvisionInstance();
   const { data: vaultModels } = useVaultModels({ status: 'available' });
 
+  // Pre-select model when opening from registry DEPLOY
+  useEffect(() => {
+    if (preselectedModel && isOpen) {
+      setSelectedModels(prev => prev.includes(preselectedModel) ? prev : [preselectedModel, ...prev]);
+    }
+  }, [preselectedModel, isOpen]);
+
   const getOfferingKey = (o: GPUOffering) =>
     `${o.provider}-${o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}`;
 
-  // Get selected GPU type for VRAM filtering
-  const selectedOffering = offerings?.find(o => getOfferingKey(o) === selectedGPU);
+  // Deduplicate offerings
+  const dedupedOfferings = offerings ? Array.from(
+    offerings.reduce((map, o) => {
+      const key = getOfferingKey(o);
+      const existing = map.get(key);
+      if (!existing || o.cost_per_hour < existing.cost_per_hour) map.set(key, o);
+      return map;
+    }, new Map<string, GPUOffering>()).values()
+  ) : undefined;
+
+  const selectedOffering = dedupedOfferings?.find(o => getOfferingKey(o) === selectedGPU);
   const selectedGPUVram = selectedOffering ? GPU_VRAM_GB[selectedOffering.gpu_type] : undefined;
 
-  // Filter vault models by VRAM compatibility
   const allVaultModels = vaultModels?.models;
   const compatibleModels = allVaultModels?.filter((m: VaultModel) => {
     if (!selectedGPUVram) return true;
-    // vram_required is in MB, GPU_VRAM_GB is in GB
     return m.vram_required <= selectedGPUVram * 1024;
   });
 
   const toggleModel = (sourceUri: string) => {
-    setSelectedModels(prev =>
-      prev.includes(sourceUri)
-        ? prev.filter(id => id !== sourceUri)
-        : [...prev, sourceUri]
-    );
+    setSelectedModels(prev => prev.includes(sourceUri) ? prev.filter(id => id !== sourceUri) : [...prev, sourceUri]);
   };
 
   const handleProvision = async () => {
-    if (!selectedGPU) return;
-    const offering = offerings?.find(o => getOfferingKey(o) === selectedGPU);
-    if (!offering) return;
-
+    if (!selectedOffering) return;
     try {
       await provisionMutation.mutateAsync({
         name: name || 'infera-worker',
-        provider: offering.provider,
-        gpu_type: offering.gpu_type,
-        gpu_count: offering.gpu_count,
+        provider: selectedOffering.provider,
+        gpu_type: selectedOffering.gpu_type,
+        gpu_count: selectedOffering.gpu_count,
         spot_instance: spotInstance,
         models: selectedModels.length > 0 ? selectedModels : undefined,
       });
       toast.success('Instance provisioned');
       onClose();
-      setName('');
-      setSelectedGPU('');
-      setSelectedModels([]);
-    } catch {
-      toast.error('Failed to provision instance');
-    }
-  };
-
-  const handleSelectGPU = (key: string) => {
-    setSelectedGPU(prev => prev === key ? '' : key);
+      setName(''); setSelectedGPU(''); setSelectedModels([]);
+    } catch { toast.error('Failed to provision'); }
   };
 
   if (!isOpen) return null;
 
-  // Deduplicate offerings by key, keeping the cheapest for each unique config
-  const dedupedOfferings = offerings ? Array.from(
-    offerings.reduce((map, o) => {
-      const key = getOfferingKey(o);
-      const existing = map.get(key);
-      if (!existing || o.cost_per_hour < existing.cost_per_hour) {
-        map.set(key, o);
-      }
-      return map;
-    }, new Map<string, GPUOffering>()).values()
-  ) : undefined;
-
-  const groupedOfferings = dedupedOfferings?.reduce((acc, o) => {
-    if (!acc[o.provider]) acc[o.provider] = [];
-    acc[o.provider].push(o);
-    return acc;
-  }, {} as Record<string, GPUOffering[]>);
-
   return (
     <>
-      <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 animate-fade-in" onClick={onClose} />
-      <div className="fixed inset-4 md:inset-8 lg:inset-12 bg-card border border-border rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col animate-scale-in">
+      <div
+        style={{ position: 'fixed', inset: 0, background: 'rgba(253,251,248,0.8)', backdropFilter: 'blur(4px)', zIndex: 50 }}
+        onClick={onClose}
+      />
+      <div style={{
+        position: 'fixed', inset: '2rem', maxWidth: 900, margin: '0 auto',
+        background: 'var(--bg-paper)', border: 'var(--grid-line)', zIndex: 50,
+        display: 'flex', flexDirection: 'column', overflow: 'hidden'
+      }}>
         {/* Header */}
-        <div className="p-6 border-b border-border flex-shrink-0">
-          <h2 className="text-2xl font-semibold text-foreground">Provision GPU Instance</h2>
-          <p className="text-sm text-muted-foreground mt-1">Select a GPU configuration to deploy your inference worker</p>
+        <div style={{ padding: '2rem', borderBottom: 'var(--grid-line)' }}>
+          <div className="label-text" style={{ marginBottom: '0.5rem' }}>PROVISION NEW NODE</div>
+          <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Select GPU configuration and models to deploy</div>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="max-w-5xl mx-auto space-y-8">
-            <div className="max-w-md">
-              <label className="block text-sm font-medium text-foreground mb-2">Instance Name</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="infera-worker"
-                className="w-full bg-input border border-border rounded-lg px-4 py-3 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '2rem' }}>
+          <div style={{ marginBottom: '2rem' }}>
+            <div className="label-text">INSTANCE NAME</div>
+            <input type="text" className="control-input" value={name} onChange={e => setName(e.target.value)} placeholder="infera-worker" style={{ marginTop: '0.5rem' }} />
+          </div>
 
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-4">GPU Configuration</label>
-
-              {groupedOfferings && Object.entries(groupedOfferings).map(([provider, providerOfferings]) => (
-                <div key={provider} className="mb-6">
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="w-2 h-2 rounded-full bg-primary" />
-                    <span className="text-sm font-semibold text-foreground uppercase tracking-wide">{provider}</span>
-                    <span className="text-xs text-muted-foreground">({providerOfferings.length} options)</span>
+          <div className="label-text" style={{ marginBottom: '1rem' }}>GPU CONFIGURATION</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '2rem' }}>
+            {dedupedOfferings?.map(o => {
+              const key = getOfferingKey(o);
+              const isSelected = selectedGPU === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setSelectedGPU(prev => prev === key ? '' : key)}
+                  style={{
+                    padding: '1.25rem', textAlign: 'left', cursor: 'pointer',
+                    border: isSelected ? '2px solid var(--text-primary)' : 'var(--grid-line)',
+                    background: isSelected ? 'var(--bg-accent)' : 'transparent',
+                    fontFamily: 'var(--font-main)',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.5rem' }}>
+                    {o.gpu_count}x {o.gpu_type.replace('_', ' ')}
                   </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {providerOfferings.map((offering) => {
-                      const key = getOfferingKey(offering);
-                      const isSelected = selectedGPU === key;
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => handleSelectGPU(key)}
-                          className={cn(
-                            "p-4 rounded-xl border-2 text-left transition-all duration-200",
-                            isSelected
-                              ? "bg-primary/15 border-primary shadow-[0_0_0_1px_var(--primary),0_0_16px_-4px_var(--primary)] scale-[1.02]"
-                              : "bg-card border-border hover:border-primary/50 hover:bg-muted/30"
-                          )}
-                        >
-                          <div className="flex items-start justify-between mb-3">
-                            <div className={cn(
-                              "w-12 h-12 rounded-xl flex items-center justify-center transition-colors",
-                              isSelected ? "bg-primary text-primary-foreground" : "bg-muted"
-                            )}>
-                              <Cpu className={cn("w-6 h-6", isSelected ? "text-primary-foreground" : "text-muted-foreground")} />
-                            </div>
-                            {isSelected && (
-                              <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-primary/20 text-primary text-xs font-medium">
-                                <Check className="w-3 h-3" />
-                                Selected
-                              </div>
-                            )}
-                          </div>
-
-                          <div className={cn("font-semibold text-lg mb-1", isSelected ? "text-primary" : "text-foreground")}>
-                            {offering.gpu_count}x {offering.gpu_type.replace('_', ' ')}
-                          </div>
-
-                          <div className="flex flex-wrap gap-2 mb-3">
-                            <span className="px-2 py-0.5 rounded-md bg-muted text-xs text-muted-foreground">
-                              {offering.vcpu} vCPU
-                            </span>
-                            <span className="px-2 py-0.5 rounded-md bg-muted text-xs text-muted-foreground">
-                              {offering.memory_gb}GB RAM
-                            </span>
-                          </div>
-
-                          <div className={cn("text-xl font-bold font-mono tabular-nums", isSelected ? "text-primary" : "text-success")}>
-                            ${offering.cost_per_hour.toFixed(2)}
-                            <span className="text-sm font-normal text-muted-foreground">/hr</span>
-                          </div>
-                        </button>
-                      );
-                    })}
+                  <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    <span>{o.vcpu} vCPU</span>
+                    <span>{o.memory_gb}GB</span>
                   </div>
-                </div>
-              ))}
-            </div>
+                  <div className="mono" style={{ marginTop: '0.75rem', fontSize: '1rem' }}>
+                    ${o.cost_per_hour.toFixed(2)}<span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/hr</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
 
-            {/* Models to Deploy */}
-            {allVaultModels && allVaultModels.length > 0 && (
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">Models to Deploy</label>
-                <p className="text-xs text-muted-foreground mb-3">
-                  {selectedGPUVram
-                    ? `Showing models that fit within ${selectedGPUVram}GB VRAM`
-                    : 'Select a GPU to filter compatible models'}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {(compatibleModels || []).map(model => {
-                    const isSelected = selectedModels.includes(model.source_uri);
-                    const vramGB = (model.vram_required / 1024).toFixed(0);
-                    return (
-                      <button
-                        key={model.id}
-                        onClick={() => toggleModel(model.source_uri)}
-                        className={cn(
-                          "inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-all",
-                          isSelected
-                            ? "bg-primary/15 border-primary text-primary"
-                            : "bg-card border-border text-foreground hover:border-primary/50"
-                        )}
-                      >
-                        {isSelected && <Check className="w-3.5 h-3.5" />}
-                        <span className="font-medium">{model.name}</span>
-                        {model.parameters && (
-                          <span className="text-xs text-muted-foreground">{model.parameters}</span>
-                        )}
-                        <span className="px-1.5 py-0.5 rounded bg-muted text-xs text-muted-foreground">
-                          {vramGB}GB
-                        </span>
-                      </button>
-                    );
-                  })}
-                  {compatibleModels?.length === 0 && selectedGPUVram && (
-                    <p className="text-sm text-muted-foreground">No models fit within {selectedGPUVram}GB VRAM</p>
-                  )}
-                </div>
+          {/* Models */}
+          {allVaultModels && allVaultModels.length > 0 && (
+            <div style={{ marginBottom: '2rem' }}>
+              <div className="label-text" style={{ marginBottom: '0.5rem' }}>MODELS TO DEPLOY</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                {selectedGPUVram ? `Showing models that fit within ${selectedGPUVram}GB VRAM` : 'Select a GPU to filter compatible models'}
               </div>
-            )}
-
-            <div className="flex items-center justify-between p-5 bg-muted/30 rounded-xl border border-border max-w-md">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Zap className="w-5 h-5 text-warning" />
-                  <span className="font-semibold text-foreground">Spot Instance</span>
-                </div>
-                <p className="text-sm text-muted-foreground mt-1">Up to 70% cheaper, but may be interrupted</p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {(compatibleModels || []).map(model => {
+                  const isSelected = selectedModels.includes(model.source_uri);
+                  return (
+                    <button
+                      key={model.id}
+                      onClick={() => toggleModel(model.source_uri)}
+                      style={{
+                        padding: '0.5rem 1rem', cursor: 'pointer',
+                        border: isSelected ? '1px solid var(--text-primary)' : 'var(--grid-line)',
+                        background: isSelected ? 'var(--bg-accent)' : 'transparent',
+                        fontFamily: 'var(--font-main)', fontSize: '0.85rem',
+                        display: 'flex', alignItems: 'center', gap: '0.5rem',
+                      }}
+                    >
+                      {model.name}
+                      {model.parameters && <span className="badge">{model.parameters}</span>}
+                    </button>
+                  );
+                })}
               </div>
-              <button
-                onClick={() => setSpotInstance(!spotInstance)}
-                className={cn(
-                  "w-14 h-7 rounded-full transition-colors relative",
-                  spotInstance ? "bg-primary" : "bg-muted"
-                )}
-              >
-                <div className={cn(
-                  "absolute w-6 h-6 bg-background rounded-full top-0.5 transition-all shadow-md",
-                  spotInstance ? "left-7" : "left-0.5"
-                )} />
-              </button>
             </div>
+          )}
+
+          {/* Spot toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <input type="checkbox" checked={spotInstance} onChange={e => setSpotInstance(e.target.checked)} />
+            <span style={{ fontSize: '0.9rem' }}>Spot Instance (up to 70% cheaper, may be interrupted)</span>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-border flex-shrink-0 flex items-center justify-between bg-muted/20">
-          <div className="text-sm text-muted-foreground">
-            {selectedGPU ? (
-              <span className="text-foreground">
-                Selected: <span className="font-medium text-primary">{offerings?.find(o => getOfferingKey(o) === selectedGPU)?.gpu_type.replace('_', ' ')}</span>
-              </span>
-            ) : (
-              'No GPU selected'
-            )}
-          </div>
-          <div className="flex gap-3">
-            <button
-              onClick={onClose}
-              className="px-5 py-2.5 rounded-lg bg-secondary text-secondary-foreground border border-border hover:bg-accent transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleProvision}
-              disabled={!selectedGPU || provisionMutation.isPending}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {provisionMutation.isPending ? (
-                <><Loader2 className="w-4 h-4 animate-spin" />Provisioning...</>
-              ) : (
-                <><Plus className="w-4 h-4" />Provision Instance</>
-              )}
-            </button>
-          </div>
+        <div style={{ padding: '1.5rem 2rem', borderTop: 'var(--grid-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button className="action-btn" onClick={onClose}>CANCEL</button>
+          <button className="btn-primary" onClick={handleProvision} disabled={!selectedGPU || provisionMutation.isPending}>
+            {provisionMutation.isPending ? 'PROVISIONING...' : 'PROVISION NODE'}
+          </button>
         </div>
       </div>
     </>
@@ -453,10 +261,24 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
 }
 
 export function Instances() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [showProvisionModal, setShowProvisionModal] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('active');
   const { data: instances, isLoading } = useInstances();
   const { data: offerings } = useOfferings();
+  const { data: workers } = useWorkers();
+
+  const [preselectedModel, setPreselectedModel] = useState<string | null>(null);
+
+  // Auto-open provision modal if redirected from dashboard or registry
+  useEffect(() => {
+    if (searchParams.get('provision') === 'true') {
+      const model = searchParams.get('model');
+      if (model) setPreselectedModel(model);
+      setShowProvisionModal(true);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const filteredInstances = instances?.filter(instance => {
     if (statusFilter === 'active') return !['terminated', 'terminating'].includes(instance.status);
@@ -464,49 +286,204 @@ export function Instances() {
     return instance.status === statusFilter;
   }) || [];
 
-  return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="relative">
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="appearance-none bg-input border border-border rounded-lg px-4 py-2 pr-10 text-sm text-foreground focus:outline-none cursor-pointer">
-              <option value="active">Active</option>
-              <option value="running">Running</option>
-              <option value="stopped">Stopped</option>
-              <option value="all">All</option>
-            </select>
-            <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-          </div>
-          <span className="text-sm text-muted-foreground">{filteredInstances.length} instance{filteredInstances.length !== 1 ? 's' : ''}</span>
-        </div>
+  const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];
+  const totalGpuUtil = healthyWorkers.length > 0
+    ? Math.round(healthyWorkers.reduce((sum, w) => sum + w.gpu_utilization, 0) / healthyWorkers.length)
+    : 0;
+  const totalMemUsed = healthyWorkers.reduce((sum, w) => sum + w.memory_used, 0);
+  const totalMemTotal = healthyWorkers.reduce((sum, w) => sum + w.memory_total, 0);
 
-        <button onClick={() => setShowProvisionModal(true)} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
-          <Plus className="w-4 h-4" />New Instance
-        </button>
+  return (
+    <div className="animate-fade-in">
+      {/* Metrics Row */}
+      <div className="grid-row">
+        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <div className="label-text">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+            TOTAL INSTANCES
+          </div>
+          <div className="value-text">{filteredInstances.length}</div>
+          <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            {instances?.length || 0} total
+          </div>
+        </div>
+        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <div className="label-text">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M12 2v20M2 12h20" />
+            </svg>
+            AVG GPU UTIL
+          </div>
+          <div className="value-text">{totalGpuUtil}%</div>
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: `${totalGpuUtil}%` }} />
+          </div>
+        </div>
+        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <div className="label-text">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+            </svg>
+            MEMORY USAGE
+          </div>
+          <div className="value-text">
+            {totalMemTotal > 0 ? `${(totalMemUsed / 1073741824).toFixed(1)} / ${(totalMemTotal / 1073741824).toFixed(1)} GB` : '-'}
+          </div>
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: totalMemTotal > 0 ? `${(totalMemUsed / totalMemTotal * 100)}%` : '0%' }} />
+          </div>
+        </div>
+        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <div className="label-text">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+            </svg>
+            STATUS
+          </div>
+          <div className="value-text" style={{ fontSize: '1.25rem' }}>
+            {filteredInstances.filter(i => i.status === 'running').length} Running
+          </div>
+          <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className={`status-dot ${filteredInstances.some(i => i.status === 'running') ? '' : 'inactive'}`} />
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              {filteredInstances.some(i => i.status === 'running') ? 'Operational' : 'No active nodes'}
+            </span>
+          </div>
+        </div>
       </div>
 
-      {isLoading ? (
-        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {[1, 2, 3].map(i => <div key={i} className="h-64 bg-muted rounded-xl animate-pulse" />)}
-        </div>
-      ) : filteredInstances.length === 0 ? (
-        <div className="bg-card border border-border rounded-xl p-6 text-center py-16">
-          <div className="w-16 h-16 rounded-xl bg-muted flex items-center justify-center mx-auto mb-4">
-            <Server className="w-8 h-8 text-muted-foreground" />
+      {/* Main Content Row */}
+      <div className="grid-row" style={{ flexGrow: 1 }}>
+        {/* Node Table */}
+        <div className="cell" style={{ gridColumn: 'span 3' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="label-text">NODE OVERVIEW</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <select
+                className="filter-select"
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value)}
+              >
+                <option value="active">Active</option>
+                <option value="running">Running</option>
+                <option value="stopped">Stopped</option>
+                <option value="all">All</option>
+              </select>
+            </div>
           </div>
-          <h3 className="text-lg font-semibold text-foreground mb-2">No instances</h3>
-          <p className="text-muted-foreground text-sm mb-6">Provision a GPU instance to get started</p>
-          <button onClick={() => setShowProvisionModal(true)} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground">
-            <Plus className="w-4 h-4" />Provision Instance
+
+          {isLoading ? (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading...</div>
+          ) : filteredInstances.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '4rem 0', color: 'var(--text-secondary)' }}>
+              <div style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>No instances found</div>
+              <button className="action-btn" onClick={() => setShowProvisionModal(true)}>PROVISION NEW NODE</button>
+            </div>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>NODE ID</th>
+                  <th>STATUS</th>
+                  <th>COST</th>
+                  <th>ENDPOINT</th>
+                  <th style={{ textAlign: 'right' }}>ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredInstances.map(instance => (
+                  <InstanceRow key={instance.id} instance={instance} />
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <button className="action-btn" style={{ marginTop: '2rem' }} onClick={() => setShowProvisionModal(true)}>
+            PROVISION NEW NODE
           </button>
         </div>
-      ) : (
-        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filteredInstances.map(instance => <InstanceCard key={instance.id} instance={instance} />)}
-        </div>
-      )}
 
-      <ProvisionModal isOpen={showProvisionModal} onClose={() => setShowProvisionModal(false)} offerings={offerings} />
+        {/* Sidebar */}
+        <div className="cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
+          <div className="label-text" style={{ marginBottom: '2rem' }}>CLUSTER INFO</div>
+
+          <div style={{ marginBottom: '2.5rem' }}>
+            <div className="label-text">TOTAL WORKERS</div>
+            <div className="mono" style={{ fontSize: '1.25rem', marginTop: '0.5rem' }}>
+              {healthyWorkers.length}
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '2.5rem' }}>
+            <div className="label-text">ACTIVE MODELS</div>
+            <div style={{ marginTop: '0.5rem' }}>
+              {healthyWorkers.length > 0 ? (
+                [...new Set(healthyWorkers.flatMap(w => w.models || []))].map(model => (
+                  <div key={model} style={{ fontSize: '0.85rem', padding: '0.25rem 0' }}>
+                    {model.split('/').pop()}
+                  </div>
+                ))
+              ) : (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>None</div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ marginTop: '4rem', borderTop: '1px solid var(--border-color)', paddingTop: '2rem' }}>
+            <div className="label-text">CLUSTER HEALTH</div>
+            <div style={{ marginTop: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                <span>Gateway</span>
+                <span style={{ color: 'var(--color-success)' }}>OK</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                <span>Router</span>
+                <span style={{ color: 'var(--color-success)' }}>OK</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                <span>Workers</span>
+                <span style={{ color: healthyWorkers.length > 0 ? 'var(--color-success)' : 'var(--color-warning)' }}>
+                  {healthyWorkers.length > 0 ? 'OK' : 'NONE'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="grid-row" style={{ borderBottom: 'none' }}>
+        <div className="cell">
+          <div className="label-text">PROVIDER</div>
+          <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+            {filteredInstances[0]?.provider || 'runpod'}
+          </div>
+        </div>
+        <div className="cell">
+          <div className="label-text">TOTAL COST</div>
+          <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+            ${filteredInstances.reduce((sum, i) => sum + i.cost_per_hour, 0).toFixed(2)}/hr
+          </div>
+        </div>
+        <div className="cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text">TAGS</div>
+          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+            <span className="badge">INFERENCE</span>
+            <span className="badge">GPU</span>
+            <span className="badge">PRODUCTION</span>
+          </div>
+        </div>
+      </div>
+
+      <ProvisionModal
+        isOpen={showProvisionModal}
+        onClose={() => { setShowProvisionModal(false); setPreselectedModel(null); }}
+        offerings={offerings}
+        preselectedModel={preselectedModel}
+      />
     </div>
   );
 }

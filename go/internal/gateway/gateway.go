@@ -663,6 +663,19 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Sync loaded models from heartbeat (self-healing if registration missed them)
+	if len(req.LoadedModels) > 0 {
+		models := make([]types.LoadedModel, len(req.LoadedModels))
+		for i, m := range req.LoadedModels {
+			models[i] = types.LoadedModel{
+				ModelID:  m.ModelID,
+				Version:  m.Version,
+				LoadedAt: time.Now(),
+			}
+		}
+		_ = g.router.UpdateWorkerModels(req.WorkerID, models)
+	}
+
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"acknowledged": true,
 	})

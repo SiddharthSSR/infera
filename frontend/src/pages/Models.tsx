@@ -1,293 +1,60 @@
 import { useState } from 'react';
-import {
-  Database, Plus, Search, X, Trash2, Loader2,
-  Cpu, MemoryStick, MessageSquare, Tag,
-  Box, Beaker, Archive
-} from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { cn } from '../lib/utils';
-import type { VaultModel, VaultModelFilter, CreateVaultModelInput } from '../types';
-import {
-  useVaultModels, useVaultStats, useVaultFamilies,
-  useRegisterVaultModel, useDeleteVaultModel,
-} from '../hooks/useApi';
+import { useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel } from '../hooks/useApi';
 
-const familyColors: Record<string, string> = {
-  mistral: 'bg-orange-500/10 text-orange-500 border-orange-500/20',
-  llama: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
-  phi: 'bg-violet-500/10 text-violet-500 border-violet-500/20',
-  qwen: 'bg-cyan-500/10 text-cyan-500 border-cyan-500/20',
-  gemma: 'bg-pink-500/10 text-pink-500 border-pink-500/20',
-};
+const FAMILY_OPTIONS = ['mistral', 'llama', 'qwen', 'phi', 'gemma', 'deepseek', 'falcon', 'mixtral', 'yi', 'command-r'];
+const QUANT_OPTIONS = ['none', 'GPTQ', 'AWQ', 'GGUF', 'FP8', 'INT8', 'INT4'];
 
-const statusConfig = {
-  available: { color: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20', icon: Box },
-  testing: { color: 'bg-amber-500/10 text-amber-500 border-amber-500/20', icon: Beaker },
-  deprecated: { color: 'bg-red-500/10 text-red-500 border-red-500/20', icon: Archive },
-};
-
-function getFamilyColor(family: string) {
-  return familyColors[family] || 'bg-muted text-muted-foreground border-border';
-}
-
-function formatVRAM(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB`;
-  return `${mb} MB`;
-}
-
-function formatContext(ctx: number): string {
-  if (ctx >= 1024) return `${(ctx / 1024).toFixed(0)}K`;
-  return `${ctx}`;
-}
-
-function StatCard({ label, value, icon: Icon }: { label: string; value: number; icon: typeof Database }) {
-  return (
-    <div className="bg-card border border-border rounded-xl p-4">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
-          <Icon className="w-5 h-5 text-muted-foreground" />
-        </div>
-        <div>
-          <div className="text-2xl font-light tabular-nums font-mono text-foreground">{value}</div>
-          <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ModelCard({
-  model,
-  onClick,
-  onDelete,
-}: {
-  model: VaultModel;
-  onClick: () => void;
-  onDelete: () => void;
-}) {
-  const cfg = statusConfig[model.status] || statusConfig.available;
-  const StatusIcon = cfg.icon;
-
-  return (
-    <div
-      onClick={onClick}
-      className="bg-card border border-border rounded-xl p-5 hover:border-primary/30 transition-all cursor-pointer group relative"
-    >
-      {/* Delete button on hover */}
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="absolute top-3 right-3 p-1.5 rounded-lg text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive hover:bg-destructive/10 transition-all"
-        title="Delete model"
-      >
-        <Trash2 className="w-4 h-4" />
-      </button>
-
-      {/* Header */}
-      <div className="flex items-start gap-3 mb-3">
-        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center border flex-shrink-0", getFamilyColor(model.family))}>
-          <Database className="w-5 h-5" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h3 className="font-semibold text-foreground text-sm leading-tight truncate pr-6">{model.name}</h3>
-          <code className="text-xs text-muted-foreground font-mono truncate block mt-0.5">{model.source_uri}</code>
-        </div>
-      </div>
-
-      {/* Badges */}
-      <div className="flex flex-wrap gap-1.5 mb-3">
-        <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border", getFamilyColor(model.family))}>
-          {model.family}
-        </span>
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-muted text-muted-foreground border border-border">
-          {model.parameters}
-        </span>
-        {model.quantization !== 'none' && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-warning/10 text-warning border border-warning/20">
-            {model.quantization.toUpperCase()}
-          </span>
-        )}
-        <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border", cfg.color)}>
-          <StatusIcon className="w-3 h-3" />
-          {model.status}
-        </span>
-      </div>
-
-      {/* Specs */}
-      <div className="grid grid-cols-2 gap-2 text-xs mb-3">
-        <div className="flex items-center gap-1.5 text-muted-foreground">
-          <MemoryStick className="w-3 h-3" />
-          <span>{formatVRAM(model.vram_required)} VRAM</span>
-        </div>
-        <div className="flex items-center gap-1.5 text-muted-foreground">
-          <MessageSquare className="w-3 h-3" />
-          <span>{formatContext(model.max_context)} ctx</span>
-        </div>
-      </div>
-
-      {/* Tags */}
-      {model.tags && model.tags.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {model.tags.map(tag => (
-            <span key={tag} className="px-1.5 py-0.5 rounded text-[10px] bg-muted text-muted-foreground">
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ModelDetailPanel({
-  model,
-  onClose,
-}: {
-  model: VaultModel;
-  onClose: () => void;
-}) {
-  const cfg = statusConfig[model.status] || statusConfig.available;
-  const StatusIcon = cfg.icon;
-
-  return (
-    <>
-      <div className="fixed inset-0 bg-background/60 backdrop-blur-sm z-40" onClick={onClose} />
-      <div className="fixed right-0 top-0 h-full w-full max-w-lg bg-card border-l border-border z-50 overflow-y-auto animate-slide-in-right">
-        <div className="p-6">
-          {/* Header */}
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-semibold text-foreground">Model Details</h2>
-            <button onClick={onClose} className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          {/* Name & URI */}
-          <div className="mb-6">
-            <h3 className="text-xl font-semibold text-foreground mb-1">{model.name}</h3>
-            <code className="text-sm text-primary font-mono break-all">{model.source_uri}</code>
-          </div>
-
-          {/* Status + Family */}
-          <div className="flex flex-wrap gap-2 mb-6">
-            <span className={cn("inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border", getFamilyColor(model.family))}>
-              {model.family}
-            </span>
-            <span className={cn("inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border", cfg.color)}>
-              <StatusIcon className="w-3.5 h-3.5" />
-              {model.status}
-            </span>
-            {model.quantization !== 'none' && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium bg-warning/10 text-warning border border-warning/20">
-                {model.quantization.toUpperCase()}
-              </span>
-            )}
-          </div>
-
-          {/* Specs Grid */}
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div className="bg-muted/50 rounded-lg p-4 border border-border">
-              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Parameters</div>
-              <div className="text-lg font-semibold text-foreground font-mono">{model.parameters}</div>
-            </div>
-            <div className="bg-muted/50 rounded-lg p-4 border border-border">
-              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">VRAM Required</div>
-              <div className="text-lg font-semibold text-foreground font-mono">{formatVRAM(model.vram_required)}</div>
-            </div>
-            <div className="bg-muted/50 rounded-lg p-4 border border-border">
-              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Max Context</div>
-              <div className="text-lg font-semibold text-foreground font-mono">{formatContext(model.max_context)}</div>
-            </div>
-            <div className="bg-muted/50 rounded-lg p-4 border border-border">
-              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Source</div>
-              <div className="text-lg font-semibold text-foreground">{model.source}</div>
-            </div>
-          </div>
-
-          {/* Tags */}
-          {model.tags && model.tags.length > 0 && (
-            <div className="mb-6">
-              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Tags</div>
-              <div className="flex flex-wrap gap-2">
-                {model.tags.map(tag => (
-                  <span key={tag} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-muted text-muted-foreground border border-border">
-                    <Tag className="w-3 h-3" />
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Metadata */}
-          {model.metadata && Object.keys(model.metadata).length > 0 && (
-            <div className="mb-6">
-              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Metadata</div>
-              <div className="bg-muted/50 rounded-lg border border-border p-3 space-y-2">
-                {Object.entries(model.metadata).map(([key, value]) => (
-                  <div key={key} className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground font-mono">{key}</span>
-                    <span className="text-foreground font-mono">{value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Timestamps */}
-          <div className="border-t border-border pt-4 space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">ID</span>
-              <code className="text-xs text-foreground font-mono">{model.id}</code>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Created</span>
-              <span className="text-foreground">{new Date(model.created_at).toLocaleString()}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Updated</span>
-              <span className="text-foreground">{new Date(model.updated_at).toLocaleString()}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function RegisterModelModal({
-  isOpen,
-  onClose,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-}) {
+function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const registerMutation = useRegisterVaultModel();
-  const [form, setForm] = useState<CreateVaultModelInput>({
+  const [form, setForm] = useState({
     name: '',
     source_uri: '',
-    parameters: '',
     family: '',
-    vram_required: 0,
-    max_context: 4096,
+    parameters: '',
     quantization: 'none',
-    tags: [],
+    max_context: 4096,
+    vram_required: 0,
+    tags: '',
   });
-  const [tagsInput, setTagsInput] = useState('');
+
+  const set = (field: string, value: string | number) =>
+    setForm(prev => ({ ...prev, [field]: value }));
+
+  // Auto-fill name from source_uri
+  const handleSourceUriChange = (uri: string) => {
+    set('source_uri', uri);
+    if (!form.name && uri.includes('/')) {
+      const modelName = uri.split('/').pop() || '';
+      set('name', modelName.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+    }
+  };
 
   const handleSubmit = async () => {
-    if (!form.name || !form.source_uri) return;
-
-    const tags = tagsInput
-      .split(',')
-      .map(t => t.trim())
-      .filter(Boolean);
+    if (!form.source_uri.trim()) {
+      toast.error('HuggingFace model ID is required');
+      return;
+    }
+    if (!form.name.trim()) {
+      toast.error('Model name is required');
+      return;
+    }
 
     try {
-      await registerMutation.mutateAsync({ ...form, tags });
-      toast.success('Model registered');
+      await registerMutation.mutateAsync({
+        name: form.name.trim(),
+        source_uri: form.source_uri.trim(),
+        family: form.family || undefined,
+        parameters: form.parameters || undefined,
+        quantization: form.quantization !== 'none' ? form.quantization : undefined,
+        max_context: form.max_context || undefined,
+        vram_required: form.vram_required || undefined,
+        tags: form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : undefined,
+      });
+      toast.success(`Registered ${form.name}`);
+      setForm({ name: '', source_uri: '', family: '', parameters: '', quantization: 'none', max_context: 4096, vram_required: 0, tags: '' });
       onClose();
-      setForm({ name: '', source_uri: '', parameters: '', family: '', vram_required: 0, max_context: 4096, quantization: 'none', tags: [] });
-      setTagsInput('');
     } catch {
       toast.error('Failed to register model');
     }
@@ -295,127 +62,158 @@ function RegisterModelModal({
 
   if (!isOpen) return null;
 
+  const inputStyle = {
+    width: '100%', padding: '0.6rem 0', background: 'transparent',
+    border: 'none', borderBottom: '1px solid var(--border-color)',
+    fontFamily: 'var(--font-main)', fontSize: '0.9rem', outline: 'none',
+    color: 'var(--text-primary)',
+  };
+
   return (
     <>
-      <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50" onClick={onClose} />
-      <div className="fixed inset-4 md:inset-y-8 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:max-w-2xl md:w-full bg-card border border-border rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col animate-scale-in">
-        <div className="p-6 border-b border-border">
-          <h2 className="text-xl font-semibold text-foreground">Register Model</h2>
-          <p className="text-sm text-muted-foreground mt-1">Add a new model to the registry</p>
+      <div
+        style={{ position: 'fixed', inset: 0, background: 'rgba(253,251,248,0.8)', backdropFilter: 'blur(4px)', zIndex: 50 }}
+        onClick={onClose}
+      />
+      <div style={{
+        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+        width: 580, maxHeight: '85vh',
+        background: 'var(--bg-paper)', border: 'var(--grid-line)', zIndex: 50,
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      }}>
+        {/* Header */}
+        <div style={{ padding: '2rem 2rem 1.5rem', borderBottom: 'var(--grid-line)' }}>
+          <div className="label-text" style={{ marginBottom: '0.5rem' }}>REGISTER MODEL</div>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Add a HuggingFace model to the registry
+          </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-foreground mb-1.5">Name *</label>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Llama 3.1 8B Instruct"
-                className="w-full bg-input border border-border rounded-lg px-4 py-2.5 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              />
+        {/* Form */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }}>
+          {/* Source URI - primary field */}
+          <div style={{ marginBottom: '1.75rem' }}>
+            <div className="label-text" style={{ marginBottom: '0.5rem' }}>HUGGINGFACE MODEL ID *</div>
+            <input
+              type="text"
+              value={form.source_uri}
+              onChange={e => handleSourceUriChange(e.target.value)}
+              placeholder="mistralai/Mistral-7B-Instruct-v0.3"
+              style={inputStyle}
+            />
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>
+              Exact org/model-name from HuggingFace. Must match what vLLM loads.
             </div>
+          </div>
 
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-foreground mb-1.5">Source URI *</label>
-              <input
-                type="text"
-                value={form.source_uri}
-                onChange={(e) => setForm({ ...form, source_uri: e.target.value })}
-                placeholder="meta-llama/Meta-Llama-3.1-8B-Instruct"
-                className="w-full bg-input border border-border rounded-lg px-4 py-2.5 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring font-mono text-sm"
-              />
-            </div>
+          {/* Name */}
+          <div style={{ marginBottom: '1.75rem' }}>
+            <div className="label-text" style={{ marginBottom: '0.5rem' }}>DISPLAY NAME *</div>
+            <input
+              type="text"
+              value={form.name}
+              onChange={e => set('name', e.target.value)}
+              placeholder="Mistral 7B Instruct v0.3"
+              style={inputStyle}
+            />
+          </div>
 
+          {/* Two-column row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.75rem' }}>
             <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">Parameters</label>
+              <div className="label-text" style={{ marginBottom: '0.5rem' }}>FAMILY</div>
+              <select
+                value={form.family}
+                onChange={e => set('family', e.target.value)}
+                style={{ ...inputStyle, cursor: 'pointer' }}
+              >
+                <option value="">Select family...</option>
+                {FAMILY_OPTIONS.map(f => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <div className="label-text" style={{ marginBottom: '0.5rem' }}>PARAMETERS</div>
               <input
                 type="text"
                 value={form.parameters}
-                onChange={(e) => setForm({ ...form, parameters: e.target.value })}
-                placeholder="8B"
-                className="w-full bg-input border border-border rounded-lg px-4 py-2.5 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                onChange={e => set('parameters', e.target.value)}
+                placeholder="7B"
+                style={inputStyle}
               />
             </div>
+          </div>
 
+          {/* Two-column row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.75rem' }}>
             <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">Family</label>
-              <input
-                type="text"
-                value={form.family}
-                onChange={(e) => setForm({ ...form, family: e.target.value })}
-                placeholder="llama"
-                className="w-full bg-input border border-border rounded-lg px-4 py-2.5 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">VRAM Required (MB)</label>
-              <input
-                type="number"
-                value={form.vram_required || ''}
-                onChange={(e) => setForm({ ...form, vram_required: parseInt(e.target.value) || 0 })}
-                placeholder="16384"
-                className="w-full bg-input border border-border rounded-lg px-4 py-2.5 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">Max Context</label>
-              <input
-                type="number"
-                value={form.max_context || ''}
-                onChange={(e) => setForm({ ...form, max_context: parseInt(e.target.value) || 0 })}
-                placeholder="131072"
-                className="w-full bg-input border border-border rounded-lg px-4 py-2.5 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">Quantization</label>
+              <div className="label-text" style={{ marginBottom: '0.5rem' }}>QUANTIZATION</div>
               <select
                 value={form.quantization}
-                onChange={(e) => setForm({ ...form, quantization: e.target.value })}
-                className="w-full bg-input border border-border rounded-lg px-4 py-2.5 text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                onChange={e => set('quantization', e.target.value)}
+                style={{ ...inputStyle, cursor: 'pointer' }}
               >
-                <option value="none">None</option>
-                <option value="awq">AWQ</option>
-                <option value="gptq">GPTQ</option>
-                <option value="int8">INT8</option>
+                {QUANT_OPTIONS.map(q => (
+                  <option key={q} value={q}>{q === 'none' ? 'None (FP16/BF16)' : q}</option>
+                ))}
               </select>
             </div>
-
             <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">Tags</label>
+              <div className="label-text" style={{ marginBottom: '0.5rem' }}>MAX CONTEXT</div>
               <input
-                type="text"
-                value={tagsInput}
-                onChange={(e) => setTagsInput(e.target.value)}
-                placeholder="chat, instruct, coding"
-                className="w-full bg-input border border-border rounded-lg px-4 py-2.5 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                type="number"
+                value={form.max_context}
+                onChange={e => set('max_context', parseInt(e.target.value) || 0)}
+                placeholder="32768"
+                style={inputStyle}
               />
+            </div>
+          </div>
+
+          {/* VRAM */}
+          <div style={{ marginBottom: '1.75rem' }}>
+            <div className="label-text" style={{ marginBottom: '0.5rem' }}>VRAM REQUIRED (MB)</div>
+            <input
+              type="number"
+              value={form.vram_required || ''}
+              onChange={e => set('vram_required', parseInt(e.target.value) || 0)}
+              placeholder="16384"
+              style={inputStyle}
+            />
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>
+              Approximate GPU memory needed. Used to filter compatible GPUs during provisioning.
+            </div>
+          </div>
+
+          {/* Tags */}
+          <div style={{ marginBottom: '1rem' }}>
+            <div className="label-text" style={{ marginBottom: '0.5rem' }}>TAGS</div>
+            <input
+              type="text"
+              value={form.tags}
+              onChange={e => set('tags', e.target.value)}
+              placeholder="chat, instruct, code"
+              style={inputStyle}
+            />
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>
+              Comma-separated labels for filtering.
             </div>
           </div>
         </div>
 
-        <div className="p-6 border-t border-border flex items-center justify-end gap-3 bg-muted/20">
+        {/* Footer */}
+        <div style={{
+          padding: '1.5rem 2rem', borderTop: 'var(--grid-line)',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <button className="action-btn" onClick={onClose}>CANCEL</button>
           <button
-            onClick={onClose}
-            className="px-5 py-2.5 rounded-lg bg-secondary text-secondary-foreground border border-border hover:bg-accent transition-colors"
-          >
-            Cancel
-          </button>
-          <button
+            className="btn-primary"
             onClick={handleSubmit}
-            disabled={!form.name || !form.source_uri || registerMutation.isPending}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            disabled={registerMutation.isPending || !form.source_uri.trim() || !form.name.trim()}
           >
-            {registerMutation.isPending ? (
-              <><Loader2 className="w-4 h-4 animate-spin" />Registering...</>
-            ) : (
-              <><Plus className="w-4 h-4" />Register Model</>
-            )}
+            {registerMutation.isPending ? 'REGISTERING...' : 'REGISTER MODEL'}
           </button>
         </div>
       </div>
@@ -424,180 +222,213 @@ function RegisterModelModal({
 }
 
 export function Models() {
-  const [filters, setFilters] = useState<VaultModelFilter>({});
-  const [searchInput, setSearchInput] = useState('');
-  const [selectedModel, setSelectedModel] = useState<VaultModel | null>(null);
+  const navigate = useNavigate();
+  const { data: models } = useModels();
+  const { data: vaultData } = useVaultModels({});
+  const deleteMutation = useDeleteVaultModel();
+  const [searchQuery, setSearchQuery] = useState('');
   const [showRegisterModal, setShowRegisterModal] = useState(false);
 
-  const { data: modelsData, isLoading } = useVaultModels(filters);
-  const { data: stats } = useVaultStats();
-  const { data: families } = useVaultFamilies();
-  const deleteMutation = useDeleteVaultModel();
+  const allModels = models || [];
+  const vaultModels = vaultData?.models || [];
 
-  const models = modelsData?.models || [];
+  // Build a lookup of vault model IDs by source_uri for delete actions
+  const vaultIdByUri = new Map(vaultModels.map(vm => [vm.source_uri, vm.id]));
 
-  const handleSearch = () => {
-    setFilters(f => ({ ...f, search: searchInput || undefined }));
-  };
+  // Merge: use /v1/models (which includes vault data) as primary, fall back to vault-only
+  const displayModels = allModels.length > 0 ? allModels : vaultModels.map(vm => ({
+    id: vm.source_uri,
+    object: 'model',
+    created: 0,
+    owned_by: vm.source,
+    loaded: false,
+    family: vm.family,
+    parameters: vm.parameters,
+    quantization: vm.quantization,
+    max_context: vm.max_context,
+    tags: vm.tags,
+    vault_status: vm.status,
+  }));
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleSearch();
-  };
+  const filtered = displayModels.filter(m => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return m.id.toLowerCase().includes(q) || m.family?.toLowerCase().includes(q) || m.owned_by?.toLowerCase().includes(q);
+  });
 
-  const handleDelete = async (model: VaultModel) => {
-    if (!confirm(`Delete "${model.name}"?`)) return;
+  const handleRemove = async (modelId: string) => {
+    const vaultId = vaultIdByUri.get(modelId);
+    if (!vaultId) {
+      toast.error('Model not found in vault registry');
+      return;
+    }
+    if (!confirm('Remove this model from the registry?')) return;
     try {
-      await deleteMutation.mutateAsync(model.id);
-      toast.success('Model deleted');
-      if (selectedModel?.id === model.id) setSelectedModel(null);
+      await deleteMutation.mutateAsync(vaultId);
+      toast.success('Model removed from registry');
     } catch {
-      toast.error('Failed to delete model');
+      toast.error('Failed to remove model');
     }
   };
 
-  const statusFilters = ['all', 'available', 'testing', 'deprecated'] as const;
-
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Stats Bar */}
-      {stats && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard label="Total Models" value={stats.total_models} icon={Database} />
-          <StatCard label="Available" value={stats.available_models} icon={Box} />
-          <StatCard label="Deprecated" value={stats.deprecated_models} icon={Archive} />
-          <StatCard label="Families" value={stats.model_families} icon={Cpu} />
-        </div>
-      )}
-
-      {/* Filter Bar */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-        {/* Search */}
-        <div className="relative flex-1 max-w-md w-full">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+    <div className="animate-fade-in">
+      {/* Search Bar */}
+      <div style={{
+        padding: '1rem 2rem',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        borderBottom: 'var(--grid-line)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
           <input
             type="text"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Search models..."
-            className="w-full bg-input border border-border rounded-lg pl-10 pr-4 py-2.5 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Filter by model name or provider..."
+            style={{
+              background: 'transparent', border: 'none', fontFamily: 'var(--font-main)',
+              fontSize: '0.9rem', width: 300, outline: 'none', color: 'var(--text-primary)',
+            }}
           />
-          {searchInput && (
-            <button
-              onClick={() => { setSearchInput(''); setFilters(f => ({ ...f, search: undefined })); }}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
         </div>
-
-        {/* Status pills */}
-        <div className="flex items-center gap-1.5">
-          {statusFilters.map(s => (
-            <button
-              key={s}
-              onClick={() => setFilters(f => ({ ...f, status: s === 'all' ? undefined : s }))}
-              className={cn(
-                "px-3 py-1.5 rounded-full text-xs font-medium transition-colors border",
-                (s === 'all' && !filters.status) || filters.status === s
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-card text-muted-foreground border-border hover:border-primary/50"
-              )}
-            >
-              {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
-            </button>
-          ))}
-        </div>
-
-        {/* Family pills */}
-        {families && families.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-xs text-muted-foreground mr-1">Family:</span>
-            {families.map(f => (
-              <button
-                key={f}
-                onClick={() => setFilters(prev => ({ ...prev, family: prev.family === f ? undefined : f }))}
-                className={cn(
-                  "px-2.5 py-1 rounded-full text-xs font-medium transition-colors border",
-                  filters.family === f
-                    ? getFamilyColor(f)
-                    : "bg-card text-muted-foreground border-border hover:border-primary/50"
-                )}
-              >
-                {f}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Register button */}
-        <button
-          onClick={() => setShowRegisterModal(true)}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors ml-auto flex-shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          Register Model
+        <button className="btn-primary" onClick={() => setShowRegisterModal(true)}>
+          ADD MODEL
         </button>
       </div>
 
-      {/* Model Grid */}
-      {isLoading ? (
-        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {[1, 2, 3, 4, 5, 6].map(i => (
-            <div key={i} className="h-48 bg-muted rounded-xl animate-pulse" />
-          ))}
-        </div>
-      ) : models.length === 0 ? (
-        <div className="bg-card border border-border rounded-xl p-6 text-center py-16">
-          <div className="w-16 h-16 rounded-xl bg-muted flex items-center justify-center mx-auto mb-4">
-            <Database className="w-8 h-8 text-muted-foreground" />
+      {/* Table Header */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '2fr 1fr 1fr 1fr 120px',
+        padding: '1rem 2rem',
+        backgroundColor: 'var(--bg-accent)',
+        borderBottom: 'var(--grid-line)',
+      }}>
+        <div className="label-text">MODEL NAME &amp; VERSION</div>
+        <div className="label-text">STATUS</div>
+        <div className="label-text">QUANTIZATION</div>
+        <div className="label-text">CONTEXT</div>
+        <div className="label-text">ACTION</div>
+      </div>
+
+      {/* Table Rows */}
+      <div style={{ flexGrow: 1 }}>
+        {filtered.length === 0 ? (
+          <div style={{ padding: '4rem 2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+            {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
           </div>
-          <h3 className="text-lg font-semibold text-foreground mb-2">No models found</h3>
-          <p className="text-muted-foreground text-sm mb-6">
-            {filters.search || filters.family || filters.status
-              ? 'Try adjusting your filters'
-              : 'Register a model to get started'}
-          </p>
-          {!filters.search && !filters.family && !filters.status && (
-            <button
-              onClick={() => setShowRegisterModal(true)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground"
-            >
-              <Plus className="w-4 h-4" />
-              Register Model
-            </button>
-          )}
-        </div>
-      ) : (
-        <>
-          <div className="text-sm text-muted-foreground">{models.length} model{models.length !== 1 ? 's' : ''}</div>
-          <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {models.map(model => (
-              <ModelCard
+        ) : (
+          filtered.map(model => {
+            const isLoaded = model.loaded !== false;
+            const isDeploying = model.vault_status === 'testing';
+            const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
+            const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
+            const shortName = model.id.split('/').pop() || model.id;
+            const provider = model.owned_by || model.family || '';
+            const hasVaultEntry = vaultIdByUri.has(model.id);
+
+            return (
+              <div
                 key={model.id}
-                model={model}
-                onClick={() => setSelectedModel(model)}
-                onDelete={() => handleDelete(model)}
-              />
-            ))}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '2fr 1fr 1fr 1fr 120px',
+                  padding: '1.5rem 2rem',
+                  borderBottom: 'var(--grid-line)',
+                  alignItems: 'center',
+                  transition: 'background-color 0.2s',
+                  backgroundColor: isLoaded ? '#fff' : 'transparent',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#F9F8F6')}
+                onMouseLeave={e => (e.currentTarget.style.backgroundColor = isLoaded ? '#fff' : 'transparent')}
+              >
+                <div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 500 }}>{shortName}</div>
+                  <div className="mono" style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                    {model.parameters && `${model.parameters} — `}{provider}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+                    <span className={`status-dot ${statusDotClass}`} />
+                    {statusLabel}
+                  </div>
+                </div>
+                <div>
+                  <span className="badge">{model.quantization || 'FP16'}</span>
+                </div>
+                <div className="mono" style={{ color: 'var(--text-secondary)' }}>
+                  {model.max_context ? model.max_context.toLocaleString() : 'N/A'}
+                </div>
+                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                  {isLoaded ? (
+                    <span
+                      style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, textDecoration: 'underline', cursor: 'pointer' }}
+                      onClick={() => navigate('/instances')}
+                    >
+                      MANAGE
+                    </span>
+                  ) : isDeploying ? (
+                    <span
+                      style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, color: 'var(--text-secondary)', cursor: 'pointer' }}
+                      onClick={() => toast.info('Cancellation coming soon')}
+                    >
+                      CANCEL
+                    </span>
+                  ) : (
+                    <>
+                      <span
+                        style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, textDecoration: 'underline', cursor: 'pointer' }}
+                        onClick={() => navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)}
+                      >
+                        DEPLOY
+                      </span>
+                      {hasVaultEntry && (
+                        <span
+                          style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, color: 'var(--color-error)', cursor: 'pointer' }}
+                          onClick={() => handleRemove(model.id)}
+                        >
+                          REMOVE
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="grid-row" style={{ borderBottom: 'none', backgroundColor: 'var(--bg-accent)' }}>
+        <div className="cell">
+          <div className="label-text">REGISTRY MODELS</div>
+          <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+            {displayModels.length}
           </div>
-        </>
-      )}
+        </div>
+        <div className="cell">
+          <div className="label-text">LOADED</div>
+          <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+            {displayModels.filter(m => m.loaded !== false).length}
+          </div>
+        </div>
+        <div className="cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text">SYSTEM STATUS</div>
+          <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className="status-dot" />
+            All model endpoints are performing within latency targets.
+          </div>
+        </div>
+      </div>
 
-      {/* Detail Panel */}
-      {selectedModel && (
-        <ModelDetailPanel
-          model={selectedModel}
-          onClose={() => setSelectedModel(null)}
-        />
-      )}
-
-      {/* Register Modal */}
-      <RegisterModelModal
-        isOpen={showRegisterModal}
-        onClose={() => setShowRegisterModal(false)}
-      />
+      <RegisterModelModal isOpen={showRegisterModal} onClose={() => setShowRegisterModal(false)} />
     </div>
   );
 }

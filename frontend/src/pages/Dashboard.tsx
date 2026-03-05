@@ -1,212 +1,15 @@
-import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Server, Cpu, Activity, DollarSign,
-  ArrowUpRight, Zap, MessageSquare, BarChart3
-} from 'lucide-react';
-import {
-  AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid
-} from 'recharts';
-import { cn } from '../lib/utils';
 import { useWorkers, useStats, useInstances, useCosts, useModels } from '../hooks/useApi';
 
-// Generate mock time-series data for charts
-function generateMockTimeSeries(points: number, base: number, variance: number) {
-  const now = Date.now();
-  return Array.from({ length: points }, (_, i) => {
-    const time = new Date(now - (points - 1 - i) * 5000);
-    return {
-      time: time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      value: Math.max(0, base + (Math.random() - 0.5) * variance),
-    };
-  });
-}
-
-function generateMockLatencyData(points: number) {
-  const now = Date.now();
-  return Array.from({ length: points }, (_, i) => {
-    const time = new Date(now - (points - 1 - i) * 5000);
-    const avg = 80 + Math.random() * 60;
-    return {
-      time: time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      avg: Math.round(avg),
-      p50: Math.round(avg * 0.8),
-      p99: Math.round(avg * 2.2),
-    };
-  });
-}
-
-// Sparkline for stat cards
-function Sparkline({ data, color, height = 32 }: { data: number[]; color: string; height?: number }) {
-  const sparkData = data.map((v, i) => ({ i, v }));
+function ChartBars({ heights, activeIndex }: { heights: number[]; activeIndex?: number }) {
   return (
-    <ResponsiveContainer width={60} height={height}>
-      <AreaChart data={sparkData} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
-        <defs>
-          <linearGradient id={`spark-${color}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.3} />
-            <stop offset="100%" stopColor={color} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <Area
-          type="monotone"
-          dataKey="v"
-          stroke={color}
-          strokeWidth={1.5}
-          fill={`url(#spark-${color})`}
-          isAnimationActive={false}
+    <div className="metric-chart">
+      {heights.map((h, i) => (
+        <div
+          key={i}
+          className={`chart-bar ${i === (activeIndex ?? heights.length - 1) ? 'active' : ''}`}
+          style={{ height: `${h}%` }}
         />
-      </AreaChart>
-    </ResponsiveContainer>
-  );
-}
-
-function StatCard({
-  title,
-  value,
-  subtitle,
-  icon: Icon,
-  variant = 'default',
-  sparkData,
-}: {
-  title: string;
-  value: string | number;
-  subtitle?: string;
-  icon: typeof Activity;
-  variant?: 'default' | 'success' | 'warning' | 'primary';
-  sparkData?: number[];
-}) {
-  const variantClasses = {
-    default: 'bg-card border-border shadow-sm',
-    success: 'bg-success/10 border-success/30 shadow-sm shadow-success/5',
-    warning: 'bg-warning/10 border-warning/30 shadow-sm shadow-warning/5',
-    primary: 'bg-primary/10 border-primary/30 shadow-sm shadow-primary/5',
-  };
-
-  const iconVariants = {
-    default: 'bg-muted text-muted-foreground',
-    success: 'bg-success/20 text-success',
-    warning: 'bg-warning/20 text-warning',
-    primary: 'bg-primary/20 text-primary',
-  };
-
-  const sparkColors: Record<string, string> = {
-    default: 'var(--muted-foreground)',
-    success: 'var(--success)',
-    warning: 'var(--warning)',
-    primary: 'var(--primary)',
-  };
-
-  return (
-    <div className={cn(
-      "rounded-xl border p-4 transition-all duration-200 hover:shadow-md",
-      variantClasses[variant]
-    )}>
-      <div className="flex items-start justify-between mb-3">
-        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center", iconVariants[variant])}>
-          <Icon className="w-5 h-5" />
-        </div>
-        {sparkData && <Sparkline data={sparkData} color={sparkColors[variant]} />}
-      </div>
-      <div className="text-2xl sm:text-3xl font-light tabular-nums font-mono text-foreground mb-1 truncate">{value}</div>
-      <div className="text-xs uppercase tracking-wider text-muted-foreground">{title}</div>
-      {subtitle && <div className="text-xs text-muted-foreground/70 mt-1">{subtitle}</div>}
-    </div>
-  );
-}
-
-function QuickAction({
-  icon: Icon,
-  title,
-  description,
-  onClick
-}: {
-  icon: typeof Activity;
-  title: string;
-  description: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "bg-card border border-border rounded-xl p-6 text-left group shadow-sm",
-        "hover:border-primary/50 hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5"
-      )}
-    >
-      <div className="flex items-start gap-4">
-        <div className="w-12 h-12 rounded-lg bg-muted group-hover:bg-primary/10 flex items-center justify-center transition-colors border border-border/50">
-          <Icon className="w-6 h-6 text-muted-foreground group-hover:text-primary transition-colors" />
-        </div>
-        <div className="flex-1">
-          <h3 className="font-semibold text-foreground group-hover:text-primary transition-colors">{title}</h3>
-          <p className="text-sm text-muted-foreground mt-1">{description}</p>
-        </div>
-        <ArrowUpRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
-      </div>
-    </button>
-  );
-}
-
-function WorkerMiniCard({ worker }: { worker: any }) {
-  const memoryPercent = worker.memory_total > 0
-    ? Math.round((worker.memory_used / worker.memory_total) * 100)
-    : 0;
-
-  return (
-    <div className="p-4 bg-muted/50 border border-border rounded-lg hover:border-primary/30 transition-colors">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-3">
-          <div className={cn(
-            "w-2 h-2 rounded-full",
-            worker.status === 'healthy'
-              ? "bg-success shadow-[0_0_8px_var(--success)]"
-              : "bg-warning shadow-[0_0_8px_var(--warning)]"
-          )} />
-          <span className="font-medium text-foreground text-sm truncate max-w-[150px]">
-            {worker.worker_id.slice(0, 8)}
-          </span>
-        </div>
-        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary border border-primary/20">
-          {worker.models?.[0]?.split('/').pop() || 'No model'}
-        </span>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 text-xs">
-        <div>
-          <div className="text-muted-foreground mb-1">GPU</div>
-          <div className="text-foreground font-mono tabular-nums font-medium">{worker.gpu_utilization}%</div>
-        </div>
-        <div>
-          <div className="text-muted-foreground mb-1">Memory</div>
-          <div className="text-foreground font-mono tabular-nums font-medium">{memoryPercent}%</div>
-        </div>
-        <div>
-          <div className="text-muted-foreground mb-1">Latency</div>
-          <div className="text-foreground font-mono tabular-nums font-medium">{worker.avg_latency_ms}ms</div>
-        </div>
-        <div>
-          <div className="text-muted-foreground mb-1">RPS</div>
-          <div className="text-foreground font-mono tabular-nums font-medium">{worker.requests_per_sec.toFixed(1)}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Custom tooltip for charts
-function ChartTooltip({ active, payload, label }: any) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="bg-popover border border-border rounded-lg px-3 py-2 shadow-xl text-xs">
-      <div className="text-muted-foreground mb-1">{label}</div>
-      {payload.map((entry: any) => (
-        <div key={entry.name} className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
-          <span className="text-foreground font-mono tabular-nums">
-            {entry.name}: {typeof entry.value === 'number' ? entry.value.toFixed(1) : entry.value}
-          </span>
-        </div>
       ))}
     </div>
   );
@@ -214,7 +17,7 @@ function ChartTooltip({ active, payload, label }: any) {
 
 export function Dashboard() {
   const navigate = useNavigate();
-  const { data: workers, isLoading: workersLoading } = useWorkers();
+  const { data: workers } = useWorkers();
   const { data: stats } = useStats();
   const { data: instances } = useInstances();
   const { data: costs } = useCosts();
@@ -222,201 +25,179 @@ export function Dashboard() {
 
   const activeInstances = instances?.filter(i => i.status === 'running') || [];
   const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];
-
-  // Mock chart data (stable across renders via useMemo)
-  const throughputData = useMemo(() => generateMockTimeSeries(20, 12, 8), []);
-  const latencyData = useMemo(() => generateMockLatencyData(20), []);
-
-  // Sparkline data for stat cards
-  const instanceSparkData = useMemo(() => Array.from({ length: 10 }, () => Math.floor(Math.random() * 5) + 1), []);
-  const workerSparkData = useMemo(() => Array.from({ length: 10 }, () => Math.floor(Math.random() * 4) + 1), []);
-  const latencySparkData = useMemo(() => Array.from({ length: 10 }, () => Math.floor(Math.random() * 80) + 40), []);
-  const costSparkData = useMemo(() => Array.from({ length: 10 }, () => Math.random() * 2 + 0.5), []);
+  const loadedModels = models?.filter(m => m.loaded !== false) || [];
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Stats Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          icon={Server}
-          title="Active Instances"
-          value={activeInstances.length}
-          subtitle={`${instances?.length || 0} total`}
-          variant="primary"
-          sparkData={instanceSparkData}
-        />
-        <StatCard
-          icon={Cpu}
-          title="Workers Online"
-          value={healthyWorkers.length}
-          subtitle={`${workers?.length || 0} registered`}
-          variant="success"
-          sparkData={workerSparkData}
-        />
-        <StatCard
-          icon={Activity}
-          title="Avg Latency"
-          value={stats?.latency?.avg_ms ? `${stats.latency.avg_ms}ms` : '-'}
-          subtitle="Response time"
-          variant="default"
-          sparkData={latencySparkData}
-        />
-        <StatCard
-          icon={DollarSign}
-          title="Cost / Hour"
-          value={costs?.current_hourly ? `$${costs.current_hourly.toFixed(2)}` : '$0.00'}
-          subtitle={costs?.today_total ? `$${costs.today_total.toFixed(2)} today` : 'No costs yet'}
-          variant="warning"
-          sparkData={costSparkData}
-        />
-      </div>
-
-      {/* Performance Charts */}
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-          <h2 className="text-lg font-semibold tracking-tight text-foreground mb-4">Request Throughput</h2>
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={throughputData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="throughputGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="time" tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }} tickLine={false} axisLine={false} />
-              <Tooltip content={<ChartTooltip />} />
-              <Area
-                type="monotone"
-                dataKey="value"
-                name="req/s"
-                stroke="var(--chart-1)"
-                strokeWidth={2}
-                fill="url(#throughputGradient)"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-          <h2 className="text-lg font-semibold tracking-tight text-foreground mb-4">Latency Distribution</h2>
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={latencyData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="avgGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--chart-2)" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="var(--chart-2)" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="p99Gradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--chart-5)" stopOpacity={0.2} />
-                  <stop offset="100%" stopColor="var(--chart-5)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="time" tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }} tickLine={false} axisLine={false} unit="ms" />
-              <Tooltip content={<ChartTooltip />} />
-              <Area type="monotone" dataKey="p99" name="p99" stroke="var(--chart-5)" strokeWidth={1.5} fill="url(#p99Gradient)" />
-              <Area type="monotone" dataKey="avg" name="avg" stroke="var(--chart-2)" strokeWidth={2} fill="url(#avgGradient)" />
-              <Area type="monotone" dataKey="p50" name="p50" stroke="var(--chart-4)" strokeWidth={1.5} fill="none" strokeDasharray="4 4" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Main Content Grid */}
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* Quick Actions */}
-        <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-lg font-semibold tracking-tight text-foreground">Quick Actions</h2>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <QuickAction
-              icon={MessageSquare}
-              title="Open Playground"
-              description="Test your models with interactive chat"
-              onClick={() => navigate('/playground')}
-            />
-            <QuickAction
-              icon={Server}
-              title="New Instance"
-              description="Provision a new GPU instance"
-              onClick={() => navigate('/instances')}
-            />
-            <QuickAction
-              icon={BarChart3}
-              title="View Logs"
-              description="Monitor real-time system logs"
-              onClick={() => navigate('/logs')}
-            />
-            <QuickAction
-              icon={Zap}
-              title="API Documentation"
-              description="Integrate with OpenAI-compatible API"
-              onClick={() => window.open('/api/health', '_blank')}
-            />
+    <div className="animate-fade-in">
+      {/* Metrics Row */}
+      <div className="grid-row">
+        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
+          <div className="label-text">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M12 2v20M2 12h20" />
+            </svg>
+            TOTAL REQUESTS
           </div>
+          <div className="value-text">{stats?.requests?.per_second ? `${(stats.requests.per_second * 86400 / 1000).toFixed(1)}K` : '0'}</div>
+          <ChartBars heights={[30, 50, 40, 80, 60, 90]} />
         </div>
 
-        {/* Active Workers */}
-        <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">Active Workers</h2>
-            <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-success/10 text-success border border-success/30">
-              {healthyWorkers.length} online
+        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
+          <div className="label-text">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+            </svg>
+            AVG LATENCY
+          </div>
+          <div className="value-text">{stats?.latency?.avg_ms != null ? `${Math.round(stats.latency.avg_ms)}ms` : '-'}</div>
+          <ChartBars heights={[20, 25, 22, 20, 30, 25]} activeIndex={3} />
+        </div>
+
+        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
+          <div className="label-text">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+            THROUGHPUT
+          </div>
+          <div className="value-text">{stats?.requests?.per_second ? `${stats.requests.per_second.toFixed(1)} r/s` : '-'}</div>
+          <ChartBars heights={[40, 60, 85, 70, 60, 55]} activeIndex={2} />
+        </div>
+
+        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
+          <div className="label-text">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+            ACTIVE NODES
+          </div>
+          <div className="value-text">{healthyWorkers.length} / {workers?.length || 0}</div>
+          <div style={{ marginTop: 'auto', paddingTop: '1rem' }}>
+            <span className="status-dot" />{' '}
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
+              {healthyWorkers.length > 0 ? 'All systems operational' : 'No workers online'}
             </span>
           </div>
-
-          {workersLoading ? (
-            <div className="space-y-3">
-              {[1, 2].map(i => (
-                <div key={i} className="h-24 bg-muted rounded-lg animate-pulse" />
-              ))}
-            </div>
-          ) : healthyWorkers.length === 0 ? (
-            <div className="text-center py-8">
-              <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center mx-auto mb-3">
-                <Cpu className="w-6 h-6 text-muted-foreground" />
-              </div>
-              <p className="text-muted-foreground text-sm">No workers online</p>
-              <button
-                onClick={() => navigate('/instances')}
-                className="text-primary text-sm mt-2 hover:underline"
-              >
-                Provision an instance
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {healthyWorkers.slice(0, 3).map(worker => (
-                <WorkerMiniCard key={worker.worker_id} worker={worker} />
-              ))}
-              {healthyWorkers.length > 3 && (
-                <button
-                  onClick={() => navigate('/instances')}
-                  className="w-full text-center text-sm text-primary hover:text-primary/80 py-2"
-                >
-                  View all {healthyWorkers.length} workers
-                </button>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Models Available */}
-      {models && models.length > 0 && (
-        <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-          <h2 className="text-lg font-semibold tracking-tight text-foreground mb-4">Available Models</h2>
-          <div className="flex flex-wrap gap-2">
-            {models.map(model => (
-              <span key={model.id} className="px-3 py-1.5 rounded-full text-sm font-medium bg-primary/10 text-primary border border-primary/30">
-                {model.id.split('/').pop()}
-              </span>
-            ))}
+      {/* Main Content Row */}
+      <div className="grid-row" style={{ flexGrow: 1 }}>
+        {/* Deployed Models */}
+        <div className="cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text" style={{ marginBottom: '2rem' }}>DEPLOYED MODELS</div>
+
+          {loadedModels.length > 0 ? (
+            loadedModels.slice(0, 3).map((model) => (
+              <div key={model.id} style={{ marginBottom: '3rem' }}>
+                <div className="label-text">
+                  <span className="nav-diamond">&#9671;</span>
+                  {model.family?.toUpperCase() || 'MODEL'}
+                </div>
+                <h2 style={{ fontSize: '1.75rem', marginTop: '0.5rem', lineHeight: 1.1, fontWeight: 500, letterSpacing: '-0.02em' }}>
+                  {model.id.split('/').pop()}
+                </h2>
+                <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                  {model.quantization && `Quantization: ${model.quantization}`}
+                  {model.max_context && <>&nbsp;|&nbsp;Context: {(model.max_context / 1000).toFixed(0)}k</>}
+                </div>
+                {model.tags && model.tags.length > 0 && (
+                  <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                    {model.tags.map(tag => (
+                      <span key={tag} className="tag">{tag}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              No models deployed yet. Provision an instance to get started.
+            </div>
+          )}
+
+          <button className="action-btn" style={{ marginTop: '1.5rem' }} onClick={() => navigate('/instances?provision=true')}>DEPLOY NEW MODEL</button>
+        </div>
+
+        {/* Right Panel */}
+        <div className="cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
+          <div style={{ marginBottom: '3rem' }}>
+            <div className="label-text">CLUSTER OVERVIEW</div>
+            <h3 style={{ fontSize: '1.25rem', marginTop: '1rem', marginBottom: '1.5rem', fontWeight: 500 }}>
+              Resource utilization
+            </h3>
+
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
+                <div style={{ fontSize: '0.9rem' }}>Active Instances</div>
+                <div className="mono">{activeInstances.length}</div>
+                <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  {instances?.length || 0} total
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
+                <div style={{ fontSize: '0.9rem' }}>Cost / Hour</div>
+                <div className="mono">${costs?.current_hourly?.toFixed(2) || '0.00'}</div>
+                <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  ${costs?.today_total?.toFixed(2) || '0.00'} today
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
+                <div style={{ fontSize: '0.9rem' }}>Queue Depth</div>
+                <div className="mono">{stats?.requests?.queue_depth || 0}</div>
+                <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>pending</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Recent Workers */}
+          <div>
+            <div className="label-text" style={{ marginBottom: '1.5rem' }}>WORKER STATUS</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+              {healthyWorkers.length > 0 ? (
+                healthyWorkers.slice(0, 4).map(worker => (
+                  <div key={worker.worker_id} style={{ borderBottom: '1px solid #F0F0F0', padding: '0.5rem 0', display: 'flex', gap: '1rem' }}>
+                    <span style={{ color: 'var(--text-primary)', minWidth: 80 }}>
+                      {worker.worker_id.slice(0, 8)}
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span className="status-dot" style={{ width: 6, height: 6 }} />
+                      GPU {worker.gpu_utilization}%
+                    </span>
+                    <span>{worker.models?.[0]?.split('/').pop() || '-'}</span>
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding: '0.5rem 0' }}>No workers connected.</div>
+              )}
+            </div>
           </div>
         </div>
-      )}
+      </div>
+
+      {/* Footer Row */}
+      <div className="grid-row" style={{ borderBottom: 'none' }}>
+        <div className="cell">
+          <div className="label-text">VERSION</div>
+          <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>v1.0.0</div>
+        </div>
+        <div className="cell">
+          <div className="label-text">UPTIME</div>
+          <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+            {stats?.uptime_seconds ? `${Math.floor(stats.uptime_seconds / 3600)}h ${Math.floor((stats.uptime_seconds % 3600) / 60)}m` : '-'}
+          </div>
+        </div>
+        <div className="cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text">SYSTEM STATUS</div>
+          <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className={`status-dot ${healthyWorkers.length > 0 ? '' : 'inactive'}`} />
+            {healthyWorkers.length > 0
+              ? 'All endpoints are performing within latency targets.'
+              : 'No active workers. Provision an instance to start serving.'}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

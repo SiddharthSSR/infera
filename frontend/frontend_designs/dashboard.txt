@@ -1,0 +1,515 @@
+The code below contains a design. This design should be used to create a new app or be added to an existing one.
+
+Look at the current open project to determine if a project exists. If no project is open, create a new Vite project then create this view in React after componentizing it.
+
+If a project does exist, determine the framework being used and implement the design within that framework. Identify whether reusable components already exist that can be used to implement the design faithfully and if so use them, otherwise create new components. If other views already exist in the project, make sure to place the view in a sensible route and connect it to the other views.
+
+Ensure the visual characteristics, layout, and interactions in the design are preserved with perfect fidelity.
+
+Run the dev command so the user can see the app once finished.
+
+```
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Inference Engine</title>
+    <style vid="5">
+        :root {
+            --bg-paper: #FDFBF8;
+            --bg-accent: #F4F2EE;
+            --text-primary: #050505;
+            --text-secondary: #555555;
+            --border-color: #D8D6D4;
+            --grid-line: 1px solid var(--border-color);
+            --font-main: "DM Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --font-mono: "Space Mono", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-paper);
+            color: var(--text-primary);
+            font-family: var(--font-main);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            border-left: var(--grid-line);
+            border-right: var(--grid-line);
+            max-width: 1600px;
+            margin: 0 auto;
+            line-height: 1.4;
+        }
+
+        
+        h1, h2, h3, h4 {
+            font-weight: 500;
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
+        }
+
+        .display-text {
+            font-size: 6rem;
+            line-height: 0.9;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: -0.04em;
+            padding: 3rem 0;
+            text-align: center;
+            border-bottom: var(--grid-line);
+        }
+
+        .label-text {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .value-text {
+            font-size: 1.5rem;
+            font-weight: 400;
+            margin-top: 0.5rem;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+            border-bottom: 1px solid currentColor;
+            padding-bottom: 1px;
+            transition: opacity 0.2s;
+        }
+        
+        a:hover {
+            opacity: 0.6;
+        }
+
+        a.nav-link {
+            border-bottom: none;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            font-weight: 600;
+        }
+
+        
+        .grid-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            border-bottom: var(--grid-line);
+        }
+
+        .grid-col-1 { grid-column: span 1; }
+        .grid-col-2 { grid-column: span 2; }
+        .grid-col-3 { grid-column: span 3; }
+        .grid-col-4 { grid-column: span 4; }
+
+        .cell {
+            padding: 2rem;
+            border-right: var(--grid-line);
+            position: relative;
+        }
+
+        .cell:last-child {
+            border-right: none;
+        }
+
+        .cell-dense {
+            padding: 1.5rem;
+        }
+
+        
+        .top-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 2rem;
+            border-bottom: var(--grid-line);
+        }
+
+        .nav-group {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .nav-diamond {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            vertical-align: middle;
+            margin: 0 4px;
+        }
+
+        .metric-block {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            height: 100%;
+            min-height: 140px;
+        }
+
+        .metric-chart {
+            flex-grow: 1;
+            display: flex;
+            align-items: flex-end;
+            gap: 4px;
+            margin-top: 1rem;
+            height: 40px;
+        }
+
+        .chart-bar {
+            background-color: var(--text-primary);
+            width: 100%;
+            opacity: 0.1;
+            transition: height 0.3s, opacity 0.2s;
+        }
+        .chart-bar:hover { opacity: 0.8; }
+        .chart-bar.active { opacity: 1; background-color: var(--text-primary); }
+
+        .model-card {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .model-header {
+            margin-bottom: 2rem;
+        }
+
+        .model-title {
+            font-size: 1.75rem;
+            margin-top: 0.5rem;
+            line-height: 1.1;
+        }
+
+        .tag-list {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .tag {
+            font-size: 0.7rem;
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+
+        .control-input {
+            width: 100%;
+            border: none;
+            border-bottom: 1px solid var(--text-primary);
+            background: transparent;
+            padding: 0.5rem 0;
+            font-family: var(--font-main);
+            font-size: 1rem;
+            outline: none;
+            margin-top: 1rem;
+            border-radius: 0;
+        }
+
+        .control-input::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.5;
+        }
+
+        .action-btn {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            background: none;
+            border: none;
+            padding: 0;
+            margin-top: 1.5rem;
+            cursor: pointer;
+            border-bottom: 1px solid var(--text-primary);
+            padding-bottom: 2px;
+            font-weight: 600;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #2E7D32; 
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-dot.idle { background-color: #F9A825; }
+        .status-dot.offline { background-color: #C62828; }
+
+        .table-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            padding: 1rem 0;
+            border-bottom: 1px solid #EEEEEC;
+            align-items: center;
+        }
+
+        .table-row:last-child { border-bottom: none; }
+
+        .table-header {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            letter-spacing: 0.05em;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        
+        .icon {
+            width: 14px;
+            height: 14px;
+            stroke: currentColor;
+            stroke-width: 1.5;
+            fill: none;
+        }
+
+        
+        .log-container {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+        .log-entry {
+            border-bottom: 1px solid #F0F0F0;
+            padding: 0.5rem 0;
+            display: flex;
+            gap: 1rem;
+        }
+        .log-time { color: var(--text-primary); min-width: 60px; }
+
+        @media (max-width: 1024px) {
+            .grid-row { grid-template-columns: repeat(2, 1fr); }
+            .grid-col-1, .grid-col-2, .grid-col-3 { grid-column: span 2; }
+            .display-text { font-size: 4rem; }
+        }
+
+        @media (max-width: 600px) {
+            .grid-row { display: flex; flex-direction: column; }
+            .cell { border-right: none; border-bottom: var(--grid-line); }
+            .nav-group { display: none; }
+            .display-text { font-size: 3rem; padding: 1.5rem 0; }
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&amp;family=Space+Mono&amp;display=swap" rel="stylesheet" vid="6">
+</head>
+<body vid="7">
+
+    
+    <nav class="top-nav" vid="8">
+        <div style="font-weight: 700; letter-spacing: -0.02em;" vid="9">INFERA.AI</div>
+        <div class="nav-group" vid="10">
+            <a href="#" class="nav-link" vid="11">MODELS</a>
+            <span class="nav-diamond" vid="12">◇</span>
+            <a href="#" class="nav-link" vid="13">CLUSTERS</a>
+            <span class="nav-diamond" vid="14">◇</span>
+            <a href="#" class="nav-link" vid="15">LOGS</a>
+            <span class="nav-diamond" vid="16">◇</span>
+            <a href="#" class="nav-link" vid="17">API KEYS</a>
+        </div>
+        <div class="nav-group" style="gap: 1rem;" vid="18">
+            <a href="#" class="nav-link" vid="19">DOCS</a>
+            <a href="#" class="nav-link" vid="20">ACCOUNT (2)</a>
+        </div>
+    </nav>
+
+    
+    <header class="display-text" vid="21">
+        INFERENCE
+    </header>
+
+    
+    <div class="grid-row" vid="22">
+        <div class="cell metric-block" vid="23">
+            <div class="label-text" vid="24">
+                <svg class="icon" viewBox="0 0 24 24" vid="25"><path d="M12 2v20M2 12h20" vid="26"></path></svg>
+                TOTAL REQUESTS
+            </div>
+            <div class="value-text" vid="27">24.5M</div>
+            <div class="metric-chart" vid="28">
+                <div class="chart-bar" style="height: 30%" vid="29"></div>
+                <div class="chart-bar" style="height: 50%" vid="30"></div>
+                <div class="chart-bar" style="height: 40%" vid="31"></div>
+                <div class="chart-bar" style="height: 80%" vid="32"></div>
+                <div class="chart-bar" style="height: 60%" vid="33"></div>
+                <div class="chart-bar active" style="height: 90%" vid="34"></div>
+            </div>
+        </div>
+        <div class="cell metric-block" vid="35">
+            <div class="label-text" vid="36">
+                <svg class="icon" viewBox="0 0 24 24" vid="37"><circle cx="12" cy="12" r="10" vid="38"></circle><polyline points="12 6 12 12 16 14" vid="39"></polyline></svg>
+                AVG LATENCY
+            </div>
+            <div class="value-text" vid="40">14ms</div>
+            <div class="metric-chart" vid="41">
+                <div class="chart-bar" style="height: 20%" vid="42"></div>
+                <div class="chart-bar" style="height: 25%" vid="43"></div>
+                <div class="chart-bar" style="height: 22%" vid="44"></div>
+                <div class="chart-bar active" style="height: 20%" vid="45"></div>
+                <div class="chart-bar" style="height: 30%" vid="46"></div>
+                <div class="chart-bar" style="height: 25%" vid="47"></div>
+            </div>
+        </div>
+        <div class="cell metric-block" vid="48">
+            <div class="label-text" vid="49">
+                <svg class="icon" viewBox="0 0 24 24" vid="50"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" vid="51"></path></svg>
+                THROUGHPUT
+            </div>
+            <div class="value-text" vid="52">4.2K t/s</div>
+            <div class="metric-chart" vid="53">
+                <div class="chart-bar" style="height: 40%" vid="54"></div>
+                <div class="chart-bar" style="height: 60%" vid="55"></div>
+                <div class="chart-bar active" style="height: 85%" vid="56"></div>
+                <div class="chart-bar" style="height: 70%" vid="57"></div>
+                <div class="chart-bar" style="height: 60%" vid="58"></div>
+                <div class="chart-bar" style="height: 55%" vid="59"></div>
+            </div>
+        </div>
+        <div class="cell metric-block" vid="60">
+            <div class="label-text" vid="61">
+                <svg class="icon" viewBox="0 0 24 24" vid="62"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" vid="63"></rect><line x1="8" y1="21" x2="16" y2="21" vid="64"></line><line x1="12" y1="17" x2="12" y2="21" vid="65"></line></svg>
+                ACTIVE NODES
+            </div>
+            <div class="value-text" vid="66">12 / 12</div>
+            <div style="margin-top: auto; padding-top: 1rem;" vid="67">
+                <div class="status-dot" vid="68"></div> <span style="font-size: 0.8rem; color: var(--text-secondary); margin-left: 0.5rem;" vid="69">All systems operational</span>
+            </div>
+        </div>
+    </div>
+
+    
+    <div class="grid-row" style="flex-grow: 1;" vid="70">
+        
+        
+        <div class="cell grid-col-2" vid="71">
+            <div class="label-text" style="margin-bottom: 2rem;" vid="72">
+                DEPLOYED MODELS
+            </div>
+
+            
+            <div style="margin-bottom: 3rem;" vid="73">
+                <div class="label-text" vid="74"><span class="nav-diamond" vid="75">◇</span> JUNE 14, 2024</div>
+                <h2 class="model-title" vid="76">Llama-3-70B-Instruct</h2>
+                <div style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--text-secondary);" vid="77">
+                    Quantization: 4-bit (AWQ) &nbsp;|&nbsp; Context: 8k
+                </div>
+                <div class="tag-list" vid="78">
+                    <span class="tag" vid="79">Chat</span>
+                    <span class="tag" vid="80">Completion</span>
+                    <span class="tag" vid="81">Production</span>
+                </div>
+            </div>
+
+            
+            <div style="margin-bottom: 3rem;" vid="82">
+                <div class="label-text" vid="83"><span class="nav-diamond" vid="84">◇</span> JUNE 10, 2024</div>
+                <h2 class="model-title" vid="85">Mistral-Large-Embed</h2>
+                <div style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--text-secondary);" vid="86">
+                    Quantization: FP16 &nbsp;|&nbsp; Context: 32k
+                </div>
+                <div class="tag-list" vid="87">
+                    <span class="tag" vid="88">Embeddings</span>
+                    <span class="tag" vid="89">RAG</span>
+                </div>
+            </div>
+
+            <button class="action-btn" vid="90">DEPLOY NEW MODEL</button>
+        </div>
+
+        
+        <div class="cell grid-col-2" style="background-color: var(--bg-accent);" vid="91">
+            
+            
+            <div style="margin-bottom: 3rem;" vid="92">
+                <div class="label-text" vid="93">QUICK CONFIGURATION</div>
+                <h3 style="font-size: 1.25rem; margin-top: 1rem; margin-bottom: 1.5rem;" vid="94">Adjust scaling parameters</h3>
+                
+                <div class="table-row" vid="95">
+                    <div style="font-size: 0.9rem;" vid="96">Max Batch Size</div>
+                    <div style="font-family: var(--font-mono);" vid="97">64</div>
+                    <div style="text-align: right; font-size: 0.8rem; text-decoration: underline;" vid="98">EDIT</div>
+                </div>
+                <div class="table-row" vid="99">
+                    <div style="font-size: 0.9rem;" vid="100">KV Cache Util</div>
+                    <div style="font-family: var(--font-mono);" vid="101">0.85</div>
+                    <div style="text-align: right; font-size: 0.8rem; text-decoration: underline;" vid="102">EDIT</div>
+                </div>
+                <div class="table-row" vid="103">
+                    <div style="font-size: 0.9rem;" vid="104">Speculative Decode</div>
+                    <div style="font-family: var(--font-mono);" vid="105">ON</div>
+                    <div style="text-align: right; font-size: 0.8rem; text-decoration: underline;" vid="106">EDIT</div>
+                </div>
+            </div>
+
+            
+            <div vid="107">
+                <div class="label-text" style="margin-bottom: 1.5rem;" vid="108">SYSTEM LOGS</div>
+                <div class="log-container" vid="109">
+                    <div class="log-entry" vid="110">
+                        <span class="log-time" vid="111">10:42:01</span>
+                        <span vid="112">Worker-04 rebalanced successfully.</span>
+                    </div>
+                    <div class="log-entry" vid="113">
+                        <span class="log-time" vid="114">10:41:55</span>
+                        <span vid="115">Autoscaling triggered: +2 nodes.</span>
+                    </div>
+                    <div class="log-entry" vid="116">
+                        <span class="log-time" vid="117">10:40:12</span>
+                        <span vid="118">Llama-3 initialized on GPU-0.</span>
+                    </div>
+                    <div class="log-entry" vid="119">
+                        <span class="log-time" vid="120">10:39:00</span>
+                        <span vid="121">Health check passed. Latency stable.</span>
+                    </div>
+                </div>
+                
+                <form style="margin-top: 2rem;" vid="122">
+                    <div class="label-text" vid="123">EXECUTE COMMAND</div>
+                    <div style="display: flex; gap: 1rem; align-items: flex-end;" vid="124">
+                        <input type="text" class="control-input" placeholder="Type system command..." vid="125">
+                        <button class="action-btn" vid="126">RUN</button>
+                    </div>
+                </form>
+            </div>
+
+        </div>
+    </div>
+
+    
+    <div class="grid-row" style="border-bottom: none;" vid="127">
+        <div class="cell" vid="128">
+            <div class="label-text" vid="129">VERSION</div>
+            <div style="margin-top: 0.5rem; font-size: 0.8rem;" vid="130">v2.4.0-stable</div>
+        </div>
+        <div class="cell" vid="131">
+            <div class="label-text" vid="132">REGION</div>
+            <div style="margin-top: 0.5rem; font-size: 0.8rem;" vid="133">us-east-1</div>
+        </div>
+        <div class="cell grid-col-2" vid="134">
+            <div class="label-text" vid="135">NEWSLETTER</div>
+            <div style="margin-top: 0.5rem; font-size: 0.9rem;" vid="136">
+                Be up to date with new optimization techniques.
+                <div style="display: flex; gap: 1rem; margin-top: 1rem;" vid="137">
+                    <input type="email" class="control-input" placeholder="Type your email..." style="margin-top: 0; font-size: 0.8rem;" vid="138">
+                    <button class="action-btn" style="margin-top: 0;" vid="139">SUBSCRIBE</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+</body></html>
+```

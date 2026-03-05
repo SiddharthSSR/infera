@@ -1,0 +1,426 @@
+The code below contains a design. This design should be used to create a new app or be added to an existing one.
+
+Look at the current open project to determine if a project exists. If no project is open, create a new Vite project then create this view in React after componentizing it.
+
+If a project does exist, determine the framework being used and implement the design within that framework. Identify whether reusable components already exist that can be used to implement the design faithfully and if so use them, otherwise create new components. If other views already exist in the project, make sure to place the view in a sensible route and connect it to the other views.
+
+Ensure the visual characteristics, layout, and interactions in the design are preserved with perfect fidelity.
+
+Run the dev command so the user can see the app once finished.
+
+```
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Playground | Laurits.ai</title>
+    <style vid="5">
+        :root {
+            --bg-paper: #FDFBF8;
+            --bg-accent: #F4F2EE;
+            --text-primary: #050505;
+            --text-secondary: #555555;
+            --border-color: #D8D6D4;
+            --grid-line: 1px solid var(--border-color);
+            --font-main: "DM Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --font-mono: "Space Mono", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-paper);
+            color: var(--text-primary);
+            font-family: var(--font-main);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            max-width: 1280px;
+            margin: 0 auto;
+            border-left: var(--grid-line);
+            border-right: var(--grid-line);
+            overflow: hidden;
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 2rem;
+            border-bottom: var(--grid-line);
+            flex-shrink: 0;
+        }
+
+        .nav-group {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .nav-link {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            font-weight: 600;
+            text-decoration: none;
+            color: inherit;
+        }
+
+        .nav-diamond {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+        }
+
+        .display-header {
+            font-size: 4rem;
+            line-height: 1;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: -0.04em;
+            padding: 2rem 0;
+            text-align: center;
+            border-bottom: var(--grid-line);
+            flex-shrink: 0;
+        }
+
+        .main-container {
+            display: grid;
+            grid-template-columns: 320px 1fr 320px;
+            flex-grow: 1;
+            overflow: hidden;
+        }
+
+        .sidebar {
+            padding: 2rem;
+            border-right: var(--grid-line);
+            background-color: var(--bg-paper);
+            overflow-y: auto;
+        }
+
+        .sidebar-right {
+            border-right: none;
+            border-left: var(--grid-line);
+            background-color: var(--bg-accent);
+        }
+
+        .label-text {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: block;
+        }
+
+        .model-selector {
+            width: 100%;
+            padding: 0.75rem 0;
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid var(--text-primary);
+            font-family: var(--font-main);
+            font-size: 1rem;
+            outline: none;
+            margin-bottom: 2rem;
+            cursor: pointer;
+        }
+
+        .parameter-row {
+            margin-bottom: 2rem;
+        }
+
+        .parameter-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .parameter-value {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--text-primary);
+            height: 2px;
+            background: var(--border-color);
+            appearance: none;
+            cursor: pointer;
+        }
+
+        .editor-container {
+            display: flex;
+            flex-direction: column;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .prompt-area {
+            flex: 1;
+            padding: 2rem;
+            border-bottom: var(--grid-line);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .response-area {
+            flex: 1;
+            padding: 2rem;
+            background-color: var(--bg-paper);
+            overflow-y: auto;
+        }
+
+        textarea {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: transparent;
+            resize: none;
+            outline: none;
+            font-family: var(--font-main);
+            font-size: 1.1rem;
+            line-height: 1.6;
+            color: var(--text-primary);
+        }
+
+        textarea::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.4;
+        }
+
+        .response-text {
+            font-family: var(--font-main);
+            font-size: 1.1rem;
+            line-height: 1.6;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+        }
+
+        .action-bar {
+            padding: 1.5rem 2rem;
+            border-bottom: var(--grid-line);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--bg-paper);
+        }
+
+        .action-btn {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            background: var(--text-primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 2rem;
+            cursor: pointer;
+            font-weight: 600;
+            transition: opacity 0.2s;
+        }
+
+        .action-btn:hover {
+            opacity: 0.9;
+        }
+
+        .secondary-btn {
+            background: transparent;
+            color: var(--text-primary);
+            border: 1px solid var(--text-primary);
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+        }
+
+        .dot {
+            width: 6px;
+            height: 6px;
+            background: #2E7D32;
+            border-radius: 50%;
+        }
+
+        .history-item {
+            padding: 1rem 0;
+            border-bottom: 1px solid #E5E2DE;
+            cursor: pointer;
+        }
+
+        .history-item:last-child {
+            border-bottom: none;
+        }
+
+        .history-time {
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+            display: block;
+        }
+
+        .history-preview {
+            font-size: 0.85rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-primary);
+        }
+
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&amp;family=Space+Mono&amp;display=swap" rel="stylesheet" vid="6">
+</head>
+<body vid="7">
+
+    <nav vid="8">
+        <div style="font-weight: 700; letter-spacing: -0.02em;" vid="9">INFERA.AI</div>
+        <div class="nav-group" vid="10">
+            <a href="#" class="nav-link" vid="11">MODELS</a>
+            <span class="nav-diamond" vid="12">◇</span>
+            <a href="#" class="nav-link" vid="13">CLUSTERS</a>
+            <span class="nav-diamond" vid="14">◇</span>
+            <a href="#" class="nav-link" vid="15">PLAYGROUND</a>
+            <span class="nav-diamond" vid="16">◇</span>
+            <a href="#" class="nav-link" vid="17">API KEYS</a>
+        </div>
+        <div class="nav-group" style="gap: 1rem;" vid="18">
+            <a href="#" class="nav-link" vid="19">DOCS</a>
+            <a href="#" class="nav-link" vid="20">ACCOUNT</a>
+        </div>
+    </nav>
+
+    <header class="display-header" vid="21">
+        PLAYGROUND
+    </header>
+
+    <div class="main-container" vid="22">
+        
+        <aside class="sidebar" vid="23">
+            <label class="label-text" vid="24">active model</label>
+            <select class="model-selector" vid="25">
+                <option vid="26">Llama-3-70B-Instruct</option>
+                <option vid="27">Mistral-Large-Embed</option>
+                <option vid="28">Claude-3-Opus-Base</option>
+            </select>
+
+            <label class="label-text" vid="29">parameters</label>
+            
+            <div class="parameter-row" vid="30">
+                <div class="parameter-header" vid="31">
+                    <span style="font-size: 0.85rem;" vid="32">Temperature</span>
+                    <span class="parameter-value" vid="33">0.70</span>
+                </div>
+                <input type="range" min="0" max="2" step="0.01" value="0.70" vid="34">
+            </div>
+
+            <div class="parameter-row" vid="35">
+                <div class="parameter-header" vid="36">
+                    <span style="font-size: 0.85rem;" vid="37">Max Tokens</span>
+                    <span class="parameter-value" vid="38">2048</span>
+                </div>
+                <input type="range" min="1" max="8192" step="1" value="2048" vid="39">
+            </div>
+
+            <div class="parameter-row" vid="40">
+                <div class="parameter-header" vid="41">
+                    <span style="font-size: 0.85rem;" vid="42">Top P</span>
+                    <span class="parameter-value" vid="43">1.00</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.01" value="1.00" vid="44">
+            </div>
+
+            <div class="parameter-row" vid="45">
+                <div class="parameter-header" vid="46">
+                    <span style="font-size: 0.85rem;" vid="47">Frequency Penalty</span>
+                    <span class="parameter-value" vid="48">0.00</span>
+                </div>
+                <input type="range" min="0" max="2" step="0.01" value="0.00" vid="49">
+            </div>
+
+            <div style="margin-top: 4rem;" vid="50">
+                <label class="label-text" vid="51">System Prompt</label>
+                <textarea style="font-size: 0.85rem; height: 120px; border-bottom: 1px solid var(--border-color);" placeholder="You are a helpful assistant..." vid="52"></textarea>
+            </div>
+        </aside>
+
+        
+        <main class="editor-container" vid="53">
+            <div class="action-bar" vid="54">
+                <div class="status-pill" vid="55">
+                    <div class="dot" vid="56"></div> ready to inference
+                </div>
+                <div style="display: flex; gap: 1rem;" vid="57">
+                    <button class="action-btn secondary-btn" style="padding: 0.5rem 1rem;" vid="58">CLEAR</button>
+                    <button class="action-btn" style="padding: 0.5rem 2rem;" vid="59">RUN INFERENCE</button>
+                </div>
+            </div>
+            
+            <section class="prompt-area" vid="60">
+                <label class="label-text" vid="61">User Prompt</label>
+                <textarea placeholder="Type your instruction here..." vid="62">Explain the concept of KV-Cache optimization in modern transformer architectures.</textarea>
+            </section>
+
+            <section class="response-area" vid="63">
+                <label class="label-text" vid="64">Output</label>
+                <div class="response-text" vid="65">KV-Cache (Key-Value Cache) is a crucial optimization for autoregressive model inference. 
+
+In a standard transformer, generating each new token requires recomputing the attention keys (K) and values (V) for all previous tokens in the sequence. This leads to redundant $O(N^2)$ computations as the sequence grows.
+
+By storing (caching) the K and V tensors for processed tokens, the model only needs to compute K and V for the *newly* generated token. This reduces the per-step complexity to $O(N)$, significantly improving throughput and reducing latency during generation.
+
+Modern implementations like PagedAttention (vLLM) further optimize this by managing the cache in non-contiguous memory blocks, similar to virtual memory in operating systems.</div>
+            </section>
+        </main>
+
+        
+        <aside class="sidebar sidebar-right" vid="66">
+            <label class="label-text" vid="67">Request History</label>
+            
+            <div class="history-item" vid="68">
+                <span class="history-time" vid="69">14:22:01 — 42ms</span>
+                <div class="history-preview" vid="70">Explain KV-Cache optimization...</div>
+            </div>
+
+            <div class="history-item" vid="71" style="opacity: 0.6;">
+                <span class="history-time" vid="72">14:18:45 — 124ms</span>
+                <div class="history-preview" vid="73">Write a python script for...</div>
+            </div>
+
+            <div class="history-item" vid="74" style="opacity: 0.6;">
+                <span class="history-time" vid="75">14:05:12 — 89ms</span>
+                <div class="history-preview" vid="76">Summarize the following log...</div>
+            </div>
+
+            <div class="history-item" vid="77" style="opacity: 0.6;">
+                <span class="history-time" vid="78">13:55:00 — 31ms</span>
+                <div class="history-preview" vid="79">What is the difference between...</div>
+            </div>
+
+            <div style="margin-top: 2rem;" vid="80">
+                <button class="action-btn secondary-btn" style="width: 100%; border-style: dashed; opacity: 0.5;" vid="81">VIEW ALL LOGS</button>
+            </div>
+        </aside>
+    </div>
+
+</body></html>
+```
