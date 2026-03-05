@@ -36,7 +36,9 @@ function ModelSelector({ models, selectedModel, onSelect, disabled }: {
   disabled?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const selectedModelData = models?.find(m => m.id === selectedModel);
   const modelName = selectedModel?.split('/').pop() || 'Select Model';
+  const hasVaultData = models?.some(m => m.family !== undefined);
 
   if (!models) {
     return (
@@ -45,6 +47,16 @@ function ModelSelector({ models, selectedModel, onSelect, disabled }: {
       </div>
     );
   }
+
+  // Group by family if vault metadata is available
+  const groupedModels = hasVaultData
+    ? models.reduce((acc, model) => {
+        const family = model.family || 'Other';
+        if (!acc[family]) acc[family] = [];
+        acc[family].push(model);
+        return acc;
+      }, {} as Record<string, Model[]>)
+    : { '': models };
 
   return (
     <div className="relative">
@@ -57,36 +69,69 @@ function ModelSelector({ models, selectedModel, onSelect, disabled }: {
         )}
       >
         <Sparkles className="w-4 h-4 text-primary" />
+        {selectedModelData?.loaded !== undefined && (
+          <span className={cn("w-2 h-2 rounded-full", selectedModelData.loaded ? "bg-emerald-500" : "bg-gray-400")} />
+        )}
         <span className="text-foreground font-medium">{modelName}</span>
+        {selectedModelData?.family && selectedModelData?.parameters && (
+          <span className="text-xs text-muted-foreground">{selectedModelData.family} · {selectedModelData.parameters}</span>
+        )}
         <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform", isOpen && "rotate-180")} />
       </button>
 
       {isOpen && models && models.length > 0 && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-          <div className="absolute top-full left-0 mt-2 w-80 bg-popover border border-border rounded-lg shadow-xl z-50 overflow-hidden animate-scale-in">
+          <div className="absolute top-full left-0 mt-2 w-96 bg-popover border border-border rounded-lg shadow-xl z-50 overflow-hidden animate-scale-in">
             <div className="p-3 border-b border-border">
               <p className="text-xs text-muted-foreground">Select a model</p>
             </div>
-            <div className="max-h-64 overflow-y-auto scrollbar-thin">
-              {models.map(model => {
-                const isSelected = model.id === selectedModel;
-                return (
-                  <button
-                    key={model.id}
-                    onClick={() => { onSelect(model.id); setIsOpen(false); }}
-                    className={cn(
-                      "w-full p-3 text-left hover:bg-accent transition-colors",
-                      isSelected && "bg-accent border-l-2 border-primary"
-                    )}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium text-foreground text-sm">{model.id.split('/').pop()}</span>
-                      {isSelected && <Check className="w-4 h-4 text-primary" />}
+            <div className="max-h-80 overflow-y-auto scrollbar-thin">
+              {Object.entries(groupedModels).map(([family, familyModels]) => (
+                <div key={family}>
+                  {family && hasVaultData && (
+                    <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide bg-muted/50 border-b border-border">
+                      {family}
                     </div>
-                  </button>
-                );
-              })}
+                  )}
+                  {familyModels.map(model => {
+                    const isSelected = model.id === selectedModel;
+                    const isLoaded = model.loaded !== undefined ? model.loaded : true;
+                    const isDisabled = model.loaded !== undefined && !model.loaded;
+                    return (
+                      <button
+                        key={model.id}
+                        onClick={() => { if (!isDisabled) { onSelect(model.id); setIsOpen(false); } }}
+                        disabled={isDisabled}
+                        className={cn(
+                          "w-full p-3 text-left transition-colors",
+                          isDisabled ? "opacity-50 cursor-not-allowed" : "hover:bg-accent",
+                          isSelected && "bg-accent border-l-2 border-primary"
+                        )}
+                      >
+                        <div className="flex items-center justify-between mb-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className={cn("w-2 h-2 rounded-full flex-shrink-0", isLoaded ? "bg-emerald-500" : "bg-gray-400")} />
+                            <span className="font-medium text-foreground text-sm">{model.id.split('/').pop()}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {isDisabled && <span className="text-xs text-muted-foreground">Not loaded</span>}
+                            {isSelected && <Check className="w-4 h-4 text-primary" />}
+                          </div>
+                        </div>
+                        <div className="ml-4 flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground truncate">{model.id}</span>
+                          {model.family && model.parameters && (
+                            <span className="flex-shrink-0 text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                              {model.family} · {model.parameters}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           </div>
         </>

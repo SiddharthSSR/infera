@@ -3,7 +3,7 @@ import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import {
-  LayoutDashboard, MessageSquare, Server,
+  LayoutDashboard, MessageSquare, Server, Database,
   Settings, ChevronLeft, ChevronRight, Sun, Moon,
   Terminal, Zap, Menu, X
 } from 'lucide-react';
@@ -13,6 +13,7 @@ import { Playground } from './pages/Playground';
 import { Instances } from './pages/Instances';
 import { Logs } from './pages/Logs';
 import { SettingsPage } from './pages/Settings';
+import { Models } from './pages/Models';
 import type { ChatMessage } from './types';
 
 // Chat message with metadata
@@ -69,6 +70,7 @@ const queryClient = new QueryClient({
 const navItems = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/playground', label: 'Playground', icon: MessageSquare },
+  { path: '/models', label: 'Models', icon: Database },
   { path: '/instances', label: 'Instances', icon: Server },
   { path: '/logs', label: 'Logs', icon: Terminal },
   { path: '/settings', label: 'Settings', icon: Settings },
@@ -78,6 +80,7 @@ const navItems = [
 const pageTitles: Record<string, { title: string; subtitle?: string }> = {
   '/': { title: 'Dashboard', subtitle: 'Overview of your inference platform' },
   '/playground': { title: 'Playground', subtitle: 'Test your models interactively' },
+  '/models': { title: 'Model Registry', subtitle: 'Browse and manage your model catalog' },
   '/instances': { title: 'GPU Instances', subtitle: 'Manage your compute resources' },
   '/logs': { title: 'Logs', subtitle: 'Real-time system logs' },
   '/settings': { title: 'Settings', subtitle: 'Configure your platform' },
@@ -290,6 +293,7 @@ function AppContent() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/playground" element={<Playground />} />
+              <Route path="/models" element={<Models />} />
               <Route path="/instances" element={<Instances />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/settings" element={<SettingsPage />} />

@@ -22,6 +22,15 @@ export interface Model {
   object: string;
   created: number;
   owned_by: string;
+  // Vault fields (present when vault is connected)
+  loaded?: boolean;
+  family?: string;
+  parameters?: string;
+  quantization?: string;
+  vram_required?: number;
+  max_context?: number;
+  tags?: string[];
+  vault_status?: string;
 }
 
 export interface Stats {
@@ -147,4 +156,53 @@ export interface ProvisionRequest {
   spot_instance?: boolean;
   max_cost_hour?: number;
   models?: string[];
+}
+
+// Vault (Model Registry) Types
+
+export interface VaultModel {
+  id: string;
+  name: string;
+  source: string;
+  source_uri: string;
+  parameters: string;
+  quantization: string;
+  vram_required: number;
+  max_context: number;
+  family: string;
+  tags: string[];
+  metadata: Record<string, string>;
+  status: 'available' | 'testing' | 'deprecated';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VaultStats {
+  total_models: number;
+  available_models: number;
+  deprecated_models: number;
+  model_families: number;
+}
+
+export interface VaultModelFilter {
+  family?: string;
+  status?: string;
+  search?: string;
+  quantization?: string;
+  tag?: string;
+  min_vram?: number;
+  max_vram?: number;
+}
+
+export interface CreateVaultModelInput {
+  name: string;
+  source_uri: string;
+  source?: string;
+  parameters?: string;
+  quantization?: string;
+  vram_required?: number;
+  max_context?: number;
+  family?: string;
+  tags?: string[];
+  metadata?: Record<string, string>;
 }

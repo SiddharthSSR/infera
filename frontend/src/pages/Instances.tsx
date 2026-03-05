@@ -6,8 +6,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
-import type { Instance, GPUOffering, InstanceStatus } from '../types';
-import { useInstances, useOfferings, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance } from '../hooks/useApi';
+import type { Instance, GPUOffering, GPUType, InstanceStatus, VaultModel } from '../types';
+import { useInstances, useOfferings, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels } from '../hooks/useApi';
 
 function StatusBadge({ status }: { status: InstanceStatus }) {
   const config: Record<InstanceStatus, { variant: string; icon: typeof CheckCircle2; spin?: boolean }> = {
@@ -107,6 +107,11 @@ function InstanceCard({ instance }: { instance: Instance }) {
           <Cpu className="w-3 h-3" />
           {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
         </span>
+        {instance.models && instance.models.length > 0 && instance.models.map(model => (
+          <span key={model} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary border border-primary/20">
+            {model.split('/').pop()}
+          </span>
+        ))}
       </div>
 
       {isRunning && instance.public_ip && (
@@ -167,14 +172,45 @@ function InstanceCard({ instance }: { instance: Instance }) {
   );
 }
 
+const GPU_VRAM_GB: Record<GPUType, number> = {
+  RTX_4090: 24,
+  RTX_4080: 16,
+  A100_40GB: 40,
+  A100_80GB: 80,
+  H100: 80,
+  L40S: 48,
+};
+
 function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClose: () => void; offerings: GPUOffering[] | undefined }) {
   const [selectedGPU, setSelectedGPU] = useState<string>('');
   const [name, setName] = useState('');
   const [spotInstance, setSpotInstance] = useState(false);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const provisionMutation = useProvisionInstance();
+  const { data: vaultModels } = useVaultModels({ status: 'available' });
 
   const getOfferingKey = (o: GPUOffering) =>
     `${o.provider}-${o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}`;
+
+  // Get selected GPU type for VRAM filtering
+  const selectedOffering = offerings?.find(o => getOfferingKey(o) === selectedGPU);
+  const selectedGPUVram = selectedOffering ? GPU_VRAM_GB[selectedOffering.gpu_type] : undefined;
+
+  // Filter vault models by VRAM compatibility
+  const allVaultModels = vaultModels?.models;
+  const compatibleModels = allVaultModels?.filter((m: VaultModel) => {
+    if (!selectedGPUVram) return true;
+    // vram_required is in MB, GPU_VRAM_GB is in GB
+    return m.vram_required <= selectedGPUVram * 1024;
+  });
+
+  const toggleModel = (sourceUri: string) => {
+    setSelectedModels(prev =>
+      prev.includes(sourceUri)
+        ? prev.filter(id => id !== sourceUri)
+        : [...prev, sourceUri]
+    );
+  };
 
   const handleProvision = async () => {
     if (!selectedGPU) return;
@@ -188,11 +224,13 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
         gpu_type: offering.gpu_type,
         gpu_count: offering.gpu_count,
         spot_instance: spotInstance,
+        models: selectedModels.length > 0 ? selectedModels : undefined,
       });
       toast.success('Instance provisioned');
       onClose();
       setName('');
       setSelectedGPU('');
+      setSelectedModels([]);
     } catch {
       toast.error('Failed to provision instance');
     }
@@ -204,7 +242,19 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
 
   if (!isOpen) return null;
 
-  const groupedOfferings = offerings?.reduce((acc, o) => {
+  // Deduplicate offerings by key, keeping the cheapest for each unique config
+  const dedupedOfferings = offerings ? Array.from(
+    offerings.reduce((map, o) => {
+      const key = getOfferingKey(o);
+      const existing = map.get(key);
+      if (!existing || o.cost_per_hour < existing.cost_per_hour) {
+        map.set(key, o);
+      }
+      return map;
+    }, new Map<string, GPUOffering>()).values()
+  ) : undefined;
+
+  const groupedOfferings = dedupedOfferings?.reduce((acc, o) => {
     if (!acc[o.provider]) acc[o.provider] = [];
     acc[o.provider].push(o);
     return acc;
@@ -299,6 +349,48 @@ function ProvisionModal({ isOpen, onClose, offerings }: { isOpen: boolean; onClo
                 </div>
               ))}
             </div>
+
+            {/* Models to Deploy */}
+            {allVaultModels && allVaultModels.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">Models to Deploy</label>
+                <p className="text-xs text-muted-foreground mb-3">
+                  {selectedGPUVram
+                    ? `Showing models that fit within ${selectedGPUVram}GB VRAM`
+                    : 'Select a GPU to filter compatible models'}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {(compatibleModels || []).map(model => {
+                    const isSelected = selectedModels.includes(model.source_uri);
+                    const vramGB = (model.vram_required / 1024).toFixed(0);
+                    return (
+                      <button
+                        key={model.id}
+                        onClick={() => toggleModel(model.source_uri)}
+                        className={cn(
+                          "inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-all",
+                          isSelected
+                            ? "bg-primary/15 border-primary text-primary"
+                            : "bg-card border-border text-foreground hover:border-primary/50"
+                        )}
+                      >
+                        {isSelected && <Check className="w-3.5 h-3.5" />}
+                        <span className="font-medium">{model.name}</span>
+                        {model.parameters && (
+                          <span className="text-xs text-muted-foreground">{model.parameters}</span>
+                        )}
+                        <span className="px-1.5 py-0.5 rounded bg-muted text-xs text-muted-foreground">
+                          {vramGB}GB
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {compatibleModels?.length === 0 && selectedGPUVram && (
+                    <p className="text-sm text-muted-foreground">No models fit within {selectedGPUVram}GB VRAM</p>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center justify-between p-5 bg-muted/30 rounded-xl border border-border max-w-md">
               <div>
