@@ -93,8 +93,8 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 	// Map our GPU types to RunPod GPU IDs
 	gpuTypeID := mapGPUType(req.GPUType)
 
-	// Use RunPod's base image with vLLM pre-installed for faster startup
-	dockerImage := "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04"
+	// Default to the custom infera worker image with vLLM 0.16+
+	dockerImage := "codingtensor/infera-worker:latest"
 
 	// If custom image provided, use it
 	if req.DockerImage != "" {

@@ -16,6 +16,7 @@ import (
 	_ "github.com/infera/infera/go/internal/providers/runpod"
 	_ "github.com/infera/infera/go/internal/providers/vastai"
 	"github.com/infera/infera/go/internal/router"
+	"github.com/infera/infera/go/internal/vault"
 )
 
 func main() {
@@ -79,6 +80,22 @@ func main() {
 	gatewayConfig := gateway.DefaultConfig()
 	gatewayConfig.HTTPPort = *httpPort
 	gw := gateway.New(gatewayConfig, r, instanceMgr)
+
+	// Initialize vault (model registry)
+	if err := os.MkdirAll("data", 0755); err != nil {
+		log.Printf("Warning: Failed to create data directory: %v", err)
+	}
+	vaultStore, err := vault.NewStore("data/vault.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize vault: %v", err)
+	}
+	defer vaultStore.Close()
+
+	if err := vault.SeedDefaultModels(vaultStore); err != nil {
+		log.Printf("Warning: Failed to seed vault: %v", err)
+	}
+
+	gw.SetVaultHandler(vault.NewHandler(vaultStore))
 
 	// Handle shutdown
 	ctx, cancel := context.WithCancel(context.Background())

@@ -66,8 +66,9 @@ class VLLMEngine(InferenceEngine):
         self.engines[model_config.model_id] = engine
 
         # Get model config for metadata
-        model_cfg = await engine.get_model_config()
-        
+        # vLLM V1: model_config is a property, not an async method
+        model_cfg = engine.model_config
+
         # Store tokenizer for chat template
         try:
             from transformers import AutoTokenizer
@@ -75,7 +76,7 @@ class VLLMEngine(InferenceEngine):
             self.tokenizers[model_config.model_id] = tokenizer
         except Exception:
             self.tokenizers[model_config.model_id] = None
-        
+
         loaded = LoadedModel(
             model_id=model_config.model_id,
             version=model_config.revision or "latest",

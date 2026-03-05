@@ -253,19 +253,26 @@ The instance will:
 
 ```
 infera/
-├── go/                          # Go backend
-│   ├── cmd/gateway/             # Gateway entrypoint
+├── go/                          # Go gateway
+│   ├── cmd/
+│   │   ├── gateway/             # Gateway entrypoint
+│   │   ├── router/              # Router entrypoint
+│   │   └── vault/               # Vault entrypoint
 │   ├── internal/
-│   │   ├── gateway/             # HTTP API handlers
+│   │   ├── gateway/             # HTTP API handlers & worker client
 │   │   ├── router/              # Request routing & load balancing
+│   │   │   ├── batcher/         # Request batching
+│   │   │   ├── registry/        # Worker registry
+│   │   │   └── strategy/        # Routing strategies (least loaded, round robin, latency)
 │   │   └── providers/           # GPU provider integrations
 │   │       ├── runpod/          # RunPod API client
 │   │       ├── vastai/          # Vast.ai API client (stub)
 │   │       └── mock/            # Mock provider for testing
-│   └── pkg/types/               # Shared types
+│   └── pkg/types/               # Shared types (routing, worker, types)
 │
-├── python/                      # Python worker
+├── python/                      # Python inference worker
 │   ├── src/infera_worker/
+│   │   ├── cli.py               # CLI entrypoint
 │   │   ├── worker.py            # Core worker logic
 │   │   ├── http_server.py       # HTTP API + gateway registration
 │   │   ├── engine.py            # Engine abstraction
@@ -273,21 +280,29 @@ infera/
 │   │   │   └── vllm_engine.py   # vLLM integration
 │   │   ├── config.py            # Configuration
 │   │   └── types.py             # Type definitions
+│   ├── tests/                   # Python tests
 │   ├── Dockerfile               # Full vLLM worker image
 │   └── Dockerfile.light         # Lightweight mock worker
 │
 ├── frontend/                    # React dashboard
 │   └── src/
-│       ├── components/          # UI components
+│       ├── components/          # UI components (Chat, Costs, Workers, etc.)
 │       ├── hooks/               # React Query hooks
-│       ├── lib/                 # API client
+│       ├── lib/                 # API client & utilities
+│       ├── pages/               # Page components (Dashboard, Instances, Playground, etc.)
 │       └── types/               # TypeScript types
 │
+├── proto/                       # Protobuf definitions
+│   ├── common.proto
+│   ├── gateway.proto
+│   ├── inference.proto
+│   ├── router.proto
+│   ├── vault.proto
+│   └── worker.proto
+│
 ├── deploy/
-│   └── docker/                  # Docker configurations
-│       ├── Dockerfile.gateway
-│       ├── Dockerfile.worker
-│       ├── Dockerfile.worker.vllm
+│   └── docker/
+│       ├── Dockerfile.worker.vllm  # Production vLLM worker image
 │       └── nginx.conf
 │
 ├── scripts/                     # Utility scripts

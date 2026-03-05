@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/router"
+	"github.com/infera/infera/go/internal/vault"
 	"github.com/infera/infera/go/pkg/types"
 )
 
@@ -25,6 +26,9 @@ type Gateway struct {
 	// Instance management
 	instanceManager  *providers.Manager
 	instanceHandlers *InstanceHandlers
+
+	// Vault (model registry)
+	vaultHandler *vault.Handler
 
 	// Worker clients for direct inference calls
 	workerClients   map[string]*WorkerClient
@@ -70,6 +74,11 @@ func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gatew
 	return gw
 }
 
+// SetVaultHandler sets the vault model registry handler.
+func (g *Gateway) SetVaultHandler(h *vault.Handler) {
+	g.vaultHandler = h
+}
+
 // Start starts the HTTP server.
 func (g *Gateway) Start() error {
 	mux := http.NewServeMux()
@@ -88,6 +97,11 @@ func (g *Gateway) Start() error {
 	// Instance management endpoints
 	if g.instanceHandlers != nil {
 		g.instanceHandlers.RegisterRoutes(mux, g.handleCORS)
+	}
+
+	// Vault (model registry) endpoints
+	if g.vaultHandler != nil {
+		g.vaultHandler.RegisterRoutes(mux, g.handleCORS)
 	}
 
 	// Health check
@@ -375,22 +389,93 @@ func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
 
 	// Get unique models from all workers
 	workers := g.router.GetWorkers("", false)
-	modelSet := make(map[string]bool)
+	loadedSet := make(map[string]bool)
 
 	for _, worker := range workers {
 		for _, model := range worker.LoadedModels {
-			modelSet[model.ModelID] = true
+			loadedSet[model.ModelID] = true
 		}
 	}
 
-	models := make([]map[string]interface{}, 0, len(modelSet))
-	for modelID := range modelSet {
-		models = append(models, map[string]interface{}{
-			"id":       modelID,
-			"object":   "model",
-			"created":  time.Now().Unix(),
-			"owned_by": "infera",
+	// If vault is not configured, fall back to existing behavior
+	if g.vaultHandler == nil {
+		models := make([]map[string]interface{}, 0, len(loadedSet))
+		for modelID := range loadedSet {
+			models = append(models, map[string]interface{}{
+				"id":       modelID,
+				"object":   "model",
+				"created":  time.Now().Unix(),
+				"owned_by": "infera",
+			})
+		}
+		g.writeJSON(w, http.StatusOK, map[string]interface{}{
+			"object": "list",
+			"data":   models,
 		})
+		return
+	}
+
+	// Query vault for all models
+	vaultModels, err := g.vaultHandler.Store().List(&vault.ModelFilter{})
+	if err != nil {
+		// Fall back to worker-only models on vault error
+		models := make([]map[string]interface{}, 0, len(loadedSet))
+		for modelID := range loadedSet {
+			models = append(models, map[string]interface{}{
+				"id":       modelID,
+				"object":   "model",
+				"created":  time.Now().Unix(),
+				"owned_by": "infera",
+			})
+		}
+		g.writeJSON(w, http.StatusOK, map[string]interface{}{
+			"object": "list",
+			"data":   models,
+		})
+		return
+	}
+
+	// Track which worker models are covered by vault entries
+	coveredByVault := make(map[string]bool)
+	now := time.Now().Unix()
+
+	models := make([]map[string]interface{}, 0, len(vaultModels)+len(loadedSet))
+
+	// Add vault models with loaded status
+	for _, vm := range vaultModels {
+		loaded := loadedSet[vm.SourceURI]
+		if loaded {
+			coveredByVault[vm.SourceURI] = true
+		}
+
+		entry := map[string]interface{}{
+			"id":            vm.SourceURI,
+			"object":        "model",
+			"created":       now,
+			"owned_by":      "infera",
+			"loaded":        loaded,
+			"family":        vm.Family,
+			"parameters":    vm.Parameters,
+			"quantization":  vm.Quantization,
+			"vram_required": vm.VRAMRequired,
+			"max_context":   vm.MaxContext,
+			"tags":          vm.Tags,
+			"vault_status":  vm.Status,
+		}
+		models = append(models, entry)
+	}
+
+	// Add worker models not in vault
+	for modelID := range loadedSet {
+		if !coveredByVault[modelID] {
+			models = append(models, map[string]interface{}{
+				"id":       modelID,
+				"object":   "model",
+				"created":  now,
+				"owned_by": "infera",
+				"loaded":   true,
+			})
+		}
 	}
 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
