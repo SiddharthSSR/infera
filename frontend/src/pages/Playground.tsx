@@ -35,7 +35,17 @@ export function Playground() {
   const [freqPenalty, setFreqPenalty] = useState(0.0);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
+  const [focusMode, setFocusMode] = useState(false);
   const responseRef = useRef<HTMLDivElement>(null);
+
+  // Keyboard shortcut: Escape to exit focus mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && focusMode) setFocusMode(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [focusMode]);
 
   // Auto-select first model if none selected
   if (!selectedModel && allModels.length > 0) {
@@ -147,21 +157,27 @@ export function Playground() {
   };
 
   return (
-    <>
+    <div style={focusMode ? {
+      position: 'fixed', inset: 0, zIndex: 100,
+      background: 'var(--bg-paper)',
+      display: 'flex', flexDirection: 'column',
+    } : {}}>
       {/* Playground has its own display header */}
-      <header className="display-text" style={{ fontSize: '6rem', padding: '3rem 0' }}>
-        PLAYGROUND
-      </header>
+      {!focusMode && (
+        <header className="display-text" style={{ fontSize: '6rem', padding: '3rem 0' }}>
+          PLAYGROUND
+        </header>
+      )}
 
       <div style={{
         display: 'grid',
-        gridTemplateColumns: '320px 1fr 320px',
+        gridTemplateColumns: focusMode ? '1fr' : '320px 1fr 320px',
         flexGrow: 1,
         overflow: 'hidden',
-        height: 'calc(100vh - 180px)',
+        height: focusMode ? '100vh' : 'calc(100vh - 260px)',
       }}>
         {/* Left Sidebar - Parameters */}
-        <aside style={{
+        {!focusMode && <aside style={{
           padding: '2rem',
           borderRight: 'var(--grid-line)',
           overflowY: 'auto',
@@ -242,7 +258,7 @@ export function Playground() {
               }}
             />
           </div>
-        </aside>
+        </aside>}
 
         {/* Center - Editor */}
         <main style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -257,6 +273,13 @@ export function Playground() {
               {isLoading ? 'generating...' : 'ready to inference'}
             </div>
             <div style={{ display: 'flex', gap: '1rem' }}>
+              <button
+                className="btn-secondary"
+                onClick={() => setFocusMode(prev => !prev)}
+                title={focusMode ? 'Exit focus mode (Esc)' : 'Enter focus mode'}
+              >
+                {focusMode ? 'EXIT' : 'FOCUS'}
+              </button>
               <button className="btn-secondary" onClick={handleClear}>CLEAR</button>
               <button className="btn-primary" onClick={handleRun} disabled={isLoading || !prompt.trim()}>
                 {isLoading ? 'GENERATING...' : 'RUN INFERENCE'}
@@ -364,7 +387,7 @@ export function Playground() {
         </main>
 
         {/* Right Sidebar - History */}
-        <aside style={{
+        {!focusMode && <aside style={{
           borderLeft: 'var(--grid-line)',
           backgroundColor: 'var(--bg-accent)',
           padding: '2rem',
@@ -419,8 +442,8 @@ export function Playground() {
               </button>
             </div>
           )}
-        </aside>
+        </aside>}
       </div>
-    </>
+    </div>
   );
 }

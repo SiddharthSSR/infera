@@ -691,23 +691,41 @@ func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	workers := g.router.GetWorkers("", false)
 
 	// Aggregate worker stats
-	var totalRPS, totalAvgLatency float64
+	var totalRPS float64
 	var totalMemoryUsed, totalMemoryTotal int64
+	var totalGPUUtil float64
 	healthyCount := 0
+
+	// For weighted average latency: weight by each worker's RPS
+	// so high-throughput workers contribute more to the average
+	var weightedLatencySum, totalWeight float64
 
 	for _, w := range workers {
 		totalRPS += w.Stats.RequestsPerSecond
-		totalAvgLatency += w.Stats.AvgLatencyMS
 		totalMemoryUsed += w.Stats.MemoryUsedBytes
 		totalMemoryTotal += w.Stats.MemoryTotalBytes
+		totalGPUUtil += w.Stats.GPUUtilization
 		if w.IsHealthy() {
 			healthyCount++
 		}
+
+		// Use RPS as weight; if a worker has 0 RPS, use equal weight of 1
+		weight := w.Stats.RequestsPerSecond
+		if weight == 0 {
+			weight = 1
+		}
+		weightedLatencySum += w.Stats.AvgLatencyMS * weight
+		totalWeight += weight
 	}
 
 	avgLatency := 0.0
+	if totalWeight > 0 {
+		avgLatency = weightedLatencySum / totalWeight
+	}
+
+	avgGPUUtil := 0.0
 	if len(workers) > 0 {
-		avgLatency = totalAvgLatency / float64(len(workers))
+		avgGPUUtil = totalGPUUtil / float64(len(workers))
 	}
 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -724,6 +742,9 @@ func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		},
 		"latency": map[string]interface{}{
 			"avg_ms": avgLatency,
+		},
+		"gpu": map[string]interface{}{
+			"avg_utilization": avgGPUUtil,
 		},
 		"memory": map[string]interface{}{
 			"used_bytes":  totalMemoryUsed,

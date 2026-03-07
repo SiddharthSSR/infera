@@ -61,7 +61,7 @@ const navItems = [
 // Page display titles
 const pageTitles: Record<string, string> = {
   '/': 'INFERENCE',
-  '/models': 'REGISTRY',
+  '/models': 'MODELS',
   '/instances': 'INSTANCES',
   '/playground': 'PLAYGROUND',
   '/logs': 'SYSTEM LOGS',

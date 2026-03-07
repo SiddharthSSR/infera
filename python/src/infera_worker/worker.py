@@ -190,31 +190,61 @@ class Worker:
             return False
         return await self.engine.cancel(request_id)
 
+    def _get_gpu_utilization(self) -> float:
+        """Get GPU compute utilization percentage (0-100).
+
+        Tries pynvml first for actual GPU core utilization,
+        falls back to memory-based estimation.
+        """
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            return float(util.gpu)
+        except Exception:
+            pass
+
+        # Fallback: derive from GPU memory usage
+        try:
+            import torch
+            if torch.cuda.is_available():
+                used = torch.cuda.memory_allocated()
+                total = torch.cuda.get_device_properties(0).total_memory
+                if total > 0:
+                    return round((used / total) * 100, 1)
+        except Exception:
+            pass
+
+        return 0.0
+
     def get_stats(self) -> WorkerStats:
         """Get current worker statistics."""
         used_memory, total_memory = (0, 0)
         if self.engine:
             used_memory, total_memory = self.engine.get_memory_usage()
-        
+
         # Calculate percentiles
         p50 = self._percentile(50)
         p99 = self._percentile(99)
-        
+
         # Calculate RPS
         uptime = (datetime.now() - self._started_at).total_seconds()
         rps = self._request_count / uptime if uptime > 0 else 0
-        
+
         # Error rate
         error_rate = (
             self._error_count / self._request_count
             if self._request_count > 0
             else 0
         )
-        
+
+        gpu_util = self._get_gpu_utilization()
+
         return WorkerStats(
-            queue_depth=0,  # Would need queue tracking
-            active_requests=0,  # Would need active request tracking
-            gpu_utilization=0.0,  # Would need GPU monitoring
+            queue_depth=0,
+            active_requests=0,
+            gpu_utilization=gpu_util,
             memory_used_bytes=used_memory,
             memory_total_bytes=total_memory,
             requests_per_second=rps,
