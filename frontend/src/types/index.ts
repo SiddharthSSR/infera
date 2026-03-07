@@ -48,6 +48,9 @@ export interface Stats {
   latency: {
     avg_ms: number;
   };
+  gpu: {
+    avg_utilization: number;
+  };
   memory: {
     used_bytes: number;
     total_bytes: number;

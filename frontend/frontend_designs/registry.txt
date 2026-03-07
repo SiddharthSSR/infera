@@ -1,0 +1,374 @@
+The code below contains a design. This design should be used to create a new app or be added to an existing one.
+
+Look at the current open project to determine if a project exists. If no project is open, create a new Vite project then create this view in React after componentizing it.
+
+If a project does exist, determine the framework being used and implement the design within that framework. Identify whether reusable components already exist that can be used to implement the design faithfully and if so use them, otherwise create new components. If other views already exist in the project, make sure to place the view in a sensible route and connect it to the other views.
+
+Ensure the visual characteristics, layout, and interactions in the design are preserved with perfect fidelity.
+
+Run the dev command so the user can see the app once finished.
+
+```
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Laurits.ai — Model Registry</title>
+    <style vid="5">
+        :root {
+            --bg-paper: #FDFBF8;
+            --bg-accent: #F4F2EE;
+            --text-primary: #050505;
+            --text-secondary: #555555;
+            --border-color: #D8D6D4;
+            --grid-line: 1px solid var(--border-color);
+            --font-main: "DM Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --font-mono: "Space Mono", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-paper);
+            color: var(--text-primary);
+            font-family: var(--font-main);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            border-left: var(--grid-line);
+            border-right: var(--grid-line);
+            max-width: 1280px;
+            margin: 0 auto;
+            line-height: 1.4;
+            border-radius: 20px;
+            overflow: hidden;
+        }
+
+        h1, h2, h3, h4 {
+            font-weight: 500;
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
+        }
+
+        .display-text {
+            font-size: 6rem;
+            line-height: 0.9;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: -0.04em;
+            padding: 3rem 0;
+            text-align: center;
+            border-bottom: var(--grid-line);
+        }
+
+        .label-text {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+            border-bottom: 1px solid currentColor;
+            padding-bottom: 1px;
+            transition: opacity 0.2s;
+        }
+        
+        a:hover {
+            opacity: 0.6;
+        }
+
+        a.nav-link {
+            border-bottom: none;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            font-weight: 600;
+        }
+
+        .grid-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            border-bottom: var(--grid-line);
+        }
+
+        .cell {
+            padding: 2rem;
+            border-right: var(--grid-line);
+        }
+
+        .cell:last-child {
+            border-right: none;
+        }
+
+        .top-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 2rem;
+            border-bottom: var(--grid-line);
+        }
+
+        .nav-group {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .nav-diamond {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            vertical-align: middle;
+            margin: 0 4px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #2E7D32; 
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-dot.deploying { background-color: #F9A825; }
+        .status-dot.inactive { background-color: #D8D6D4; }
+
+        .model-table-header {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr 100px;
+            padding: 1rem 2rem;
+            background-color: var(--bg-accent);
+            border-bottom: var(--grid-line);
+        }
+
+        .model-table-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr 100px;
+            padding: 1.5rem 2rem;
+            border-bottom: var(--grid-line);
+            align-items: center;
+            transition: background-color 0.2s;
+        }
+
+        .model-table-row:hover {
+            background-color: #F9F8F6;
+        }
+
+        .model-name {
+            font-size: 1.25rem;
+            font-weight: 500;
+        }
+
+        .model-meta {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            margin-top: 0.25rem;
+        }
+
+        .action-link {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-weight: 700;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+
+        .badge {
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border: 1px solid var(--border-color);
+            text-transform: uppercase;
+            border-radius: 2px;
+            font-weight: 600;
+        }
+
+        .active-row {
+            background-color: #fff;
+        }
+
+        .icon {
+            width: 14px;
+            height: 14px;
+            stroke: currentColor;
+            stroke-width: 1.5;
+            fill: none;
+        }
+
+        .search-bar {
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: var(--grid-line);
+        }
+
+        .search-input {
+            background: transparent;
+            border: none;
+            font-family: var(--font-main);
+            font-size: 0.9rem;
+            width: 300px;
+            outline: none;
+        }
+
+        .btn-primary {
+            background: var(--text-primary);
+            color: #fff;
+            padding: 0.6rem 1.2rem;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            border: none;
+            cursor: pointer;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&amp;family=Space+Mono&amp;display=swap" rel="stylesheet" vid="6">
+</head>
+<body vid="7">
+
+    <nav class="top-nav" vid="8">
+        <div style="font-weight: 700; letter-spacing: -0.02em;" vid="9">INFERA.AI</div>
+        <div class="nav-group" vid="10">
+            <a href="#" class="nav-link" style="color: var(--text-primary); border-bottom: 2px solid var(--text-primary);" vid="11">MODELS</a>
+            <span class="nav-diamond" vid="12">◇</span>
+            <a href="#" class="nav-link" vid="13">CLUSTERS</a>
+            <span class="nav-diamond" vid="14">◇</span>
+            <a href="#" class="nav-link" vid="15">LOGS</a>
+            <span class="nav-diamond" vid="16">◇</span>
+            <a href="#" class="nav-link" vid="17">API KEYS</a>
+        </div>
+        <div class="nav-group" style="gap: 1rem;" vid="18">
+            <a href="#" class="nav-link" vid="19">DOCS</a>
+            <a href="#" class="nav-link" vid="20">ACCOUNT (2)</a>
+        </div>
+    </nav>
+
+    <header class="display-text" vid="21">
+        REGISTRY
+    </header>
+
+    <div class="search-bar" vid="22">
+        <div style="display: flex; align-items: center; gap: 0.5rem;" vid="23">
+            <svg class="icon" viewBox="0 0 24 24" vid="24"><circle cx="11" cy="11" r="8" vid="25"></circle><line x1="21" y1="21" x2="16.65" y2="16.65" vid="26"></line></svg>
+            <input type="text" class="search-input" placeholder="Filter by model name or provider..." vid="27">
+        </div>
+        <button class="btn-primary" vid="28">ADD CUSTOM MODEL</button>
+    </div>
+
+    <div class="model-table-header" vid="29">
+        <div class="label-text" vid="30">MODEL NAME &amp; VERSION</div>
+        <div class="label-text" vid="31">STATUS</div>
+        <div class="label-text" vid="32">QUANTIZATION</div>
+        <div class="label-text" vid="33">CONTEXT</div>
+        <div class="label-text" vid="34">ACTION</div>
+    </div>
+
+    <div style="flex-grow: 1;" vid="35">
+        
+        <div class="model-table-row active-row" vid="36">
+            <div vid="37">
+                <div class="model-name" vid="38">Llama-3-70B-Instruct</div>
+                <div class="model-meta" vid="39">v1.2.4 — Meta AI</div>
+            </div>
+            <div vid="40">
+                <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;" vid="41">
+                    <span class="status-dot" vid="42"></span> Active
+                </div>
+            </div>
+            <div vid="43"><span class="badge" vid="44">4-BIT (AWQ)</span></div>
+            <div class="model-meta" vid="45">8,192</div>
+            <div vid="46"><span class="action-link" vid="47">MANAGE</span></div>
+        </div>
+
+        <div class="model-table-row active-row" vid="48">
+            <div vid="49">
+                <div class="model-name" vid="50">Mistral-Large-Embed</div>
+                <div class="model-meta" vid="51">v2.0.1 — Mistral AI</div>
+            </div>
+            <div vid="52">
+                <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;" vid="53">
+                    <span class="status-dot" vid="54"></span> Active
+                </div>
+            </div>
+            <div vid="55"><span class="badge" vid="56">FP16</span></div>
+            <div class="model-meta" vid="57">32,768</div>
+            <div vid="58"><span class="action-link" vid="59">MANAGE</span></div>
+        </div>
+
+        <div class="model-table-row" vid="60">
+            <div vid="61">
+                <div class="model-name" vid="62">Gemma-2-9B-IT</div>
+                <div class="model-meta" vid="63">v1.0.0 — Google</div>
+            </div>
+            <div vid="64">
+                <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;" vid="65">
+                    <span class="status-dot deploying" vid="66"></span> Deploying...
+                </div>
+            </div>
+            <div vid="67"><span class="badge" vid="68">8-BIT (GGUF)</span></div>
+            <div class="model-meta" vid="69">4,096</div>
+            <div vid="70"><span class="action-link" style="color: var(--text-secondary); text-decoration: none;" vid="71">CANCEL</span></div>
+        </div>
+
+        <div class="model-table-row" vid="72">
+            <div vid="73">
+                <div class="model-name" vid="74">Phi-3-Mini-4k</div>
+                <div class="model-meta" vid="75">v1.1.0 — Microsoft</div>
+            </div>
+            <div vid="76">
+                <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;" vid="77">
+                    <span class="status-dot inactive" vid="78"></span> Available
+                </div>
+            </div>
+            <div vid="79"><span class="badge" vid="80">BF16</span></div>
+            <div class="model-meta" vid="81">4,096</div>
+            <div vid="82"><span class="action-link" vid="83">DEPLOY</span></div>
+        </div>
+
+        <div class="model-table-row" vid="84">
+            <div vid="85">
+                <div class="model-name" vid="86">Stable-Diffusion-3-Med</div>
+                <div class="model-meta" vid="87">v0.9.0 — Stability AI</div>
+            </div>
+            <div vid="88">
+                <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;" vid="89">
+                    <span class="status-dot inactive" vid="90"></span> Available
+                </div>
+            </div>
+            <div vid="91"><span class="badge" vid="92">FP8</span></div>
+            <div class="model-meta" vid="93">N/A</div>
+            <div vid="94"><span class="action-link" vid="95">DEPLOY</span></div>
+        </div>
+    </div>
+
+    <div class="grid-row" style="border-bottom: none; background-color: var(--bg-accent);" vid="96">
+        <div class="cell" vid="97">
+            <div class="label-text" vid="98">REGISTRY UPTIME</div>
+            <div style="margin-top: 0.5rem; font-size: 0.8rem; font-family: var(--font-mono);" vid="99">99.998%</div>
+        </div>
+        <div class="cell" vid="100">
+            <div class="label-text" vid="101">STORAGE USED</div>
+            <div style="margin-top: 0.5rem; font-size: 0.8rem; font-family: var(--font-mono);" vid="102">412.5 GB / 2 TB</div>
+        </div>
+        <div class="cell" style="grid-column: span 2;" vid="103">
+            <div class="label-text" vid="104">SYSTEM STATUS</div>
+            <div style="margin-top: 0.5rem; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem;" vid="105">
+                <span class="status-dot" vid="106"></span> All model endpoints are performing within latency targets.
+            </div>
+        </div>
+    </div>
+
+</body></html>
+```

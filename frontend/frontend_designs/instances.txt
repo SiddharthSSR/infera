@@ -1,0 +1,460 @@
+The code below contains a design. This design should be used to create a new app or be added to an existing one.
+
+Look at the current open project to determine if a project exists. If no project is open, create a new Vite project then create this view in React after componentizing it.
+
+If a project does exist, determine the framework being used and implement the design within that framework. Identify whether reusable components already exist that can be used to implement the design faithfully and if so use them, otherwise create new components. If other views already exist in the project, make sure to place the view in a sensible route and connect it to the other views.
+
+Ensure the visual characteristics, layout, and interactions in the design are preserved with perfect fidelity.
+
+Run the dev command so the user can see the app once finished.
+
+```
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Laurits.ai — Instances</title>
+    <style vid="5">
+        :root {
+            --bg-paper: #FDFBF8;
+            --bg-accent: #F4F2EE;
+            --text-primary: #050505;
+            --text-secondary: #555555;
+            --border-color: #D8D6D4;
+            --grid-line: 1px solid var(--border-color);
+            --font-main: "DM Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --font-mono: "Space Mono", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-paper);
+            color: var(--text-primary);
+            font-family: var(--font-main);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            border-left: var(--grid-line);
+            border-right: var(--grid-line);
+            max-width: 1280px;
+            margin: 0 auto;
+            line-height: 1.4;
+            overflow-x: hidden;
+        }
+
+        h1, h2, h3, h4 {
+            font-weight: 500;
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
+        }
+
+        .display-text {
+            font-size: 6rem;
+            line-height: 0.9;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: -0.04em;
+            padding: 3rem 0;
+            text-align: center;
+            border-bottom: var(--grid-line);
+        }
+
+        .label-text {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .value-text {
+            font-size: 1.5rem;
+            font-weight: 400;
+            margin-top: 0.5rem;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+            border-bottom: 1px solid currentColor;
+            padding-bottom: 1px;
+            transition: opacity 0.2s;
+        }
+        
+        a:hover {
+            opacity: 0.6;
+        }
+
+        a.nav-link {
+            border-bottom: none;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            font-weight: 600;
+        }
+
+        .grid-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            border-bottom: var(--grid-line);
+        }
+
+        .grid-col-2 { grid-column: span 2; }
+        .grid-col-3 { grid-column: span 3; }
+
+        .cell {
+            padding: 2rem;
+            border-right: var(--grid-line);
+            position: relative;
+        }
+
+        .cell:last-child {
+            border-right: none;
+        }
+
+        .top-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 2rem;
+            border-bottom: var(--grid-line);
+        }
+
+        .nav-group {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .nav-diamond {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            vertical-align: middle;
+            margin: 0 4px;
+        }
+
+        .metric-block {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            height: 100%;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #2E7D32; 
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-dot.warning { background-color: #F9A825; }
+
+        .progress-track {
+            height: 4px;
+            background: #E5E3E0;
+            width: 100%;
+            margin-top: 0.75rem;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--text-primary);
+        }
+
+        .instance-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .instance-table th {
+            text-align: left;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--text-primary);
+        }
+
+        .instance-row {
+            border-bottom: 1px solid #EEEEEC;
+            transition: background 0.2s;
+        }
+
+        .instance-row td {
+            padding: 1.5rem 0;
+            vertical-align: middle;
+        }
+
+        .mono {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+        }
+
+        .control-input {
+            width: 100%;
+            border: none;
+            border-bottom: 1px solid var(--text-primary);
+            background: transparent;
+            padding: 0.5rem 0;
+            font-family: var(--font-main);
+            font-size: 1rem;
+            outline: none;
+            margin-top: 1rem;
+            border-radius: 0;
+        }
+
+        .action-btn {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            background: none;
+            border: none;
+            padding: 0;
+            cursor: pointer;
+            border-bottom: 1px solid var(--text-primary);
+            padding-bottom: 2px;
+            font-weight: 600;
+        }
+
+        .icon {
+            width: 14px;
+            height: 14px;
+            stroke: currentColor;
+            stroke-width: 1.5;
+            fill: none;
+        }
+
+        .btn-sm {
+            font-size: 0.65rem;
+            padding-bottom: 1px;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&amp;family=Space+Mono&amp;display=swap" rel="stylesheet" vid="6">
+</head>
+<body vid="7">
+
+    <nav class="top-nav" vid="8">
+        <div style="font-weight: 700; letter-spacing: -0.02em;" vid="9">INFERA.AI</div>
+        <div class="nav-group" vid="10">
+            <a href="#" class="nav-link" vid="11">MODELS</a>
+            <span class="nav-diamond" vid="12">◇</span>
+            <a href="#" class="nav-link" style="border-bottom: 1px solid var(--text-primary)" vid="13">CLUSTERS</a>
+            <span class="nav-diamond" vid="14">◇</span>
+            <a href="#" class="nav-link" vid="15">LOGS</a>
+            <span class="nav-diamond" vid="16">◇</span>
+            <a href="#" class="nav-link" vid="17">API KEYS</a>
+        </div>
+        <div class="nav-group" style="gap: 1rem;" vid="18">
+            <a href="#" class="nav-link" vid="19">DOCS</a>
+            <a href="#" class="nav-link" vid="20">ACCOUNT (2)</a>
+        </div>
+    </nav>
+
+    <header class="display-text" vid="21">
+        INSTANCES
+    </header>
+
+    <div class="grid-row" vid="22">
+        <div class="cell metric-block" vid="23">
+            <div class="label-text" vid="24">
+                <svg class="icon" viewBox="0 0 24 24" vid="25"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" vid="26"></rect><line x1="8" y1="21" x2="16" y2="21" vid="27"></line><line x1="12" y1="17" x2="12" y2="21" vid="28"></line></svg>
+                TOTAL CLUSTER GPU
+            </div>
+            <div class="value-text" vid="29">96x H100</div>
+            <div style="margin-top: 1rem; font-size: 0.8rem; color: var(--text-secondary);" vid="30">Across 12 nodes</div>
+        </div>
+        <div class="cell metric-block" vid="31">
+            <div class="label-text" vid="32">
+                <svg class="icon" viewBox="0 0 24 24" vid="33"><path d="M12 2v20M2 12h20" vid="34"></path></svg>
+                AVG GPU UTIL
+            </div>
+            <div class="value-text" vid="35">78.2%</div>
+            <div class="progress-track" vid="36">
+                <div class="progress-fill" style="width: 78.2%" vid="37"></div>
+            </div>
+        </div>
+        <div class="cell metric-block" vid="38">
+            <div class="label-text" vid="39">
+                <svg class="icon" viewBox="0 0 24 24" vid="40"><path d="M22 12h-4l-3 9L9 3l-3 9H2" vid="41"></path></svg>
+                MEMORY USAGE
+            </div>
+            <div class="value-text" vid="42">7.4 / 9.6 TB</div>
+            <div class="progress-track" vid="43">
+                <div class="progress-fill" style="width: 77%" vid="44"></div>
+            </div>
+        </div>
+        <div class="cell metric-block" vid="45">
+            <div class="label-text" vid="46">
+                <svg class="icon" viewBox="0 0 24 24" vid="47"><circle cx="12" cy="12" r="10" vid="48"></circle><polyline points="12 6 12 12 16 14" vid="49"></polyline></svg>
+                UPTIME
+            </div>
+            <div class="value-text" vid="50">99.98%</div>
+            <div style="margin-top: 1rem; display: flex; align-items: center; gap: 0.5rem;" vid="51">
+                <div class="status-dot" vid="52"></div>
+                <span style="font-size: 0.8rem; color: var(--text-secondary);" vid="53">Operational</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid-row" style="flex-grow: 1;" vid="54">
+        <div class="cell grid-col-3" vid="55">
+            <div class="label-text" style="margin-bottom: 2rem;" vid="56">NODE OVERVIEW</div>
+            
+            <table class="instance-table" vid="57">
+                <thead vid="58">
+                    <tr vid="59">
+                        <th class="label-text" vid="60">NODE ID</th>
+                        <th class="label-text" vid="61">STATUS</th>
+                        <th class="label-text" vid="62">GPU UTIL</th>
+                        <th class="label-text" vid="63">VRAM</th>
+                        <th class="label-text" style="text-align: right;" vid="64">ACTIONS</th>
+                    </tr>
+                </thead>
+                <tbody vid="65">
+                    <tr class="instance-row" vid="66">
+                        <td class="mono" vid="67">node-us-east-01</td>
+                        <td vid="68">
+                            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;" vid="69">
+                                <span class="status-dot" vid="70"></span> Running
+                            </div>
+                        </td>
+                        <td vid="71">
+                            <div class="mono" vid="72">92%</div>
+                            <div class="progress-track" style="width: 80px; margin-top: 4px;" vid="73">
+                                <div class="progress-fill" style="width: 92%" vid="74"></div>
+                            </div>
+                        </td>
+                        <td class="mono" vid="75">742 / 800 GB</td>
+                        <td style="text-align: right;" vid="76">
+                            <button class="action-btn btn-sm" vid="77">SHELL</button>
+                        </td>
+                    </tr>
+                    <tr class="instance-row" vid="78">
+                        <td class="mono" vid="79">node-us-east-02</td>
+                        <td vid="80">
+                            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;" vid="81">
+                                <span class="status-dot" vid="82"></span> Running
+                            </div>
+                        </td>
+                        <td vid="83">
+                            <div class="mono" vid="84">84%</div>
+                            <div class="progress-track" style="width: 80px; margin-top: 4px;" vid="85">
+                                <div class="progress-fill" style="width: 84%" vid="86"></div>
+                            </div>
+                        </td>
+                        <td class="mono" vid="87">610 / 800 GB</td>
+                        <td style="text-align: right;" vid="88">
+                            <button class="action-btn btn-sm" vid="89">SHELL</button>
+                        </td>
+                    </tr>
+                    <tr class="instance-row" vid="90">
+                        <td class="mono" vid="91">node-us-east-03</td>
+                        <td vid="92">
+                            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;" vid="93">
+                                <span class="status-dot warning" vid="94"></span> Thermal Throttling
+                            </div>
+                        </td>
+                        <td vid="95">
+                            <div class="mono" vid="96">45%</div>
+                            <div class="progress-track" style="width: 80px; margin-top: 4px;" vid="97">
+                                <div class="progress-fill" style="width: 45%" vid="98"></div>
+                            </div>
+                        </td>
+                        <td class="mono" vid="99">220 / 800 GB</td>
+                        <td style="text-align: right;" vid="100">
+                            <button class="action-btn btn-sm" style="color: #C62828; border-bottom-color: #C62828" vid="101">REBOOT</button>
+                        </td>
+                    </tr>
+                    <tr class="instance-row" vid="102">
+                        <td class="mono" vid="103">node-us-east-04</td>
+                        <td vid="104">
+                            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;" vid="105">
+                                <span class="status-dot" vid="106"></span> Running
+                            </div>
+                        </td>
+                        <td vid="107">
+                            <div class="mono" vid="108">0%</div>
+                            <div class="progress-track" style="width: 80px; margin-top: 4px;" vid="109">
+                                <div class="progress-fill" style="width: 0%" vid="110"></div>
+                            </div>
+                        </td>
+                        <td class="mono" vid="111">12 / 800 GB</td>
+                        <td style="text-align: right;" vid="112">
+                            <button class="action-btn btn-sm" vid="113">SHELL</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <button class="action-btn" style="margin-top: 2rem;" vid="114">PROVISION NEW NODE</button>
+        </div>
+
+        <div class="cell grid-col-1" style="background-color: var(--bg-accent);" vid="115">
+            <div class="label-text" style="margin-bottom: 2rem;" vid="116">SCALING CONTROLS</div>
+            
+            <div style="margin-bottom: 2.5rem;" vid="117">
+                <div class="label-text" vid="118">CLUSTER MIN NODES</div>
+                <input type="text" class="control-input mono" value="4" vid="119">
+            </div>
+
+            <div style="margin-bottom: 2.5rem;" vid="120">
+                <div class="label-text" vid="121">CLUSTER MAX NODES</div>
+                <input type="text" class="control-input mono" value="12" vid="122">
+            </div>
+
+            <div style="margin-bottom: 2.5rem;" vid="123">
+                <div class="label-text" vid="124">AUTOSCALE TRIGGER (%)</div>
+                <input type="text" class="control-input mono" value="85" vid="125">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;" vid="126">
+                    Scaling up when average GPU utilization exceeds 85% for 5 mins.
+                </div>
+            </div>
+
+            <div style="margin-top: 4rem; border-top: 1px solid #D8D6D4; padding-top: 2rem;" vid="127">
+                <div class="label-text" vid="128">CLUSTER HEALTH</div>
+                <div style="margin-top: 1rem;" vid="129">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.5rem;" vid="130">
+                        <span vid="131">Orchestrator</span>
+                        <span style="color: #2E7D32" vid="132">OK</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.5rem;" vid="133">
+                        <span vid="134">Load Balancer</span>
+                        <span style="color: #2E7D32" vid="135">OK</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem;" vid="136">
+                        <span vid="137">Storage Mesh</span>
+                        <span style="color: #F9A825" vid="138">LATENCY</span>
+                    </div>
+                </div>
+            </div>
+            
+            <button class="action-btn" style="width: 100%; margin-top: 2.5rem; text-align: left;" vid="139">APPLY CHANGES</button>
+        </div>
+    </div>
+
+    <div class="grid-row" style="border-bottom: none;" vid="140">
+        <div class="cell" vid="141">
+            <div class="label-text" vid="142">REGION</div>
+            <div style="margin-top: 0.5rem; font-size: 0.8rem;" vid="143">us-east-1 (N. Virginia)</div>
+        </div>
+        <div class="cell" vid="144">
+            <div class="label-text" vid="145">LAST REBALANCE</div>
+            <div style="margin-top: 0.5rem; font-size: 0.8rem;" vid="146">42 minutes ago</div>
+        </div>
+        <div class="cell grid-col-2" vid="147">
+            <div class="label-text" vid="148">CLUSTER TAGS</div>
+            <div style="display: flex; gap: 0.75rem; margin-top: 0.5rem;" vid="149">
+                <span style="font-size: 0.7rem; border: 1px solid var(--border-color); padding: 2px 8px;" vid="150">H100-PROD</span>
+                <span style="font-size: 0.7rem; border: 1px solid var(--border-color); padding: 2px 8px;" vid="151">LOW-LATENCY</span>
+                <span style="font-size: 0.7rem; border: 1px solid var(--border-color); padding: 2px 8px;" vid="152">TIER-1</span>
+            </div>
+        </div>
+    </div>
+
+</body></html>
+```

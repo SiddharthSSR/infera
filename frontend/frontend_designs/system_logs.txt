@@ -1,0 +1,381 @@
+The code below contains a design. This design should be used to create a new app or be added to an existing one.
+
+Look at the current open project to determine if a project exists. If no project is open, create a new Vite project then create this view in React after componentizing it.
+
+If a project does exist, determine the framework being used and implement the design within that framework. Identify whether reusable components already exist that can be used to implement the design faithfully and if so use them, otherwise create new components. If other views already exist in the project, make sure to place the view in a sensible route and connect it to the other views.
+
+Ensure the visual characteristics, layout, and interactions in the design are preserved with perfect fidelity.
+
+Run the dev command so the user can see the app once finished.
+
+```
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Logs | INFERA.AI</title>
+    <style vid="5">
+        :root {
+            --bg-paper: #FDFBF8;
+            --bg-accent: #F4F2EE;
+            --text-primary: #050505;
+            --text-secondary: #555555;
+            --border-color: #D8D6D4;
+            --grid-line: 1px solid var(--border-color);
+            --font-main: "DM Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --font-mono: "Space Mono", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-paper);
+            color: var(--text-primary);
+            font-family: var(--font-main);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            border-left: var(--grid-line);
+            border-right: var(--grid-line);
+            max-width: 1280px;
+            margin: 0 auto;
+            line-height: 1.4;
+            border-radius: 20px;
+            overflow: hidden;
+        }
+
+        h1, h2, h3, h4 {
+            font-weight: 500;
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
+        }
+
+        .display-text {
+            font-size: 6rem;
+            line-height: 0.9;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: -0.04em;
+            padding: 3rem 0;
+            text-align: center;
+            border-bottom: var(--grid-line);
+        }
+
+        .label-text {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+            border-bottom: 1px solid currentColor;
+            padding-bottom: 1px;
+            transition: opacity 0.2s;
+        }
+        
+        a:hover { opacity: 0.6; }
+
+        a.nav-link {
+            border-bottom: none;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            font-weight: 600;
+        }
+
+        .grid-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            border-bottom: var(--grid-line);
+        }
+
+        .cell {
+            padding: 2rem;
+            border-right: var(--grid-line);
+            position: relative;
+        }
+
+        .cell:last-child { border-right: none; }
+
+        .top-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 2rem;
+            border-bottom: var(--grid-line);
+        }
+
+        .nav-group {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .nav-diamond {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            vertical-align: middle;
+            margin: 0 4px;
+        }
+
+        .filter-bar {
+            background-color: var(--bg-accent);
+            padding: 1rem 2rem;
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+            border-bottom: var(--grid-line);
+        }
+
+        .filter-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .filter-select {
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid var(--text-primary);
+            font-family: var(--font-main);
+            font-size: 0.85rem;
+            padding: 2px 0;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .search-input {
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid var(--text-primary);
+            font-family: var(--font-main);
+            font-size: 0.85rem;
+            padding: 2px 0;
+            width: 240px;
+            outline: none;
+        }
+
+        .logs-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+        }
+
+        .logs-table th {
+            text-align: left;
+            padding: 1rem 2rem;
+            border-bottom: var(--grid-line);
+            background: var(--bg-paper);
+            position: sticky;
+            top: 0;
+        }
+
+        .logs-table td {
+            padding: 0.75rem 2rem;
+            border-bottom: 1px solid #EEEEEC;
+            vertical-align: top;
+        }
+
+        .log-level {
+            display: inline-block;
+            padding: 2px 6px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .level-info { color: #2E7D32; border: 1px solid #2E7D32; }
+        .level-warn { color: #F9A825; border: 1px solid #F9A825; }
+        .level-error { color: #C62828; border: 1px solid #C62828; }
+        .level-debug { color: var(--text-secondary); border: 1px solid var(--text-secondary); }
+
+        .action-btn {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            background: none;
+            border: none;
+            padding: 0;
+            cursor: pointer;
+            border-bottom: 1px solid var(--text-primary);
+            padding-bottom: 2px;
+            font-weight: 600;
+        }
+
+        .scroll-area {
+            flex-grow: 1;
+            overflow-y: auto;
+            max-height: 600px;
+        }
+
+        .timestamp { color: var(--text-secondary); width: 160px; }
+        .source { color: var(--text-primary); font-weight: 500; width: 140px; }
+        .message { color: var(--text-secondary); }
+
+        .icon {
+            width: 14px;
+            height: 14px;
+            stroke: currentColor;
+            stroke-width: 1.5;
+            fill: none;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&amp;family=Space+Mono&amp;display=swap" rel="stylesheet" vid="6">
+</head>
+<body vid="7">
+
+    <nav class="top-nav" vid="8">
+        <div style="font-weight: 700; letter-spacing: -0.02em;" vid="9">INFERA.AI</div>
+        <div class="nav-group" vid="10">
+            <a href="#" class="nav-link" vid="11">MODELS</a>
+            <span class="nav-diamond" vid="12">◇</span>
+            <a href="#" class="nav-link" vid="13">CLUSTERS</a>
+            <span class="nav-diamond" vid="14">◇</span>
+            <a href="#" class="nav-link" style="color: var(--text-primary); border-bottom: 2px solid var(--text-primary);" vid="15">LOGS</a>
+            <span class="nav-diamond" vid="16">◇</span>
+            <a href="#" class="nav-link" vid="17">API KEYS</a>
+        </div>
+        <div class="nav-group" style="gap: 1rem;" vid="18">
+            <a href="#" class="nav-link" vid="19">DOCS</a>
+            <a href="#" class="nav-link" vid="20">ACCOUNT (2)</a>
+        </div>
+    </nav>
+
+    <header class="display-text" vid="21">
+        SYSTEM LOGS
+    </header>
+
+    <div class="filter-bar" vid="22">
+        <div class="filter-item" vid="23">
+            <div class="label-text" vid="24">Search</div>
+            <input type="text" class="search-input" placeholder="Filter by message or ID..." vid="25">
+        </div>
+        <div class="filter-item" vid="26">
+            <div class="label-text" vid="27">Log Level</div>
+            <select class="filter-select" vid="28">
+                <option vid="29">ALL LEVELS</option>
+                <option vid="30">INFO</option>
+                <option vid="31">WARN</option>
+                <option vid="32">ERROR</option>
+                <option vid="33">DEBUG</option>
+            </select>
+        </div>
+        <div class="filter-item" vid="34">
+            <div class="label-text" vid="35">Source</div>
+            <select class="filter-select" vid="36">
+                <option vid="37">ALL SOURCES</option>
+                <option vid="38">INFERENCE-ENGINE</option>
+                <option vid="39">API-GATEWAY</option>
+                <option vid="40">WORKER-NODES</option>
+            </select>
+        </div>
+        <div class="filter-item" style="margin-left: auto;" vid="41">
+            <button class="action-btn" vid="42">EXPORT .CSV</button>
+        </div>
+    </div>
+
+    <div class="scroll-area" vid="43">
+        <table class="logs-table" vid="44">
+            <thead vid="45">
+                <tr vid="46">
+                    <th class="label-text" vid="47">Timestamp</th>
+                    <th class="label-text" vid="48">Level</th>
+                    <th class="label-text" vid="49">Source</th>
+                    <th class="label-text" vid="50">Message</th>
+                </tr>
+            </thead>
+            <tbody vid="51">
+                <tr vid="52">
+                    <td class="timestamp" vid="53">2024-06-14 10:45:12</td>
+                    <td vid="54"><span class="log-level level-info" vid="55">INFO</span></td>
+                    <td class="source" vid="56">GATEWAY-01</td>
+                    <td class="message" vid="57">Request accepted: llama-3-70b-instruct [req_9a2b8c]</td>
+                </tr>
+                <tr vid="58">
+                    <td class="timestamp" vid="59">2024-06-14 10:45:11</td>
+                    <td vid="60"><span class="log-level level-debug" vid="61">DEBUG</span></td>
+                    <td class="source" vid="62">WORKER-04</td>
+                    <td class="message" vid="63">KV Cache hit rate: 0.92 for block 8410</td>
+                </tr>
+                <tr vid="64">
+                    <td class="timestamp" vid="65">2024-06-14 10:44:55</td>
+                    <td vid="66"><span class="log-level level-warn" vid="67">WARN</span></td>
+                    <td class="source" vid="68">NODE-MANAGER</td>
+                    <td class="message" vid="69">Node GPU-03 approaching thermal threshold (82°C)</td>
+                </tr>
+                <tr vid="70">
+                    <td class="timestamp" vid="71">2024-06-14 10:44:02</td>
+                    <td vid="72"><span class="log-level level-error" vid="73">ERROR</span></td>
+                    <td class="source" vid="74">INFERENCE-02</td>
+                    <td class="message" vid="75">CUDA_OUT_OF_MEMORY: Failed to allocate 2.4GB for attention_mask</td>
+                </tr>
+                <tr vid="76">
+                    <td class="timestamp" vid="77">2024-06-14 10:43:45</td>
+                    <td vid="78"><span class="log-level level-info" vid="79">INFO</span></td>
+                    <td class="source" vid="80">SCHEDULER</td>
+                    <td class="message" vid="81">Re-routing 12 pending tasks to cluster-us-east-b</td>
+                </tr>
+                <tr vid="82">
+                    <td class="timestamp" vid="83">2024-06-14 10:43:30</td>
+                    <td vid="84"><span class="log-level level-info" vid="85">INFO</span></td>
+                    <td class="source" vid="86">GATEWAY-01</td>
+                    <td class="message" vid="87">Streaming response completed in 412ms for [req_1f4e5a]</td>
+                </tr>
+                <tr vid="88">
+                    <td class="timestamp" vid="89">2024-06-14 10:42:12</td>
+                    <td vid="90"><span class="log-level level-debug" vid="91">DEBUG</span></td>
+                    <td class="source" vid="92">WORKER-02</td>
+                    <td class="message" vid="93">Prefill phase latency: 12ms | Decoding: 40 tokens/sec</td>
+                </tr>
+                <tr vid="94">
+                    <td class="timestamp" vid="95">2024-06-14 10:41:01</td>
+                    <td vid="96"><span class="log-level level-info" vid="97">INFO</span></td>
+                    <td class="source" vid="98">SYSTEM</td>
+                    <td class="message" vid="99">New configuration applied: Max Batch Size = 64</td>
+                </tr>
+                <tr vid="100">
+                    <td class="timestamp" vid="101">2024-06-14 10:40:55</td>
+                    <td vid="102"><span class="log-level level-info" vid="103">INFO</span></td>
+                    <td class="source" vid="104">AUTOSCALER</td>
+                    <td class="message" vid="105">Spinning up node-09 (H100) due to throughput pressure</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="grid-row" style="border-top: var(--grid-line); border-bottom: none;" vid="106">
+        <div class="cell" vid="107">
+            <div class="label-text" vid="108">Live Status</div>
+            <div style="margin-top: 0.5rem; font-size: 0.8rem; display: flex; align-items: center; gap: 8px;" vid="109">
+                <span style="width: 8px; height: 8px; border-radius: 50%; background: #2E7D32;" vid="110"></span>
+                Connected to Stream
+            </div>
+        </div>
+        <div class="cell" vid="111">
+            <div class="label-text" vid="112">Retention</div>
+            <div style="margin-top: 0.5rem; font-size: 0.8rem;" vid="113">30 Days (Rolling)</div>
+        </div>
+        <div class="cell grid-col-2" style="grid-column: span 2;" vid="114">
+            <div class="label-text" vid="115">Logging Controls</div>
+            <div style="margin-top: 0.5rem; display: flex; gap: 2rem;" vid="116">
+                <a href="#" class="action-btn" vid="117">Pause Stream</a>
+                <a href="#" class="action-btn" vid="118">Clear Screen</a>
+                <a href="#" class="action-btn" vid="119">Archive Logs</a>
+            </div>
+        </div>
+    </div>
+
+</body></html>
+```

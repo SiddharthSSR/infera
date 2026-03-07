@@ -106,8 +106,17 @@ class HTTPServer:
         registration_data = {
             "worker_id": self.worker.worker_id,
             "address": worker_address,
-            "http_port": self.config.http_port,
-            "models": [m.model_id for m in self.worker.get_loaded_models()],
+            "status": "healthy",
+            "loaded_models": [
+                {
+                    "model_id": m.model_id,
+                    "version": m.version,
+                    "memory_bytes": m.memory_bytes,
+                    "max_batch_size": 0,
+                    "max_sequence_length": 0,
+                }
+                for m in self.worker.get_loaded_models()
+            ],
             "gpu_type": os.environ.get("RUNPOD_GPU_TYPE", "unknown"),
             "gpu_count": int(os.environ.get("RUNPOD_GPU_COUNT", "1")),
         }

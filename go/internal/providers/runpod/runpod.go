@@ -424,15 +424,23 @@ func (p *Provider) ListInstances(ctx context.Context) ([]*providers.Instance, er
 	return instances, nil
 }
 
-// ListOfferings returns available GPU configurations.
+// ListOfferings returns available GPU configurations with real pricing from RunPod API.
 func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering, error) {
-	// RunPod's gpuTypes query to get available GPUs
+	// Query gpuTypes with pricing fields from RunPod's GraphQL API
 	query := `
 		query GpuTypes {
 			gpuTypes {
 				id
 				displayName
 				memoryInGb
+				securePrice
+				communityPrice
+				secureSpotPrice
+				communitySpotPrice
+				lowestPrice(input: { gpuCount: 1 }) {
+					minimumBidPrice
+					uninterruptablePrice
+				}
 			}
 		}
 	`
@@ -445,9 +453,17 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 
 	var result struct {
 		GpuTypes []struct {
-			ID          string `json:"id"`
-			DisplayName string `json:"displayName"`
-			MemoryInGb  int    `json:"memoryInGb"`
+			ID                 string  `json:"id"`
+			DisplayName        string  `json:"displayName"`
+			MemoryInGb         int     `json:"memoryInGb"`
+			SecurePrice        float64 `json:"securePrice"`
+			CommunityPrice     float64 `json:"communityPrice"`
+			SecureSpotPrice    float64 `json:"secureSpotPrice"`
+			CommunitySpotPrice float64 `json:"communitySpotPrice"`
+			LowestPrice        *struct {
+				MinimumBidPrice      float64 `json:"minimumBidPrice"`
+				UninterruptablePrice float64 `json:"uninterruptablePrice"`
+			} `json:"lowestPrice"`
 		} `json:"gpuTypes"`
 	}
 
@@ -463,7 +479,30 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 	offerings := make([]*providers.GPUOffering, 0, len(result.GpuTypes))
 	for _, gpu := range result.GpuTypes {
 		gpuType := mapDisplayNameToGPUType(gpu.DisplayName)
-		price := getEstimatedPrice(gpuType)
+
+		// Determine the best on-demand price: prefer community, fall back to secure, then lowestPrice
+		price := gpu.CommunityPrice
+		if price == 0 {
+			price = gpu.SecurePrice
+		}
+		if price == 0 && gpu.LowestPrice != nil {
+			price = gpu.LowestPrice.UninterruptablePrice
+		}
+		if price == 0 {
+			price = getEstimatedPrice(gpuType)
+		}
+
+		// Determine spot price: prefer community spot, fall back to secure spot, then lowestPrice bid
+		spotPrice := gpu.CommunitySpotPrice
+		if spotPrice == 0 {
+			spotPrice = gpu.SecureSpotPrice
+		}
+		if spotPrice == 0 && gpu.LowestPrice != nil {
+			spotPrice = gpu.LowestPrice.MinimumBidPrice
+		}
+		if spotPrice == 0 {
+			spotPrice = price * 0.5
+		}
 
 		offerings = append(offerings, &providers.GPUOffering{
 			Provider:    providers.ProviderRunPod,
@@ -471,7 +510,7 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 			GPUCount:    1,
 			MemoryGB:    gpu.MemoryInGb,
 			CostPerHour: price,
-			SpotPrice:   price * 0.5, // Estimate spot at 50%
+			SpotPrice:   spotPrice,
 			Region:      "global",
 			Available:   -1, // Unknown
 		})
@@ -480,7 +519,8 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 	return offerings, nil
 }
 
-// getStaticOfferings returns a static list of common RunPod GPU offerings
+// getStaticOfferings returns a static list of common RunPod GPU offerings.
+// Prices reflect RunPod community cloud on-demand rates as of March 2026.
 func (p *Provider) getStaticOfferings() []*providers.GPUOffering {
 	return []*providers.GPUOffering{
 		{
@@ -488,8 +528,8 @@ func (p *Provider) getStaticOfferings() []*providers.GPUOffering {
 			GPUType:     providers.GPURTX4090,
 			GPUCount:    1,
 			MemoryGB:    24,
-			CostPerHour: 0.44,
-			SpotPrice:   0.22,
+			CostPerHour: 0.34,
+			SpotPrice:   0.17,
 			Region:      "global",
 			Available:   -1,
 		},
@@ -498,8 +538,8 @@ func (p *Provider) getStaticOfferings() []*providers.GPUOffering {
 			GPUType:     providers.GPUA100_40,
 			GPUCount:    1,
 			MemoryGB:    40,
-			CostPerHour: 0.79,
-			SpotPrice:   0.39,
+			CostPerHour: 1.19,
+			SpotPrice:   0.59,
 			Region:      "global",
 			Available:   -1,
 		},
@@ -518,8 +558,8 @@ func (p *Provider) getStaticOfferings() []*providers.GPUOffering {
 			GPUType:     providers.GPUH100,
 			GPUCount:    1,
 			MemoryGB:    80,
-			CostPerHour: 2.49,
-			SpotPrice:   1.24,
+			CostPerHour: 1.99,
+			SpotPrice:   0.99,
 			Region:      "global",
 			Available:   -1,
 		},
@@ -528,29 +568,31 @@ func (p *Provider) getStaticOfferings() []*providers.GPUOffering {
 			GPUType:     providers.GPUL40S,
 			GPUCount:    1,
 			MemoryGB:    48,
-			CostPerHour: 0.99,
-			SpotPrice:   0.49,
+			CostPerHour: 0.79,
+			SpotPrice:   0.39,
 			Region:      "global",
 			Available:   -1,
 		},
 	}
 }
 
-// getEstimatedPrice returns estimated hourly price for a GPU type
+// getEstimatedPrice returns estimated hourly price for a GPU type.
+// Used as fallback when the API doesn't return pricing.
+// Prices reflect RunPod community cloud on-demand rates as of March 2026.
 func getEstimatedPrice(gpuType providers.GPUType) float64 {
 	switch gpuType {
 	case providers.GPURTX4090:
-		return 0.44
-	case providers.GPURTX4080:
 		return 0.34
+	case providers.GPURTX4080:
+		return 0.29
 	case providers.GPUA100_40:
-		return 0.79
+		return 1.19
 	case providers.GPUA100_80:
 		return 1.19
 	case providers.GPUH100:
-		return 2.49
+		return 1.99
 	case providers.GPUL40S:
-		return 0.99
+		return 0.79
 	default:
 		return 0.50
 	}
