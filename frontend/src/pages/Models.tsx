@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel } from '../hooks/useApi';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 const FAMILY_OPTIONS = ['mistral', 'llama', 'qwen', 'phi', 'gemma', 'deepseek', 'falcon', 'mixtral', 'yi', 'command-r'];
 const QUANT_OPTIONS = ['none', 'GPTQ', 'AWQ', 'GGUF', 'FP8', 'INT8', 'INT4'];
@@ -77,7 +78,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
       />
       <div style={{
         position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-        width: 580, maxHeight: '85vh',
+        width: 'min(580px, calc(100vw - 2rem))', maxHeight: '85vh',
         background: 'var(--bg-paper)', border: 'var(--grid-line)', zIndex: 50,
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
@@ -119,7 +120,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           </div>
 
           {/* Two-column row */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.75rem' }}>
+          <div className="modal-two-col-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.75rem' }}>
             <div>
               <div className="label-text" style={{ marginBottom: '0.5rem' }}>FAMILY</div>
               <select
@@ -146,7 +147,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           </div>
 
           {/* Two-column row */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.75rem' }}>
+          <div className="modal-two-col-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.75rem' }}>
             <div>
               <div className="label-text" style={{ marginBottom: '0.5rem' }}>QUANTIZATION</div>
               <select
@@ -203,7 +204,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
         </div>
 
         {/* Footer */}
-        <div style={{
+        <div className="generic-modal-footer" style={{
           padding: '1.5rem 2rem', borderTop: 'var(--grid-line)',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
@@ -223,6 +224,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 
 export function Models() {
   const navigate = useNavigate();
+  const isMobile = useIsMobile(900);
   const { data: models } = useModels();
   const { data: vaultData } = useVaultModels({});
   const deleteMutation = useDeleteVaultModel();
@@ -278,6 +280,8 @@ export function Models() {
         padding: '1rem 2rem',
         display: 'flex',
         justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '1rem',
         alignItems: 'center',
         borderBottom: 'var(--grid-line)',
       }}>
@@ -292,7 +296,7 @@ export function Models() {
             placeholder="Filter by model name or provider..."
             style={{
               background: 'transparent', border: 'none', fontFamily: 'var(--font-main)',
-              fontSize: '0.9rem', width: 300, outline: 'none', color: 'var(--text-primary)',
+              fontSize: '0.9rem', width: 'min(300px, 62vw)', outline: 'none', color: 'var(--text-primary)',
             }}
           />
         </div>
@@ -301,29 +305,107 @@ export function Models() {
         </button>
       </div>
 
-      {/* Table Header */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '2fr 1fr 1fr 1fr 120px',
-        padding: '1rem 2rem',
-        backgroundColor: 'var(--bg-accent)',
-        borderBottom: 'var(--grid-line)',
-      }}>
-        <div className="label-text">MODEL NAME &amp; VERSION</div>
-        <div className="label-text">STATUS</div>
-        <div className="label-text">QUANTIZATION</div>
-        <div className="label-text">CONTEXT</div>
-        <div className="label-text">ACTION</div>
-      </div>
+      {isMobile ? (
+        <div className="mobile-data-list" style={{ padding: '1rem' }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
+            </div>
+          ) : (
+            filtered.map(model => {
+              const isLoaded = model.loaded !== false;
+              const isDeploying = model.vault_status === 'testing';
+              const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
+              const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
+              const shortName = model.id.split('/').pop() || model.id;
+              const provider = model.owned_by || model.family || '';
+              const hasVaultEntry = vaultIdByUri.has(model.id);
 
-      {/* Table Rows */}
-      <div style={{ flexGrow: 1 }}>
-        {filtered.length === 0 ? (
-          <div style={{ padding: '4rem 2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-            {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
+              return (
+                <div key={model.id} className="mobile-data-card">
+                  <div className="mobile-data-card-header">
+                    <div>
+                      <div className="mobile-data-title">{shortName}</div>
+                      <div className="mobile-data-subtitle mono">
+                        {model.parameters && `${model.parameters} — `}{provider}
+                      </div>
+                    </div>
+                    <div className="mobile-status-inline">
+                      <span className={`status-dot ${statusDotClass}`} />
+                      {statusLabel}
+                    </div>
+                  </div>
+
+                  <div className="mobile-data-meta">
+                    <div><span className="label-text">QUANT</span> <span>{model.quantization || 'FP16'}</span></div>
+                    <div><span className="label-text">CONTEXT</span> <span className="mono">{model.max_context ? model.max_context.toLocaleString() : 'N/A'}</span></div>
+                  </div>
+
+                  <div className="mobile-data-actions">
+                    {isLoaded ? (
+                      <span
+                        className="mobile-data-action"
+                        onClick={() => navigate('/instances')}
+                      >
+                        MANAGE
+                      </span>
+                    ) : isDeploying ? (
+                      <span
+                        className="mobile-data-action muted"
+                        onClick={() => toast.info('Cancellation coming soon')}
+                      >
+                        CANCEL
+                      </span>
+                    ) : (
+                      <>
+                        <span
+                          className="mobile-data-action"
+                          onClick={() => navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)}
+                        >
+                          DEPLOY
+                        </span>
+                        {hasVaultEntry && (
+                          <span
+                            className="mobile-data-action danger"
+                            onClick={() => handleRemove(model.id)}
+                          >
+                            REMOVE
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      ) : (
+      <div className="responsive-scroll-x">
+        <div className="responsive-scroll-x-content">
+          {/* Table Header */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: '2fr 1fr 1fr 1fr 120px',
+            padding: '1rem 2rem',
+            backgroundColor: 'var(--bg-accent)',
+            borderBottom: 'var(--grid-line)',
+          }}>
+            <div className="label-text">MODEL NAME &amp; VERSION</div>
+            <div className="label-text">STATUS</div>
+            <div className="label-text">QUANTIZATION</div>
+            <div className="label-text">CONTEXT</div>
+            <div className="label-text">ACTION</div>
           </div>
-        ) : (
-          filtered.map(model => {
+
+          {/* Table Rows */}
+          <div style={{ flexGrow: 1 }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: '4rem 2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
+              </div>
+            ) : (
+              filtered.map(model => {
             const isLoaded = model.loaded !== false;
             const isDeploying = model.vault_status === 'testing';
             const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
@@ -400,10 +482,13 @@ export function Models() {
                   )}
                 </div>
               </div>
-            );
-          })
-        )}
+              );
+            })
+            )}
+          </div>
+        </div>
       </div>
+      )}
 
       {/* Footer */}
       <div className="grid-row" style={{ borderBottom: 'none', backgroundColor: 'var(--bg-accent)' }}>
