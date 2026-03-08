@@ -73,6 +73,29 @@ jobs:
         working-directory: frontend
         run: npm run test:run
 
+      - name: Run frontend lint
+        working-directory: frontend
+        run: npm run lint
+
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+
+  prod-config:
+    name: Production Compose Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose.prod.yml
+        env:
+          INFERA_ADMIN_KEY: test-admin-key
+          INFERA_ALLOWED_ORIGINS: https://example.com
+          INFERA_GATEWAY_ADDRESS: https://example.com
+          INFERA_WORKER_SHARED_TOKEN: test-worker-token
+          INFERA_WORKER_IMAGE: ghcr.io/example/infera-worker:test
+          RUNPOD_API_KEY: ""
+          VASTAI_API_KEY: ""
+          HF_TOKEN: ""
+        run: docker compose -f docker-compose.prod.yml config
