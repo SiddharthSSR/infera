@@ -7,9 +7,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/gateway"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/providers/mock"
@@ -79,6 +81,10 @@ func main() {
 	// Create gateway
 	gatewayConfig := gateway.DefaultConfig()
 	gatewayConfig.HTTPPort = *httpPort
+	gatewayConfig.WorkerSharedToken = strings.TrimSpace(os.Getenv("INFERA_WORKER_SHARED_TOKEN"))
+	if allowedOrigins := parseAllowedOrigins(os.Getenv("INFERA_ALLOWED_ORIGINS")); len(allowedOrigins) > 0 {
+		gatewayConfig.AllowedOrigins = allowedOrigins
+	}
 	gw := gateway.New(gatewayConfig, r, instanceMgr)
 
 	// Initialize vault (model registry)
@@ -96,6 +102,41 @@ func main() {
 	}
 
 	gw.SetVaultHandler(vault.NewHandler(vaultStore))
+
+	// Initialize auth (API key authentication)
+	authStore, err := auth.NewStore("data/auth.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize auth store: %v", err)
+	}
+	defer authStore.Close()
+
+	// Bootstrap admin key from env or auto-generate on first run
+	keyCount, _ := authStore.Count()
+	if keyCount == 0 {
+		adminKey := os.Getenv("INFERA_ADMIN_KEY")
+		if adminKey != "" {
+			// Use provided admin key
+			if _, err := authStore.CreateKeyFromRaw(adminKey, "Bootstrap Admin", "admin"); err != nil {
+				log.Printf("Warning: Failed to store bootstrap admin key: %v", err)
+			} else {
+				log.Println("Admin key configured from INFERA_ADMIN_KEY")
+			}
+		} else {
+			// Auto-generate admin key
+			fullKey, _, err := authStore.CreateKey("Auto Admin", "admin")
+			if err != nil {
+				log.Printf("Warning: Failed to generate admin key: %v", err)
+			} else {
+				log.Println("========================================")
+				log.Println("  AUTO-GENERATED ADMIN API KEY")
+				log.Printf("  %s", fullKey)
+				log.Println("  Save this key — it won't be shown again!")
+				log.Println("========================================")
+			}
+		}
+	}
+
+	gw.SetAuthHandler(auth.NewHandler(authStore))
 
 	// Handle shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -125,7 +166,7 @@ func main() {
 		<-sigChan
 		log.Println("Shutting down...")
 
-		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 10*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer shutdownCancel()
 
 		if err := gw.Stop(shutdownCtx); err != nil {
@@ -134,6 +175,7 @@ func main() {
 
 		r.Stop()
 		cancel()
+		log.Println("Shutdown complete")
 	}()
 
 	// Start gateway
@@ -142,4 +184,21 @@ func main() {
 	if err := gw.Start(); err != nil {
 		log.Fatalf("Gateway error: %v", err)
 	}
+}
+
+func parseAllowedOrigins(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		origin := strings.TrimSpace(part)
+		if origin != "" {
+			out = append(out, origin)
+		}
+	}
+	return out
 }

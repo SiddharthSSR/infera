@@ -1,0 +1,15 @@
+# Stage 1: Build
+FROM golang:1.22-alpine AS builder
+RUN apk add --no-cache gcc musl-dev
+WORKDIR /app
+COPY go/ ./go/
+RUN cd go && CGO_ENABLED=1 go build -o /gateway ./cmd/gateway
+
+# Stage 2: Run
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates wget
+COPY --from=builder /gateway /usr/local/bin/gateway
+RUN mkdir -p /app/data
+WORKDIR /app
+EXPOSE 8080
+CMD ["gateway"]

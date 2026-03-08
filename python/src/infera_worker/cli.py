@@ -110,6 +110,7 @@ async def register_with_gateway(worker: Worker, config: WorkerConfig) -> bool:
             response = await client.post(
                 gateway_url,
                 json=registration_data,
+                headers=config.gateway_headers(),
                 timeout=10.0,
             )
             
@@ -172,6 +173,7 @@ async def heartbeat_loop(worker: Worker, config: WorkerConfig, interval: float =
                 await client.post(
                     heartbeat_url,
                     json=heartbeat_data,
+                    headers=config.gateway_headers(),
                     timeout=5.0,
                 )
                 

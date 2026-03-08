@@ -19,6 +19,7 @@ class WorkerConfig(BaseSettings):
     router_address: str = Field(default="", description="Router/Gateway address")
     worker_address: str = Field(default="", description="Public address of this worker (for registration)")
     vault_address: str = Field(default="localhost:50053", description="Vault address")
+    worker_shared_token: str = Field(default="", description="Shared token for gateway worker auth")
     
     # Capacity
     max_concurrent_requests: int = Field(default=32, description="Max concurrent requests")
@@ -27,6 +28,8 @@ class WorkerConfig(BaseSettings):
     
     # Model management
     model_cache_size: int = Field(default=2, description="Max models in memory")
+    # Optional constructor-level preload list; env parsing still handled via computed field below.
+    preload_models_input: list[str] = Field(default_factory=list, alias="preload_models")
     # NOTE: preload_models is handled via computed_field to avoid pydantic-settings JSON parsing issues
     
     # GPU/Device
@@ -62,6 +65,9 @@ class WorkerConfig(BaseSettings):
         - Comma-separated: "model1,model2"
         - JSON array: '["model1","model2"]'
         """
+        if self.preload_models_input:
+            return [m for m in self.preload_models_input if m]
+
         value = os.environ.get("INFERA_PRELOAD_MODELS", "")
         
         if not value:
@@ -82,6 +88,12 @@ class WorkerConfig(BaseSettings):
         
         # Comma-separated
         return [m.strip() for m in value.split(",") if m.strip()]
+
+    def gateway_headers(self) -> dict[str, str]:
+        """Headers used for worker calls to the gateway."""
+        if not self.worker_shared_token:
+            return {}
+        return {"X-Worker-Token": self.worker_shared_token}
 
     model_config = SettingsConfigDict(
         env_prefix="INFERA_",

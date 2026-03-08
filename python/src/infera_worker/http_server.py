@@ -130,6 +130,7 @@ class HTTPServer:
                     response = await client.post(
                         gateway_url,
                         json=registration_data,
+                        headers=self.config.gateway_headers(),
                         timeout=10.0,
                     )
                     
@@ -170,7 +171,7 @@ class HTTPServer:
         
         try:
             async with httpx.AsyncClient() as client:
-                await client.delete(gateway_url, timeout=5.0)
+                await client.delete(gateway_url, headers=self.config.gateway_headers(), timeout=5.0)
                 logger.info("Deregistered from gateway")
         except Exception as e:
             logger.warning("Failed to deregister from gateway", error=str(e))
@@ -213,6 +214,7 @@ class HTTPServer:
                     response = await client.post(
                         gateway_url,
                         json=heartbeat_data,
+                        headers=self.config.gateway_headers(),
                         timeout=5.0,
                     )
                     if response.status_code == 200:

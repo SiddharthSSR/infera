@@ -1,0 +1,35 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.gateway
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY:-}
+      - VASTAI_API_KEY=${VASTAI_API_KEY:-}
+      - INFERA_ADMIN_KEY=${INFERA_ADMIN_KEY:-}
+      - INFERA_ALLOWED_ORIGINS=${INFERA_ALLOWED_ORIGINS:-http://localhost:3000}
+      - INFERA_WORKER_SHARED_TOKEN=${INFERA_WORKER_SHARED_TOKEN:-}
+      - INFERA_GATEWAY_ADDRESS=${INFERA_GATEWAY_ADDRESS:-http://localhost:8080}
+      - INFERA_WORKER_IMAGE=${INFERA_WORKER_IMAGE:-codingtensor/infera-worker:latest}
+      - HF_TOKEN=${HF_TOKEN:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
