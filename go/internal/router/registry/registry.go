@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -28,8 +29,8 @@ type RegistryConfig struct {
 func DefaultRegistryConfig() RegistryConfig {
 	return RegistryConfig{
 		HealthCheckInterval: 5 * time.Second,
-		UnhealthyThreshold:  15 * time.Second,
-		RemovalThreshold:    60 * time.Second,
+		UnhealthyThreshold:  10 * time.Second,
+		RemovalThreshold:    30 * time.Second,
 	}
 }
 
@@ -216,7 +217,11 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 
 		if timeSinceHeartbeat > r.config.RemovalThreshold {
 			toRemove = append(toRemove, workerID)
+			log.Printf("Removing worker %s: no heartbeat for %v", workerID, timeSinceHeartbeat.Round(time.Second))
 		} else if timeSinceHeartbeat > r.config.UnhealthyThreshold {
+			if worker.Status != types.WorkerStatusUnhealthy {
+				log.Printf("Worker %s unhealthy: no heartbeat for %v", workerID, timeSinceHeartbeat.Round(time.Second))
+			}
 			worker.UpdateStatus(types.WorkerStatusUnhealthy)
 		}
 	}

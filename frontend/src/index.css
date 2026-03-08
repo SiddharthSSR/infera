@@ -469,6 +469,11 @@ input[type="range"]::-webkit-slider-thumb {
   animation: fade-in 0.3s ease-out;
 }
 
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
 /* Markdown output styling */
 .markdown-output {
   font-family: var(--font-main);

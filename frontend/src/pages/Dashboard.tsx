@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useWorkers, useStats, useInstances, useCosts, useModels } from '../hooks/useApi';
+import { SkeletonCell } from '../components/Skeleton';
 
 function ChartBars({ heights, activeIndex }: { heights: number[]; activeIndex?: number }) {
   return (
@@ -17,15 +18,29 @@ function ChartBars({ heights, activeIndex }: { heights: number[]; activeIndex?: 
 
 export function Dashboard() {
   const navigate = useNavigate();
-  const { data: workers } = useWorkers();
-  const { data: stats } = useStats();
+  const { data: workers, isLoading: loadingWorkers } = useWorkers();
+  const { data: stats, isLoading: loadingStats } = useStats();
   const { data: instances } = useInstances();
   const { data: costs } = useCosts();
   const { data: models } = useModels();
+  const isLoading = loadingWorkers && loadingStats;
 
   const activeInstances = instances?.filter(i => i.status === 'running') || [];
   const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];
   const loadedModels = models?.filter(m => m.loaded !== false) || [];
+
+  if (isLoading) {
+    return (
+      <div className="animate-fade-in">
+        <div className="grid-row">
+          <SkeletonCell />
+          <SkeletonCell />
+          <SkeletonCell />
+          <SkeletonCell />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-fade-in">

@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { useModels } from '../hooks/useApi';
 import { useChat } from '../App';
+import { getApiKey } from '../lib/api';
 
 interface HistoryEntry {
   id: string;
@@ -74,9 +75,13 @@ export function Playground() {
       messages.push({ role: 'user' as const, content: prompt });
 
       // Stream response
+      const apiKey = getApiKey();
       const res = await fetch('/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
+        },
         body: JSON.stringify({
           model: selectedModel,
           messages,

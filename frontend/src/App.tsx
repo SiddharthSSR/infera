@@ -1,4 +1,4 @@
-import { useState, createContext, useContext } from 'react';
+import { useState, useEffect, useCallback, createContext, useContext } from 'react';
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
@@ -9,6 +9,8 @@ import { Instances } from './pages/Instances';
 import { Logs } from './pages/Logs';
 import { Models } from './pages/Models';
 import { ApiKeys } from './pages/ApiKeys';
+import { Login } from './pages/Login';
+import { getApiKey, clearApiKey } from './lib/api';
 import type { ChatMessage } from './types';
 
 // Chat message with metadata
@@ -69,7 +71,7 @@ const pageTitles: Record<string, string> = {
 };
 
 // Top Navigation
-function TopNav() {
+function TopNav({ onLogout }: { onLogout: () => void }) {
   return (
     <nav className="top-nav">
       <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
@@ -90,9 +92,9 @@ function TopNav() {
         ))}
       </div>
       <div className="nav-group" style={{ gap: '1rem' }}>
-        <a href="/api/health" target="_blank" rel="noopener noreferrer" className="nav-link">
-          DOCS
-        </a>
+        <button className="nav-link" onClick={onLogout} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+          DISCONNECT
+        </button>
       </div>
     </nav>
   );
@@ -101,12 +103,30 @@ function TopNav() {
 // Main App Content
 function AppContent() {
   const location = useLocation();
+  const [authenticated, setAuthenticated] = useState(() => !!getApiKey());
 
   // Chat state - persisted across page switches
   const [messages, setMessages] = useState<Message[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
+
+  const handleLogout = useCallback(() => {
+    clearApiKey();
+    setAuthenticated(false);
+    queryClient.clear();
+  }, []);
+
+  // Listen for auth-expired events from api.ts
+  useEffect(() => {
+    const handler = () => handleLogout();
+    window.addEventListener('auth-expired', handler);
+    return () => window.removeEventListener('auth-expired', handler);
+  }, [handleLogout]);
+
+  if (!authenticated) {
+    return <Login onAuthenticated={() => setAuthenticated(true)} />;
+  }
 
   const pageTitle = pageTitles[location.pathname] || 'INFERA';
 
@@ -124,7 +144,7 @@ function AppContent() {
   return (
     <ChatContext.Provider value={chatContextValue}>
       <div className="app-shell">
-        <TopNav />
+        <TopNav onLogout={handleLogout} />
         {/* Display header - skip for playground which has its own layout */}
         {location.pathname !== '/playground' && (
           <header className="display-text">{pageTitle}</header>
