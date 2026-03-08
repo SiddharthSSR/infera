@@ -1,0 +1,19 @@
+inferai.co.in {
+  encode gzip
+
+  handle /api/* {
+    reverse_proxy gateway:8080
+  }
+
+  handle /v1/* {
+    reverse_proxy gateway:8080
+  }
+
+  handle /health {
+    reverse_proxy gateway:8080
+  }
+
+  handle {
+    reverse_proxy frontend:3000
+  }
+}

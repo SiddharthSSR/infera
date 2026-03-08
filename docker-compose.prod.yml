@@ -1,0 +1,49 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.gateway
+    environment:
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
+      - VASTAI_API_KEY=${VASTAI_API_KEY}
+      - INFERA_ADMIN_KEY=${INFERA_ADMIN_KEY}
+      - INFERA_ALLOWED_ORIGINS=${INFERA_ALLOWED_ORIGINS}
+      - INFERA_GATEWAY_ADDRESS=${INFERA_GATEWAY_ADDRESS}
+      - INFERA_WORKER_SHARED_TOKEN=${INFERA_WORKER_SHARED_TOKEN}
+      - INFERA_WORKER_IMAGE=${INFERA_WORKER_IMAGE}
+      - HF_TOKEN=${HF_TOKEN}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.frontend
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - gateway
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
