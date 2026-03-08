@@ -75,7 +75,7 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
   return (
     <nav className="top-nav">
       <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
-      <div className="nav-group">
+      <div className="nav-group nav-links-group">
         {navItems.map((item, i) => (
           <span key={item.path} className="contents">
             {i > 0 && <span className="nav-diamond">&#9671;</span>}
@@ -91,7 +91,7 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
           </span>
         ))}
       </div>
-      <div className="nav-group" style={{ gap: '1rem' }}>
+      <div className="nav-group nav-auth-group" style={{ gap: '1rem' }}>
         <button className="nav-link" onClick={onLogout} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
           DISCONNECT
         </button>

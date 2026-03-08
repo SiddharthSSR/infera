@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { fetchApiKeys, createApiKey, revokeApiKey, type ApiKeyRecord } from '../lib/api';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 export function ApiKeys() {
+  const isMobile = useIsMobile(900);
   const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [newKeyName, setNewKeyName] = useState('');
@@ -81,6 +83,7 @@ export function ApiKeys() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
+          flexWrap: 'wrap',
           gap: '1rem',
         }}>
           <div>
@@ -109,60 +112,101 @@ export function ApiKeys() {
             <div style={{ padding: '3rem 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
               Loading keys...
             </div>
-          ) : (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>NAME / PREFIX</th>
-                  <th>ROLE</th>
-                  <th>CREATED</th>
-                  <th>LAST USED</th>
-                  <th>STATUS</th>
-                  <th style={{ textAlign: 'right' }}>ACTION</th>
-                </tr>
-              </thead>
-              <tbody>
-                {keys.map(key => (
-                  <tr key={key.id}>
-                    <td>
-                      <div style={{ fontWeight: 500 }}>{key.name}</div>
-                      <div className="mono" style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-                        {key.key_prefix}
+          ) : isMobile ? (
+            <div className="mobile-data-list">
+              {keys.length === 0 ? (
+                <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem 0' }}>
+                  No API keys. Create one to get started.
+                </div>
+              ) : (
+                keys.map(key => (
+                  <div key={key.id} className="mobile-data-card">
+                    <div className="mobile-data-card-header">
+                      <div>
+                        <div className="mobile-data-title">{key.name}</div>
+                        <div className="mobile-data-subtitle mono">
+                          {key.key_prefix}
+                        </div>
                       </div>
-                    </td>
-                    <td>
                       <span className="badge">{key.role.toUpperCase()}</span>
-                    </td>
-                    <td>{formatDate(key.created_at)}</td>
-                    <td>{formatDate(key.last_used)}</td>
-                    <td>
-                      <span style={{
-                        color: key.status === 'active' ? 'var(--color-success)' : 'var(--color-error)',
-                        fontWeight: 600,
-                        fontSize: '0.75rem',
-                        textTransform: 'uppercase',
-                      }}>
-                        {key.status}
-                      </span>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      {key.status === 'active' && (
+                    </div>
+                    <div className="mobile-data-meta">
+                      <div><span className="label-text">CREATED</span> <span>{formatDate(key.created_at)}</span></div>
+                      <div><span className="label-text">LAST USED</span> <span>{formatDate(key.last_used)}</span></div>
+                      <div>
+                        <span className="label-text">STATUS</span>{' '}
+                        <span style={{ color: key.status === 'active' ? 'var(--color-success)' : 'var(--color-error)', fontWeight: 600 }}>
+                          {key.status.toUpperCase()}
+                        </span>
+                      </div>
+                    </div>
+                    {key.status === 'active' && (
+                      <div className="mobile-data-actions">
                         <button className="action-btn destructive" onClick={() => handleRevoke(key.id)}>
                           REVOKE
                         </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {keys.length === 0 && (
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          ) : (
+            <div className="responsive-scroll-x">
+              <table className="data-table responsive-scroll-x-content">
+                <thead>
                   <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 0' }}>
-                      No API keys. Create one to get started.
-                    </td>
+                    <th>NAME / PREFIX</th>
+                    <th>ROLE</th>
+                    <th>CREATED</th>
+                    <th>LAST USED</th>
+                    <th>STATUS</th>
+                    <th style={{ textAlign: 'right' }}>ACTION</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {keys.map(key => (
+                    <tr key={key.id}>
+                      <td>
+                        <div style={{ fontWeight: 500 }}>{key.name}</div>
+                        <div className="mono" style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
+                          {key.key_prefix}
+                        </div>
+                      </td>
+                      <td>
+                        <span className="badge">{key.role.toUpperCase()}</span>
+                      </td>
+                      <td>{formatDate(key.created_at)}</td>
+                      <td>{formatDate(key.last_used)}</td>
+                      <td>
+                        <span style={{
+                          color: key.status === 'active' ? 'var(--color-success)' : 'var(--color-error)',
+                          fontWeight: 600,
+                          fontSize: '0.75rem',
+                          textTransform: 'uppercase',
+                        }}>
+                          {key.status}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        {key.status === 'active' && (
+                          <button className="action-btn destructive" onClick={() => handleRevoke(key.id)}>
+                            REVOKE
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {keys.length === 0 && (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 0' }}>
+                        No API keys. Create one to get started.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
