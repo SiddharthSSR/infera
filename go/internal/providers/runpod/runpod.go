@@ -119,6 +119,13 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		})
 	}
 
+	// Add shared worker auth token so worker can register/heartbeat on protected gateway endpoints.
+	if workerToken := os.Getenv("INFERA_WORKER_SHARED_TOKEN"); workerToken != "" {
+		env = append(env, map[string]string{
+			"key": "INFERA_WORKER_SHARED_TOKEN", "value": workerToken,
+		})
+	}
+
 	// Add models to preload
 	if len(req.Models) > 0 {
 		// Convert to JSON array string

@@ -89,6 +89,9 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	if req.GPUCount == 0 {
 		req.GPUCount = 1
 	}
+	if req.GatewayAddress == "" {
+		req.GatewayAddress = m.gatewayAddress
+	}
 
 	// Create instance via provider
 	instance, err := provider.Provision(ctx, req)
