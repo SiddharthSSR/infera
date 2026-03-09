@@ -38,12 +38,14 @@ export function clearApiKey() {
 }
 
 async function readResponseError(response: Response, fallbackMessage: string): Promise<string> {
-  const contentType = response.headers.get('content-type') || '';
-  const status = `${response.status} ${response.statusText}`.trim();
+  const contentType = response.headers?.get?.('content-type') || '';
+  const statusCode = response.status ?? 0;
+  const statusText = response.statusText ?? '';
+  const status = `${statusCode || 'unknown'} ${statusText}`.trim();
   let detail = '';
 
   try {
-    if (contentType.includes('application/json')) {
+    if (contentType.includes('application/json') || (!contentType && typeof response.json === 'function')) {
       const payload = await response.json();
       detail =
         payload?.error?.message ||
@@ -68,10 +70,10 @@ async function readResponseError(response: Response, fallbackMessage: string): P
 
 async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   const sentKey = getApiKey();
-  const headers = {
-    ...(sentKey ? { 'Authorization': `Bearer ${sentKey}` } : {}),
-    ...(init?.headers || {}),
-  };
+  const headers = new Headers(init?.headers);
+  if (sentKey) {
+    headers.set('Authorization', `Bearer ${sentKey}`);
+  }
   const response = await fetch(url, { ...init, headers });
 
   // If 401, clear only if this request used the current key.
@@ -113,8 +115,7 @@ export async function sendChatCompletion(request: ChatCompletionRequest): Promis
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Request failed');
+    throw new Error(await readResponseError(response, 'Request failed'));
   }
 
   return response.json();
@@ -132,24 +133,11 @@ export async function* streamChatCompletion(
   });
 
   if (!response.ok) {
-    const contentType = response.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      try {
-        const error = await response.json();
-        throw new Error(error.error?.message || `Request failed with status ${response.status}`);
-      } catch (e) {
-        if (e instanceof SyntaxError) {
-          throw new Error(`Request failed with status ${response.status}`);
-        }
-        throw e;
-      }
-    } else {
-      const text = await response.text();
-      if (text.includes('ngrok')) {
-        throw new Error('Please visit the ngrok URL directly in your browser first to bypass the interstitial page');
-      }
-      throw new Error(`Request failed with status ${response.status}`);
+    const message = await readResponseError(response, 'Request failed');
+    if (message.toLowerCase().includes('ngrok')) {
+      throw new Error('Please visit the ngrok URL directly in your browser first to bypass the interstitial page');
     }
+    throw new Error(message);
   }
 
   const reader = response.body?.getReader();
@@ -222,8 +210,7 @@ export async function provisionInstance(request: ProvisionRequest): Promise<Inst
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Provisioning failed');
+    throw new Error(await readResponseError(response, 'Provisioning failed'));
   }
 
   const data = await response.json();
@@ -236,8 +223,7 @@ export async function terminateInstance(instanceId: string): Promise<void> {
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Termination failed');
+    throw new Error(await readResponseError(response, 'Termination failed'));
   }
 }
 
@@ -247,8 +233,7 @@ export async function startInstance(instanceId: string): Promise<void> {
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Start failed');
+    throw new Error(await readResponseError(response, 'Start failed'));
   }
 }
 
@@ -258,8 +243,7 @@ export async function stopInstance(instanceId: string): Promise<void> {
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Stop failed');
+    throw new Error(await readResponseError(response, 'Stop failed'));
   }
 }
 
@@ -300,8 +284,7 @@ export async function registerVaultModel(model: CreateVaultModelInput): Promise<
     body: JSON.stringify(model),
   });
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Registration failed');
+    throw new Error(await readResponseError(response, 'Registration failed'));
   }
   return response.json();
 }
@@ -311,8 +294,7 @@ export async function deleteVaultModel(id: string): Promise<void> {
     method: 'DELETE',
   });
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Delete failed');
+    throw new Error(await readResponseError(response, 'Delete failed'));
   }
 }
 

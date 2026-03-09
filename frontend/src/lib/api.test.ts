@@ -45,7 +45,7 @@ describe('API Functions', () => {
 
       const workers = await fetchWorkers()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/workers', expect.objectContaining({ headers: {} }))
+      expect(mockFetch).toHaveBeenCalledWith('/api/workers', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(workers).toHaveLength(2)
       expect(workers[0].worker_id).toBe('worker-1')
     })
@@ -74,7 +74,7 @@ describe('API Functions', () => {
 
       const models = await fetchModels()
 
-      expect(mockFetch).toHaveBeenCalledWith('/v1/models', expect.objectContaining({ headers: {} }))
+      expect(mockFetch).toHaveBeenCalledWith('/v1/models', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(models).toHaveLength(2)
     })
   })
@@ -97,7 +97,7 @@ describe('API Functions', () => {
 
       const stats = await fetchStats()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/stats', expect.objectContaining({ headers: {} }))
+      expect(mockFetch).toHaveBeenCalledWith('/api/stats', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(stats.workers.total).toBe(5)
     })
   })
@@ -116,7 +116,7 @@ describe('API Functions', () => {
 
       const instances = await fetchInstances()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/instances', expect.objectContaining({ headers: {} }))
+      expect(mockFetch).toHaveBeenCalledWith('/api/instances', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(instances).toHaveLength(2)
     })
   })
@@ -134,7 +134,7 @@ describe('API Functions', () => {
 
       const offerings = await fetchOfferings()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/offerings', expect.objectContaining({ headers: {} }))
+      expect(mockFetch).toHaveBeenCalledWith('/api/offerings', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(offerings[0].gpu_type).toBe('RTX_4090')
     })
   })
@@ -157,7 +157,7 @@ describe('API Functions', () => {
 
       const costs = await fetchCosts()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/costs', expect.objectContaining({ headers: {} }))
+      expect(mockFetch).toHaveBeenCalledWith('/api/costs', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(costs.current_hourly).toBe(5.50)
     })
   })
@@ -188,10 +188,12 @@ describe('API Functions', () => {
         '/api/instances/provision',
         expect.objectContaining({
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: expect.any(Headers),
           body: JSON.stringify(request),
         })
       )
+      const [, config] = mockFetch.mock.calls[0]
+      expect((config.headers as Headers).get('Content-Type')).toBe('application/json')
       expect(instance.name).toBe('my-worker')
     })
 
@@ -312,14 +314,9 @@ describe('API Functions', () => {
 
       await fetchWorkers()
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/workers',
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            Authorization: 'Bearer inf_test_token_123',
-          }),
-        })
-      )
+      const [, config] = mockFetch.mock.calls[0]
+      expect(config.headers).toBeInstanceOf(Headers)
+      expect((config.headers as Headers).get('Authorization')).toBe('Bearer inf_test_token_123')
     })
 
     it('clears stored key and emits auth-expired on 401', async () => {
