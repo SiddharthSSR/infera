@@ -14,7 +14,7 @@ const GPU_VRAM_GB: Record<GPUType, number> = {
   L40S: 48,
 };
 
-function getStatusClass(status: Instance['status']) {
+function getStatusClass(status: string) {
   switch (status) {
     case 'running':
       return '';
@@ -28,14 +28,13 @@ function getStatusClass(status: Instance['status']) {
     case 'terminating':
     case 'terminated':
       return 'inactive';
-    default: {
-      const neverStatus: never = status;
-      throw new Error(`Unhandled instance status: ${neverStatus}`);
-    }
+    default:
+      console.warn('Unknown instance status class fallback', status);
+      return '';
   }
 }
 
-function getStatusLabel(status: Instance['status']) {
+function getStatusLabel(status: string) {
   switch (status) {
     case 'pending':
       return 'Pending';
@@ -53,10 +52,9 @@ function getStatusLabel(status: Instance['status']) {
       return 'Terminated';
     case 'error':
       return 'Error';
-    default: {
-      const neverStatus: never = status;
-      throw new Error(`Unhandled instance status: ${neverStatus}`);
-    }
+    default:
+      console.warn('Unknown instance status label fallback', status);
+      return 'Unknown';
   }
 }
 
@@ -112,14 +110,16 @@ function InstanceActions({ instance, compact = false }: { instance: Instance; co
       {instance.status === 'running' && (
         <button className="action-btn" style={buttonStyle} disabled={isLoading} onClick={handleStop}>STOP</button>
       )}
-      <button
-        className="action-btn destructive"
-        style={{ fontSize: '0.65rem' }}
-        disabled={isLoading}
-        onClick={handleTerminate}
-      >
-        TERMINATE
-      </button>
+      {instance.status !== 'terminating' && instance.status !== 'terminated' && (
+        <button
+          className="action-btn destructive"
+          style={{ fontSize: '0.65rem' }}
+          disabled={isLoading}
+          onClick={handleTerminate}
+        >
+          TERMINATE
+        </button>
+      )}
     </>
   );
 }
@@ -224,6 +224,7 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
       setName('');
       setSelectedGPU('');
       setSelectedModels([]);
+      setSpotInstance(false);
     } catch { toast.error('Failed to provision'); }
   };
 
@@ -345,6 +346,9 @@ function InstanceCard({ instance }: { instance: Instance }) {
           <div className="mobile-data-title mono" style={{ fontSize: '0.9rem' }}>{instance.name || instance.id.slice(0, 16)}</div>
           <div className="mobile-data-subtitle">
             {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
+            {instance.models && instance.models.length > 0 && (
+              <> &middot; {instance.models[0].split('/').pop()}</>
+            )}
           </div>
         </div>
         <div className="mobile-status-inline">

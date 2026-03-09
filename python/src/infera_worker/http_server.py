@@ -54,6 +54,7 @@ class HTTPServer:
         self.runner: web.AppRunner | None = None
         self._registration_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
+        self._consecutive_auth_failures = 0
         self._setup_routes()
 
     def _setup_routes(self) -> None:
@@ -176,6 +177,7 @@ class HTTPServer:
             await asyncio.sleep(retry_delay)
         
         logger.error("Failed to register with gateway after max retries")
+        raise RuntimeError("Failed to register with gateway after max retries")
 
     async def _deregister_from_gateway(self) -> None:
         """Deregister this worker from the gateway."""
@@ -247,8 +249,10 @@ class HTTPServer:
                         timeout=5.0,
                     )
                     if response.status_code == 200:
+                        self._consecutive_auth_failures = 0
                         logger.debug("Heartbeat sent successfully")
                     elif response.status_code in (401, 403):
+                        self._consecutive_auth_failures += 1
                         logger.error(
                             "Heartbeat rejected by gateway auth",
                             status=response.status_code,
@@ -256,7 +260,16 @@ class HTTPServer:
                             gateway_url=gateway_url,
                             worker_id=self.worker.worker_id,
                         )
+                        if self._consecutive_auth_failures >= 3:
+                            logger.error(
+                                "Stopping heartbeat loop after repeated auth failures",
+                                worker_id=self.worker.worker_id,
+                                failures=self._consecutive_auth_failures,
+                                gateway_url=gateway_url,
+                            )
+                            break
                     else:
+                        self._consecutive_auth_failures = 0
                         logger.warning(
                             "Heartbeat failed with non-200 response",
                             status=response.status_code,
