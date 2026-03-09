@@ -14,22 +14,114 @@ const GPU_VRAM_GB: Record<GPUType, number> = {
   L40S: 48,
 };
 
-function getStatusClass(status: string) {
-  return status === 'running' ? '' :
-    status === 'error' ? 'error' :
-    ['stopping', 'pending', 'provisioning'].includes(status) ? 'warning' : 'inactive';
+function getStatusClass(status: Instance['status']) {
+  switch (status) {
+    case 'running':
+      return '';
+    case 'error':
+      return 'error';
+    case 'stopping':
+    case 'pending':
+    case 'provisioning':
+      return 'warning';
+    case 'stopped':
+    case 'terminating':
+    case 'terminated':
+      return 'inactive';
+    default: {
+      const neverStatus: never = status;
+      throw new Error(`Unhandled instance status: ${neverStatus}`);
+    }
+  }
 }
 
-function getStatusLabel(status: string) {
-  return status.charAt(0).toUpperCase() + status.slice(1);
+function getStatusLabel(status: Instance['status']) {
+  switch (status) {
+    case 'pending':
+      return 'Pending';
+    case 'provisioning':
+      return 'Provisioning';
+    case 'running':
+      return 'Running';
+    case 'stopping':
+      return 'Stopping';
+    case 'stopped':
+      return 'Stopped';
+    case 'terminating':
+      return 'Terminating';
+    case 'terminated':
+      return 'Terminated';
+    case 'error':
+      return 'Error';
+    default: {
+      const neverStatus: never = status;
+      throw new Error(`Unhandled instance status: ${neverStatus}`);
+    }
+  }
 }
 
-function InstanceRow({ instance }: { instance: Instance }) {
+function useInstanceActions(instance: Instance) {
   const terminateMutation = useTerminateInstance();
   const startMutation = useStartInstance();
   const stopMutation = useStopInstance();
   const isLoading = terminateMutation.isPending || startMutation.isPending || stopMutation.isPending;
 
+  const handleStart = async () => {
+    try {
+      await startMutation.mutateAsync(instance.id);
+      toast.success('Instance started');
+    } catch {
+      toast.error('Failed to start');
+    }
+  };
+
+  const handleStop = async () => {
+    try {
+      await stopMutation.mutateAsync(instance.id);
+      toast.success('Instance stopped');
+    } catch {
+      toast.error('Failed to stop');
+    }
+  };
+
+  const handleTerminate = async () => {
+    if (!confirm('Terminate this instance?')) return;
+    try {
+      await terminateMutation.mutateAsync(instance.id);
+      toast.success('Terminated');
+    } catch {
+      toast.error('Failed to terminate');
+    }
+  };
+
+  return { isLoading, handleStart, handleStop, handleTerminate };
+}
+
+function InstanceActions({ instance, compact = false }: { instance: Instance; compact?: boolean }) {
+  const { isLoading, handleStart, handleStop, handleTerminate } = useInstanceActions(instance);
+  const buttonStyle = compact ? { fontSize: '0.65rem' } : { fontSize: '0.65rem', marginRight: '1rem' };
+
+  return (
+    <>
+      {instance.status === 'stopped' && (
+        <button className="action-btn" style={buttonStyle} disabled={isLoading} onClick={handleStart}>START</button>
+      )}
+      {instance.status === 'running' && (
+        <button className="action-btn" style={buttonStyle} disabled={isLoading} onClick={handleStop}>STOP</button>
+      )}
+      <button
+        className="action-btn destructive"
+        style={{ fontSize: '0.65rem' }}
+        disabled={isLoading}
+        onClick={handleTerminate}
+      >
+        TERMINATE
+      </button>
+    </>
+  );
+}
+
+function InstanceRow({ instance }: { instance: Instance }) {
   const statusClass = getStatusClass(instance.status);
   const statusLabel = getStatusLabel(instance.status);
 
@@ -61,38 +153,7 @@ function InstanceRow({ instance }: { instance: Instance }) {
         )}
       </td>
       <td style={{ padding: '1.5rem 0', verticalAlign: 'middle', textAlign: 'right' }}>
-        {instance.status === 'stopped' && (
-          <button
-            className="action-btn"
-            style={{ fontSize: '0.65rem', marginRight: '1rem' }}
-            disabled={isLoading}
-            onClick={async () => {
-              try { await startMutation.mutateAsync(instance.id); toast.success('Instance started'); }
-              catch { toast.error('Failed to start'); }
-            }}
-          >START</button>
-        )}
-        {instance.status === 'running' && (
-          <button
-            className="action-btn"
-            style={{ fontSize: '0.65rem', marginRight: '1rem' }}
-            disabled={isLoading}
-            onClick={async () => {
-              try { await stopMutation.mutateAsync(instance.id); toast.success('Instance stopped'); }
-              catch { toast.error('Failed to stop'); }
-            }}
-          >STOP</button>
-        )}
-        <button
-          className="action-btn destructive"
-          style={{ fontSize: '0.65rem' }}
-          disabled={isLoading}
-          onClick={async () => {
-            if (!confirm('Terminate this instance?')) return;
-            try { await terminateMutation.mutateAsync(instance.id); toast.success('Terminated'); }
-            catch { toast.error('Failed to terminate'); }
-          }}
-        >TERMINATE</button>
+        <InstanceActions instance={instance} />
       </td>
     </tr>
   );
@@ -269,10 +330,6 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
 }
 
 function InstanceCard({ instance }: { instance: Instance }) {
-  const terminateMutation = useTerminateInstance();
-  const startMutation = useStartInstance();
-  const stopMutation = useStopInstance();
-  const isLoading = terminateMutation.isPending || startMutation.isPending || stopMutation.isPending;
   const statusClass = getStatusClass(instance.status);
   const statusLabel = getStatusLabel(instance.status);
 
@@ -295,38 +352,7 @@ function InstanceCard({ instance }: { instance: Instance }) {
         <div><span className="label-text">ENDPOINT</span> <span className="mono">{instance.public_ip || '-'}</span></div>
       </div>
       <div className="mobile-data-actions">
-        {instance.status === 'stopped' && (
-          <button
-            className="action-btn"
-            style={{ fontSize: '0.65rem' }}
-            disabled={isLoading}
-            onClick={async () => {
-              try { await startMutation.mutateAsync(instance.id); toast.success('Instance started'); }
-              catch { toast.error('Failed to start'); }
-            }}
-          >START</button>
-        )}
-        {instance.status === 'running' && (
-          <button
-            className="action-btn"
-            style={{ fontSize: '0.65rem' }}
-            disabled={isLoading}
-            onClick={async () => {
-              try { await stopMutation.mutateAsync(instance.id); toast.success('Instance stopped'); }
-              catch { toast.error('Failed to stop'); }
-            }}
-          >STOP</button>
-        )}
-        <button
-          className="action-btn destructive"
-          style={{ fontSize: '0.65rem' }}
-          disabled={isLoading}
-          onClick={async () => {
-            if (!confirm('Terminate this instance?')) return;
-            try { await terminateMutation.mutateAsync(instance.id); toast.success('Terminated'); }
-            catch { toast.error('Failed to terminate'); }
-          }}
-        >TERMINATE</button>
+        <InstanceActions instance={instance} compact />
       </div>
     </div>
   );

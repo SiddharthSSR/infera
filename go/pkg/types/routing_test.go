@@ -138,6 +138,7 @@ func TestRequestTracker(t *testing.T) {
 
 func TestInferenceRequest(t *testing.T) {
 	t.Run("NewInferenceRequest", func(t *testing.T) {
+		start := time.Now()
 		req := NewInferenceRequest("llama-8b", []Message{{Role: RoleUser, Content: "hello"}})
 		if req.RequestID == "" {
 			t.Error("expected generated request ID")
@@ -147,6 +148,18 @@ func TestInferenceRequest(t *testing.T) {
 		}
 		if req.Priority != PriorityNormal {
 			t.Errorf("expected normal priority, got %d", req.Priority)
+		}
+		defaultParams := DefaultInferenceParameters()
+		if req.Parameters.MaxTokens != defaultParams.MaxTokens ||
+			req.Parameters.Temperature != defaultParams.Temperature ||
+			req.Parameters.TopP != defaultParams.TopP {
+			t.Errorf("expected default parameters, got %+v", req.Parameters)
+		}
+		if req.CreatedAt.IsZero() {
+			t.Error("expected non-zero CreatedAt")
+		}
+		if req.CreatedAt.Before(start) {
+			t.Errorf("expected CreatedAt >= test start, got %v before %v", req.CreatedAt, start)
 		}
 	})
 

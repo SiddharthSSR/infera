@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -84,5 +86,13 @@ func extractKey(r *http.Request) string {
 func writeAuthError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	w.Write([]byte(`{"error":{"type":"authentication_error","message":"` + message + `"}}`))
+	payload := map[string]any{
+		"error": map[string]string{
+			"type":    "authentication_error",
+			"message": message,
+		},
+	}
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("failed to encode auth error response: %v", err)
+	}
 }

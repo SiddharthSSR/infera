@@ -8,7 +8,7 @@ import structlog
 
 from .config import WorkerConfig
 from .worker import Worker
-from .http_server import HTTPServer
+from .http_server import HTTPServer, build_gateway_url
 
 # Optional httpx for registration
 try:
@@ -95,15 +95,7 @@ async def register_with_gateway(worker: Worker, config: WorkerConfig) -> bool:
                 },
             }
             
-            # Build gateway URL - handle if user included protocol
-            gateway_addr = config.router_address
-            if gateway_addr.startswith("https://"):
-                gateway_url = f"{gateway_addr}/api/workers/register"
-            elif gateway_addr.startswith("http://"):
-                gateway_url = f"{gateway_addr}/api/workers/register"
-            else:
-                # Default to https for ngrok and other public URLs
-                gateway_url = f"https://{gateway_addr}/api/workers/register"
+            gateway_url = build_gateway_url(config.router_address, "/api/workers/register")
             
             logger.info("Registering with gateway", gateway_url=gateway_url, worker_address=worker_address)
             
@@ -117,6 +109,15 @@ async def register_with_gateway(worker: Worker, config: WorkerConfig) -> bool:
             if response.status_code == 200:
                 logger.info("Registered with gateway", gateway=config.router_address)
                 return True
+            elif response.status_code in (401, 403):
+                logger.error(
+                    "Gateway registration rejected by auth",
+                    status=response.status_code,
+                    body=response.text,
+                    gateway=config.router_address,
+                    gateway_url=gateway_url,
+                )
+                raise RuntimeError("Gateway auth rejected worker registration")
             else:
                 logger.warning("Failed to register", status=response.status_code, body=response.text)
                 return False
@@ -131,14 +132,7 @@ async def heartbeat_loop(worker: Worker, config: WorkerConfig, interval: float =
     if not HTTPX_AVAILABLE or not config.router_address:
         return
     
-    # Build heartbeat URL - handle if user included protocol
-    gateway_addr = config.router_address
-    if gateway_addr.startswith("https://"):
-        heartbeat_url = f"{gateway_addr}/api/workers/heartbeat"
-    elif gateway_addr.startswith("http://"):
-        heartbeat_url = f"{gateway_addr}/api/workers/heartbeat"
-    else:
-        heartbeat_url = f"https://{gateway_addr}/api/workers/heartbeat"
+    heartbeat_url = build_gateway_url(config.router_address, "/api/workers/heartbeat")
         
     logger = structlog.get_logger()
         

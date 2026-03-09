@@ -141,6 +141,16 @@ class HTTPServer:
                             worker_id=self.worker.worker_id,
                         )
                         return
+                    elif response.status_code in (401, 403):
+                        logger.error(
+                            "Gateway registration rejected by auth",
+                            status=response.status_code,
+                            response=response.text,
+                            gateway=self.config.router_address,
+                            gateway_url=gateway_url,
+                            worker_id=self.worker.worker_id,
+                        )
+                        raise RuntimeError("Gateway auth rejected worker registration")
                     else:
                         logger.warning(
                             "Gateway registration failed",
@@ -148,6 +158,8 @@ class HTTPServer:
                             response=response.text,
                         )
                         
+            except RuntimeError:
+                raise
             except Exception as e:
                 logger.warning(
                     "Gateway registration attempt failed",
