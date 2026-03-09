@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -120,19 +121,22 @@ func main() {
 		if adminKey != "" {
 			// Use provided admin key
 			if _, err := authStore.CreateKeyFromRaw(adminKey, "Bootstrap Admin", "admin"); err != nil {
-				log.Printf("Warning: Failed to store bootstrap admin key: %v", err)
+				log.Fatalf("Failed to store bootstrap admin key from INFERA_ADMIN_KEY: %v", err)
 			} else {
 				log.Println("Admin key configured from INFERA_ADMIN_KEY")
 			}
 		} else {
 			// Auto-generate admin key
-			_, record, err := authStore.CreateKey("Auto Admin", "admin")
+			fullKey, record, err := authStore.CreateKey("Auto Admin", "admin")
 			if err != nil {
-				log.Printf("Warning: Failed to generate admin key: %v", err)
+				log.Fatalf("Failed to generate admin key: %v", err)
 			} else {
+				if err := persistBootstrapAdminKey("data/bootstrap_admin_key.txt", fullKey); err != nil {
+					log.Fatalf("Failed to persist bootstrap admin key: %v", err)
+				}
 				log.Println("Auto-generated admin API key created.")
 				log.Printf("Key prefix: %s", record.KeyPrefix)
-				log.Println("Store this key securely at creation time; plaintext key is not written to logs.")
+				log.Println("Plaintext key stored at data/bootstrap_admin_key.txt with 0600 permissions.")
 			}
 		}
 	}
@@ -202,4 +206,17 @@ func parseAllowedOrigins(raw string) []string {
 		}
 	}
 	return out
+}
+
+func persistBootstrapAdminKey(path, fullKey string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if _, err := fmt.Fprintf(f, "%s\n", fullKey); err != nil {
+		return err
+	}
+	return f.Sync()
 }

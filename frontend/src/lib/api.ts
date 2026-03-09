@@ -37,23 +37,16 @@ export function clearApiKey() {
   }
 }
 
-function authHeaders(): Record<string, string> {
-  const key = getApiKey();
-  if (key) {
-    return { 'Authorization': `Bearer ${key}` };
-  }
-  return {};
-}
-
 async function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  const sentKey = getApiKey();
   const headers = {
-    ...authHeaders(),
+    ...(sentKey ? { 'Authorization': `Bearer ${sentKey}` } : {}),
     ...(init?.headers || {}),
   };
   const response = await fetch(url, { ...init, headers });
 
-  // If 401, clear stored key so login page shows
-  if (response.status === 401) {
+  // If 401, clear only if this request used the current key.
+  if (response.status === 401 && getApiKey() === sentKey) {
     clearApiKey();
     window.dispatchEvent(new Event('auth-expired'));
   }

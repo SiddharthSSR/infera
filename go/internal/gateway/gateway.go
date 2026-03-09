@@ -4,6 +4,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -122,8 +123,8 @@ func (g *Gateway) Start() error {
 	mux.HandleFunc("/health", g.handleHealth)
 
 	// Protected internal API endpoints (require auth)
-	mux.HandleFunc("/api/workers", withAuth(g.handleGetWorkers))
-	mux.HandleFunc("/api/stats", withAuth(g.handleGetStats))
+	mux.HandleFunc("/api/workers", withAdmin(g.handleGetWorkers))
+	mux.HandleFunc("/api/stats", withAdmin(g.handleGetStats))
 
 	// Instance management endpoints (require admin)
 	if g.instanceHandlers != nil {
@@ -369,6 +370,13 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 	// Call worker
 	resp, err := client.InferWithContext(ctx, req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			g.writeError(w, http.StatusGatewayTimeout, "inference_timeout", "Inference request timed out")
+			return
+		}
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
 		return
 	}

@@ -306,6 +306,24 @@ describe('API Functions', () => {
       expect(getApiKey()).toBeNull()
     })
 
+    it('does not clear a newer token when an older in-flight request returns 401', async () => {
+      setApiKey('inf_old_token')
+      let resolveFetch: (value: any) => void = () => {}
+      mockFetch.mockImplementationOnce(() => new Promise((resolve) => { resolveFetch = resolve }))
+
+      const pendingRequest = fetchWorkers().catch(() => undefined)
+      setApiKey('inf_new_token')
+
+      resolveFetch({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { message: 'unauthorized' } }),
+      })
+
+      await pendingRequest
+      expect(getApiKey()).toBe('inf_new_token')
+    })
+
     it('validateApiKey returns true on 2xx', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
