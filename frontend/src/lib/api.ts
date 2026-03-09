@@ -37,6 +37,35 @@ export function clearApiKey() {
   }
 }
 
+async function readResponseError(response: Response, fallbackMessage: string): Promise<string> {
+  const contentType = response.headers.get('content-type') || '';
+  const status = `${response.status} ${response.statusText}`.trim();
+  let detail = '';
+
+  try {
+    if (contentType.includes('application/json')) {
+      const payload = await response.json();
+      detail =
+        payload?.error?.message ||
+        payload?.message ||
+        (payload ? JSON.stringify(payload) : '');
+    } else {
+      detail = (await response.text()).trim();
+    }
+  } catch {
+    try {
+      detail = (await response.text()).trim();
+    } catch {
+      detail = '';
+    }
+  }
+
+  if (!detail) {
+    return `${fallbackMessage} (${status})`;
+  }
+  return `${fallbackMessage} (${status}): ${detail}`;
+}
+
 async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   const sentKey = getApiKey();
   const headers = {
@@ -301,7 +330,7 @@ export interface ApiKeyRecord {
 
 export async function fetchApiKeys(): Promise<ApiKeyRecord[]> {
   const response = await authFetch(`${API_BASE}/api/auth/keys`);
-  if (!response.ok) throw new Error('Failed to fetch API keys');
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch API keys'));
   const data = await response.json();
   return data.keys;
 }
@@ -313,8 +342,7 @@ export async function createApiKey(name: string, role: string = 'user'): Promise
     body: JSON.stringify({ name, role }),
   });
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Failed to create key');
+    throw new Error(await readResponseError(response, 'Failed to create key'));
   }
   return response.json();
 }
@@ -324,8 +352,7 @@ export async function revokeApiKey(id: string): Promise<void> {
     method: 'DELETE',
   });
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Failed to revoke key');
+    throw new Error(await readResponseError(response, 'Failed to revoke key'));
   }
 }
 

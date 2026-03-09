@@ -7,6 +7,9 @@ import {
   fetchInstances,
   fetchOfferings,
   fetchCosts,
+  fetchApiKeys,
+  createApiKey,
+  revokeApiKey,
   provisionInstance,
   terminateInstance,
   startInstance,
@@ -258,6 +261,44 @@ describe('API Functions', () => {
         '/api/instances/inst-123/stop',
         expect.objectContaining({ method: 'POST' })
       )
+    })
+  })
+
+  describe('api key error parsing', () => {
+    it('createApiKey handles non-JSON error responses', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        statusText: 'Bad Gateway',
+        headers: { get: () => 'text/html' },
+        text: async () => '<html>upstream failure</html>',
+      })
+
+      await expect(createApiKey('test-key')).rejects.toThrow('Failed to create key (502 Bad Gateway)')
+    })
+
+    it('revokeApiKey handles empty error bodies', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        headers: { get: () => '' },
+        text: async () => '',
+      })
+
+      await expect(revokeApiKey('key-1')).rejects.toThrow('Failed to revoke key (500 Internal Server Error)')
+    })
+
+    it('fetchApiKeys preserves status on errors', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        statusText: 'Service Unavailable',
+        headers: { get: () => 'application/json' },
+        json: async () => ({ error: { message: 'auth backend unavailable' } }),
+      })
+
+      await expect(fetchApiKeys()).rejects.toThrow('503 Service Unavailable')
     })
   })
 
