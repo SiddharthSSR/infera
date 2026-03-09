@@ -194,7 +194,7 @@ class HTTPServer:
                     headers=self.config.gateway_headers(),
                     timeout=5.0,
                 )
-                if resp.is_error or resp.status_code >= 400:
+                if resp.is_error:
                     logger.error(
                         "Failed to deregister from gateway",
                         status=resp.status_code,

@@ -167,6 +167,10 @@ func TestInferenceRequest(t *testing.T) {
 		if req.CreatedAt.Before(start) {
 			t.Errorf("expected CreatedAt >= test start, got %v before %v", req.CreatedAt, start)
 		}
+		now := time.Now()
+		if req.CreatedAt.After(now) {
+			t.Errorf("expected CreatedAt <= now, got %v after %v", req.CreatedAt, now)
+		}
 	})
 
 	t.Run("TokenEstimate", func(t *testing.T) {

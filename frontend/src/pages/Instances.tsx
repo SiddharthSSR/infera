@@ -571,7 +571,7 @@ export function Instances() {
         <div className="cell">
           <div className="label-text">PROVIDER</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-            {filteredInstances[0]?.provider || 'runpod'}
+            {filteredInstances[0]?.provider || '—'}
           </div>
         </div>
         <div className="cell">
