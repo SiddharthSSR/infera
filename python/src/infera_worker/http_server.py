@@ -55,6 +55,7 @@ class HTTPServer:
         self._registration_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
         self._consecutive_auth_failures = 0
+        self._gateway_registered = False
         self._setup_routes()
 
     def _setup_routes(self) -> None:
@@ -86,6 +87,7 @@ class HTTPServer:
                     await self.runner.cleanup()
                     self.runner = None
                 raise
+            self._gateway_registered = True
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def stop(self) -> None:
@@ -96,8 +98,9 @@ class HTTPServer:
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
         
-        # Deregister from gateway
-        await self._deregister_from_gateway()
+        # Deregister only if registration succeeded.
+        if self._gateway_registered:
+            await self._deregister_from_gateway()
         
         if self.runner:
             await self.runner.cleanup()
@@ -158,6 +161,16 @@ class HTTPServer:
                             worker_id=self.worker.worker_id,
                         )
                         raise RuntimeError("Gateway auth rejected worker registration")
+                    elif 400 <= response.status_code < 500:
+                        logger.error(
+                            "Gateway registration failed with non-retriable client error",
+                            status=response.status_code,
+                            response=response.text,
+                            gateway=self.config.router_address,
+                            gateway_url=gateway_url,
+                            worker_id=self.worker.worker_id,
+                        )
+                        raise RuntimeError("Gateway registration failed with non-retriable client error")
                     else:
                         logger.warning(
                             "Gateway registration failed",
@@ -202,9 +215,12 @@ class HTTPServer:
                         status=resp.status_code,
                         response=resp.text,
                     )
+                    self._gateway_registered = False
                     return
                 logger.info("Deregistered from gateway")
+                self._gateway_registered = False
         except Exception as e:
+            self._gateway_registered = False
             logger.warning("Failed to deregister from gateway", error=str(e))
 
     async def _heartbeat_loop(self) -> None:
@@ -267,6 +283,7 @@ class HTTPServer:
                                 failures=self._consecutive_auth_failures,
                                 gateway_url=gateway_url,
                             )
+                            self.worker.request_shutdown()
                             break
                     else:
                         self._consecutive_auth_failures = 0

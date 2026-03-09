@@ -80,6 +80,14 @@ class Worker:
         
         logger.info("Worker stopped", worker_id=self.worker_id)
 
+    def request_shutdown(self) -> None:
+        """Signal the worker shutdown event."""
+        self._shutdown_event.set()
+
+    async def wait_for_shutdown(self) -> None:
+        """Wait until shutdown is requested."""
+        await self._shutdown_event.wait()
+
     async def load_model(self, config: ModelConfig) -> LoadedModel:
         """Load a model."""
         if self.engine is None:

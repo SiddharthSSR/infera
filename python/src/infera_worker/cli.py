@@ -34,6 +34,7 @@ async def run_worker(config: WorkerConfig) -> None:
     def signal_handler():
         logger.info("Received shutdown signal")
         shutdown_event.set()
+        worker.request_shutdown()
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -53,8 +54,17 @@ async def run_worker(config: WorkerConfig) -> None:
             engine=config.engine,
         )
         
-        # Wait for shutdown
-        await shutdown_event.wait()
+        # Wait for shutdown signal from OS or worker-internal path.
+        local_shutdown = asyncio.create_task(shutdown_event.wait())
+        worker_shutdown = asyncio.create_task(worker.wait_for_shutdown())
+        done, pending = await asyncio.wait(
+            {local_shutdown, worker_shutdown},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        for task in done:
+            task.result()
         
     except Exception as e:
         logger.error("Worker error", error=str(e))
