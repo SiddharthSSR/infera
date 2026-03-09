@@ -20,10 +20,10 @@ export function Dashboard() {
   const navigate = useNavigate();
   const { data: workers, isLoading: loadingWorkers } = useWorkers();
   const { data: stats, isLoading: loadingStats } = useStats();
-  const { data: instances } = useInstances();
-  const { data: costs } = useCosts();
-  const { data: models } = useModels();
-  const isLoading = loadingWorkers && loadingStats;
+  const { data: instances, isLoading: loadingInstances } = useInstances();
+  const { data: costs, isLoading: loadingCosts } = useCosts();
+  const { data: models, isLoading: loadingModels } = useModels();
+  const isLoading = loadingWorkers || loadingStats || loadingInstances || loadingCosts || loadingModels;
 
   const activeInstances = instances?.filter(i => i.status === 'running') || [];
   const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];

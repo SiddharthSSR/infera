@@ -68,8 +68,9 @@ func (h *Handler) RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 func extractKey(r *http.Request) string {
 	// Try Authorization: Bearer <key>
 	auth := r.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Bearer ") {
-		return strings.TrimPrefix(auth, "Bearer ")
+	fields := strings.Fields(auth)
+	if len(fields) >= 2 && strings.EqualFold(fields[0], "Bearer") {
+		return fields[1]
 	}
 
 	// Try X-API-Key header

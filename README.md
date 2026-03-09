@@ -69,10 +69,10 @@ make deps
 
 ```bash
 # Mock provider only (for testing)
-make run-gateway
+INFERA_WORKER_SHARED_TOKEN=your_worker_shared_token make run-gateway
 
 # With RunPod
-make run-gateway-runpod RUNPOD_API_KEY=your_key
+INFERA_WORKER_SHARED_TOKEN=your_worker_shared_token make run-gateway-runpod RUNPOD_API_KEY=your_key
 ```
 
 ### 3. Start the Frontend
@@ -150,10 +150,10 @@ Expected:
 
 ### 5. Worker Registration Checklist
 
-If `/api/health` shows `workers: 0`:
+If `/health` shows `workers: 0`:
 
 1. Confirm worker can reach gateway:
-   `curl -i https://inferai.co.in/api/health`
+   `curl -i https://inferai.co.in/health`
 2. Confirm worker has runtime env:
    `INFERA_ROUTER_ADDRESS`, `INFERA_WORKER_SHARED_TOKEN`
 3. Confirm gateway and worker token hashes match.
@@ -184,6 +184,7 @@ make ngrok
 ```bash
 # Terminal 2: Start gateway
 make run-gateway-runpod \
+  INFERA_WORKER_SHARED_TOKEN=your_worker_shared_token \
   RUNPOD_API_KEY=your_key \
   INFERA_GATEWAY_ADDRESS=abc123.ngrok-free.app
 ```
@@ -219,8 +220,8 @@ The instance will:
 | Command | Description |
 |---------|-------------|
 | `make deps` | Install all dependencies |
-| `make run-gateway` | Start gateway (mock only) |
-| `make run-gateway-runpod RUNPOD_API_KEY=xxx` | Start gateway with RunPod |
+| `INFERA_WORKER_SHARED_TOKEN=xxx make run-gateway` | Start gateway (mock only) |
+| `INFERA_WORKER_SHARED_TOKEN=xxx make run-gateway-runpod RUNPOD_API_KEY=xxx` | Start gateway with RunPod |
 | `make run-frontend` | Start frontend dev server |
 | `make run-worker` | Start local mock worker |
 | `make run-worker-connected` | Start worker connected to gateway |
@@ -469,6 +470,7 @@ make docker-push DOCKER_USERNAME=your_username
 
 # Use with RunPod
 make run-gateway-runpod \
+  INFERA_WORKER_SHARED_TOKEN=xxx \
   RUNPOD_API_KEY=xxx \
   INFERA_WORKER_IMAGE=your_username/infera-worker:latest
 ```
@@ -479,6 +481,7 @@ Push your code to GitHub and set `INFERA_GITHUB_REPO`:
 
 ```bash
 make run-gateway-runpod \
+  INFERA_WORKER_SHARED_TOKEN=xxx \
   RUNPOD_API_KEY=xxx \
   INFERA_GITHUB_REPO=https://github.com/your_username/infera.git
 ```
@@ -496,7 +499,7 @@ RunPod will use a base image and install the worker from GitHub at runtime.
 lsof -i :8080
 
 # Use different port
-make run-gateway GATEWAY_PORT=8081
+INFERA_WORKER_SHARED_TOKEN=xxx make run-gateway GATEWAY_PORT=8081
 ```
 
 ### Frontend can't connect to gateway
@@ -516,7 +519,7 @@ For gated models (Llama, Gemma):
 2. Create a token at https://huggingface.co/settings/tokens
 3. Set `HF_TOKEN` when starting the gateway:
    ```bash
-   make run-gateway-runpod RUNPOD_API_KEY=xxx HF_TOKEN=hf_xxx
+make run-gateway-runpod INFERA_WORKER_SHARED_TOKEN=xxx RUNPOD_API_KEY=xxx HF_TOKEN=hf_xxx
    ```
 
 ### Worker not registering
@@ -525,7 +528,7 @@ Check that:
 1. `INFERA_GATEWAY_ADDRESS` points to your public domain (`https://...`)
 2. Worker has non-empty `INFERA_ROUTER_ADDRESS`
 3. Gateway and worker share the same `INFERA_WORKER_SHARED_TOKEN`
-4. Worker can reach `/api/workers/register` and `/api/health`
+4. Worker can reach `/api/workers/register` and `/health`
 5. You reprovisioned workers after env changes
 
 ---

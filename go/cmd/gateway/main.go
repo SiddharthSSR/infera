@@ -115,7 +115,10 @@ func main() {
 	defer authStore.Close()
 
 	// Bootstrap admin key from env or auto-generate on first run
-	keyCount, _ := authStore.Count()
+	keyCount, err := authStore.Count()
+	if err != nil {
+		log.Fatalf("Failed to count existing API keys: %v", err)
+	}
 	if keyCount == 0 {
 		adminKey := os.Getenv("INFERA_ADMIN_KEY")
 		if adminKey != "" {
@@ -132,6 +135,9 @@ func main() {
 				log.Fatalf("Failed to generate admin key: %v", err)
 			} else {
 				if err := persistBootstrapAdminKey("data/bootstrap_admin_key.txt", fullKey); err != nil {
+					if rollbackErr := authStore.DeleteKey(record.ID); rollbackErr != nil {
+						log.Printf("Failed to rollback bootstrap admin key %s after persist failure: %v", record.KeyPrefix, rollbackErr)
+					}
 					log.Fatalf("Failed to persist bootstrap admin key: %v", err)
 				}
 				log.Println("Auto-generated admin API key created.")

@@ -30,7 +30,9 @@ type KeyRecord struct {
 type Store struct {
 	db         *sql.DB
 	lastUsedCh chan string
+	shutdownCh chan struct{}
 	wg         sync.WaitGroup
+	closeOnce  sync.Once
 }
 
 var bootstrapKeyPattern = regexp.MustCompile(`^inf_[0-9a-fA-F]{48}$`)
@@ -43,14 +45,17 @@ func NewStore(dbPath string) (*Store, error) {
 	}
 
 	if err := db.Ping(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping auth database: %w", err)
 	}
 
 	s := &Store{
 		db:         db,
 		lastUsedCh: make(chan string, 2048),
+		shutdownCh: make(chan struct{}),
 	}
 	if err := s.migrate(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to run auth migrations: %w", err)
 	}
 	s.startLastUsedUpdater()
@@ -60,7 +65,9 @@ func NewStore(dbPath string) (*Store, error) {
 
 // Close closes the database connection.
 func (s *Store) Close() error {
-	close(s.lastUsedCh)
+	s.closeOnce.Do(func() {
+		close(s.shutdownCh)
+	})
 	s.wg.Wait()
 	return s.db.Close()
 }
@@ -158,6 +165,8 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 
 	// Queue last_used updates for a single background updater.
 	select {
+	case <-s.shutdownCh:
+		// Store is shutting down; skip best-effort update.
 	case s.lastUsedCh <- record.ID:
 	default:
 		// Drop update if channel is full; this should not block request path.
@@ -294,14 +303,13 @@ func (s *Store) startLastUsedUpdater() {
 
 		for {
 			select {
-			case id, ok := <-s.lastUsedCh:
-				if !ok {
-					flush()
-					return
-				}
+			case id := <-s.lastUsedCh:
 				pending[id] = time.Now()
 			case <-ticker.C:
 				flush()
+			case <-s.shutdownCh:
+				flush()
+				return
 			}
 		}
 	}()

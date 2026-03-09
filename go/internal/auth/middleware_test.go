@@ -105,8 +105,14 @@ func TestRequireAuth(t *testing.T) {
 func TestRequireAdmin(t *testing.T) {
 	h, s := newTestHandler(t)
 
-	adminKey, _, _ := s.CreateKey("admin-key", "admin")
-	userKey, _, _ := s.CreateKey("user-key", "user")
+	adminKey, _, err := s.CreateKey("admin-key", "admin")
+	if err != nil {
+		t.Fatalf("CreateKey failed for admin key: %v", err)
+	}
+	userKey, _, err := s.CreateKey("user-key", "user")
+	if err != nil {
+		t.Fatalf("CreateKey failed for user key: %v", err)
+	}
 
 	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

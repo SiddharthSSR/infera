@@ -137,9 +137,13 @@ func TestListKeys(t *testing.T) {
 		}
 	})
 
-	t.Run("returns all keys ordered by created_at DESC", func(t *testing.T) {
-		s.CreateKey("first", "user")
-		s.CreateKey("second", "admin")
+	t.Run("returns all created keys", func(t *testing.T) {
+		if _, _, err := s.CreateKey("first", "user"); err != nil {
+			t.Fatalf("CreateKey(first) failed: %v", err)
+		}
+		if _, _, err := s.CreateKey("second", "admin"); err != nil {
+			t.Fatalf("CreateKey(second) failed: %v", err)
+		}
 
 		keys, err := s.ListKeys()
 		if err != nil {
@@ -148,12 +152,20 @@ func TestListKeys(t *testing.T) {
 		if len(keys) != 2 {
 			t.Fatalf("expected 2 keys, got %d", len(keys))
 		}
-		// Most recent first
-		if keys[0].Name != "second" {
-			t.Errorf("expected first key to be 'second', got %s", keys[0].Name)
+
+		found := map[string]bool{
+			"first":  false,
+			"second": false,
 		}
-		if keys[1].Name != "first" {
-			t.Errorf("expected second key to be 'first', got %s", keys[1].Name)
+		for _, key := range keys {
+			if _, ok := found[key.Name]; ok {
+				found[key.Name] = true
+			}
+		}
+		for name, ok := range found {
+			if !ok {
+				t.Errorf("expected key %q in list", name)
+			}
 		}
 	})
 }

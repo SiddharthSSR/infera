@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { useModels } from '../hooks/useApi';
 import { useChat } from '../App';
-import { getApiKey } from '../lib/api';
+import { clearApiKey, getApiKey } from '../lib/api';
 
 interface HistoryEntry {
   id: string;
@@ -38,6 +38,7 @@ export function Playground() {
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const [focusMode, setFocusMode] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 900);
+  const [showMobileSettings, setShowMobileSettings] = useState(false);
   const responseRef = useRef<HTMLDivElement>(null);
 
   // Keyboard shortcut: Escape to exit focus mode
@@ -56,6 +57,12 @@ export function Playground() {
     mediaQuery.addEventListener('change', handleChange);
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, []);
+
+  useEffect(() => {
+    if (!isMobile) {
+      setShowMobileSettings(false);
+    }
+  }, [isMobile]);
 
   // Auto-select first model if none selected
   if (!selectedModel && allModels.length > 0) {
@@ -101,6 +108,12 @@ export function Playground() {
           stream: true,
         }),
       });
+
+      if (res.status === 401) {
+        clearApiKey();
+        window.dispatchEvent(new Event('auth-expired'));
+        throw new Error('Authentication expired. Please sign in again.');
+      }
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -170,6 +183,82 @@ export function Playground() {
     setTokenUsage(null);
   };
 
+  const settingsControls = (
+    <>
+      <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>ACTIVE MODEL</label>
+      <select
+        value={selectedModel}
+        onChange={e => setSelectedModel(e.target.value)}
+        style={{
+          width: '100%', padding: '0.75rem 0', background: 'transparent',
+          border: 'none', borderBottom: '1px solid var(--text-primary)',
+          fontFamily: 'var(--font-main)', fontSize: '1rem', outline: 'none',
+          marginBottom: '2rem', cursor: 'pointer', color: 'var(--text-primary)',
+        }}
+      >
+        {allModels.length === 0 && <option value="">No models available</option>}
+        {allModels.map(m => (
+          <option key={m.id} value={m.id}>
+            {m.id.split('/').pop()}{m.loaded === false ? ' (not loaded)' : ''}{m.parameters ? ` — ${m.parameters}` : ''}
+          </option>
+        ))}
+      </select>
+
+      <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>PARAMETERS</label>
+
+      <div style={{ marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+          <span style={{ fontSize: '0.85rem' }}>Temperature</span>
+          <span className="mono" style={{ fontSize: '0.85rem' }}>{temperature.toFixed(2)}</span>
+        </div>
+        <input type="range" min="0" max="2" step="0.01" value={temperature}
+          onChange={e => setTemperature(parseFloat(e.target.value))} />
+      </div>
+
+      <div style={{ marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+          <span style={{ fontSize: '0.85rem' }}>Max Tokens</span>
+          <span className="mono" style={{ fontSize: '0.85rem' }}>{maxTokens}</span>
+        </div>
+        <input type="range" min="1" max="8192" step="1" value={maxTokens}
+          onChange={e => setMaxTokens(parseInt(e.target.value))} />
+      </div>
+
+      <div style={{ marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+          <span style={{ fontSize: '0.85rem' }}>Top P</span>
+          <span className="mono" style={{ fontSize: '0.85rem' }}>{topP.toFixed(2)}</span>
+        </div>
+        <input type="range" min="0" max="1" step="0.01" value={topP}
+          onChange={e => setTopP(parseFloat(e.target.value))} />
+      </div>
+
+      <div style={{ marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+          <span style={{ fontSize: '0.85rem' }}>Frequency Penalty</span>
+          <span className="mono" style={{ fontSize: '0.85rem' }}>{freqPenalty.toFixed(2)}</span>
+        </div>
+        <input type="range" min="0" max="2" step="0.01" value={freqPenalty}
+          onChange={e => setFreqPenalty(parseFloat(e.target.value))} />
+      </div>
+
+      <div style={{ marginTop: '2rem' }}>
+        <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>SYSTEM PROMPT</label>
+        <textarea
+          value={systemPrompt}
+          onChange={e => setSystemPrompt(e.target.value)}
+          placeholder="You are a helpful assistant..."
+          style={{
+            width: '100%', height: 120, border: 'none', background: 'transparent',
+            resize: 'none', outline: 'none', fontFamily: 'var(--font-main)',
+            fontSize: '0.85rem', lineHeight: 1.6, color: 'var(--text-primary)',
+            borderBottom: '1px solid var(--border-color)',
+          }}
+        />
+      </div>
+    </>
+  );
+
   return (
     <div style={focusMode ? {
       position: 'fixed', inset: 0, zIndex: 100,
@@ -196,82 +285,7 @@ export function Playground() {
           borderRight: 'var(--grid-line)',
           overflowY: 'auto',
         }}>
-          <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>ACTIVE MODEL</label>
-          <select
-            value={selectedModel}
-            onChange={e => setSelectedModel(e.target.value)}
-            style={{
-              width: '100%', padding: '0.75rem 0', background: 'transparent',
-              border: 'none', borderBottom: '1px solid var(--text-primary)',
-              fontFamily: 'var(--font-main)', fontSize: '1rem', outline: 'none',
-              marginBottom: '2rem', cursor: 'pointer', color: 'var(--text-primary)',
-            }}
-          >
-            {allModels.length === 0 && <option value="">No models available</option>}
-            {allModels.map(m => (
-              <option key={m.id} value={m.id}>
-                {m.id.split('/').pop()}{m.loaded === false ? ' (not loaded)' : ''}{m.parameters ? ` — ${m.parameters}` : ''}
-              </option>
-            ))}
-          </select>
-
-          <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>PARAMETERS</label>
-
-          {/* Temperature */}
-          <div style={{ marginBottom: '2rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '0.85rem' }}>Temperature</span>
-              <span className="mono" style={{ fontSize: '0.85rem' }}>{temperature.toFixed(2)}</span>
-            </div>
-            <input type="range" min="0" max="2" step="0.01" value={temperature}
-              onChange={e => setTemperature(parseFloat(e.target.value))} />
-          </div>
-
-          {/* Max Tokens */}
-          <div style={{ marginBottom: '2rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '0.85rem' }}>Max Tokens</span>
-              <span className="mono" style={{ fontSize: '0.85rem' }}>{maxTokens}</span>
-            </div>
-            <input type="range" min="1" max="8192" step="1" value={maxTokens}
-              onChange={e => setMaxTokens(parseInt(e.target.value))} />
-          </div>
-
-          {/* Top P */}
-          <div style={{ marginBottom: '2rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '0.85rem' }}>Top P</span>
-              <span className="mono" style={{ fontSize: '0.85rem' }}>{topP.toFixed(2)}</span>
-            </div>
-            <input type="range" min="0" max="1" step="0.01" value={topP}
-              onChange={e => setTopP(parseFloat(e.target.value))} />
-          </div>
-
-          {/* Frequency Penalty */}
-          <div style={{ marginBottom: '2rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '0.85rem' }}>Frequency Penalty</span>
-              <span className="mono" style={{ fontSize: '0.85rem' }}>{freqPenalty.toFixed(2)}</span>
-            </div>
-            <input type="range" min="0" max="2" step="0.01" value={freqPenalty}
-              onChange={e => setFreqPenalty(parseFloat(e.target.value))} />
-          </div>
-
-          {/* System Prompt */}
-          <div style={{ marginTop: '4rem' }}>
-            <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>SYSTEM PROMPT</label>
-            <textarea
-              value={systemPrompt}
-              onChange={e => setSystemPrompt(e.target.value)}
-              placeholder="You are a helpful assistant..."
-              style={{
-                width: '100%', height: 120, border: 'none', background: 'transparent',
-                resize: 'none', outline: 'none', fontFamily: 'var(--font-main)',
-                fontSize: '0.85rem', lineHeight: 1.6, color: 'var(--text-primary)',
-                borderBottom: '1px solid var(--border-color)',
-              }}
-            />
-          </div>
+          {settingsControls}
         </aside>}
 
         {/* Center - Editor */}
@@ -288,6 +302,14 @@ export function Playground() {
               {isLoading ? 'generating...' : 'ready to inference'}
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              {isMobile && !focusMode && (
+                <button
+                  className="btn-secondary"
+                  onClick={() => setShowMobileSettings(prev => !prev)}
+                >
+                  {showMobileSettings ? 'HIDE SETTINGS' : 'SETTINGS'}
+                </button>
+              )}
               <button
                 className="btn-secondary"
                 onClick={() => setFocusMode(prev => !prev)}
@@ -301,6 +323,17 @@ export function Playground() {
               </button>
             </div>
           </div>
+
+          {isMobile && !focusMode && showMobileSettings && (
+            <section style={{
+              padding: '1rem',
+              borderBottom: 'var(--grid-line)',
+              overflowY: 'auto',
+              maxHeight: '45vh',
+            }}>
+              {settingsControls}
+            </section>
+          )}
 
           {/* Prompt Area - fixed height, does not grow */}
           <section style={{

@@ -170,12 +170,19 @@ async def heartbeat_loop(worker: Worker, config: WorkerConfig, interval: float =
                     ],
                 }
                 
-                await client.post(
+                response = await client.post(
                     heartbeat_url,
                     json=heartbeat_data,
                     headers=config.gateway_headers(),
                     timeout=5.0,
                 )
+                if response.is_error:
+                    logger.error(
+                        "Heartbeat request rejected",
+                        status=response.status_code,
+                        body=response.text,
+                        gateway_url=heartbeat_url,
+                    )
                 
         except Exception as e:
             logger.debug("Heartbeat failed", error=str(e))

@@ -57,15 +57,18 @@ func TestRoutedRequest(t *testing.T) {
 }
 
 func TestBatchContext(t *testing.T) {
-	b := &BatchContext{
-		BatchID:   "batch-1",
-		MaxSize:   3,
-		MaxWaitMS: 50,
-		CreatedAt: time.Now(),
-		Requests:  make([]*RoutedRequest, 0),
+	newBatch := func() *BatchContext {
+		return &BatchContext{
+			BatchID:   "batch-1",
+			MaxSize:   3,
+			MaxWaitMS: 50,
+			CreatedAt: time.Now(),
+			Requests:  make([]*RoutedRequest, 0),
+		}
 	}
 
 	t.Run("Add", func(t *testing.T) {
+		b := newBatch()
 		req := &RoutedRequest{Request: &InferenceRequest{RequestID: "r1"}}
 		if !b.Add(req) {
 			t.Error("should be able to add request")
@@ -76,6 +79,8 @@ func TestBatchContext(t *testing.T) {
 	})
 
 	t.Run("IsFull", func(t *testing.T) {
+		b := newBatch()
+		b.Add(&RoutedRequest{Request: &InferenceRequest{RequestID: "r1"}})
 		b.Add(&RoutedRequest{Request: &InferenceRequest{RequestID: "r2"}})
 		b.Add(&RoutedRequest{Request: &InferenceRequest{RequestID: "r3"}})
 		if !b.IsFull() {
@@ -89,6 +94,7 @@ func TestBatchContext(t *testing.T) {
 	})
 
 	t.Run("Seal", func(t *testing.T) {
+		b := newBatch()
 		if b.IsSealed() {
 			t.Error("should not be sealed yet")
 		}
@@ -147,7 +153,7 @@ func TestInferenceRequest(t *testing.T) {
 	t.Run("TokenEstimate", func(t *testing.T) {
 		req := &InferenceRequest{
 			Messages: []Message{
-				{Content: "hello world"},         // 11 chars = ~2 tokens
+				{Content: "hello world"},          // 11 chars = ~2 tokens
 				{Content: "this is a test input"}, // 20 chars = ~5 tokens
 			},
 		}

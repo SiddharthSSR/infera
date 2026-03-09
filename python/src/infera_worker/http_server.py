@@ -230,6 +230,22 @@ class HTTPServer:
                     )
                     if response.status_code == 200:
                         logger.debug("Heartbeat sent successfully")
+                    elif response.status_code in (401, 403):
+                        logger.error(
+                            "Heartbeat rejected by gateway auth",
+                            status=response.status_code,
+                            response=response.text,
+                            gateway_url=gateway_url,
+                            worker_id=self.worker.worker_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Heartbeat failed with non-200 response",
+                            status=response.status_code,
+                            response=response.text,
+                            gateway_url=gateway_url,
+                            worker_id=self.worker.worker_id,
+                        )
                     
             except asyncio.CancelledError:
                 break

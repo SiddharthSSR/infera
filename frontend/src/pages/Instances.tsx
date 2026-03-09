@@ -188,7 +188,7 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
           </div>
 
           <div className="label-text" style={{ marginBottom: '1rem' }}>GPU CONFIGURATION</div>
-          <div className="provision-options-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '2rem' }}>
+          <div className="provision-options-grid" style={{ marginBottom: '2rem' }}>
             {dedupedOfferings?.map(o => {
               const key = getOfferingKey(o);
               const isSelected = selectedGPU === key;
