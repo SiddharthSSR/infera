@@ -7,7 +7,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"strings"
+	"regexp"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,8 +28,12 @@ type KeyRecord struct {
 
 // Store is a SQLite-backed API key store.
 type Store struct {
-	db *sql.DB
+	db         *sql.DB
+	lastUsedCh chan string
+	wg         sync.WaitGroup
 }
+
+var bootstrapKeyPattern = regexp.MustCompile(`^inf_[0-9a-fA-F]{48}$`)
 
 // NewStore opens a SQLite database and runs migrations.
 func NewStore(dbPath string) (*Store, error) {
@@ -41,16 +46,22 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to ping auth database: %w", err)
 	}
 
-	s := &Store{db: db}
+	s := &Store{
+		db:         db,
+		lastUsedCh: make(chan string, 2048),
+	}
 	if err := s.migrate(); err != nil {
 		return nil, fmt.Errorf("failed to run auth migrations: %w", err)
 	}
+	s.startLastUsedUpdater()
 
 	return s, nil
 }
 
 // Close closes the database connection.
 func (s *Store) Close() error {
+	close(s.lastUsedCh)
+	s.wg.Wait()
 	return s.db.Close()
 }
 
@@ -145,10 +156,12 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 		return nil, fmt.Errorf("failed to validate key: %w", err)
 	}
 
-	// Update last_used in background (don't block validation)
-	go func() {
-		s.db.Exec("UPDATE api_keys SET last_used = ? WHERE id = ?", time.Now(), record.ID)
-	}()
+	// Queue last_used updates for a single background updater.
+	select {
+	case s.lastUsedCh <- record.ID:
+	default:
+		// Drop update if channel is full; this should not block request path.
+	}
 
 	return record, nil
 }
@@ -218,11 +231,8 @@ func (s *Store) Count() (int, error) {
 
 // CreateKeyFromRaw stores a pre-generated key (used for bootstrap admin key).
 func (s *Store) CreateKeyFromRaw(fullKey, name, role string) (*KeyRecord, error) {
-	if len(fullKey) < 12 {
-		return nil, fmt.Errorf("key is too short")
-	}
-	if !strings.HasPrefix(fullKey, "inf_") {
-		return nil, fmt.Errorf("key must start with inf_")
+	if !bootstrapKeyPattern.MatchString(fullKey) {
+		return nil, fmt.Errorf("key must match inf_ followed by exactly 48 hexadecimal characters")
 	}
 	if name == "" {
 		return nil, fmt.Errorf("key name is required")
@@ -262,4 +272,37 @@ func (s *Store) CreateKeyFromRaw(fullKey, name, role string) (*KeyRecord, error)
 func hashKey(key string) string {
 	h := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(h[:])
+}
+
+func (s *Store) startLastUsedUpdater() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		pending := make(map[string]time.Time)
+		flush := func() {
+			if len(pending) == 0 {
+				return
+			}
+			for id, ts := range pending {
+				_, _ = s.db.Exec("UPDATE api_keys SET last_used = ? WHERE id = ?", ts, id)
+			}
+			pending = make(map[string]time.Time)
+		}
+
+		for {
+			select {
+			case id, ok := <-s.lastUsedCh:
+				if !ok {
+					flush()
+					return
+				}
+				pending[id] = time.Now()
+			case <-ticker.C:
+				flush()
+			}
+		}
+	}()
 }

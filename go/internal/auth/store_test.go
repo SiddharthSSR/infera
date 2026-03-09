@@ -268,7 +268,7 @@ func TestCount(t *testing.T) {
 func TestCreateKeyFromRaw(t *testing.T) {
 	s := newTestStore(t)
 
-	rawKey := "inf_abcdef1234567890abcdef1234567890abcdef12345678"
+	rawKey := "inf_" + strings.Repeat("ab", 24)
 	record, err := s.CreateKeyFromRaw(rawKey, "bootstrap-admin", "admin")
 	if err != nil {
 		t.Fatalf("CreateKeyFromRaw failed: %v", err)
@@ -300,6 +300,13 @@ func TestCreateKeyFromRaw(t *testing.T) {
 		_, err := s.CreateKeyFromRaw("bad_abcdef1234567890abcdef1234567890abcdef12345678", "bad", "admin")
 		if err == nil {
 			t.Fatal("expected error for invalid key prefix")
+		}
+	})
+
+	t.Run("rejects non-hex key body", func(t *testing.T) {
+		_, err := s.CreateKeyFromRaw("inf_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "bad", "admin")
+		if err == nil {
+			t.Fatal("expected error for non-hex key body")
 		}
 	})
 }

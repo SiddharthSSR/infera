@@ -112,10 +112,14 @@ function AppContent() {
   const [maxTokens, setMaxTokens] = useState(2048);
 
   const handleLogout = useCallback(() => {
+    setMessages([]);
+    setSelectedModel('');
+    setTemperature(0.7);
+    setMaxTokens(2048);
     clearApiKey();
     setAuthenticated(false);
     queryClient.clear();
-  }, []);
+  }, [setMessages, setSelectedModel, setTemperature, setMaxTokens]);
 
   // Listen for auth-expired events from api.ts
   useEffect(() => {

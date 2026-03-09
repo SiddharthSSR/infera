@@ -5,18 +5,36 @@ import type {
 } from '../types';
 
 const API_BASE = '';
+const API_KEY_STORAGE = 'infera_api_key';
+let inMemoryApiKey: string | null = null;
 
 // Auth token management
 export function getApiKey(): string | null {
-  return localStorage.getItem('infera_api_key');
+  if (inMemoryApiKey) return inMemoryApiKey;
+  try {
+    inMemoryApiKey = sessionStorage.getItem(API_KEY_STORAGE);
+  } catch {
+    inMemoryApiKey = null;
+  }
+  return inMemoryApiKey;
 }
 
 export function setApiKey(key: string) {
-  localStorage.setItem('infera_api_key', key);
+  inMemoryApiKey = key;
+  try {
+    sessionStorage.setItem(API_KEY_STORAGE, key);
+  } catch {
+    // Ignore storage errors and continue with in-memory key.
+  }
 }
 
 export function clearApiKey() {
-  localStorage.removeItem('infera_api_key');
+  inMemoryApiKey = null;
+  try {
+    sessionStorage.removeItem(API_KEY_STORAGE);
+  } catch {
+    // Ignore storage errors.
+  }
 }
 
 function authHeaders(): Record<string, string> {
@@ -320,8 +338,18 @@ export async function revokeApiKey(id: string): Promise<void> {
 
 // Validate API key by hitting a protected endpoint
 export async function validateApiKey(key: string): Promise<boolean> {
-  const response = await fetch(`${API_BASE}/api/stats`, {
-    headers: { 'Authorization': `Bearer ${key}` },
-  });
-  return response.ok;
+  try {
+    const response = await fetch(`${API_BASE}/api/stats`, {
+      headers: { 'Authorization': `Bearer ${key}` },
+    });
+
+    if (response.ok) return true;
+    if (response.status === 401) return false;
+    throw new Error(`Validation failed: ${response.status} ${response.statusText}`);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Failed to validate API key: ${error.message}`);
+    }
+    throw new Error('Failed to validate API key: unknown network error');
+  }
 }

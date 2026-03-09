@@ -60,6 +60,7 @@ func TestShouldBatch(t *testing.T) {
 func TestEnqueueAndQueueDepth(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.MaxBatchSize = 100 // prevent auto-seal
+	cfg.MaxWaitMS = 5000   // prevent timeout-based seal in this test
 	m := NewManager(cfg)
 	defer m.Stop()
 
@@ -98,12 +99,17 @@ func TestBatchSealOnMaxSize(t *testing.T) {
 
 	var mu sync.Mutex
 	var dispatched []*types.BatchContext
+	done := make(chan struct{}, 1)
 
 	m := NewManager(cfg)
 	m.OnBatchReady(func(batch *types.BatchContext) {
 		mu.Lock()
 		dispatched = append(dispatched, batch)
 		mu.Unlock()
+		select {
+		case done <- struct{}{}:
+		default:
+		}
 	})
 	defer m.Stop()
 
@@ -112,8 +118,11 @@ func TestBatchSealOnMaxSize(t *testing.T) {
 	m.Enqueue(makeRequest("model", "b", false, types.PriorityNormal))
 	m.Enqueue(makeRequest("model", "c", false, types.PriorityNormal))
 
-	// Give callback goroutine time to run
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for size-based batch dispatch")
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -138,19 +147,27 @@ func TestBatchSealOnTimeout(t *testing.T) {
 
 	var mu sync.Mutex
 	var dispatched []*types.BatchContext
+	done := make(chan struct{}, 1)
 
 	m := NewManager(cfg)
 	m.OnBatchReady(func(batch *types.BatchContext) {
 		mu.Lock()
 		dispatched = append(dispatched, batch)
 		mu.Unlock()
+		select {
+		case done <- struct{}{}:
+		default:
+		}
 	})
 	defer m.Stop()
 
 	m.Enqueue(makeRequest("model", "hello", false, types.PriorityNormal))
 
-	// Wait for timeout-based seal
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for timeout-based batch dispatch")
+	}
 
 	mu.Lock()
 	defer mu.Unlock()

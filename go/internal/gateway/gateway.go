@@ -361,13 +361,13 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if req.Stream {
 		g.handleStreamingInference(w, r, client, inferenceReq, req.Model)
 	} else {
-		g.handleNonStreamingInference(w, client, inferenceReq, req.Model)
+		g.handleNonStreamingInference(w, ctx, client, inferenceReq, req.Model)
 	}
 }
 
-func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, client *WorkerClient, req *types.InferenceRequest, model string) {
+func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context.Context, client *WorkerClient, req *types.InferenceRequest, model string) {
 	// Call worker
-	resp, err := client.Infer(req)
+	resp, err := client.InferWithContext(ctx, req)
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
 		return

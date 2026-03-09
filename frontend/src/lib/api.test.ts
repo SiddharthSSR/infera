@@ -11,6 +11,7 @@ import {
   terminateInstance,
   startInstance,
   stopInstance,
+  validateApiKey,
   setApiKey,
   getApiKey,
   clearApiKey,
@@ -23,7 +24,8 @@ const mockFetch = vi.fn()
 describe('API Functions', () => {
   beforeEach(() => {
     mockFetch.mockClear()
-    localStorage.clear()
+    sessionStorage.clear()
+    clearApiKey()
   })
 
   describe('fetchWorkers', () => {
@@ -302,6 +304,38 @@ describe('API Functions', () => {
       expect(getApiKey()).toBe('inf_to_remove')
       clearApiKey()
       expect(getApiKey()).toBeNull()
+    })
+
+    it('validateApiKey returns true on 2xx', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+      })
+      await expect(validateApiKey('inf_valid')).resolves.toBe(true)
+    })
+
+    it('validateApiKey returns false on 401', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+      })
+      await expect(validateApiKey('inf_invalid')).resolves.toBe(false)
+    })
+
+    it('validateApiKey throws on non-401 HTTP errors', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        statusText: 'Service Unavailable',
+      })
+      await expect(validateApiKey('inf_key')).rejects.toThrow('503 Service Unavailable')
+    })
+
+    it('validateApiKey throws on network errors', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('network down'))
+      await expect(validateApiKey('inf_key')).rejects.toThrow('Failed to validate API key')
     })
   })
 })

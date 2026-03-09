@@ -171,7 +171,18 @@ class HTTPServer:
         
         try:
             async with httpx.AsyncClient() as client:
-                await client.delete(gateway_url, headers=self.config.gateway_headers(), timeout=5.0)
+                resp = await client.delete(
+                    gateway_url,
+                    headers=self.config.gateway_headers(),
+                    timeout=5.0,
+                )
+                if resp.is_error or resp.status_code >= 400:
+                    logger.error(
+                        "Failed to deregister from gateway",
+                        status=resp.status_code,
+                        response=resp.text,
+                    )
+                    return
                 logger.info("Deregistered from gateway")
         except Exception as e:
             logger.warning("Failed to deregister from gateway", error=str(e))

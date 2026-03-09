@@ -82,6 +82,9 @@ func main() {
 	gatewayConfig := gateway.DefaultConfig()
 	gatewayConfig.HTTPPort = *httpPort
 	gatewayConfig.WorkerSharedToken = strings.TrimSpace(os.Getenv("INFERA_WORKER_SHARED_TOKEN"))
+	if gatewayConfig.WorkerSharedToken == "" {
+		log.Fatal("INFERA_WORKER_SHARED_TOKEN is required and cannot be empty")
+	}
 	if allowedOrigins := parseAllowedOrigins(os.Getenv("INFERA_ALLOWED_ORIGINS")); len(allowedOrigins) > 0 {
 		gatewayConfig.AllowedOrigins = allowedOrigins
 	}
@@ -123,15 +126,13 @@ func main() {
 			}
 		} else {
 			// Auto-generate admin key
-			fullKey, _, err := authStore.CreateKey("Auto Admin", "admin")
+			_, record, err := authStore.CreateKey("Auto Admin", "admin")
 			if err != nil {
 				log.Printf("Warning: Failed to generate admin key: %v", err)
 			} else {
-				log.Println("========================================")
-				log.Println("  AUTO-GENERATED ADMIN API KEY")
-				log.Printf("  %s", fullKey)
-				log.Println("  Save this key — it won't be shown again!")
-				log.Println("========================================")
+				log.Println("Auto-generated admin API key created.")
+				log.Printf("Key prefix: %s", record.KeyPrefix)
+				log.Println("Store this key securely at creation time; plaintext key is not written to logs.")
 			}
 		}
 	}

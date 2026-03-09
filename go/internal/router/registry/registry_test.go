@@ -61,6 +61,24 @@ func TestRegister(t *testing.T) {
 		if got.Address != "localhost:9001" {
 			t.Errorf("expected updated address, got %s", got.Address)
 		}
+
+		oldModelWorkers := r.GetWorkersForModel("llama-8b")
+		for _, worker := range oldModelWorkers {
+			if worker.WorkerID == "w1" {
+				t.Fatal("expected w1 to be removed from old model index after overwrite")
+			}
+		}
+
+		newModelWorkers := r.GetWorkersForModel("mistral-7b")
+		foundW1 := false
+		for _, worker := range newModelWorkers {
+			if worker.WorkerID == "w1" {
+				foundW1 = true
+			}
+		}
+		if !foundW1 {
+			t.Fatal("expected w1 to be indexed for mistral-7b after overwrite")
+		}
 	})
 }
 
