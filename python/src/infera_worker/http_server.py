@@ -76,9 +76,15 @@ class HTTPServer:
         
         logger.info("HTTP server started", port=self.config.http_port)
         
-        # Start gateway registration
+        # Register with gateway before heartbeats so auth errors fail startup.
         if self.config.router_address:
-            self._registration_task = asyncio.create_task(self._register_with_gateway())
+            try:
+                await self._register_with_gateway()
+            except Exception:
+                if self.runner:
+                    await self.runner.cleanup()
+                    self.runner = None
+                raise
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def stop(self) -> None:

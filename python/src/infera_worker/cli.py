@@ -122,6 +122,8 @@ async def register_with_gateway(worker: Worker, config: WorkerConfig) -> bool:
                 logger.warning("Failed to register", status=response.status_code, body=response.text)
                 return False
                 
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.warning("Could not register with gateway", error=str(e), gateway=config.router_address)
         return False

@@ -53,6 +53,12 @@ func TestRoutedRequest(t *testing.T) {
 		if retry.Request.RequestID != "req-1" {
 			t.Error("retry should keep same request")
 		}
+		if retry == r {
+			t.Error("WithRetry should return a new RoutedRequest instance")
+		}
+		if r.Attempt != 1 {
+			t.Errorf("original attempt mutated, expected 1 got %d", r.Attempt)
+		}
 	})
 }
 
@@ -171,8 +177,8 @@ func TestInferenceRequest(t *testing.T) {
 			},
 		}
 		estimate := req.TokenEstimate()
-		if estimate < 5 || estimate > 10 {
-			t.Errorf("unexpected token estimate: %d", estimate)
+		if estimate != 7 {
+			t.Errorf("expected token estimate 7, got %d", estimate)
 		}
 	})
 

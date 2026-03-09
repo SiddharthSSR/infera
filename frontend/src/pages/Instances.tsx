@@ -70,7 +70,8 @@ function useInstanceActions(instance: Instance) {
     try {
       await startMutation.mutateAsync(instance.id);
       toast.success('Instance started');
-    } catch {
+    } catch (err) {
+      console.error('Failed to start instance', err);
       toast.error('Failed to start');
     }
   };
@@ -79,7 +80,8 @@ function useInstanceActions(instance: Instance) {
     try {
       await stopMutation.mutateAsync(instance.id);
       toast.success('Instance stopped');
-    } catch {
+    } catch (err) {
+      console.error('Failed to stop instance', err);
       toast.error('Failed to stop');
     }
   };
@@ -89,7 +91,8 @@ function useInstanceActions(instance: Instance) {
     try {
       await terminateMutation.mutateAsync(instance.id);
       toast.success('Terminated');
-    } catch {
+    } catch (err) {
+      console.error('Failed to terminate instance', err);
       toast.error('Failed to terminate');
     }
   };
@@ -218,7 +221,9 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
       });
       toast.success('Instance provisioned');
       onClose();
-      setName(''); setSelectedGPU(''); setSelectedModels([]);
+      setName('');
+      setSelectedGPU('');
+      setSelectedModels([]);
     } catch { toast.error('Failed to provision'); }
   };
 
