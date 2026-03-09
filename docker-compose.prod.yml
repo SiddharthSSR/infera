@@ -28,6 +28,7 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
+    command: ["nginx", "-g", "pid /tmp/nginx.pid; daemon off;"]
     restart: unless-stopped
 
   caddy:
