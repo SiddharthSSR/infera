@@ -75,7 +75,7 @@ async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(url, { ...init, headers });
 
   // If 401, clear only if this request used the current key.
-  if (response.status === 401 && getApiKey() === sentKey) {
+  if (response.status === 401 && sentKey && getApiKey() === sentKey) {
     clearApiKey();
     window.dispatchEvent(new Event('auth-expired'));
   }
