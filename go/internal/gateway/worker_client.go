@@ -74,6 +74,11 @@ type WorkerInferResponse struct {
 
 // Infer sends an inference request to the worker.
 func (c *WorkerClient) Infer(req *types.InferenceRequest) (*types.InferenceResponse, error) {
+	return c.InferWithContext(context.Background(), req)
+}
+
+// InferWithContext sends an inference request with context propagation.
+func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.InferenceRequest) (*types.InferenceResponse, error) {
 	// Convert to worker format
 	workerReq := WorkerInferRequest{
 		RequestID:  req.RequestID,
@@ -103,7 +108,13 @@ func (c *WorkerClient) Infer(req *types.InferenceRequest) (*types.InferenceRespo
 		protocol = "https"
 	}
 	url := fmt.Sprintf("%s://%s/infer", protocol, c.address)
-	resp, err := c.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call worker: %w", err)
 	}

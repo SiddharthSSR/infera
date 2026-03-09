@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { Instance, GPUOffering, GPUType, VaultModel } from '../types';
 import { useInstances, useOfferings, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 const GPU_VRAM_GB: Record<GPUType, number> = {
   RTX_4090: 24,
@@ -13,17 +14,119 @@ const GPU_VRAM_GB: Record<GPUType, number> = {
   L40S: 48,
 };
 
-function InstanceRow({ instance }: { instance: Instance }) {
+function getStatusClass(status: string) {
+  switch (status) {
+    case 'running':
+      return '';
+    case 'error':
+      return 'error';
+    case 'stopping':
+    case 'pending':
+    case 'provisioning':
+      return 'warning';
+    case 'stopped':
+    case 'terminating':
+    case 'terminated':
+      return 'inactive';
+    default:
+      console.warn('Unknown instance status class fallback', status);
+      return '';
+  }
+}
+
+function getStatusLabel(status: string) {
+  switch (status) {
+    case 'pending':
+      return 'Pending';
+    case 'provisioning':
+      return 'Provisioning';
+    case 'running':
+      return 'Running';
+    case 'stopping':
+      return 'Stopping';
+    case 'stopped':
+      return 'Stopped';
+    case 'terminating':
+      return 'Terminating';
+    case 'terminated':
+      return 'Terminated';
+    case 'error':
+      return 'Error';
+    default:
+      console.warn('Unknown instance status label fallback', status);
+      return 'Unknown';
+  }
+}
+
+function useInstanceActions(instance: Instance) {
   const terminateMutation = useTerminateInstance();
   const startMutation = useStartInstance();
   const stopMutation = useStopInstance();
   const isLoading = terminateMutation.isPending || startMutation.isPending || stopMutation.isPending;
 
-  const statusClass = instance.status === 'running' ? '' :
-    instance.status === 'error' ? 'error' :
-    ['stopping', 'pending', 'provisioning'].includes(instance.status) ? 'warning' : 'inactive';
+  const handleStart = async () => {
+    try {
+      await startMutation.mutateAsync(instance.id);
+      toast.success('Instance started');
+    } catch (err) {
+      console.error('Failed to start instance', err);
+      toast.error('Failed to start');
+    }
+  };
 
-  const statusLabel = instance.status.charAt(0).toUpperCase() + instance.status.slice(1);
+  const handleStop = async () => {
+    try {
+      await stopMutation.mutateAsync(instance.id);
+      toast.success('Instance stopped');
+    } catch (err) {
+      console.error('Failed to stop instance', err);
+      toast.error('Failed to stop');
+    }
+  };
+
+  const handleTerminate = async () => {
+    if (!confirm('Terminate this instance?')) return;
+    try {
+      await terminateMutation.mutateAsync(instance.id);
+      toast.success('Terminated');
+    } catch (err) {
+      console.error('Failed to terminate instance', err);
+      toast.error('Failed to terminate');
+    }
+  };
+
+  return { isLoading, handleStart, handleStop, handleTerminate };
+}
+
+function InstanceActions({ instance, compact = false }: { instance: Instance; compact?: boolean }) {
+  const { isLoading, handleStart, handleStop, handleTerminate } = useInstanceActions(instance);
+  const buttonStyle = compact ? { fontSize: '0.65rem' } : { fontSize: '0.65rem', marginRight: '1rem' };
+
+  return (
+    <>
+      {instance.status === 'stopped' && (
+        <button className="action-btn" style={buttonStyle} disabled={isLoading} onClick={handleStart}>START</button>
+      )}
+      {instance.status === 'running' && (
+        <button className="action-btn" style={buttonStyle} disabled={isLoading} onClick={handleStop}>STOP</button>
+      )}
+      {instance.status !== 'terminating' && instance.status !== 'terminated' && (
+        <button
+          className="action-btn destructive"
+          style={{ fontSize: '0.65rem' }}
+          disabled={isLoading}
+          onClick={handleTerminate}
+        >
+          TERMINATE
+        </button>
+      )}
+    </>
+  );
+}
+
+function InstanceRow({ instance }: { instance: Instance }) {
+  const statusClass = getStatusClass(instance.status);
+  const statusLabel = getStatusLabel(instance.status);
 
   return (
     <tr style={{ borderBottom: '1px solid #EEEEEC' }}>
@@ -53,38 +156,7 @@ function InstanceRow({ instance }: { instance: Instance }) {
         )}
       </td>
       <td style={{ padding: '1.5rem 0', verticalAlign: 'middle', textAlign: 'right' }}>
-        {instance.status === 'stopped' && (
-          <button
-            className="action-btn"
-            style={{ fontSize: '0.65rem', marginRight: '1rem' }}
-            disabled={isLoading}
-            onClick={async () => {
-              try { await startMutation.mutateAsync(instance.id); toast.success('Instance started'); }
-              catch { toast.error('Failed to start'); }
-            }}
-          >START</button>
-        )}
-        {instance.status === 'running' && (
-          <button
-            className="action-btn"
-            style={{ fontSize: '0.65rem', marginRight: '1rem' }}
-            disabled={isLoading}
-            onClick={async () => {
-              try { await stopMutation.mutateAsync(instance.id); toast.success('Instance stopped'); }
-              catch { toast.error('Failed to stop'); }
-            }}
-          >STOP</button>
-        )}
-        <button
-          className="action-btn destructive"
-          style={{ fontSize: '0.65rem' }}
-          disabled={isLoading}
-          onClick={async () => {
-            if (!confirm('Terminate this instance?')) return;
-            try { await terminateMutation.mutateAsync(instance.id); toast.success('Terminated'); }
-            catch { toast.error('Failed to terminate'); }
-          }}
-        >TERMINATE</button>
+        <InstanceActions instance={instance} />
       </td>
     </tr>
   );
@@ -149,7 +221,10 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
       });
       toast.success('Instance provisioned');
       onClose();
-      setName(''); setSelectedGPU(''); setSelectedModels([]);
+      setName('');
+      setSelectedGPU('');
+      setSelectedModels([]);
+      setSpotInstance(false);
     } catch { toast.error('Failed to provision'); }
   };
 
@@ -162,7 +237,7 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
         onClick={onClose}
       />
       <div style={{
-        position: 'fixed', inset: '2rem', maxWidth: 900, margin: '0 auto',
+        position: 'fixed', inset: '1rem', maxWidth: 900, margin: '0 auto',
         background: 'var(--bg-paper)', border: 'var(--grid-line)', zIndex: 50,
         display: 'flex', flexDirection: 'column', overflow: 'hidden'
       }}>
@@ -180,7 +255,7 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
           </div>
 
           <div className="label-text" style={{ marginBottom: '1rem' }}>GPU CONFIGURATION</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '2rem' }}>
+          <div className="provision-options-grid" style={{ marginBottom: '2rem' }}>
             {dedupedOfferings?.map(o => {
               const key = getOfferingKey(o);
               const isSelected = selectedGPU === key;
@@ -249,7 +324,7 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
         </div>
 
         {/* Footer */}
-        <div style={{ padding: '1.5rem 2rem', borderTop: 'var(--grid-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="provision-modal-footer" style={{ padding: '1.5rem 2rem', borderTop: 'var(--grid-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <button className="action-btn" onClick={onClose}>CANCEL</button>
           <button className="btn-primary" onClick={handleProvision} disabled={!selectedGPU || provisionMutation.isPending}>
             {provisionMutation.isPending ? 'PROVISIONING...' : 'PROVISION NODE'}
@@ -260,10 +335,43 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
   );
 }
 
+function InstanceCard({ instance }: { instance: Instance }) {
+  const statusClass = getStatusClass(instance.status);
+  const statusLabel = getStatusLabel(instance.status);
+
+  return (
+    <div className="mobile-data-card">
+      <div className="mobile-data-card-header">
+        <div>
+          <div className="mobile-data-title mono" style={{ fontSize: '0.9rem' }}>{instance.name || instance.id.slice(0, 16)}</div>
+          <div className="mobile-data-subtitle">
+            {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
+            {instance.models && instance.models.length > 0 && (
+              <> &middot; {instance.models[0].split('/').pop()}</>
+            )}
+          </div>
+        </div>
+        <div className="mobile-status-inline">
+          <span className={`status-dot ${statusClass}`} />
+          {statusLabel}
+        </div>
+      </div>
+      <div className="mobile-data-meta">
+        <div><span className="label-text">COST</span> <span className="mono">${instance.cost_per_hour.toFixed(2)}/hr</span></div>
+        <div><span className="label-text">ENDPOINT</span> <span className="mono">{instance.public_ip || '-'}</span></div>
+      </div>
+      <div className="mobile-data-actions">
+        <InstanceActions instance={instance} compact />
+      </div>
+    </div>
+  );
+}
+
 export function Instances() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [showProvisionModal, setShowProvisionModal] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('active');
+  const isMobile = useIsMobile(900);
   const { data: instances, isLoading } = useInstances();
   const { data: offerings } = useOfferings();
   const { data: workers } = useWorkers();
@@ -382,23 +490,31 @@ export function Instances() {
               <div style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>No instances found</div>
               <button className="action-btn" onClick={() => setShowProvisionModal(true)}>PROVISION NEW NODE</button>
             </div>
+          ) : isMobile ? (
+            <div className="mobile-data-list">
+              {filteredInstances.map(instance => (
+                <InstanceCard key={instance.id} instance={instance} />
+              ))}
+            </div>
           ) : (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>NODE ID</th>
-                  <th>STATUS</th>
-                  <th>COST</th>
-                  <th>ENDPOINT</th>
-                  <th style={{ textAlign: 'right' }}>ACTIONS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredInstances.map(instance => (
-                  <InstanceRow key={instance.id} instance={instance} />
-                ))}
-              </tbody>
-            </table>
+            <div className="responsive-scroll-x">
+              <table className="data-table responsive-scroll-x-content">
+                <thead>
+                  <tr>
+                    <th>NODE ID</th>
+                    <th>STATUS</th>
+                    <th>COST</th>
+                    <th>ENDPOINT</th>
+                    <th style={{ textAlign: 'right' }}>ACTIONS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredInstances.map(instance => (
+                    <InstanceRow key={instance.id} instance={instance} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
 
           <button className="action-btn" style={{ marginTop: '2rem' }} onClick={() => setShowProvisionModal(true)}>
@@ -459,7 +575,7 @@ export function Instances() {
         <div className="cell">
           <div className="label-text">PROVIDER</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-            {filteredInstances[0]?.provider || 'runpod'}
+            {filteredInstances[0]?.provider || '—'}
           </div>
         </div>
         <div className="cell">

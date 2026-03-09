@@ -9,6 +9,7 @@ import (
 // mockTestProvider is a simple mock for testing the manager
 type mockTestProvider struct {
 	instances map[string]*Instance
+	lastReq   *ProvisionRequest
 }
 
 func newMockTestProvider() *mockTestProvider {
@@ -22,6 +23,7 @@ func (p *mockTestProvider) Name() ProviderType {
 }
 
 func (p *mockTestProvider) Provision(ctx context.Context, req *ProvisionRequest) (*Instance, error) {
+	p.lastReq = req
 	id := "test-" + time.Now().Format("150405")
 	now := time.Now()
 	instance := &Instance{
@@ -38,6 +40,33 @@ func (p *mockTestProvider) Provision(ctx context.Context, req *ProvisionRequest)
 	}
 	p.instances[id] = instance
 	return instance, nil
+}
+
+func TestManagerProvisionSetsDefaultGatewayAddress(t *testing.T) {
+	provider := newMockTestProvider()
+	mgr := NewManager(ManagerConfig{
+		DefaultProvider: ProviderMock,
+		WorkerImage:     "worker:latest",
+		GatewayAddress:  "https://inferai.co.in",
+	})
+	mgr.RegisterProvider(provider)
+
+	ctx := context.Background()
+	req := &ProvisionRequest{
+		Name:    "gateway-default-test",
+		GPUType: GPURTX4090,
+	}
+
+	if _, err := mgr.Provision(ctx, req); err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+
+	if provider.lastReq == nil {
+		t.Fatal("expected provider to receive provision request")
+	}
+	if provider.lastReq.GatewayAddress != "https://inferai.co.in" {
+		t.Fatalf("expected default gateway address to be injected, got %q", provider.lastReq.GatewayAddress)
+	}
 }
 
 func (p *mockTestProvider) Terminate(ctx context.Context, instanceID string) error {

@@ -4,12 +4,15 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/gateway"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/providers/mock"
@@ -79,6 +82,13 @@ func main() {
 	// Create gateway
 	gatewayConfig := gateway.DefaultConfig()
 	gatewayConfig.HTTPPort = *httpPort
+	gatewayConfig.WorkerSharedToken = strings.TrimSpace(os.Getenv("INFERA_WORKER_SHARED_TOKEN"))
+	if gatewayConfig.WorkerSharedToken == "" {
+		log.Fatal("INFERA_WORKER_SHARED_TOKEN is required and cannot be empty")
+	}
+	if allowedOrigins := parseAllowedOrigins(os.Getenv("INFERA_ALLOWED_ORIGINS")); len(allowedOrigins) > 0 {
+		gatewayConfig.AllowedOrigins = allowedOrigins
+	}
 	gw := gateway.New(gatewayConfig, r, instanceMgr)
 
 	// Initialize vault (model registry)
@@ -96,6 +106,48 @@ func main() {
 	}
 
 	gw.SetVaultHandler(vault.NewHandler(vaultStore))
+
+	// Initialize auth (API key authentication)
+	authStore, err := auth.NewStore("data/auth.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize auth store: %v", err)
+	}
+	defer authStore.Close()
+
+	// Bootstrap admin key from env or auto-generate on first run
+	keyCount, err := authStore.Count()
+	if err != nil {
+		log.Fatalf("Failed to count existing API keys: %v", err)
+	}
+	if keyCount == 0 {
+		adminKey := os.Getenv("INFERA_ADMIN_KEY")
+		if adminKey != "" {
+			// Use provided admin key
+			if _, err := authStore.CreateKeyFromRaw(adminKey, "Bootstrap Admin", "admin"); err != nil {
+				log.Fatalf("Failed to store bootstrap admin key from INFERA_ADMIN_KEY: %v", err)
+			} else {
+				log.Println("Admin key configured from INFERA_ADMIN_KEY")
+			}
+		} else {
+			// Auto-generate admin key
+			fullKey, record, err := authStore.CreateKey("Auto Admin", "admin")
+			if err != nil {
+				log.Fatalf("Failed to generate admin key: %v", err)
+			} else {
+				if err := persistBootstrapAdminKey("data/bootstrap_admin_key.txt", fullKey); err != nil {
+					if rollbackErr := authStore.DeleteKey(record.ID); rollbackErr != nil {
+						log.Printf("Failed to rollback bootstrap admin key %s after persist failure: %v", record.KeyPrefix, rollbackErr)
+					}
+					log.Fatalf("Failed to persist bootstrap admin key: %v", err)
+				}
+				log.Println("Auto-generated admin API key created.")
+				log.Printf("Key prefix: %s", record.KeyPrefix)
+				log.Println("Plaintext key stored at data/bootstrap_admin_key.txt with 0600 permissions.")
+			}
+		}
+	}
+
+	gw.SetAuthHandler(auth.NewHandler(authStore))
 
 	// Handle shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -125,7 +177,7 @@ func main() {
 		<-sigChan
 		log.Println("Shutting down...")
 
-		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 10*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer shutdownCancel()
 
 		if err := gw.Stop(shutdownCtx); err != nil {
@@ -134,6 +186,7 @@ func main() {
 
 		r.Stop()
 		cancel()
+		log.Println("Shutdown complete")
 	}()
 
 	// Start gateway
@@ -142,4 +195,34 @@ func main() {
 	if err := gw.Start(); err != nil {
 		log.Fatalf("Gateway error: %v", err)
 	}
+}
+
+func parseAllowedOrigins(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		origin := strings.TrimSpace(part)
+		if origin != "" {
+			out = append(out, origin)
+		}
+	}
+	return out
+}
+
+func persistBootstrapAdminKey(path, fullKey string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if _, err := fmt.Fprintf(f, "%s\n", fullKey); err != nil {
+		return err
+	}
+	return f.Sync()
 }

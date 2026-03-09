@@ -7,10 +7,17 @@ import {
   fetchInstances,
   fetchOfferings,
   fetchCosts,
+  fetchApiKeys,
+  createApiKey,
+  revokeApiKey,
   provisionInstance,
   terminateInstance,
   startInstance,
   stopInstance,
+  validateApiKey,
+  setApiKey,
+  getApiKey,
+  clearApiKey,
 } from './api'
 
 // Mock fetch
@@ -20,6 +27,8 @@ const mockFetch = vi.fn()
 describe('API Functions', () => {
   beforeEach(() => {
     mockFetch.mockClear()
+    sessionStorage.clear()
+    clearApiKey()
   })
 
   describe('fetchWorkers', () => {
@@ -36,7 +45,7 @@ describe('API Functions', () => {
 
       const workers = await fetchWorkers()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/workers')
+      expect(mockFetch).toHaveBeenCalledWith('/api/workers', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(workers).toHaveLength(2)
       expect(workers[0].worker_id).toBe('worker-1')
     })
@@ -65,7 +74,7 @@ describe('API Functions', () => {
 
       const models = await fetchModels()
 
-      expect(mockFetch).toHaveBeenCalledWith('/v1/models')
+      expect(mockFetch).toHaveBeenCalledWith('/v1/models', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(models).toHaveLength(2)
     })
   })
@@ -88,7 +97,7 @@ describe('API Functions', () => {
 
       const stats = await fetchStats()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/stats')
+      expect(mockFetch).toHaveBeenCalledWith('/api/stats', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(stats.workers.total).toBe(5)
     })
   })
@@ -107,7 +116,7 @@ describe('API Functions', () => {
 
       const instances = await fetchInstances()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/instances')
+      expect(mockFetch).toHaveBeenCalledWith('/api/instances', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(instances).toHaveLength(2)
     })
   })
@@ -125,7 +134,7 @@ describe('API Functions', () => {
 
       const offerings = await fetchOfferings()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/offerings')
+      expect(mockFetch).toHaveBeenCalledWith('/api/offerings', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(offerings[0].gpu_type).toBe('RTX_4090')
     })
   })
@@ -148,7 +157,7 @@ describe('API Functions', () => {
 
       const costs = await fetchCosts()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/costs')
+      expect(mockFetch).toHaveBeenCalledWith('/api/costs', expect.objectContaining({ headers: expect.any(Headers) }))
       expect(costs.current_hourly).toBe(5.50)
     })
   })
@@ -179,10 +188,12 @@ describe('API Functions', () => {
         '/api/instances/provision',
         expect.objectContaining({
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: expect.any(Headers),
           body: JSON.stringify(request),
         })
       )
+      const [, config] = mockFetch.mock.calls[0]
+      expect((config.headers as Headers).get('Content-Type')).toBe('application/json')
       expect(instance.name).toBe('my-worker')
     })
 
@@ -252,6 +263,135 @@ describe('API Functions', () => {
         '/api/instances/inst-123/stop',
         expect.objectContaining({ method: 'POST' })
       )
+    })
+  })
+
+  describe('api key error parsing', () => {
+    it('createApiKey handles non-JSON error responses', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        statusText: 'Bad Gateway',
+        headers: { get: () => 'text/html' },
+        text: async () => '<html>upstream failure</html>',
+      })
+
+      await expect(createApiKey('test-key')).rejects.toThrow('Failed to create key (502 Bad Gateway)')
+    })
+
+    it('revokeApiKey handles empty error bodies', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        headers: { get: () => '' },
+        text: async () => '',
+      })
+
+      await expect(revokeApiKey('key-1')).rejects.toThrow('Failed to revoke key (500 Internal Server Error)')
+    })
+
+    it('fetchApiKeys preserves status on errors', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        statusText: 'Service Unavailable',
+        headers: { get: () => 'application/json' },
+        json: async () => ({ error: { message: 'auth backend unavailable' } }),
+      })
+
+      await expect(fetchApiKeys()).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('auth token handling', () => {
+    it('attaches bearer token when present', async () => {
+      setApiKey('inf_test_token_123')
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ workers: [] }),
+      })
+
+      await fetchWorkers()
+
+      const [, config] = mockFetch.mock.calls[0]
+      expect(config.headers).toBeInstanceOf(Headers)
+      expect((config.headers as Headers).get('Authorization')).toBe('Bearer inf_test_token_123')
+    })
+
+    it('clears stored key and emits auth-expired on 401', async () => {
+      setApiKey('inf_expired_token')
+      const expiredHandler = vi.fn()
+      window.addEventListener('auth-expired', expiredHandler)
+
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { message: 'unauthorized' } }),
+      })
+
+      await expect(fetchWorkers()).rejects.toThrow('Failed to fetch workers')
+      expect(getApiKey()).toBeNull()
+      expect(expiredHandler).toHaveBeenCalledTimes(1)
+
+      window.removeEventListener('auth-expired', expiredHandler)
+    })
+
+    it('clearApiKey removes token', () => {
+      setApiKey('inf_to_remove')
+      expect(getApiKey()).toBe('inf_to_remove')
+      clearApiKey()
+      expect(getApiKey()).toBeNull()
+    })
+
+    it('does not clear a newer token when an older in-flight request returns 401', async () => {
+      setApiKey('inf_old_token')
+      let resolveFetch: (value: any) => void = () => {}
+      mockFetch.mockImplementationOnce(() => new Promise((resolve) => { resolveFetch = resolve }))
+
+      const pendingRequest = fetchWorkers().catch(() => undefined)
+      setApiKey('inf_new_token')
+
+      resolveFetch({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { message: 'unauthorized' } }),
+      })
+
+      await pendingRequest
+      expect(getApiKey()).toBe('inf_new_token')
+    })
+
+    it('validateApiKey returns true on 2xx', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+      })
+      await expect(validateApiKey('inf_valid')).resolves.toBe(true)
+    })
+
+    it('validateApiKey returns false on 401', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+      })
+      await expect(validateApiKey('inf_invalid')).resolves.toBe(false)
+    })
+
+    it('validateApiKey throws on non-401 HTTP errors', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        statusText: 'Service Unavailable',
+      })
+      await expect(validateApiKey('inf_key')).rejects.toThrow('503 Service Unavailable')
+    })
+
+    it('validateApiKey throws on network errors', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('network down'))
+      await expect(validateApiKey('inf_key')).rejects.toThrow('Failed to validate API key')
     })
   })
 })

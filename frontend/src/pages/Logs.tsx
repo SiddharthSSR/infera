@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 interface LogEntry {
   id: string;
@@ -36,6 +37,7 @@ function generateMockLog(): LogEntry {
 }
 
 export function Logs() {
+  const isMobile = useIsMobile(900);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isStreaming, setIsStreaming] = useState(true);
   const [levelFilter, setLevelFilter] = useState<string>('all');
@@ -96,6 +98,7 @@ export function Logs() {
         padding: '1rem 2rem',
         display: 'flex',
         gap: '2rem',
+        flexWrap: 'wrap',
         alignItems: 'flex-end',
         borderBottom: 'var(--grid-line)',
       }}>
@@ -131,50 +134,73 @@ export function Logs() {
             {sources.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
-        <div style={{ marginLeft: 'auto' }}>
+        <div style={{ marginLeft: isMobile ? 0 : 'auto' }}>
           <button className="action-btn" onClick={handleExport}>EXPORT .CSV</button>
         </div>
       </div>
 
       {/* Log Table */}
-      <div ref={logsContainerRef} style={{ flexGrow: 1, overflowY: 'auto', minHeight: 0 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
-          <thead>
-            <tr>
-              <th className="label-text" style={{ textAlign: 'left', padding: '1rem 2rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)' }}>
-                Timestamp
-              </th>
-              <th className="label-text" style={{ textAlign: 'left', padding: '1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)' }}>
-                Level
-              </th>
-              <th className="label-text" style={{ textAlign: 'left', padding: '1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)' }}>
-                Source
-              </th>
-              <th className="label-text" style={{ textAlign: 'left', padding: '1rem 2rem 1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)' }}>
-                Message
-              </th>
-            </tr>
-          </thead>
-          <tbody>
+      {isMobile ? (
+        <div ref={logsContainerRef} style={{ flexGrow: 1, overflowY: 'auto', minHeight: 0, padding: '1rem' }}>
+          <div className="mobile-data-list">
             {filteredLogs.map(log => (
-              <tr key={log.id}>
-                <td style={{ padding: '0.75rem 2rem', borderBottom: '1px solid #EEEEEC', color: 'var(--text-secondary)', width: 160, verticalAlign: 'top' }}>
-                  {log.timestamp.toISOString().slice(0, 19).replace('T', ' ')}
-                </td>
-                <td style={{ padding: '0.75rem 0.5rem', borderBottom: '1px solid #EEEEEC', verticalAlign: 'top' }}>
+              <div key={log.id} className="mobile-data-card">
+                <div className="mobile-data-card-header">
                   <span className={`log-level ${levelClass(log.level)}`}>{log.level.toUpperCase()}</span>
-                </td>
-                <td style={{ padding: '0.75rem 0.5rem', borderBottom: '1px solid #EEEEEC', fontWeight: 500, color: 'var(--text-primary)', width: 140, verticalAlign: 'top' }}>
+                  <span className="mono" style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>
+                    {log.timestamp.toISOString().slice(11, 19)}
+                  </span>
+                </div>
+                <div className="mobile-data-subtitle mono" style={{ color: 'var(--text-primary)' }}>
                   {log.source}
-                </td>
-                <td style={{ padding: '0.75rem 2rem 0.75rem 0.5rem', borderBottom: '1px solid #EEEEEC', color: 'var(--text-secondary)', verticalAlign: 'top' }}>
+                </div>
+                <div className="mobile-log-message">
                   {log.message}
-                </td>
-              </tr>
+                </div>
+              </div>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        </div>
+      ) : (
+        <div ref={logsContainerRef} className="responsive-scroll-x" style={{ flexGrow: 1, overflowY: 'auto', minHeight: 0 }}>
+          <table className="responsive-scroll-x-content" style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+            <thead>
+              <tr>
+                <th className="label-text" style={{ textAlign: 'left', padding: '1rem 2rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)' }}>
+                  Timestamp
+                </th>
+                <th className="label-text" style={{ textAlign: 'left', padding: '1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)' }}>
+                  Level
+                </th>
+                <th className="label-text" style={{ textAlign: 'left', padding: '1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)' }}>
+                  Source
+                </th>
+                <th className="label-text" style={{ textAlign: 'left', padding: '1rem 2rem 1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)' }}>
+                  Message
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredLogs.map(log => (
+                <tr key={log.id}>
+                  <td style={{ padding: '0.75rem 2rem', borderBottom: '1px solid #EEEEEC', color: 'var(--text-secondary)', width: 160, verticalAlign: 'top' }}>
+                    {log.timestamp.toISOString().slice(0, 19).replace('T', ' ')}
+                  </td>
+                  <td style={{ padding: '0.75rem 0.5rem', borderBottom: '1px solid #EEEEEC', verticalAlign: 'top' }}>
+                    <span className={`log-level ${levelClass(log.level)}`}>{log.level.toUpperCase()}</span>
+                  </td>
+                  <td style={{ padding: '0.75rem 0.5rem', borderBottom: '1px solid #EEEEEC', fontWeight: 500, color: 'var(--text-primary)', width: 140, verticalAlign: 'top' }}>
+                    {log.source}
+                  </td>
+                  <td style={{ padding: '0.75rem 2rem 0.75rem 0.5rem', borderBottom: '1px solid #EEEEEC', color: 'var(--text-secondary)', verticalAlign: 'top' }}>
+                    {log.message}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="grid-row" style={{ borderTop: 'var(--grid-line)', borderBottom: 'none' }}>
@@ -193,7 +219,7 @@ export function Logs() {
         </div>
         <div className="cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text">LOGGING CONTROLS</div>
-          <div style={{ marginTop: '0.5rem', display: 'flex', gap: '2rem' }}>
+          <div style={{ marginTop: '0.5rem', display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
             <button className="action-btn" onClick={() => setIsStreaming(!isStreaming)}>
               {isStreaming ? 'PAUSE STREAM' : 'RESUME STREAM'}
             </button>

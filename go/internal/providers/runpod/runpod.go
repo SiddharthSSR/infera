@@ -119,6 +119,13 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		})
 	}
 
+	// Add shared worker auth token so worker can register/heartbeat on protected gateway endpoints.
+	if workerToken := os.Getenv("INFERA_WORKER_SHARED_TOKEN"); workerToken != "" {
+		env = append(env, map[string]string{
+			"key": "INFERA_WORKER_SHARED_TOKEN", "value": workerToken,
+		})
+	}
+
 	// Add models to preload
 	if len(req.Models) > 0 {
 		// Convert to JSON array string
@@ -190,7 +197,12 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 	}
 
 	// Log the request for debugging
-	inputJSON, _ := json.Marshal(input)
+	logInput := make(map[string]interface{}, len(input))
+	for k, v := range input {
+		logInput[k] = v
+	}
+	logInput["env"] = redactEnvForLog(env)
+	inputJSON, _ := json.Marshal(logInput)
 	fmt.Printf("[RunPod] Provisioning pod with input: %s\n", string(inputJSON))
 
 	variables := map[string]interface{}{
@@ -251,6 +263,37 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 			"image":      pod.ImageName,
 		},
 	}, nil
+}
+
+func redactEnvForLog(env []map[string]string) []map[string]string {
+	secretKeys := map[string]struct{}{
+		"INFERA_WORKER_SHARED_TOKEN": {},
+		"HF_TOKEN":                   {},
+		"HUGGING_FACE_HUB_TOKEN":     {},
+	}
+
+	redacted := make([]map[string]string, 0, len(env))
+	for _, pair := range env {
+		copied := map[string]string{
+			"key":   pair["key"],
+			"value": pair["value"],
+		}
+		if _, isSecret := secretKeys[pair["key"]]; isSecret {
+			copied["value"] = maskSecret(pair["value"])
+		}
+		redacted = append(redacted, copied)
+	}
+	return redacted
+}
+
+func maskSecret(value string) string {
+	if value == "" {
+		return ""
+	}
+	if len(value) <= 4 {
+		return "****"
+	}
+	return value[:2] + "****" + value[len(value)-2:]
 }
 
 // Terminate destroys a pod.

@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -28,8 +29,8 @@ type RegistryConfig struct {
 func DefaultRegistryConfig() RegistryConfig {
 	return RegistryConfig{
 		HealthCheckInterval: 5 * time.Second,
-		UnhealthyThreshold:  15 * time.Second,
-		RemovalThreshold:    60 * time.Second,
+		UnhealthyThreshold:  10 * time.Second,
+		RemovalThreshold:    30 * time.Second,
 	}
 }
 
@@ -49,6 +50,13 @@ func (r *WorkerRegistry) Register(worker *types.WorkerInfo) error {
 
 	if worker.WorkerID == "" {
 		return fmt.Errorf("worker ID is required")
+	}
+
+	// If replacing an existing worker entry, remove old model index entries first.
+	if existing, exists := r.workers[worker.WorkerID]; exists {
+		for _, model := range existing.LoadedModels {
+			r.removeFromModelIndex(model.ModelID, worker.WorkerID)
+		}
 	}
 
 	r.workers[worker.WorkerID] = worker
@@ -206,17 +214,21 @@ func (r *WorkerRegistry) StartHealthChecker(ctx context.Context) {
 
 func (r *WorkerRegistry) checkWorkerHealth() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	now := time.Now()
 	toRemove := []string{}
+	logMessages := []string{}
 
 	for workerID, worker := range r.workers {
 		timeSinceHeartbeat := now.Sub(worker.LastHealthCheck)
 
 		if timeSinceHeartbeat > r.config.RemovalThreshold {
 			toRemove = append(toRemove, workerID)
+			logMessages = append(logMessages, fmt.Sprintf("Removing worker %s: no heartbeat for %v", workerID, timeSinceHeartbeat.Round(time.Second)))
 		} else if timeSinceHeartbeat > r.config.UnhealthyThreshold {
+			if worker.Status != types.WorkerStatusUnhealthy {
+				logMessages = append(logMessages, fmt.Sprintf("Worker %s unhealthy: no heartbeat for %v", workerID, timeSinceHeartbeat.Round(time.Second)))
+			}
 			worker.UpdateStatus(types.WorkerStatusUnhealthy)
 		}
 	}
@@ -227,6 +239,11 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 			r.removeFromModelIndex(model.ModelID, workerID)
 		}
 		delete(r.workers, workerID)
+	}
+
+	r.mu.Unlock()
+	for _, msg := range logMessages {
+		log.Print(msg)
 	}
 }
 

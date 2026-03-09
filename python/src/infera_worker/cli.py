@@ -1,7 +1,6 @@
 """CLI entry point for Infera Worker."""
 
 import asyncio
-import os
 import signal
 import sys
 import structlog
@@ -9,13 +8,6 @@ import structlog
 from .config import WorkerConfig
 from .worker import Worker
 from .http_server import HTTPServer
-
-# Optional httpx for registration
-try:
-    import httpx
-    HTTPX_AVAILABLE = True
-except ImportError:
-    HTTPX_AVAILABLE = False
 
 
 def setup_logging(config: WorkerConfig) -> None:
@@ -32,153 +24,6 @@ def setup_logging(config: WorkerConfig) -> None:
     structlog.configure(processors=processors)
 
 
-def get_worker_public_address(config: WorkerConfig) -> str:
-    """Get the worker's public address for registration.
-    
-    In RunPod, the public URL is: https://{POD_ID}-{PORT}.proxy.runpod.net
-    """
-    # First check if explicitly set
-    if config.worker_address:
-        return config.worker_address
-    
-    # Check for RunPod environment
-    pod_id = os.getenv("RUNPOD_POD_ID")
-    if pod_id:
-        # RunPod proxy URL format
-        return f"{pod_id}-{config.http_port}.proxy.runpod.net"
-    
-    # Fallback to localhost
-    return f"localhost:{config.http_port}"
-
-
-async def register_with_gateway(worker: Worker, config: WorkerConfig) -> bool:
-    """Register this worker with the gateway."""
-    if not HTTPX_AVAILABLE:
-        return False
-    
-    if not config.router_address:
-        return False
-        
-    logger = structlog.get_logger()
-    
-    # Get the worker's public address
-    worker_address = get_worker_public_address(config)
-    
-    try:
-        async with httpx.AsyncClient() as client:
-            stats = worker.get_stats()
-            models = worker.get_loaded_models()
-            
-            registration_data = {
-                "worker_id": worker.worker_id,
-                "address": worker_address,
-                "status": "healthy",
-                "loaded_models": [
-                    {
-                        "model_id": m.model_id,
-                        "version": m.version,
-                        "memory_bytes": m.memory_bytes,
-                        "max_batch_size": m.max_batch_size,
-                        "max_sequence_length": m.max_sequence_length,
-                    }
-                    for m in models
-                ],
-                "stats": {
-                    "queue_depth": stats.queue_depth,
-                    "active_requests": stats.active_requests,
-                    "gpu_utilization": stats.gpu_utilization,
-                    "memory_used_bytes": stats.memory_used_bytes,
-                    "memory_total_bytes": stats.memory_total_bytes,
-                    "requests_per_second": stats.requests_per_second,
-                    "avg_latency_ms": stats.avg_latency_ms,
-                    "error_rate": stats.error_rate,
-                },
-            }
-            
-            # Build gateway URL - handle if user included protocol
-            gateway_addr = config.router_address
-            if gateway_addr.startswith("https://"):
-                gateway_url = f"{gateway_addr}/api/workers/register"
-            elif gateway_addr.startswith("http://"):
-                gateway_url = f"{gateway_addr}/api/workers/register"
-            else:
-                # Default to https for ngrok and other public URLs
-                gateway_url = f"https://{gateway_addr}/api/workers/register"
-            
-            logger.info("Registering with gateway", gateway_url=gateway_url, worker_address=worker_address)
-            
-            response = await client.post(
-                gateway_url,
-                json=registration_data,
-                timeout=10.0,
-            )
-            
-            if response.status_code == 200:
-                logger.info("Registered with gateway", gateway=config.router_address)
-                return True
-            else:
-                logger.warning("Failed to register", status=response.status_code, body=response.text)
-                return False
-                
-    except Exception as e:
-        logger.warning("Could not register with gateway", error=str(e), gateway=config.router_address)
-        return False
-
-
-async def heartbeat_loop(worker: Worker, config: WorkerConfig, interval: float = 5.0) -> None:
-    """Send periodic heartbeats to the gateway."""
-    if not HTTPX_AVAILABLE or not config.router_address:
-        return
-    
-    # Build heartbeat URL - handle if user included protocol
-    gateway_addr = config.router_address
-    if gateway_addr.startswith("https://"):
-        heartbeat_url = f"{gateway_addr}/api/workers/heartbeat"
-    elif gateway_addr.startswith("http://"):
-        heartbeat_url = f"{gateway_addr}/api/workers/heartbeat"
-    else:
-        heartbeat_url = f"https://{gateway_addr}/api/workers/heartbeat"
-        
-    logger = structlog.get_logger()
-        
-    while True:
-        await asyncio.sleep(interval)
-        
-        try:
-            async with httpx.AsyncClient() as client:
-                stats = worker.get_stats()
-                models = worker.get_loaded_models()
-                
-                heartbeat_data = {
-                    "worker_id": worker.worker_id,
-                    "stats": {
-                        "queue_depth": stats.queue_depth,
-                        "active_requests": stats.active_requests,
-                        "gpu_utilization": stats.gpu_utilization,
-                        "memory_used_bytes": stats.memory_used_bytes,
-                        "memory_total_bytes": stats.memory_total_bytes,
-                        "requests_per_second": stats.requests_per_second,
-                        "avg_latency_ms": stats.avg_latency_ms,
-                        "p50_latency_ms": stats.p50_latency_ms,
-                        "p99_latency_ms": stats.p99_latency_ms,
-                        "error_rate": stats.error_rate,
-                    },
-                    "loaded_models": [
-                        {"model_id": m.model_id, "version": m.version}
-                        for m in models
-                    ],
-                }
-                
-                await client.post(
-                    heartbeat_url,
-                    json=heartbeat_data,
-                    timeout=5.0,
-                )
-                
-        except Exception as e:
-            logger.debug("Heartbeat failed", error=str(e))
-
-
 async def run_worker(config: WorkerConfig) -> None:
     """Run the worker."""
     logger = structlog.get_logger()
@@ -189,13 +34,12 @@ async def run_worker(config: WorkerConfig) -> None:
     def signal_handler():
         logger.info("Received shutdown signal")
         shutdown_event.set()
+        worker.request_shutdown()
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, signal_handler)
 
-    heartbeat_task = None
-    
     try:
         # Start worker
         await worker.start()
@@ -210,28 +54,23 @@ async def run_worker(config: WorkerConfig) -> None:
             engine=config.engine,
         )
         
-        # Try to register with gateway
-        await register_with_gateway(worker, config)
-        
-        # Start heartbeat task
-        heartbeat_task = asyncio.create_task(heartbeat_loop(worker, config))
-        
-        # Wait for shutdown
-        await shutdown_event.wait()
+        # Wait for shutdown signal from OS or worker-internal path.
+        local_shutdown = asyncio.create_task(shutdown_event.wait())
+        worker_shutdown = asyncio.create_task(worker.wait_for_shutdown())
+        done, pending = await asyncio.wait(
+            {local_shutdown, worker_shutdown},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        for task in done:
+            task.result()
         
     except Exception as e:
         logger.error("Worker error", error=str(e))
         raise
         
     finally:
-        # Cancel heartbeat
-        if heartbeat_task:
-            heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
-        
         logger.info("Shutting down...")
         await http_server.stop()
         await worker.stop()

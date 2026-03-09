@@ -69,10 +69,10 @@ make deps
 
 ```bash
 # Mock provider only (for testing)
-make run-gateway
+INFERA_WORKER_SHARED_TOKEN=your_worker_shared_token make run-gateway
 
 # With RunPod
-make run-gateway-runpod RUNPOD_API_KEY=your_key
+INFERA_WORKER_SHARED_TOKEN=your_worker_shared_token make run-gateway-runpod RUNPOD_API_KEY=your_key
 ```
 
 ### 3. Start the Frontend
@@ -85,6 +85,79 @@ make run-frontend
 ### 4. Open the Dashboard
 
 Go to **http://localhost:5173**
+
+---
+
+## Production Deployment (DigitalOcean + Caddy)
+
+This repository includes production deployment files:
+
+- `docker-compose.prod.yml`
+- `deploy/caddy/Caddyfile`
+
+### 1. DNS and Firewall
+
+Point your domain to the VM public IP:
+
+- `A inferai.co.in -> <VM_IP>`
+
+Open inbound ports:
+
+- `22` (SSH from your IP only)
+- `80` (public)
+- `443` (public)
+
+### 2. Prepare `.env`
+
+Use `.env.example` as a base and set:
+
+```bash
+RUNPOD_API_KEY=...
+INFERA_ADMIN_KEY=...
+INFERA_GATEWAY_ADDRESS=https://inferai.co.in
+INFERA_ALLOWED_ORIGINS=https://inferai.co.in
+INFERA_WORKER_SHARED_TOKEN=<long-random-token>
+INFERA_WORKER_IMAGE=<registry>/infera-worker:<pinned-tag>
+HF_TOKEN=... # optional
+```
+
+Notes:
+
+- Keep `INFERA_WORKER_SHARED_TOKEN` identical on gateway and workers.
+- Avoid using `latest` for worker image in production.
+
+### 3. Deploy
+
+```bash
+git checkout v1-production
+git pull origin v1-production
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml ps
+```
+
+### 4. Verify
+
+```bash
+curl -I https://inferai.co.in
+curl -I https://inferai.co.in/health
+curl -i https://inferai.co.in/api/stats
+```
+
+Expected:
+
+- `/` and `/health` return `200`
+- `/api/stats` returns `401` without API key
+
+### 5. Worker Registration Checklist
+
+If `/health` shows `workers: 0`:
+
+1. Confirm worker can reach gateway:
+   `curl -i https://inferai.co.in/health`
+2. Confirm worker has runtime env:
+   `INFERA_ROUTER_ADDRESS`, `INFERA_WORKER_SHARED_TOKEN`
+3. Confirm gateway and worker token hashes match.
+4. Recreate gateway and reprovision workers (env is applied at worker creation time).
 
 ---
 
@@ -111,6 +184,7 @@ make ngrok
 ```bash
 # Terminal 2: Start gateway
 make run-gateway-runpod \
+  INFERA_WORKER_SHARED_TOKEN=your_worker_shared_token \
   RUNPOD_API_KEY=your_key \
   INFERA_GATEWAY_ADDRESS=abc123.ngrok-free.app
 ```
@@ -146,8 +220,8 @@ The instance will:
 | Command | Description |
 |---------|-------------|
 | `make deps` | Install all dependencies |
-| `make run-gateway` | Start gateway (mock only) |
-| `make run-gateway-runpod RUNPOD_API_KEY=xxx` | Start gateway with RunPod |
+| `INFERA_WORKER_SHARED_TOKEN=xxx make run-gateway` | Start gateway (mock only) |
+| `INFERA_WORKER_SHARED_TOKEN=xxx make run-gateway-runpod RUNPOD_API_KEY=xxx` | Start gateway with RunPod |
 | `make run-frontend` | Start frontend dev server |
 | `make run-worker` | Start local mock worker |
 | `make run-worker-connected` | Start worker connected to gateway |
@@ -215,7 +289,7 @@ The instance will:
 |----------|--------|-------------|
 | `/api/workers` | GET | List workers |
 | `/api/workers/register` | POST | Register worker |
-| `/api/workers/{id}/heartbeat` | POST | Worker heartbeat |
+| `/api/workers/heartbeat` | POST | Worker heartbeat |
 | `/api/workers/{id}` | DELETE | Deregister worker |
 | `/api/stats` | GET | Cluster stats |
 | `/health` | GET | Health check |
@@ -230,7 +304,10 @@ The instance will:
 |----------|---------|-------------|
 | `RUNPOD_API_KEY` | — | RunPod API key |
 | `VASTAI_API_KEY` | — | Vast.ai API key |
-| `INFERA_GATEWAY_ADDRESS` | — | Public gateway URL (for worker registration) |
+| `INFERA_ADMIN_KEY` | auto-generated | Admin API key bootstrap (recommended to set explicitly in production) |
+| `INFERA_GATEWAY_ADDRESS` | — | Public gateway URL workers use for registration/heartbeat |
+| `INFERA_ALLOWED_ORIGINS` | `*` | CORS allowlist (comma-separated) |
+| `INFERA_WORKER_SHARED_TOKEN` | — | Shared secret required for worker register/heartbeat |
 | `INFERA_WORKER_IMAGE` | — | Custom worker Docker image |
 | `INFERA_DEFAULT_MODEL` | `mistralai/Mistral-7B-Instruct-v0.2` | Default model to load |
 | `INFERA_GITHUB_REPO` | — | GitHub repo to install worker from |
@@ -301,14 +378,19 @@ infera/
 │   └── worker.proto
 │
 ├── deploy/
+│   ├── caddy/
+│   │   └── Caddyfile               # Production reverse proxy config
 │   └── docker/
-│       ├── Dockerfile.worker.vllm  # Production vLLM worker image
+│       ├── Dockerfile.frontend
+│       ├── Dockerfile.gateway
+│       ├── Dockerfile.worker.vllm
 │       └── nginx.conf
 │
 ├── scripts/                     # Utility scripts
 │   └── build-docker.sh
 │
 ├── docker-compose.yml           # Local development
+├── docker-compose.prod.yml      # Production deployment (gateway + frontend + caddy)
 └── Makefile                     # Build & run commands
 ```
 
@@ -364,10 +446,20 @@ make docker-up
 
 This starts:
 - Gateway on port 8080
-- Mock worker on port 8081
 - Frontend on port 3000
 
-### Option 2: Build & Push Worker Image
+### Option 2: Docker Compose (Production)
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+This starts:
+- Gateway (internal)
+- Frontend (internal)
+- Caddy on `80/443` (public)
+
+### Option 3: Build & Push Worker Image
 
 ```bash
 # Build the worker image
@@ -378,16 +470,18 @@ make docker-push DOCKER_USERNAME=your_username
 
 # Use with RunPod
 make run-gateway-runpod \
+  INFERA_WORKER_SHARED_TOKEN=xxx \
   RUNPOD_API_KEY=xxx \
   INFERA_WORKER_IMAGE=your_username/infera-worker:latest
 ```
 
-### Option 3: Install from GitHub (No Docker Push Required)
+### Option 4: Install from GitHub (No Docker Push Required)
 
 Push your code to GitHub and set `INFERA_GITHUB_REPO`:
 
 ```bash
 make run-gateway-runpod \
+  INFERA_WORKER_SHARED_TOKEN=xxx \
   RUNPOD_API_KEY=xxx \
   INFERA_GITHUB_REPO=https://github.com/your_username/infera.git
 ```
@@ -405,7 +499,7 @@ RunPod will use a base image and install the worker from GitHub at runtime.
 lsof -i :8080
 
 # Use different port
-make run-gateway GATEWAY_PORT=8081
+INFERA_WORKER_SHARED_TOKEN=xxx make run-gateway GATEWAY_PORT=8081
 ```
 
 ### Frontend can't connect to gateway
@@ -425,15 +519,17 @@ For gated models (Llama, Gemma):
 2. Create a token at https://huggingface.co/settings/tokens
 3. Set `HF_TOKEN` when starting the gateway:
    ```bash
-   make run-gateway-runpod RUNPOD_API_KEY=xxx HF_TOKEN=hf_xxx
+make run-gateway-runpod INFERA_WORKER_SHARED_TOKEN=xxx RUNPOD_API_KEY=xxx HF_TOKEN=hf_xxx
    ```
 
 ### Worker not registering
 
 Check that:
-1. `INFERA_GATEWAY_ADDRESS` is set and reachable from the worker
-2. The gateway's `/api/workers/register` endpoint is accessible
-3. No firewall blocking the connection
+1. `INFERA_GATEWAY_ADDRESS` points to your public domain (`https://...`)
+2. Worker has non-empty `INFERA_ROUTER_ADDRESS`
+3. Gateway and worker share the same `INFERA_WORKER_SHARED_TOKEN`
+4. Worker can reach `/api/workers/register` and `/health`
+5. You reprovisioned workers after env changes
 
 ---
 

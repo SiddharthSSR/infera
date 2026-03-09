@@ -80,10 +80,18 @@ class Worker:
         
         logger.info("Worker stopped", worker_id=self.worker_id)
 
+    def request_shutdown(self) -> None:
+        """Signal the worker shutdown event."""
+        self._shutdown_event.set()
+
+    async def wait_for_shutdown(self) -> None:
+        """Wait until shutdown is requested."""
+        await self._shutdown_event.wait()
+
     async def load_model(self, config: ModelConfig) -> LoadedModel:
         """Load a model."""
         if self.engine is None:
-            raise RuntimeError("Worker not initialized")
+            raise RuntimeError("Worker not ready: not initialized")
         
         logger.info("Loading model", model_id=config.model_id)
         model = await self.engine.load_model(config)
@@ -93,7 +101,7 @@ class Worker:
     async def unload_model(self, model_id: str) -> bool:
         """Unload a model."""
         if self.engine is None:
-            raise RuntimeError("Worker not initialized")
+            raise RuntimeError("Worker not ready: not initialized")
         
         logger.info("Unloading model", model_id=model_id)
         result = await self.engine.unload_model(model_id)
@@ -110,7 +118,7 @@ class Worker:
     async def infer(self, request: InferenceRequest) -> InferenceResponse:
         """Process an inference request."""
         if self.engine is None:
-            raise RuntimeError("Worker not initialized")
+            raise RuntimeError("Worker not ready: not initialized")
         
         if self.state != WorkerState.READY:
             raise RuntimeError(f"Worker not ready: {self.state}")
@@ -151,7 +159,7 @@ class Worker:
     ) -> AsyncGenerator[TokenChunk, None]:
         """Process a streaming inference request."""
         if self.engine is None:
-            raise RuntimeError("Worker not initialized")
+            raise RuntimeError("Worker not ready: not initialized")
         
         if self.state != WorkerState.READY:
             raise RuntimeError(f"Worker not ready: {self.state}")

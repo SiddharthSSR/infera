@@ -75,6 +75,8 @@ secrets/
 logs/
 *.sqlite
 *.db
+*.db-wal
+*.db-shm
 
 # ============================================================================
 # Proto Generated Files

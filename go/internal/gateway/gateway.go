@@ -4,12 +4,15 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/internal/vault"
@@ -27,6 +30,9 @@ type Gateway struct {
 	instanceManager  *providers.Manager
 	instanceHandlers *InstanceHandlers
 
+	// Auth
+	authHandler *auth.Handler
+
 	// Vault (model registry)
 	vaultHandler *vault.Handler
 
@@ -37,23 +43,27 @@ type Gateway struct {
 
 // Config configures the gateway.
 type Config struct {
-	HTTPPort         int
-	ReadTimeout      time.Duration
-	WriteTimeout     time.Duration
-	EnableCORS       bool
-	AllowedOrigins   []string
-	RequestTimeoutMS int
+	HTTPPort          int
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	InferenceTimeout  time.Duration
+	EnableCORS        bool
+	AllowedOrigins    []string
+	WorkerSharedToken string
+	RequestTimeoutMS  int
 }
 
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		HTTPPort:         8080,
-		ReadTimeout:      30 * time.Second,
-		WriteTimeout:     60 * time.Second,
-		EnableCORS:       true,
-		AllowedOrigins:   []string{"*"},
-		RequestTimeoutMS: 30000,
+		HTTPPort:          8080,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      300 * time.Second,
+		InferenceTimeout:  120 * time.Second,
+		EnableCORS:        true,
+		AllowedOrigins:    []string{"*"},
+		WorkerSharedToken: "",
+		RequestTimeoutMS:  30000,
 	}
 }
 
@@ -74,6 +84,11 @@ func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gatew
 	return gw
 }
 
+// SetAuthHandler sets the authentication handler.
+func (g *Gateway) SetAuthHandler(h *auth.Handler) {
+	g.authHandler = h
+}
+
 // SetVaultHandler sets the vault model registry handler.
 func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 	g.vaultHandler = h
@@ -83,29 +98,52 @@ func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 func (g *Gateway) Start() error {
 	mux := http.NewServeMux()
 
-	// OpenAI-compatible endpoints
-	mux.HandleFunc("/v1/chat/completions", g.handleCORS(g.handleChatCompletions))
-	mux.HandleFunc("/v1/models", g.handleCORS(g.handleListModels))
+	// Helper: wrap with auth if auth handler is configured
+	withAuth := func(h http.HandlerFunc) http.HandlerFunc {
+		if g.authHandler != nil {
+			return g.handleCORS(g.authHandler.RequireAuth(h))
+		}
+		return g.handleCORS(h)
+	}
+	withAdmin := func(h http.HandlerFunc) http.HandlerFunc {
+		if g.authHandler != nil {
+			return g.handleCORS(g.authHandler.RequireAdmin(h))
+		}
+		return g.handleCORS(h)
+	}
 
-	// Internal API endpoints
-	mux.HandleFunc("/api/workers", g.handleCORS(g.handleGetWorkers))
-	mux.HandleFunc("/api/workers/register", g.handleCORS(g.handleRegisterWorker))
-	mux.HandleFunc("/api/workers/heartbeat", g.handleCORS(g.handleWorkerHeartbeat))
-	mux.HandleFunc("/api/stats", g.handleCORS(g.handleGetStats))
+	// OpenAI-compatible endpoints (require auth)
+	mux.HandleFunc("/v1/chat/completions", withAuth(g.handleChatCompletions))
+	mux.HandleFunc("/v1/models", withAuth(g.handleListModels))
+
+	// Public endpoints (no auth — workers need these, plus health checks)
+	mux.HandleFunc("/api/workers/register", g.handleCORS(g.requireWorkerToken(g.handleRegisterWorker)))
+	mux.HandleFunc("/api/workers/heartbeat", g.handleCORS(g.requireWorkerToken(g.handleWorkerHeartbeat)))
 	mux.HandleFunc("/api/health", g.handleCORS(g.handleHealth))
-
-	// Instance management endpoints
-	if g.instanceHandlers != nil {
-		g.instanceHandlers.RegisterRoutes(mux, g.handleCORS)
-	}
-
-	// Vault (model registry) endpoints
-	if g.vaultHandler != nil {
-		g.vaultHandler.RegisterRoutes(mux, g.handleCORS)
-	}
-
-	// Health check
 	mux.HandleFunc("/health", g.handleHealth)
+
+	// Protected internal API endpoints (require auth)
+	mux.HandleFunc("/api/workers", withAdmin(g.handleGetWorkers))
+	mux.HandleFunc("/api/stats", withAdmin(g.handleGetStats))
+
+	// Instance management endpoints (require admin)
+	if g.instanceHandlers != nil {
+		g.instanceHandlers.RegisterRoutes(mux, func(h http.HandlerFunc) http.HandlerFunc {
+			return withAdmin(h)
+		})
+	}
+
+	// Vault (model registry) endpoints (require auth)
+	if g.vaultHandler != nil {
+		g.vaultHandler.RegisterRoutes(mux, func(h http.HandlerFunc) http.HandlerFunc {
+			return withAuth(h)
+		})
+	}
+
+	// Auth management endpoints (self-registers with admin-only middleware)
+	if g.authHandler != nil {
+		g.authHandler.RegisterRoutes(mux, g.handleCORS)
+	}
 
 	g.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", g.config.HTTPPort),
@@ -130,19 +168,71 @@ func (g *Gateway) handleCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if g.config.EnableCORS {
 			origin := r.Header.Get("Origin")
-			if origin == "" {
-				origin = "*"
+			if origin != "" {
+				if !g.isOriginAllowed(origin) {
+					http.Error(w, "origin not allowed", http.StatusForbidden)
+					return
+				}
+
+				if g.hasWildcardOrigin() {
+					w.Header().Set("Access-Control-Allow-Origin", "*")
+				} else {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				}
+				w.Header().Set("Vary", "Origin")
 			}
-			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Worker-Token")
 
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
 				return
 			}
 		}
+		next(w, r)
+	}
+}
+
+func (g *Gateway) isOriginAllowed(origin string) bool {
+	for _, allowed := range g.config.AllowedOrigins {
+		if allowed == "*" || allowed == origin {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Gateway) hasWildcardOrigin() bool {
+	for _, allowed := range g.config.AllowedOrigins {
+		if allowed == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Gateway) requireWorkerToken(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		expected := strings.TrimSpace(g.config.WorkerSharedToken)
+		if expected == "" {
+			next(w, r)
+			return
+		}
+
+		token := strings.TrimSpace(r.Header.Get("X-Worker-Token"))
+		if token == "" {
+			auth := strings.TrimSpace(r.Header.Get("Authorization"))
+			if strings.HasPrefix(auth, "Bearer ") {
+				token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+			}
+		}
+
+		if token == "" || token != expected {
+			g.writeError(w, http.StatusUnauthorized, "unauthorized", "Invalid worker token")
+			return
+		}
+
 		next(w, r)
 	}
 }
@@ -241,6 +331,11 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Apply inference timeout — cancel if worker takes too long
+	ctx, cancel := context.WithTimeout(r.Context(), g.config.InferenceTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+
 	// Convert to internal format
 	inferenceReq := g.toInferenceRequest(&req)
 
@@ -252,7 +347,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			g.writeError(w, status, string(inferaErr.Code), inferaErr.Message)
 			return
 		}
-		g.writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		// No healthy workers → 503
+		g.writeError(w, http.StatusServiceUnavailable, "no_workers", "No healthy workers available for model: "+req.Model)
 		return
 	}
 
@@ -266,14 +362,21 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if req.Stream {
 		g.handleStreamingInference(w, r, client, inferenceReq, req.Model)
 	} else {
-		g.handleNonStreamingInference(w, client, inferenceReq, req.Model)
+		g.handleNonStreamingInference(w, ctx, client, inferenceReq, req.Model)
 	}
 }
 
-func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, client *WorkerClient, req *types.InferenceRequest, model string) {
+func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context.Context, client *WorkerClient, req *types.InferenceRequest, model string) {
 	// Call worker
-	resp, err := client.Infer(req)
+	resp, err := client.InferWithContext(ctx, req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			g.writeError(w, http.StatusGatewayTimeout, "inference_timeout", "Inference request timed out")
+			return
+		}
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
 		return
 	}
