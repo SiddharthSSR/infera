@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/gateway"
 	"github.com/infera/infera/go/internal/providers"
@@ -150,6 +151,15 @@ func main() {
 	authHandler := auth.NewHandler(authStore)
 	authHandler.SetSecure(os.Getenv("INFERA_DEV_MODE") != "1")
 	gw.SetAuthHandler(authHandler)
+
+	// Initialize inference audit store (best-effort, non-fatal)
+	auditStore, err := audit.NewStore("data/audit.db")
+	if err != nil {
+		log.Warn("failed to initialize audit store", slog.String("error", err.Error()))
+	} else {
+		defer auditStore.Close()
+		gw.SetAuditStore(auditStore)
+	}
 
 	// Handle shutdown
 	ctx, cancel := context.WithCancel(context.Background())
