@@ -3,40 +3,47 @@
 import asyncio
 import json
 import os
+import time
 from datetime import datetime
 from typing import Any
-import structlog
+
 import httpx
-
+import structlog
 from aiohttp import web
-
-from .config import WorkerConfig, ModelConfig
-from .worker import Worker
-from .types import (
-    InferenceRequest,
-    InferenceParameters,
-    Message,
-    Role,
-    Priority,
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
 )
+
+from .config import ModelConfig, WorkerConfig
+from .types import (
+    InferenceParameters,
+    InferenceRequest,
+    Message,
+    Priority,
+    Role,
+)
+from .worker import Worker
 
 logger = structlog.get_logger()
 
 
 def build_gateway_url(router_address: str, path: str) -> str:
     """Build a gateway URL with proper protocol.
-    
+
     Uses HTTPS for ngrok and other public URLs, HTTP for localhost.
     """
     if not router_address:
         return ""
-    
+
     # If protocol is already included, use it
-    if router_address.startswith("https://"):
+    if router_address.startswith("https://") or router_address.startswith("http://"):
         return f"{router_address}{path}"
-    elif router_address.startswith("http://"):
-        return f"{router_address}{path}"
-    
+
     # Default to HTTPS for public URLs (ngrok, etc.), HTTP for localhost
     if "localhost" in router_address or "127.0.0.1" in router_address:
         return f"http://{router_address}{path}"
@@ -56,6 +63,8 @@ class HTTPServer:
         self._heartbeat_task: asyncio.Task | None = None
         self._consecutive_auth_failures = 0
         self._gateway_registered = False
+        self._metrics_registry = CollectorRegistry()
+        self._setup_metrics()
         self._setup_routes()
 
     def _setup_routes(self) -> None:
@@ -63,21 +72,107 @@ class HTTPServer:
         self.app.router.add_post("/infer", self.handle_infer)
         self.app.router.add_post("/infer/stream", self.handle_infer_stream)
         self.app.router.add_get("/health", self.handle_health)
+        self.app.router.add_get("/metrics", self.handle_metrics)
         self.app.router.add_get("/models", self.handle_list_models)
         self.app.router.add_post("/models/load", self.handle_load_model)
         self.app.router.add_post("/models/unload", self.handle_unload_model)
         self.app.router.add_get("/stats", self.handle_stats)
 
+    def _setup_metrics(self) -> None:
+        """Initialize Prometheus metrics for worker observability."""
+        self._inference_requests = Counter(
+            "infera_worker_inference_requests_total",
+            "Total inference requests handled by the worker.",
+            ["stream", "status"],
+            registry=self._metrics_registry,
+        )
+        self._inference_duration = Histogram(
+            "infera_worker_inference_duration_seconds",
+            "Inference request duration in seconds.",
+            ["stream", "status"],
+            registry=self._metrics_registry,
+        )
+        self._inference_tokens = Counter(
+            "infera_worker_inference_tokens_total",
+            "Total tokens produced/used in inference responses.",
+            registry=self._metrics_registry,
+        )
+        self._loaded_models_gauge = Gauge(
+            "infera_worker_loaded_models",
+            "Number of models currently loaded in the worker.",
+            registry=self._metrics_registry,
+        )
+        self._gpu_utilization_gauge = Gauge(
+            "infera_worker_gpu_utilization",
+            "Current GPU utilization percentage.",
+            registry=self._metrics_registry,
+        )
+        self._memory_used_gauge = Gauge(
+            "infera_worker_memory_used_bytes",
+            "Current GPU memory used in bytes.",
+            registry=self._metrics_registry,
+        )
+        self._memory_total_gauge = Gauge(
+            "infera_worker_memory_total_bytes",
+            "Current GPU memory total in bytes.",
+            registry=self._metrics_registry,
+        )
+        self._gateway_registration = Counter(
+            "infera_worker_gateway_registration_total",
+            "Gateway registration attempts by result status.",
+            ["status"],
+            registry=self._metrics_registry,
+        )
+        self._gateway_heartbeats = Counter(
+            "infera_worker_gateway_heartbeats_total",
+            "Gateway heartbeat attempts by result status.",
+            ["status"],
+            registry=self._metrics_registry,
+        )
+        self._worker_info = Gauge(
+            "infera_worker_info",
+            "Static worker metadata.",
+            ["worker_id", "engine"],
+            registry=self._metrics_registry,
+        )
+        self._worker_info.labels(worker_id=self.worker.worker_id, engine=self.config.engine).set(1)
+
+    def _record_inference_metrics(
+        self,
+        *,
+        stream: bool,
+        status: str,
+        duration_seconds: float,
+        token_count: int = 0,
+    ) -> None:
+        """Record inference metrics for a completed request."""
+        stream_label = "true" if stream else "false"
+        status_label = status or "unknown"
+        self._inference_requests.labels(stream=stream_label, status=status_label).inc()
+        self._inference_duration.labels(stream=stream_label, status=status_label).observe(
+            max(duration_seconds, 0.0)
+        )
+        if token_count > 0:
+            self._inference_tokens.inc(token_count)
+
+    def _refresh_runtime_gauges(self) -> None:
+        """Refresh worker resource gauges from runtime stats."""
+        stats = self.worker.get_stats()
+        self._loaded_models_gauge.set(len(self.worker.get_loaded_models()))
+        self._gpu_utilization_gauge.set(stats.gpu_utilization)
+        self._memory_used_gauge.set(stats.memory_used_bytes)
+        self._memory_total_gauge.set(stats.memory_total_bytes)
+
     async def start(self) -> None:
         """Start the HTTP server."""
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
-        
+
         site = web.TCPSite(self.runner, "0.0.0.0", self.config.http_port)
         await site.start()
-        
+
         logger.info("HTTP server started", port=self.config.http_port)
-        
+
         # Register with gateway before heartbeats so auth errors fail startup.
         if self.config.router_address:
             try:
@@ -97,11 +192,11 @@ class HTTPServer:
             self._registration_task.cancel()
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
-        
+
         # Deregister only if registration succeeded.
         if self._gateway_registered:
             await self._deregister_from_gateway()
-        
+
         if self.runner:
             await self.runner.cleanup()
             logger.info("HTTP server stopped")
@@ -109,10 +204,10 @@ class HTTPServer:
     async def _register_with_gateway(self) -> None:
         """Register this worker with the gateway."""
         gateway_url = build_gateway_url(self.config.router_address, "/api/workers/register")
-        
+
         # Get public IP/hostname for the gateway to reach us
         worker_address = self._get_worker_address()
-        
+
         registration_data = {
             "worker_id": self.worker.worker_id,
             "address": worker_address,
@@ -130,10 +225,10 @@ class HTTPServer:
             "gpu_type": os.environ.get("RUNPOD_GPU_TYPE", "unknown"),
             "gpu_count": int(os.environ.get("RUNPOD_GPU_COUNT", "1")),
         }
-        
+
         max_retries = 10
         retry_delay = 5
-        
+
         for attempt in range(max_retries):
             try:
                 async with httpx.AsyncClient() as client:
@@ -143,8 +238,9 @@ class HTTPServer:
                         headers=self.config.gateway_headers(),
                         timeout=10.0,
                     )
-                    
+
                     if response.status_code == 200:
+                        self._gateway_registration.labels(status="success").inc()
                         logger.info(
                             "Registered with gateway",
                             gateway=self.config.router_address,
@@ -152,6 +248,7 @@ class HTTPServer:
                         )
                         return
                     elif response.status_code in (401, 403):
+                        self._gateway_registration.labels(status="auth_rejected").inc()
                         logger.error(
                             "Gateway registration rejected by auth",
                             status=response.status_code,
@@ -162,6 +259,7 @@ class HTTPServer:
                         )
                         raise RuntimeError("Gateway auth rejected worker registration")
                     elif 400 <= response.status_code < 500:
+                        self._gateway_registration.labels(status="client_error").inc()
                         logger.error(
                             "Gateway registration failed with non-retriable client error",
                             status=response.status_code,
@@ -172,23 +270,25 @@ class HTTPServer:
                         )
                         raise RuntimeError("Gateway registration failed with non-retriable client error")
                     else:
+                        self._gateway_registration.labels(status="http_error").inc()
                         logger.warning(
                             "Gateway registration failed",
                             status=response.status_code,
                             response=response.text,
                         )
-                        
+
             except RuntimeError:
                 raise
             except Exception as e:
+                self._gateway_registration.labels(status="exception").inc()
                 logger.warning(
                     "Gateway registration attempt failed",
                     attempt=attempt + 1,
                     error=str(e),
                 )
-            
+
             await asyncio.sleep(retry_delay)
-        
+
         logger.error("Failed to register with gateway after max retries")
         raise RuntimeError("Failed to register with gateway after max retries")
 
@@ -196,12 +296,12 @@ class HTTPServer:
         """Deregister this worker from the gateway."""
         if not self.config.router_address:
             return
-        
+
         gateway_url = build_gateway_url(
-            self.config.router_address, 
+            self.config.router_address,
             f"/api/workers/{self.worker.worker_id}"
         )
-        
+
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.delete(
@@ -230,11 +330,11 @@ class HTTPServer:
             "/api/workers/heartbeat"
         )
         interval = self.config.health_report_interval_ms / 1000.0
-        
+
         while True:
             try:
                 await asyncio.sleep(interval)
-                
+
                 stats = self.worker.get_stats()
                 heartbeat_data = {
                     "worker_id": self.worker.worker_id,
@@ -256,7 +356,7 @@ class HTTPServer:
                         for m in self.worker.get_loaded_models()
                     ],
                 }
-                
+
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
                         gateway_url,
@@ -265,9 +365,11 @@ class HTTPServer:
                         timeout=5.0,
                     )
                     if response.status_code == 200:
+                        self._gateway_heartbeats.labels(status="success").inc()
                         self._consecutive_auth_failures = 0
                         logger.debug("Heartbeat sent successfully")
                     elif response.status_code in (401, 403):
+                        self._gateway_heartbeats.labels(status="auth_rejected").inc()
                         self._consecutive_auth_failures += 1
                         logger.error(
                             "Heartbeat rejected by gateway auth",
@@ -286,6 +388,7 @@ class HTTPServer:
                             self.worker.request_shutdown()
                             break
                     else:
+                        self._gateway_heartbeats.labels(status="http_error").inc()
                         self._consecutive_auth_failures = 0
                         logger.warning(
                             "Heartbeat failed with non-200 response",
@@ -294,10 +397,11 @@ class HTTPServer:
                             gateway_url=gateway_url,
                             worker_id=self.worker.worker_id,
                         )
-                    
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                self._gateway_heartbeats.labels(status="exception").inc()
                 logger.debug("Heartbeat failed", error=str(e))
 
     def _get_worker_address(self) -> str:
@@ -306,49 +410,66 @@ class HTTPServer:
         runpod_pod_id = os.environ.get("RUNPOD_POD_ID")
         if runpod_pod_id:
             return f"{runpod_pod_id}-{self.config.http_port}.proxy.runpod.net"
-        
+
         # Check for RunPod public IP
         runpod_public_ip = os.environ.get("RUNPOD_PUBLIC_IP")
         if runpod_public_ip:
             return runpod_public_ip
-        
+
         # Check for explicit address
         explicit_address = os.environ.get("INFERA_WORKER_ADDRESS")
         if explicit_address:
             return explicit_address
-        
+
         # Default to localhost for local development
         return f"localhost:{self.config.http_port}"
 
     async def handle_infer(self, request: web.Request) -> web.Response:
         """Handle non-streaming inference request."""
+        start_time = time.perf_counter()
+        status = "success"
+        token_count = 0
         try:
             data = await request.json()
             inference_request = self._parse_request(data)
-            
+
             response = await self.worker.infer(inference_request)
-            
+            token_count = response.usage.total_tokens
+
             return web.json_response(self._format_response(response))
-            
+
         except ValueError as e:
+            status = "invalid_request"
             return web.json_response(
                 {"error": {"type": "invalid_request", "message": str(e)}},
                 status=400
             )
         except RuntimeError as e:
+            status = "worker_error"
             return web.json_response(
                 {"error": {"type": "worker_error", "message": str(e)}},
                 status=503
             )
         except Exception as e:
+            status = "internal_error"
             logger.error("Inference error", error=str(e))
             return web.json_response(
                 {"error": {"type": "internal_error", "message": str(e)}},
                 status=500
             )
+        finally:
+            self._record_inference_metrics(
+                stream=False,
+                status=status,
+                duration_seconds=time.perf_counter() - start_time,
+                token_count=token_count,
+            )
 
     async def handle_infer_stream(self, request: web.Request) -> web.StreamResponse:
         """Handle streaming inference request."""
+        start_time = time.perf_counter()
+        status = "success"
+        token_count = 0
         response = web.StreamResponse(
             status=200,
             reason="OK",
@@ -371,23 +492,32 @@ class HTTPServer:
                     "index": chunk.index,
                     "delta": chunk.delta,
                 }
-                
+
                 if chunk.finish_reason is not None:
                     chunk_data["finish_reason"] = chunk.finish_reason.value
-                    
+
                 if chunk.usage is not None:
                     chunk_data["usage"] = {
                         "prompt_tokens": chunk.usage.prompt_tokens,
                         "completion_tokens": chunk.usage.completion_tokens,
                         "total_tokens": chunk.usage.total_tokens,
                     }
+                    token_count = max(token_count, chunk.usage.total_tokens)
 
                 await response.write(json.dumps(chunk_data).encode() + b"\n")
 
         except Exception as e:
+            status = "internal_error"
             logger.error("Streaming error", error=str(e))
             error_data = {"error": {"message": str(e)}}
             await response.write(json.dumps(error_data).encode() + b"\n")
+        finally:
+            self._record_inference_metrics(
+                stream=True,
+                status=status,
+                duration_seconds=time.perf_counter() - start_time,
+                token_count=token_count,
+            )
 
         await response.write_eof()
         return response
@@ -396,7 +526,7 @@ class HTTPServer:
         """Handle health check."""
         state = self.worker.get_state()
         stats = self.worker.get_stats()
-        
+
         return web.json_response({
             "status": "healthy" if state.value == "ready" else state.value,
             "worker_id": self.worker.worker_id,
@@ -406,10 +536,19 @@ class HTTPServer:
             "memory_total_bytes": stats.memory_total_bytes,
         })
 
+    async def handle_metrics(self, request: web.Request) -> web.Response:
+        """Expose Prometheus metrics for scraping."""
+        self._refresh_runtime_gauges()
+        payload = generate_latest(self._metrics_registry)
+        return web.Response(
+            body=payload,
+            headers={"Content-Type": CONTENT_TYPE_LATEST},
+        )
+
     async def handle_list_models(self, request: web.Request) -> web.Response:
         """Handle list models request."""
         models = self.worker.get_loaded_models()
-        
+
         return web.json_response({
             "models": [
                 {
@@ -436,18 +575,18 @@ class HTTPServer:
                 max_batch_size=data.get("max_batch_size", 8),
                 max_sequence_length=data.get("max_sequence_length", 4096),
             )
-            
+
             start_time = datetime.now()
             loaded = await self.worker.load_model(model_config)
             load_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            
+
             return web.json_response({
                 "success": True,
                 "model_id": loaded.model_id,
                 "memory_bytes": loaded.memory_bytes,
                 "load_time_ms": load_time_ms,
             })
-            
+
         except Exception as e:
             return web.json_response(
                 {"success": False, "error": str(e)},
@@ -459,14 +598,14 @@ class HTTPServer:
         try:
             data = await request.json()
             model_id = data.get("model_id")
-            
+
             success = await self.worker.unload_model(model_id)
-            
+
             return web.json_response({
                 "success": success,
                 "model_id": model_id,
             })
-            
+
         except Exception as e:
             return web.json_response(
                 {"success": False, "error": str(e)},
@@ -476,7 +615,7 @@ class HTTPServer:
     async def handle_stats(self, request: web.Request) -> web.Response:
         """Handle stats request."""
         stats = self.worker.get_stats()
-        
+
         return web.json_response({
             "queue_depth": stats.queue_depth,
             "active_requests": stats.active_requests,
