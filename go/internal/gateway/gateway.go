@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/router"
@@ -39,6 +40,9 @@ type Gateway struct {
 
 	// Vault (model registry)
 	vaultHandler *vault.Handler
+
+	// Audit (inference usage tracking)
+	auditStore *audit.Store
 
 	// Rate limiting
 	rateLimiter *RateLimiter
@@ -111,6 +115,11 @@ func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 	g.vaultHandler = h
 }
 
+// SetAuditStore sets the inference audit store.
+func (g *Gateway) SetAuditStore(s *audit.Store) {
+	g.auditStore = s
+}
+
 // Start starts the HTTP server.
 func (g *Gateway) Start() error {
 	mux := http.NewServeMux()
@@ -145,6 +154,9 @@ func (g *Gateway) Start() error {
 	// Protected internal API endpoints (require auth)
 	mux.HandleFunc("/api/workers", withAdmin(g.handleGetWorkers))
 	mux.HandleFunc("/api/stats", withAdmin(g.handleGetStats))
+	if g.auditStore != nil {
+		mux.HandleFunc("/api/audit/usage", withAdmin(g.handleGetAuditUsage))
+	}
 
 	// Instance management endpoints (require admin)
 	if g.instanceHandlers != nil {
@@ -408,6 +420,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	auditWorkerID := ""
 	auditErrorCode := ""
 	defer func() {
+		latencyMS := time.Since(requestStart).Milliseconds()
 		attrs := []any{
 			slog.String("request_id", requestID),
 			slog.String("key_id", keyID),
@@ -418,12 +431,35 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			slog.Int("token_count", auditTokenCount),
 			slog.String("prompt_hash", promptHash),
 			slog.String("status", auditStatus),
-			slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
+			slog.Int64("latency_ms", latencyMS),
 		}
 		if auditErrorCode != "" {
 			attrs = append(attrs, slog.String("error_code", auditErrorCode))
 		}
 		g.log.Info("inference.audit", attrs...)
+
+		if g.auditStore != nil {
+			err := g.auditStore.AppendInference(audit.InferenceAuditRecord{
+				Timestamp:    requestStart.UTC(),
+				RequestID:    requestID,
+				KeyID:        keyID,
+				Model:        req.Model,
+				WorkerID:     auditWorkerID,
+				Stream:       req.Stream,
+				MessageCount: len(req.Messages),
+				TokenCount:   auditTokenCount,
+				PromptHash:   promptHash,
+				Status:       auditStatus,
+				ErrorCode:    auditErrorCode,
+				LatencyMS:    latencyMS,
+			})
+			if err != nil {
+				g.log.Warn("inference.audit_persist_failed",
+					slog.String("request_id", requestID),
+					slog.String("error", err.Error()),
+				)
+			}
+		}
 	}()
 
 	// Apply inference timeout — cancel if worker takes too long
@@ -989,6 +1025,91 @@ func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {
 			"total_bytes": totalMemoryTotal,
 		},
 		"uptime_seconds": int64(time.Since(g.startedAt).Seconds()),
+	})
+}
+
+func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+	if g.auditStore == nil {
+		g.writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "Audit store is not configured")
+		return
+	}
+
+	now := time.Now().UTC()
+	start := now.Add(-24 * time.Hour)
+	end := now
+
+	if rawStart := strings.TrimSpace(r.URL.Query().Get("start")); rawStart != "" {
+		parsed, err := time.Parse(time.RFC3339, rawStart)
+		if err != nil {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "start must be RFC3339")
+			return
+		}
+		start = parsed.UTC()
+	}
+	if rawEnd := strings.TrimSpace(r.URL.Query().Get("end")); rawEnd != "" {
+		parsed, err := time.Parse(time.RFC3339, rawEnd)
+		if err != nil {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "end must be RFC3339")
+			return
+		}
+		end = parsed.UTC()
+	}
+	if !start.Before(end) {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "start must be before end")
+		return
+	}
+
+	bucket := strings.TrimSpace(r.URL.Query().Get("bucket"))
+	if bucket == "" {
+		bucket = "day"
+	}
+	if bucket != "day" && bucket != "hour" {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "bucket must be 'day' or 'hour'")
+		return
+	}
+
+	rows, err := g.auditStore.UsageByKey(audit.UsageQuery{
+		Start:  start,
+		End:    end,
+		Bucket: bucket,
+		KeyID:  strings.TrimSpace(r.URL.Query().Get("key_id")),
+		Model:  strings.TrimSpace(r.URL.Query().Get("model")),
+	})
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "audit_query_failed", err.Error())
+		return
+	}
+
+	type usageRow struct {
+		BucketStart string `json:"bucket_start"`
+		KeyID       string `json:"key_id"`
+		Requests    int64  `json:"requests"`
+		Tokens      int64  `json:"tokens"`
+		Successes   int64  `json:"successes"`
+		Errors      int64  `json:"errors"`
+	}
+
+	out := make([]usageRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, usageRow{
+			BucketStart: time.UnixMilli(row.BucketStartMS).UTC().Format(time.RFC3339),
+			KeyID:       row.KeyID,
+			Requests:    row.RequestCount,
+			Tokens:      row.TokenCount,
+			Successes:   row.SuccessCount,
+			Errors:      row.ErrorCount,
+		})
+	}
+
+	g.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"bucket": bucket,
+		"start":  start.Format(time.RFC3339),
+		"end":    end.Format(time.RFC3339),
+		"rows":   out,
 	})
 }
 
