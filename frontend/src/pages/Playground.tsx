@@ -7,15 +7,6 @@ import { useModels } from '../hooks/useApi';
 import { useChat } from '../App';
 import { streamChatCompletion } from '../lib/api';
 
-interface HistoryEntry {
-  id: string;
-  time: string;
-  latencyMs: number;
-  preview: string;
-  promptTokens?: number;
-  completionTokens?: number;
-}
-
 interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -24,7 +15,16 @@ interface TokenUsage {
 }
 
 export function Playground() {
-  const { selectedModel, setSelectedModel, temperature, setTemperature, maxTokens, setMaxTokens } = useChat();
+  const {
+    history,
+    setHistory,
+    selectedModel,
+    setSelectedModel,
+    temperature,
+    setTemperature,
+    maxTokens,
+    setMaxTokens,
+  } = useChat();
   const { data: models } = useModels();
   const allModels = models || [];
 
@@ -34,7 +34,6 @@ export function Playground() {
   const [isLoading, setIsLoading] = useState(false);
   const [topP, setTopP] = useState(1.0);
   const [freqPenalty, setFreqPenalty] = useState(0.0);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const [focusMode, setFocusMode] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 900);

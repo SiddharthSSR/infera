@@ -20,10 +20,21 @@ interface Message extends ChatMessage {
   timestamp: Date;
 }
 
+interface PlaygroundHistoryEntry {
+  id: string;
+  time: string;
+  latencyMs: number;
+  preview: string;
+  promptTokens?: number;
+  completionTokens?: number;
+}
+
 // Chat Context - to persist chat state across page switches
 interface ChatContextType {
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
+  history: PlaygroundHistoryEntry[];
+  setHistory: React.Dispatch<React.SetStateAction<PlaygroundHistoryEntry[]>>;
   selectedModel: string;
   setSelectedModel: (model: string) => void;
   temperature: number;
@@ -109,6 +120,7 @@ function AppContent() {
 
   // Chat state - persisted across page switches
   const [messages, setMessages] = useState<Message[]>([]);
+  const [history, setHistory] = useState<PlaygroundHistoryEntry[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
@@ -122,13 +134,14 @@ function AppContent() {
 
   const handleLogout = useCallback(() => {
     setMessages([]);
+    setHistory([]);
     setSelectedModel('');
     setTemperature(0.7);
     setMaxTokens(2048);
     destroySession();
     setAuthenticated(false);
     queryClient.clear();
-  }, [setMessages, setSelectedModel, setTemperature, setMaxTokens]);
+  }, [setMessages, setHistory, setSelectedModel, setTemperature, setMaxTokens]);
 
   // Listen for auth-expired events from api.ts
   useEffect(() => {
@@ -163,6 +176,8 @@ function AppContent() {
   const chatContextValue: ChatContextType = {
     messages,
     setMessages,
+    history,
+    setHistory,
     selectedModel,
     setSelectedModel,
     temperature,
