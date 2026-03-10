@@ -3,7 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -93,6 +93,6 @@ func writeAuthError(w http.ResponseWriter, status int, message string) {
 		},
 	}
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		log.Printf("failed to encode auth error response: %v", err)
+		slog.Error("failed to encode auth error response", slog.String("error", err.Error()))
 	}
 }

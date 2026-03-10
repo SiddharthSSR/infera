@@ -11,6 +11,7 @@ import { Models } from './pages/Models';
 import { ApiKeys } from './pages/ApiKeys';
 import { Login } from './pages/Login';
 import { getApiKey, clearApiKey } from './lib/api';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import type { ChatMessage } from './types';
 
 // Chat message with metadata
@@ -170,6 +171,7 @@ function AppContent() {
 // Root App with Providers
 function App() {
   return (
+    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <AppContent />
       <Toaster
@@ -184,6 +186,7 @@ function App() {
         }}
       />
     </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

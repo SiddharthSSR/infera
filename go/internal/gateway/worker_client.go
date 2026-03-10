@@ -19,6 +19,7 @@ import (
 type WorkerClient struct {
 	address    string
 	httpClient *http.Client
+	breaker    *CircuitBreaker
 }
 
 // NewWorkerClient creates a new worker client.
@@ -26,8 +27,9 @@ func NewWorkerClient(address string) *WorkerClient {
 	return &WorkerClient{
 		address: address,
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: 120 * time.Second,
 		},
+		breaker: NewCircuitBreaker(),
 	}
 }
 
@@ -79,6 +81,10 @@ func (c *WorkerClient) Infer(req *types.InferenceRequest) (*types.InferenceRespo
 
 // InferWithContext sends an inference request with context propagation.
 func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.InferenceRequest) (*types.InferenceResponse, error) {
+	if !c.breaker.Allow() {
+		return nil, ErrCircuitOpen
+	}
+
 	// Convert to worker format
 	workerReq := WorkerInferRequest{
 		RequestID:  req.RequestID,
@@ -113,17 +119,22 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set(HeaderRequestID, req.RequestID)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		c.breaker.RecordFailure()
 		return nil, fmt.Errorf("failed to call worker: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		c.breaker.RecordFailure()
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("worker error (status %d): %s", resp.StatusCode, string(bodyBytes))
 	}
+
+	c.breaker.RecordSuccess()
 
 	// Parse response
 	var workerResp WorkerInferResponse
@@ -165,6 +176,10 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 
 // InferStream sends a streaming inference request to the worker.
 func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequest) (<-chan *types.TokenChunk, error) {
+	if !c.breaker.Allow() {
+		return nil, ErrCircuitOpen
+	}
+
 	// Convert to worker format
 	workerReq := WorkerInferRequest{
 		RequestID:  req.RequestID,
@@ -200,17 +215,22 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set(HeaderRequestID, req.RequestID)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		c.breaker.RecordFailure()
 		return nil, fmt.Errorf("failed to call worker: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		c.breaker.RecordFailure()
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		return nil, fmt.Errorf("worker error (status %d): %s", resp.StatusCode, string(bodyBytes))
 	}
+
+	c.breaker.RecordSuccess()
 
 	// Create channel for chunks
 	chunks := make(chan *types.TokenChunk, 100)

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +37,16 @@ type Gateway struct {
 
 	// Vault (model registry)
 	vaultHandler *vault.Handler
+
+	// Rate limiting
+	rateLimiter *RateLimiter
+
+	// Backpressure: track in-flight inference requests
+	inFlightRequests   int64
+	maxInFlightDefault int64
+
+	// Structured logger
+	log *slog.Logger
 
 	// Worker clients for direct inference calls
 	workerClients   map[string]*WorkerClient
@@ -70,11 +82,14 @@ func DefaultConfig() Config {
 // New creates a new gateway.
 func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gateway {
 	gw := &Gateway{
-		router:          r,
-		config:          config,
-		instanceManager: instanceMgr,
-		workerClients:   make(map[string]*WorkerClient),
-		startedAt:       time.Now(),
+		router:             r,
+		config:             config,
+		instanceManager:    instanceMgr,
+		rateLimiter:        NewRateLimiter(DefaultRateLimiterConfig()),
+		maxInFlightDefault: 100,
+		log:                NewLogger(),
+		workerClients:      make(map[string]*WorkerClient),
+		startedAt:          time.Now(),
 	}
 
 	if instanceMgr != nil {
@@ -112,8 +127,11 @@ func (g *Gateway) Start() error {
 		return g.handleCORS(h)
 	}
 
-	// OpenAI-compatible endpoints (require auth)
-	mux.HandleFunc("/v1/chat/completions", withAuth(g.handleChatCompletions))
+	// Rate limit wrapper for inference endpoints
+	withRateLimit := RateLimitMiddleware(g.rateLimiter)
+
+	// OpenAI-compatible endpoints (require auth + rate limit)
+	mux.HandleFunc("/v1/chat/completions", withAuth(withRateLimit(g.handleChatCompletions)))
 	mux.HandleFunc("/v1/models", withAuth(g.handleListModels))
 
 	// Public endpoints (no auth — workers need these, plus health checks)
@@ -145,9 +163,20 @@ func (g *Gateway) Start() error {
 		g.authHandler.RegisterRoutes(mux, g.handleCORS)
 	}
 
+	// Apply middleware chain: recovery → request ID → body size limit.
+	// Note: we intentionally do NOT apply http.TimeoutHandler globally
+	// because streaming endpoints need long-lived connections. The
+	// inference timeout is enforced per-request in handleChatCompletions.
+	handler := chainMiddleware(
+		mux,
+		recoveryMiddleware(g.log),
+		requestIDMiddleware,
+		bodySizeLimitMiddleware(maxRequestBodyBytes),
+	)
+
 	g.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", g.config.HTTPPort),
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  g.config.ReadTimeout,
 		WriteTimeout: g.config.WriteTimeout,
 	}
@@ -157,6 +186,9 @@ func (g *Gateway) Start() error {
 
 // Stop gracefully stops the server.
 func (g *Gateway) Stop(ctx context.Context) error {
+	if g.rateLimiter != nil {
+		g.rateLimiter.Stop()
+	}
 	if g.httpServer != nil {
 		return g.httpServer.Shutdown(ctx)
 	}
@@ -314,6 +346,16 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Backpressure: reject if too many in-flight requests
+	current := atomic.AddInt64(&g.inFlightRequests, 1)
+	defer atomic.AddInt64(&g.inFlightRequests, -1)
+
+	if current > g.maxInFlightDefault {
+		w.Header().Set("Retry-After", "5")
+		g.writeError(w, http.StatusServiceUnavailable, "overloaded", "Server is overloaded. Please retry shortly.")
+		return
+	}
+
 	// Parse request
 	var req ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -331,6 +373,14 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Audit log fields
+	requestStart := time.Now()
+	requestID := r.Header.Get(HeaderRequestID)
+	keyID := ""
+	if record := auth.KeyFromContext(r.Context()); record != nil {
+		keyID = record.KeyPrefix
+	}
+
 	// Apply inference timeout — cancel if worker takes too long
 	ctx, cancel := context.WithTimeout(r.Context(), g.config.InferenceTimeout)
 	defer cancel()
@@ -342,6 +392,13 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// Route the request
 	routed, err := g.router.Route(inferenceReq)
 	if err != nil {
+		g.log.Warn("inference.route_failed",
+			slog.String("request_id", requestID),
+			slog.String("key", keyID),
+			slog.String("model", req.Model),
+			slog.String("error", err.Error()),
+			slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
+		)
 		if inferaErr, ok := err.(*types.InferaError); ok {
 			status := g.errorCodeToStatus(inferaErr.Code)
 			g.writeError(w, status, string(inferaErr.Code), inferaErr.Message)
@@ -355,6 +412,14 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// Get worker client
 	client, err := g.getWorkerClient(routed.WorkerID)
 	if err != nil {
+		g.log.Warn("inference.worker_unavailable",
+			slog.String("request_id", requestID),
+			slog.String("key", keyID),
+			slog.String("model", req.Model),
+			slog.String("worker_id", routed.WorkerID),
+			slog.String("error", err.Error()),
+			slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
+		)
 		g.writeError(w, http.StatusServiceUnavailable, "worker_unavailable", err.Error())
 		return
 	}
@@ -364,6 +429,17 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	} else {
 		g.handleNonStreamingInference(w, ctx, client, inferenceReq, req.Model)
 	}
+
+	// Audit log for completed requests
+	g.log.Info("inference.completed",
+		slog.String("request_id", requestID),
+		slog.String("key", keyID),
+		slog.String("model", req.Model),
+		slog.String("worker_id", routed.WorkerID),
+		slog.Bool("stream", req.Stream),
+		slog.Int("message_count", len(req.Messages)),
+		slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
+	)
 }
 
 func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context.Context, client *WorkerClient, req *types.InferenceRequest, model string) {

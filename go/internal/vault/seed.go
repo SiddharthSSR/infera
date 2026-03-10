@@ -1,6 +1,6 @@
 package vault
 
-import "log"
+import "log/slog"
 
 // SeedDefaultModels populates the registry with well-known models if it's empty.
 // This is idempotent — it skips seeding if any models already exist.
@@ -10,7 +10,7 @@ func SeedDefaultModels(store *Store) error {
 		return err
 	}
 	if count > 0 {
-		log.Printf("Vault: %d models already exist, skipping seed", count)
+		slog.Info("vault seed skipped, models already exist", slog.Int("count", count))
 		return nil
 	}
 
@@ -119,6 +119,6 @@ func SeedDefaultModels(store *Store) error {
 		}
 	}
 
-	log.Printf("Vault: seeded %d default models", len(models))
+	slog.Info("vault seeded default models", slog.Int("count", len(models)))
 	return nil
 }
