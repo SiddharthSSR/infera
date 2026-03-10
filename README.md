@@ -120,6 +120,11 @@ INFERA_WORKER_SHARED_TOKEN=<long-random-token>
 INFERA_WORKER_IMAGE=<registry>/infera-worker:<pinned-tag>
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD=<strong-password>
+ALERT_EMAIL_TO=codingtensor@gmail.com
+ALERT_SMTP_FROM=codingtensor@gmail.com
+ALERT_SMTP_SMARTHOST=smtp.gmail.com:587
+ALERT_SMTP_USERNAME=codingtensor@gmail.com
+ALERT_SMTP_PASSWORD=<gmail-app-password>
 HF_TOKEN=... # optional
 ```
 
@@ -152,14 +157,17 @@ Expected:
 - `dashboard.inferai.co.in` returns `200` and serves Grafana login
 - `/api/stats` returns `401` without API key
 
-### 6. Monitoring Bootstrap
+### 5. Monitoring Bootstrap
 
-Production compose now includes Prometheus and Grafana:
+Production compose now includes Prometheus, Alertmanager, and Grafana:
 
 - Prometheus config: `deploy/observability/prometheus/prometheus.yml`
 - Alert rules: `deploy/observability/prometheus/rules/infera-alerts.yml`
+- Alertmanager routing: `deploy/observability/alertmanager/alertmanager.yml`
+- Alertmanager templates: `deploy/observability/alertmanager/templates/`
 - Grafana provisioning: `deploy/observability/grafana/provisioning/`
 - Starter dashboard: `deploy/observability/grafana/dashboards/infera-overview.json`
+- Runbooks: `deploy/observability/RUNBOOKS.md`
 
 For worker scraping, edit:
 
@@ -167,7 +175,7 @@ For worker scraping, edit:
 
 Use `worker_targets.example.json` as template.
 
-### 5. Worker Registration Checklist
+### 6. Worker Registration Checklist
 
 If `/health` shows `workers: 0`:
 

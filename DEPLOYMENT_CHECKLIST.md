@@ -22,6 +22,11 @@ git pull origin main
   - [ ] `INFERA_WORKER_IMAGE`
   - [ ] `GRAFANA_ADMIN_USER`
   - [ ] `GRAFANA_ADMIN_PASSWORD`
+  - [ ] `ALERT_EMAIL_TO`
+  - [ ] `ALERT_SMTP_FROM`
+  - [ ] `ALERT_SMTP_SMARTHOST`
+  - [ ] `ALERT_SMTP_USERNAME`
+  - [ ] `ALERT_SMTP_PASSWORD`
 - [ ] `data` directory exists for persistent DB files:
 
 ```bash
@@ -104,6 +109,12 @@ docker compose -f docker-compose.prod.yml logs prometheus --tail=200
 docker compose -f docker-compose.prod.yml logs grafana --tail=200
 ```
 
+- [ ] Alertmanager config loaded and notifications pipeline is healthy:
+
+```bash
+docker compose -f docker-compose.prod.yml logs alertmanager --tail=200
+```
+
 ## 4. Functional Smoke Test
 
 - [ ] Open `https://inferai.co.in` in browser.
@@ -112,6 +123,7 @@ docker compose -f docker-compose.prod.yml logs grafana --tail=200
 - [ ] Dashboard loads.
 - [ ] Instances page loads.
 - [ ] Playground page loads and can issue a request.
+- [ ] Trigger a test alert (or silence flow) and verify email delivery path.
 
 ## 5. Rollback Plan
 
