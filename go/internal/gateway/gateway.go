@@ -3,6 +3,8 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -340,6 +342,26 @@ type ChatDelta struct {
 	Content string `json:"content,omitempty"`
 }
 
+func hashPrompt(messages []ChatMessage) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	hasher := sha256.New()
+	for _, msg := range messages {
+		_, _ = hasher.Write([]byte(msg.Role))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(msg.Name))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(msg.Content))
+		_, _ = hasher.Write([]byte{0})
+	}
+	sum := hex.EncodeToString(hasher.Sum(nil))
+	if len(sum) > 16 {
+		return sum[:16]
+	}
+	return sum
+}
+
 func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed")
@@ -380,6 +402,29 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if record := auth.KeyFromContext(r.Context()); record != nil {
 		keyID = record.KeyPrefix
 	}
+	promptHash := hashPrompt(req.Messages)
+	auditStatus := "unknown_error"
+	auditTokenCount := 0
+	auditWorkerID := ""
+	auditErrorCode := ""
+	defer func() {
+		attrs := []any{
+			slog.String("request_id", requestID),
+			slog.String("key_id", keyID),
+			slog.String("model", req.Model),
+			slog.String("worker_id", auditWorkerID),
+			slog.Bool("stream", req.Stream),
+			slog.Int("message_count", len(req.Messages)),
+			slog.Int("token_count", auditTokenCount),
+			slog.String("prompt_hash", promptHash),
+			slog.String("status", auditStatus),
+			slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
+		}
+		if auditErrorCode != "" {
+			attrs = append(attrs, slog.String("error_code", auditErrorCode))
+		}
+		g.log.Info("inference.audit", attrs...)
+	}()
 
 	// Apply inference timeout — cancel if worker takes too long
 	ctx, cancel := context.WithTimeout(r.Context(), g.config.InferenceTimeout)
@@ -394,67 +439,66 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		g.log.Warn("inference.route_failed",
 			slog.String("request_id", requestID),
-			slog.String("key", keyID),
+			slog.String("key_id", keyID),
 			slog.String("model", req.Model),
 			slog.String("error", err.Error()),
 			slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
 		)
 		if inferaErr, ok := err.(*types.InferaError); ok {
+			auditStatus = "failed"
+			auditErrorCode = string(inferaErr.Code)
 			status := g.errorCodeToStatus(inferaErr.Code)
 			g.writeError(w, status, string(inferaErr.Code), inferaErr.Message)
 			return
 		}
 		// No healthy workers → 503
+		auditStatus = "failed"
+		auditErrorCode = "no_workers"
 		g.writeError(w, http.StatusServiceUnavailable, "no_workers", "No healthy workers available for model: "+req.Model)
 		return
 	}
 
 	// Get worker client
+	auditWorkerID = routed.WorkerID
 	client, err := g.getWorkerClient(routed.WorkerID)
 	if err != nil {
 		g.log.Warn("inference.worker_unavailable",
 			slog.String("request_id", requestID),
-			slog.String("key", keyID),
+			slog.String("key_id", keyID),
 			slog.String("model", req.Model),
 			slog.String("worker_id", routed.WorkerID),
 			slog.String("error", err.Error()),
 			slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
 		)
+		auditStatus = "failed"
+		auditErrorCode = "worker_unavailable"
 		g.writeError(w, http.StatusServiceUnavailable, "worker_unavailable", err.Error())
 		return
 	}
 
 	if req.Stream {
-		g.handleStreamingInference(w, r, client, inferenceReq, req.Model)
+		auditTokenCount, auditStatus = g.handleStreamingInference(w, r, client, inferenceReq, req.Model)
 	} else {
-		g.handleNonStreamingInference(w, ctx, client, inferenceReq, req.Model)
+		auditTokenCount, auditStatus = g.handleNonStreamingInference(w, ctx, client, inferenceReq, req.Model)
 	}
-
-	// Audit log for completed requests
-	g.log.Info("inference.completed",
-		slog.String("request_id", requestID),
-		slog.String("key", keyID),
-		slog.String("model", req.Model),
-		slog.String("worker_id", routed.WorkerID),
-		slog.Bool("stream", req.Stream),
-		slog.Int("message_count", len(req.Messages)),
-		slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
-	)
+	if auditStatus != "success" {
+		auditErrorCode = auditStatus
+	}
 }
 
-func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context.Context, client *WorkerClient, req *types.InferenceRequest, model string) {
+func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context.Context, client *WorkerClient, req *types.InferenceRequest, model string) (int, string) {
 	// Call worker
 	resp, err := client.InferWithContext(ctx, req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			g.writeError(w, http.StatusGatewayTimeout, "inference_timeout", "Inference request timed out")
-			return
+			return 0, "inference_timeout"
 		}
 		if errors.Is(err, context.Canceled) {
-			return
+			return 0, "client_canceled"
 		}
 		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
-		return
+		return 0, "inference_error"
 	}
 
 	// Convert to OpenAI format
@@ -483,16 +527,17 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 	}
 
 	g.writeJSON(w, http.StatusOK, openAIResp)
+	return openAIResp.Usage.TotalTokens, "success"
 }
 
-func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) {
+func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) (int, string) {
 	// First, try to get the stream from worker
 	// This validates the request before we commit to SSE
 	chunks, err := client.InferStream(r.Context(), req)
 	if err != nil {
 		// Return regular error response (not SSE) since we haven't committed to streaming yet
 		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
-		return
+		return 0, "inference_error"
 	}
 
 	// Now commit to SSE
@@ -504,7 +549,7 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		g.writeError(w, http.StatusInternalServerError, "streaming_not_supported", "Streaming not supported")
-		return
+		return 0, "streaming_not_supported"
 	}
 
 	requestID := "chatcmpl-" + req.RequestID
@@ -529,7 +574,15 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
 
+	tokenCount := 0
+	generatedChars := 0
+
 	for chunk := range chunks {
+		generatedChars += len(chunk.Delta)
+		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
+			tokenCount = chunk.Usage.TotalTokens
+		}
+
 		openAIChunk := ChatCompletionChunk{
 			ID:      requestID,
 			Object:  "chat.completion.chunk",
@@ -558,6 +611,12 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	// Send [DONE]
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+
+	if tokenCount == 0 {
+		tokenCount = req.TokenEstimate() + (generatedChars / 4)
+	}
+
+	return tokenCount, "success"
 }
 
 func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
