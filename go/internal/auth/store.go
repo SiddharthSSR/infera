@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sync"
 	"time"
@@ -34,6 +35,21 @@ var authMigrations = []migrate.Migration{
 		);
 		CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 		CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status);`,
+	},
+	{
+		Version:     2,
+		Description: "create sessions table",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS sessions (
+			id         TEXT PRIMARY KEY,
+			key_id     TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+			token_hash TEXT NOT NULL UNIQUE,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at DATETIME NOT NULL,
+			last_seen  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
+		CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);`,
 	},
 }
 
@@ -81,6 +97,7 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to run auth migrations: %w", err)
 	}
 	s.startLastUsedUpdater()
+	s.startSessionPruner()
 
 	return s, nil
 }
@@ -284,9 +301,123 @@ func (s *Store) CreateKeyFromRaw(fullKey, name, role string) (*KeyRecord, error)
 	}, nil
 }
 
+// SessionRecord represents a stored session.
+type SessionRecord struct {
+	ID        string    `json:"id"`
+	KeyID     string    `json:"key_id"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	LastSeen  time.Time `json:"last_seen"`
+}
+
+const sessionDuration = 24 * time.Hour
+
+// CreateSession creates a new session for the given key ID.
+// Returns the raw token (to be set as cookie) and the session record.
+func (s *Store) CreateSession(keyID string) (string, *SessionRecord, error) {
+	rawBytes := make([]byte, 32)
+	if _, err := rand.Read(rawBytes); err != nil {
+		return "", nil, fmt.Errorf("failed to generate session token: %w", err)
+	}
+	rawToken := hex.EncodeToString(rawBytes)
+	tokenHash := hashKey(rawToken)
+
+	id := uuid.New().String()
+	now := time.Now()
+	expiresAt := now.Add(sessionDuration)
+
+	_, err := s.db.Exec(`
+		INSERT INTO sessions (id, key_id, token_hash, created_at, expires_at, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		id, keyID, tokenHash, now, expiresAt, now,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	return rawToken, &SessionRecord{
+		ID:        id,
+		KeyID:     keyID,
+		CreatedAt: now,
+		ExpiresAt: expiresAt,
+		LastSeen:  now,
+	}, nil
+}
+
+// ValidateSession checks a raw session token.
+// Returns the session and associated key record if valid.
+func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, error) {
+	tokenHash := hashKey(rawToken)
+
+	row := s.db.QueryRow(`
+		SELECT s.id, s.key_id, s.created_at, s.expires_at, s.last_seen,
+		       k.id, k.key_prefix, k.name, k.role, k.created_at, k.last_used, k.status
+		FROM sessions s
+		JOIN api_keys k ON s.key_id = k.id
+		WHERE s.token_hash = ? AND s.expires_at > ? AND k.status = 'active'`,
+		tokenHash, time.Now(),
+	)
+
+	session := &SessionRecord{}
+	key := &KeyRecord{}
+	err := row.Scan(
+		&session.ID, &session.KeyID, &session.CreatedAt, &session.ExpiresAt, &session.LastSeen,
+		&key.ID, &key.KeyPrefix, &key.Name, &key.Role, &key.CreatedAt, &key.LastUsed, &key.Status,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil, fmt.Errorf("invalid or expired session")
+		}
+		return nil, nil, fmt.Errorf("failed to validate session: %w", err)
+	}
+
+	// Update last_seen asynchronously
+	go func() {
+		_, _ = s.db.Exec("UPDATE sessions SET last_seen = CURRENT_TIMESTAMP WHERE id = ?", session.ID)
+	}()
+
+	return session, key, nil
+}
+
+// DeleteSession removes a session by ID.
+func (s *Store) DeleteSession(id string) error {
+	_, err := s.db.Exec("DELETE FROM sessions WHERE id = ?", id)
+	return err
+}
+
+// DeleteSessionByToken removes a session by raw token.
+func (s *Store) DeleteSessionByToken(rawToken string) error {
+	tokenHash := hashKey(rawToken)
+	_, err := s.db.Exec("DELETE FROM sessions WHERE token_hash = ?", tokenHash)
+	return err
+}
+
 func hashKey(key string) string {
 	h := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(h[:])
+}
+
+func (s *Store) startSessionPruner() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				result, err := s.db.Exec("DELETE FROM sessions WHERE expires_at <= ?", time.Now())
+				if err != nil {
+					slog.Warn("failed to prune expired sessions", slog.String("error", err.Error()))
+				} else if n, _ := result.RowsAffected(); n > 0 {
+					slog.Info("pruned expired sessions", slog.Int64("count", n))
+				}
+			case <-s.shutdownCh:
+				return
+			}
+		}
+	}()
 }
 
 func (s *Store) startLastUsedUpdater() {

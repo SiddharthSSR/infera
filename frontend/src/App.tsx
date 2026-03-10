@@ -10,7 +10,7 @@ import { Logs } from './pages/Logs';
 import { Models } from './pages/Models';
 import { ApiKeys } from './pages/ApiKeys';
 import { Login } from './pages/Login';
-import { getApiKey, clearApiKey } from './lib/api';
+import { getSession, destroySession } from './lib/api';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import type { ChatMessage } from './types';
 
@@ -104,7 +104,8 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
 // Main App Content
 function AppContent() {
   const location = useLocation();
-  const [authenticated, setAuthenticated] = useState(() => !!getApiKey());
+  // null = loading, true = authenticated, false = not authenticated
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
 
   // Chat state - persisted across page switches
   const [messages, setMessages] = useState<Message[]>([]);
@@ -112,12 +113,19 @@ function AppContent() {
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
 
+  // Check for existing session on startup
+  useEffect(() => {
+    getSession().then((session) => {
+      setAuthenticated(session !== null);
+    });
+  }, []);
+
   const handleLogout = useCallback(() => {
     setMessages([]);
     setSelectedModel('');
     setTemperature(0.7);
     setMaxTokens(2048);
-    clearApiKey();
+    destroySession();
     setAuthenticated(false);
     queryClient.clear();
   }, [setMessages, setSelectedModel, setTemperature, setMaxTokens]);
@@ -128,6 +136,23 @@ function AppContent() {
     window.addEventListener('auth-expired', handler);
     return () => window.removeEventListener('auth-expired', handler);
   }, [handleLogout]);
+
+  if (authenticated === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '100vh',
+        color: 'var(--text-secondary)',
+        fontFamily: 'var(--font-main)',
+        fontSize: '0.85rem',
+        letterSpacing: '0.05em',
+      }}>
+        LOADING...
+      </div>
+    );
+  }
 
   if (!authenticated) {
     return <Login onAuthenticated={() => setAuthenticated(true)} />;

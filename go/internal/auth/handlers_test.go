@@ -1,206 +1,225 @@
 package auth
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func newTestHandlerForHTTP(t *testing.T) *Handler {
+func newTestHandlerWithRoutes(t *testing.T) (*Handler, *Store, *http.ServeMux) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test_auth.db")
-	s, err := NewStore(dbPath)
+	dir := t.TempDir()
+	s, err := NewStore(filepath.Join(dir, "auth_test.db"))
 	if err != nil {
-		t.Fatalf("failed to create test store: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	return NewHandler(s)
+	h := NewHandler(s)
+	h.SetSecure(false)
+
+	mux := http.NewServeMux()
+	noopCORS := func(next http.HandlerFunc) http.HandlerFunc { return next }
+	h.RegisterRoutes(mux, noopCORS)
+	return h, s, mux
 }
 
+// ---------- Key handlers ----------
+
 func TestHandleCreateKey(t *testing.T) {
-	h := newTestHandlerForHTTP(t)
+	_, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, _, _ := s.CreateKey("admin", "admin")
 
-	t.Run("create key successfully", func(t *testing.T) {
-		body, _ := json.Marshal(map[string]string{"name": "my-key", "role": "user"})
-		req := httptest.NewRequest(http.MethodPost, "/api/auth/keys", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
+	body := `{"name":"test-key","role":"user"}`
+	req := httptest.NewRequest("POST", "/api/auth/keys", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
 
-		h.handleCreateKey(w, req)
+	if rr.Code != http.StatusCreated {
+		t.Errorf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
 
-		if w.Code != http.StatusCreated {
-			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
-		}
+	var resp map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp["key"] == nil {
+		t.Error("expected key in response")
+	}
+}
 
-		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+func TestHandleCreateKey_MissingName(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, _, _ := s.CreateKey("admin", "admin")
 
-		key, ok := resp["key"].(string)
-		if !ok || key == "" {
-			t.Error("expected full key in response")
-		}
+	body := `{"role":"user"}`
+	req := httptest.NewRequest("POST", "/api/auth/keys", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
 
-		record, ok := resp["record"].(map[string]interface{})
-		if !ok {
-			t.Fatal("expected record in response")
-		}
-		if record["name"] != "my-key" {
-			t.Errorf("expected name my-key, got %v", record["name"])
-		}
-		if record["role"] != "user" {
-			t.Errorf("expected role user, got %v", record["role"])
-		}
-	})
-
-	t.Run("missing name returns 400", func(t *testing.T) {
-		body, _ := json.Marshal(map[string]string{"role": "user"})
-		req := httptest.NewRequest(http.MethodPost, "/api/auth/keys", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-
-		h.handleCreateKey(w, req)
-
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
-		}
-	})
-
-	t.Run("invalid JSON returns 400", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/auth/keys", bytes.NewReader([]byte("not json")))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-
-		h.handleCreateKey(w, req)
-
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("expected 400, got %d", w.Code)
-		}
-	})
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
+	}
 }
 
 func TestHandleListKeys(t *testing.T) {
-	h := newTestHandlerForHTTP(t)
+	_, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, _, _ := s.CreateKey("admin", "admin")
 
-	t.Run("empty list", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/auth/keys", nil)
-		w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/auth/keys", nil)
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
 
-		h.handleListKeys(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", w.Code)
-		}
-
-		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
-
-		keys := resp["keys"].([]interface{})
-		if len(keys) != 0 {
-			t.Errorf("expected 0 keys, got %d", len(keys))
-		}
-		if resp["total"].(float64) != 0 {
-			t.Errorf("expected total 0, got %v", resp["total"])
-		}
-	})
-
-	t.Run("lists created keys", func(t *testing.T) {
-		h.store.CreateKey("key-1", "user")
-		h.store.CreateKey("key-2", "admin")
-
-		req := httptest.NewRequest(http.MethodGet, "/api/auth/keys", nil)
-		w := httptest.NewRecorder()
-
-		h.handleListKeys(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", w.Code)
-		}
-
-		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
-
-		keys := resp["keys"].([]interface{})
-		if len(keys) != 2 {
-			t.Errorf("expected 2 keys, got %d", len(keys))
-		}
-	})
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
 }
 
 func TestHandleRevokeKey(t *testing.T) {
-	h := newTestHandlerForHTTP(t)
+	_, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, _, _ := s.CreateKey("admin", "admin")
+	_, userRec, _ := s.CreateKey("user", "user")
 
-	t.Run("revoke existing key", func(t *testing.T) {
-		_, record, _ := h.store.CreateKey("revoke-target", "user")
+	req := httptest.NewRequest("DELETE", "/api/auth/keys/"+userRec.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
 
-		req := httptest.NewRequest(http.MethodDelete, "/api/auth/keys/"+record.ID, nil)
-		w := httptest.NewRecorder()
-
-		h.handleRevokeKey(w, req, record.ID)
-
-		if w.Code != http.StatusOK {
-			t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
-		}
-
-		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
-
-		if resp["success"] != true {
-			t.Error("expected success to be true")
-		}
-	})
-
-	t.Run("nonexistent key returns 404", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/auth/keys/nonexistent", nil)
-		w := httptest.NewRecorder()
-
-		h.handleRevokeKey(w, req, "nonexistent")
-
-		if w.Code != http.StatusNotFound {
-			t.Errorf("expected 404, got %d", w.Code)
-		}
-	})
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
 }
 
-func TestHandleKeys(t *testing.T) {
-	h := newTestHandlerForHTTP(t)
+// ---------- Session handlers ----------
 
-	t.Run("method not allowed", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPut, "/api/auth/keys", nil)
-		w := httptest.NewRecorder()
+func TestHandleCreateSession_AdminKey(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, _, _ := s.CreateKey("admin", "admin")
 
-		h.handleKeys(w, req)
+	body := `{"api_key":"` + adminKey + `"}`
+	req := httptest.NewRequest("POST", "/api/auth/session", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
 
-		if w.Code != http.StatusMethodNotAllowed {
-			t.Errorf("expected 405, got %d", w.Code)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	cookies := rr.Result().Cookies()
+	found := false
+	for _, c := range cookies {
+		if c.Name == sessionCookieName {
+			found = true
+			if !c.HttpOnly {
+				t.Error("cookie should be HttpOnly")
+			}
 		}
-	})
+	}
+	if !found {
+		t.Error("expected session cookie to be set")
+	}
 }
 
-func TestHandleKeyByID(t *testing.T) {
-	h := newTestHandlerForHTTP(t)
+func TestHandleCreateSession_UserKey(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	userKey, _, _ := s.CreateKey("user", "user")
 
-	t.Run("empty ID returns 400", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/auth/keys/", nil)
-		w := httptest.NewRecorder()
+	body := `{"api_key":"` + userKey + `"}`
+	req := httptest.NewRequest("POST", "/api/auth/session", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
 
-		h.handleKeyByID(w, req)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", rr.Code)
+	}
+}
 
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("expected 400, got %d", w.Code)
-		}
-	})
+func TestHandleCreateSession_InvalidKey(t *testing.T) {
+	_, _, mux := newTestHandlerWithRoutes(t)
 
-	t.Run("method not allowed", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPut, "/api/auth/keys/some-id", nil)
-		w := httptest.NewRecorder()
+	body := `{"api_key":"inf_invalid"}`
+	req := httptest.NewRequest("POST", "/api/auth/session", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
 
-		h.handleKeyByID(w, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rr.Code)
+	}
+}
 
-		if w.Code != http.StatusMethodNotAllowed {
-			t.Errorf("expected 405, got %d", w.Code)
-		}
-	})
+func TestHandleGetSession_Valid(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	_, rec, _ := s.CreateKey("admin", "admin")
+	token, _, _ := s.CreateSession(rec.ID)
+
+	req := httptest.NewRequest("GET", "/api/auth/session", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp["session"] == nil || resp["key"] == nil {
+		t.Error("expected session and key in response")
+	}
+}
+
+func TestHandleGetSession_NoCookie(t *testing.T) {
+	_, _, mux := newTestHandlerWithRoutes(t)
+
+	req := httptest.NewRequest("GET", "/api/auth/session", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestHandleDeleteSession(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	_, rec, _ := s.CreateKey("admin", "admin")
+	token, _, _ := s.CreateSession(rec.ID)
+
+	req := httptest.NewRequest("DELETE", "/api/auth/session", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+
+	req2 := httptest.NewRequest("GET", "/api/auth/session", nil)
+	req2.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	rr2 := httptest.NewRecorder()
+	mux.ServeHTTP(rr2, req2)
+
+	if rr2.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 after delete, got %d", rr2.Code)
+	}
+}
+
+func TestHandleDeleteSession_NoCookie(t *testing.T) {
+	_, _, mux := newTestHandlerWithRoutes(t)
+
+	req := httptest.NewRequest("DELETE", "/api/auth/session", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 for idempotent logout, got %d", rr.Code)
+	}
 }

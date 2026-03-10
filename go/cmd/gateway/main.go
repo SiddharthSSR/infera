@@ -147,7 +147,9 @@ func main() {
 		}
 	}
 
-	gw.SetAuthHandler(auth.NewHandler(authStore))
+	authHandler := auth.NewHandler(authStore)
+	authHandler.SetSecure(os.Getenv("INFERA_DEV_MODE") != "1")
+	gw.SetAuthHandler(authHandler)
 
 	// Handle shutdown
 	ctx, cancel := context.WithCancel(context.Background())

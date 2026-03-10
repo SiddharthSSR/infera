@@ -5,35 +5,51 @@ import type {
 } from '../types';
 
 const API_BASE = '';
-const API_KEY_STORAGE = 'infera_api_key';
-let inMemoryApiKey: string | null = null;
 
-// Auth token management
-export function getApiKey(): string | null {
-  if (inMemoryApiKey) return inMemoryApiKey;
-  try {
-    inMemoryApiKey = sessionStorage.getItem(API_KEY_STORAGE);
-  } catch {
-    inMemoryApiKey = null;
-  }
-  return inMemoryApiKey;
+// Session info returned by session endpoints
+export interface SessionInfo {
+  session: { id: string; expires_at: string };
+  key: { id: string; key_prefix: string; name: string; role: string };
 }
 
-export function setApiKey(key: string) {
-  inMemoryApiKey = key;
+// Create a server-side session (login). Sets HttpOnly cookie.
+export async function createSession(apiKey: string): Promise<SessionInfo> {
+  const response = await fetch(`${API_BASE}/api/auth/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+  if (!response.ok) {
+    if (response.status === 401) throw new Error('Invalid API key');
+    if (response.status === 403) throw new Error('Admin access required');
+    throw new Error(await readResponseError(response, 'Login failed'));
+  }
+  return response.json();
+}
+
+// Check if a valid session exists (used on startup).
+export async function getSession(): Promise<SessionInfo | null> {
   try {
-    sessionStorage.setItem(API_KEY_STORAGE, key);
+    const response = await fetch(`${API_BASE}/api/auth/session`, {
+      credentials: 'include',
+    });
+    if (!response.ok) return null;
+    return response.json();
   } catch {
-    // Ignore storage errors and continue with in-memory key.
+    return null;
   }
 }
 
-export function clearApiKey() {
-  inMemoryApiKey = null;
+// Destroy the current session (logout). Always succeeds.
+export async function destroySession(): Promise<void> {
   try {
-    sessionStorage.removeItem(API_KEY_STORAGE);
+    await fetch(`${API_BASE}/api/auth/session`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
   } catch {
-    // Ignore storage errors.
+    // Ignore errors — cookie will expire anyway.
   }
 }
 
@@ -69,16 +85,12 @@ async function readResponseError(response: Response, fallbackMessage: string): P
 }
 
 async function authFetch(url: string, init?: RequestInit): Promise<Response> {
-  const sentKey = getApiKey();
-  const headers = new Headers(init?.headers);
-  if (sentKey) {
-    headers.set('Authorization', `Bearer ${sentKey}`);
-  }
-  const response = await fetch(url, { ...init, headers });
+  const response = await fetch(url, {
+    ...init,
+    credentials: 'include',
+  });
 
-  // If 401, clear only if this request used the current key.
-  if (response.status === 401 && sentKey && getApiKey() === sentKey) {
-    clearApiKey();
+  if (response.status === 401) {
     window.dispatchEvent(new Event('auth-expired'));
   }
 
@@ -338,20 +350,3 @@ export async function revokeApiKey(id: string): Promise<void> {
   }
 }
 
-// Validate API key by hitting a protected endpoint
-export async function validateApiKey(key: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${API_BASE}/api/stats`, {
-      headers: { 'Authorization': `Bearer ${key}` },
-    });
-
-    if (response.ok) return true;
-    if (response.status === 401) return false;
-    throw new Error(`Validation failed: ${response.status} ${response.statusText}`);
-  } catch (error) {
-    if (error instanceof Error) {
-      throw new Error(`Failed to validate API key: ${error.message}`);
-    }
-    throw new Error('Failed to validate API key: unknown network error');
-  }
-}
