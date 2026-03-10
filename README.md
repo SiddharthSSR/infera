@@ -118,6 +118,8 @@ INFERA_GATEWAY_ADDRESS=https://inferai.co.in
 INFERA_ALLOWED_ORIGINS=https://inferai.co.in
 INFERA_WORKER_SHARED_TOKEN=<long-random-token>
 INFERA_WORKER_IMAGE=<registry>/infera-worker:<pinned-tag>
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=<strong-password>
 HF_TOKEN=... # optional
 ```
 
@@ -140,13 +142,30 @@ docker compose -f docker-compose.prod.yml ps
 ```bash
 curl -I https://inferai.co.in
 curl -I https://inferai.co.in/health
+curl -I https://dashboard.inferai.co.in
 curl -i https://inferai.co.in/api/stats
 ```
 
 Expected:
 
 - `/` and `/health` return `200`
+- `dashboard.inferai.co.in` returns `200` and serves Grafana login
 - `/api/stats` returns `401` without API key
+
+### 6. Monitoring Bootstrap
+
+Production compose now includes Prometheus and Grafana:
+
+- Prometheus config: `deploy/observability/prometheus/prometheus.yml`
+- Alert rules: `deploy/observability/prometheus/rules/infera-alerts.yml`
+- Grafana provisioning: `deploy/observability/grafana/provisioning/`
+- Starter dashboard: `deploy/observability/grafana/dashboards/infera-overview.json`
+
+For worker scraping, edit:
+
+- `deploy/observability/prometheus/worker_targets.json`
+
+Use `worker_targets.example.json` as template.
 
 ### 5. Worker Registration Checklist
 
