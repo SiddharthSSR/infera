@@ -28,14 +28,27 @@ type ManagerConfig struct {
 	DefaultProvider ProviderType
 	WorkerImage     string // Docker image for workers
 	GatewayAddress  string // Gateway address for workers to connect
+	CostDBPath      string // Path to SQLite DB for persistent cost tracking (empty = in-memory)
 }
 
 // NewManager creates a new instance manager.
 func NewManager(config ManagerConfig) *Manager {
+	var costs *CostTracker
+	if config.CostDBPath != "" {
+		var err error
+		costs, err = NewPersistentCostTracker(config.CostDBPath)
+		if err != nil {
+			// Fall back to in-memory if DB fails
+			costs = NewCostTracker()
+		}
+	} else {
+		costs = NewCostTracker()
+	}
+
 	return &Manager{
 		providers:       make(map[ProviderType]Provider),
 		instances:       make(map[string]*Instance),
-		costs:           NewCostTracker(),
+		costs:           costs,
 		defaultProvider: config.DefaultProvider,
 		workerImage:     config.WorkerImage,
 		gatewayAddress:  config.GatewayAddress,

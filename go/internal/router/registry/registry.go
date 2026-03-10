@@ -3,7 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -243,7 +243,7 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 
 	r.mu.Unlock()
 	for _, msg := range logMessages {
-		log.Print(msg)
+		slog.Info(msg)
 	}
 }
 

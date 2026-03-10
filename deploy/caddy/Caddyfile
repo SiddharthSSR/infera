@@ -1,3 +1,7 @@
+www.inferai.co.in {
+  redir https://inferai.co.in{uri} permanent
+}
+
 inferai.co.in {
   encode gzip
   header {
@@ -13,7 +17,9 @@ inferai.co.in {
   }
 
   handle /v1/* {
-    reverse_proxy gateway:8080
+    reverse_proxy gateway:8080 {
+      flush_interval -1
+    }
   }
 
   handle /health {

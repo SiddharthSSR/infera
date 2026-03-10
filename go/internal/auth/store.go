@@ -12,8 +12,30 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/infera/infera/go/internal/migrate"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// authMigrations defines the versioned schema for the auth database.
+var authMigrations = []migrate.Migration{
+	{
+		Version:     1,
+		Description: "create api_keys table",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS api_keys (
+			id         TEXT PRIMARY KEY,
+			key_hash   TEXT NOT NULL UNIQUE,
+			key_prefix TEXT NOT NULL,
+			name       TEXT NOT NULL,
+			role       TEXT NOT NULL DEFAULT 'user',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			last_used  DATETIME,
+			status     TEXT NOT NULL DEFAULT 'active'
+		);
+		CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+		CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status);`,
+	},
+}
 
 // KeyRecord represents a stored API key.
 type KeyRecord struct {
@@ -73,23 +95,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	query := `
-	CREATE TABLE IF NOT EXISTS api_keys (
-		id         TEXT PRIMARY KEY,
-		key_hash   TEXT NOT NULL UNIQUE,
-		key_prefix TEXT NOT NULL,
-		name       TEXT NOT NULL,
-		role       TEXT NOT NULL DEFAULT 'user',
-		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		last_used  DATETIME,
-		status     TEXT NOT NULL DEFAULT 'active'
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
-	CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status);
-	`
-	_, err := s.db.Exec(query)
-	return err
+	return migrate.Run(s.db, authMigrations)
 }
 
 // CreateKey generates a new API key and stores its hash.
