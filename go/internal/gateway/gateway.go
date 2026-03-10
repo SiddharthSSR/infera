@@ -47,6 +47,9 @@ type Gateway struct {
 	// Rate limiting
 	rateLimiter *RateLimiter
 
+	// Metrics
+	metrics *GatewayMetrics
+
 	// Backpressure: track in-flight inference requests
 	inFlightRequests   int64
 	maxInFlightDefault int64
@@ -92,6 +95,7 @@ func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gatew
 		config:             config,
 		instanceManager:    instanceMgr,
 		rateLimiter:        NewRateLimiter(DefaultRateLimiterConfig()),
+		metrics:            NewGatewayMetrics(),
 		maxInFlightDefault: 100,
 		log:                NewLogger(),
 		workerClients:      make(map[string]*WorkerClient),
@@ -144,6 +148,9 @@ func (g *Gateway) Start() error {
 	// OpenAI-compatible endpoints (require auth + rate limit)
 	mux.HandleFunc("/v1/chat/completions", withAuth(withRateLimit(g.handleChatCompletions)))
 	mux.HandleFunc("/v1/models", withAuth(g.handleListModels))
+	if g.metrics != nil {
+		mux.Handle("/metrics", g.metrics.Handler())
+	}
 
 	// Public endpoints (no auth — workers need these, plus health checks)
 	mux.HandleFunc("/api/workers/register", g.handleCORS(g.requireWorkerToken(g.handleRegisterWorker)))
@@ -187,6 +194,9 @@ func (g *Gateway) Start() error {
 		requestIDMiddleware,
 		bodySizeLimitMiddleware(maxRequestBodyBytes),
 	)
+	if g.metrics != nil {
+		handler = g.metrics.HTTPMiddleware(handler)
+	}
 
 	g.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", g.config.HTTPPort),
@@ -459,6 +469,10 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 					slog.String("error", err.Error()),
 				)
 			}
+		}
+
+		if g.metrics != nil {
+			g.metrics.RecordInference(req.Stream, auditStatus, auditTokenCount, time.Since(requestStart))
 		}
 	}()
 
