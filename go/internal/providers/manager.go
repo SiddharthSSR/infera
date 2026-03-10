@@ -4,6 +4,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -281,8 +282,10 @@ func (m *Manager) ListOfferings(ctx context.Context) ([]*GPUOffering, error) {
 	for _, provider := range providers {
 		offerings, err := provider.ListOfferings(ctx)
 		if err != nil {
-			// Log the error for debugging
-			fmt.Printf("Warning: Failed to get offerings from %s: %v\n", provider.Name(), err)
+			slog.Warn("providers.list_offerings_failed",
+				slog.String("provider", string(provider.Name())),
+				slog.String("error", err.Error()),
+			)
 			continue // Skip failed providers
 		}
 		allOfferings = append(allOfferings, offerings...)

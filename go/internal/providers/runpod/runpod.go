@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -203,7 +204,10 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 	}
 	logInput["env"] = redactEnvForLog(env)
 	inputJSON, _ := json.Marshal(logInput)
-	fmt.Printf("[RunPod] Provisioning pod with input: %s\n", string(inputJSON))
+	slog.Info("runpod.provision.request",
+		slog.String("provider", string(providers.ProviderRunPod)),
+		slog.String("input", string(inputJSON)),
+	)
 
 	variables := map[string]interface{}{
 		"input": input,
