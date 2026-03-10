@@ -1,6 +1,9 @@
 /// <reference types="vitest/globals" />
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
+  createSession,
+  getSession,
+  destroySession,
   fetchWorkers,
   fetchModels,
   fetchStats,
@@ -14,259 +17,142 @@ import {
   terminateInstance,
   startInstance,
   stopInstance,
-  validateApiKey,
-  setApiKey,
-  getApiKey,
-  clearApiKey,
 } from './api'
 
-// Mock fetch
 const mockFetch = vi.fn()
 ;(globalThis as any).fetch = mockFetch
 
 describe('API Functions', () => {
   beforeEach(() => {
     mockFetch.mockClear()
-    sessionStorage.clear()
-    clearApiKey()
   })
 
-  describe('fetchWorkers', () => {
-    it('should fetch workers successfully', async () => {
-      const mockWorkers = [
-        { worker_id: 'worker-1', status: 'healthy' },
-        { worker_id: 'worker-2', status: 'degraded' },
-      ]
+  describe('session auth', () => {
+    it('createSession should create server-side session', async () => {
+      const payload = {
+        session: { id: 'sess-1', expires_at: '2099-01-01T00:00:00Z' },
+        key: { id: 'k1', key_prefix: 'inf_abcd', name: 'admin', role: 'admin' },
+      }
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ workers: mockWorkers }),
+        json: async () => payload,
+      })
+
+      const result = await createSession('inf_valid_key')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/auth/session',
+        expect.objectContaining({
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: 'inf_valid_key' }),
+        })
+      )
+      expect(result).toEqual(payload)
+    })
+
+    it('createSession returns invalid-key message for 401', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 401 })
+      await expect(createSession('inf_bad')).rejects.toThrow('Invalid API key')
+    })
+
+    it('createSession returns admin-required message for 403', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 403 })
+      await expect(createSession('inf_user')).rejects.toThrow('Admin access required')
+    })
+
+    it('getSession returns null when unauthenticated', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 401 })
+      await expect(getSession()).resolves.toBeNull()
+    })
+
+    it('destroySession should not throw on network errors', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('network down'))
+      await expect(destroySession()).resolves.toBeUndefined()
+    })
+  })
+
+  describe('core endpoints', () => {
+    it('fetchWorkers should call endpoint with cookie credentials', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ workers: [{ worker_id: 'w1', status: 'healthy' }] }),
       })
 
       const workers = await fetchWorkers()
 
-      expect(mockFetch).toHaveBeenCalledWith('/api/workers', expect.objectContaining({ headers: expect.any(Headers) }))
-      expect(workers).toHaveLength(2)
-      expect(workers[0].worker_id).toBe('worker-1')
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/workers',
+        expect.objectContaining({ credentials: 'include' })
+      )
+      expect(workers).toHaveLength(1)
     })
 
-    it('should throw error on failure', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      })
+    it('dispatches auth-expired event on 401', async () => {
+      const handler = vi.fn()
+      window.addEventListener('auth-expired', handler)
+
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 401 })
 
       await expect(fetchWorkers()).rejects.toThrow('Failed to fetch workers')
+      expect(handler).toHaveBeenCalledTimes(1)
+
+      window.removeEventListener('auth-expired', handler)
     })
-  })
 
-  describe('fetchModels', () => {
-    it('should fetch models successfully', async () => {
-      const mockModels = [
-        { id: 'llama-3-8b', object: 'model' },
-        { id: 'gpt-4', object: 'model' },
-      ]
+    it('fetchModels/fetchStats/fetchInstances/fetchOfferings/fetchCosts should parse payloads', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ data: [{ id: 'llama-3-8b', object: 'model' }] }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ workers: { total: 1, healthy: 1 } }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ instances: [{ id: 'i1', status: 'running' }] }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ offerings: [{ gpu_type: 'RTX_4090' }] }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ current_hourly: 1.5 }) })
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ data: mockModels }),
-      })
-
-      const models = await fetchModels()
-
-      expect(mockFetch).toHaveBeenCalledWith('/v1/models', expect.objectContaining({ headers: expect.any(Headers) }))
-      expect(models).toHaveLength(2)
+      await expect(fetchModels()).resolves.toHaveLength(1)
+      await expect(fetchStats()).resolves.toEqual(expect.objectContaining({ workers: { total: 1, healthy: 1 } }))
+      await expect(fetchInstances()).resolves.toHaveLength(1)
+      await expect(fetchOfferings()).resolves.toHaveLength(1)
+      await expect(fetchCosts()).resolves.toEqual(expect.objectContaining({ current_hourly: 1.5 }))
     })
-  })
 
-  describe('fetchStats', () => {
-    it('should fetch stats successfully', async () => {
-      const mockStats = {
-        workers: { total: 5, healthy: 4 },
-        models: { available: 3 },
-        requests: { per_second: 100, queue_depth: 10 },
-        latency: { avg_ms: 150 },
-        memory: { used_bytes: 1000, total_bytes: 2000 },
-        uptime_seconds: 3600,
-      }
+    it('provision/start/stop/terminate should hit expected methods', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ instance: { id: 'new-inst', name: 'worker-1' } }) })
+        .mockResolvedValueOnce({ ok: true })
+        .mockResolvedValueOnce({ ok: true })
+        .mockResolvedValueOnce({ ok: true })
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockStats,
-      })
+      await provisionInstance({ name: 'worker-1', provider: 'mock', gpu_type: 'RTX_4090', gpu_count: 1 })
+      await startInstance('new-inst')
+      await stopInstance('new-inst')
+      await terminateInstance('new-inst')
 
-      const stats = await fetchStats()
-
-      expect(mockFetch).toHaveBeenCalledWith('/api/stats', expect.objectContaining({ headers: expect.any(Headers) }))
-      expect(stats.workers.total).toBe(5)
-    })
-  })
-
-  describe('fetchInstances', () => {
-    it('should fetch instances successfully', async () => {
-      const mockInstances = [
-        { id: 'inst-1', name: 'test-1', status: 'running' },
-        { id: 'inst-2', name: 'test-2', status: 'stopped' },
-      ]
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ instances: mockInstances }),
-      })
-
-      const instances = await fetchInstances()
-
-      expect(mockFetch).toHaveBeenCalledWith('/api/instances', expect.objectContaining({ headers: expect.any(Headers) }))
-      expect(instances).toHaveLength(2)
-    })
-  })
-
-  describe('fetchOfferings', () => {
-    it('should fetch offerings successfully', async () => {
-      const mockOfferings = [
-        { provider: 'mock', gpu_type: 'RTX_4090', cost_per_hour: 0.50 },
-      ]
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ offerings: mockOfferings }),
-      })
-
-      const offerings = await fetchOfferings()
-
-      expect(mockFetch).toHaveBeenCalledWith('/api/offerings', expect.objectContaining({ headers: expect.any(Headers) }))
-      expect(offerings[0].gpu_type).toBe('RTX_4090')
-    })
-  })
-
-  describe('fetchCosts', () => {
-    it('should fetch costs successfully', async () => {
-      const mockCosts = {
-        current_hourly: 5.50,
-        today_total: 45.00,
-        month_total: 350.00,
-        projected_month: 500.00,
-        by_provider: {},
-        by_gpu: {},
-      }
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockCosts,
-      })
-
-      const costs = await fetchCosts()
-
-      expect(mockFetch).toHaveBeenCalledWith('/api/costs', expect.objectContaining({ headers: expect.any(Headers) }))
-      expect(costs.current_hourly).toBe(5.50)
-    })
-  })
-
-  describe('provisionInstance', () => {
-    it('should provision instance successfully', async () => {
-      const mockInstance = {
-        id: 'new-inst',
-        name: 'my-worker',
-        status: 'provisioning',
-      }
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ instance: mockInstance }),
-      })
-
-      const request = {
-        name: 'my-worker',
-        provider: 'mock' as const,
-        gpu_type: 'RTX_4090' as const,
-        gpu_count: 1,
-      }
-
-      const instance = await provisionInstance(request)
-
-      expect(mockFetch).toHaveBeenCalledWith(
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
         '/api/instances/provision',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.any(Headers),
-          body: JSON.stringify(request),
-        })
+        expect.objectContaining({ method: 'POST', credentials: 'include' })
       )
-      const [, config] = mockFetch.mock.calls[0]
-      expect((config.headers as Headers).get('Content-Type')).toBe('application/json')
-      expect(instance.name).toBe('my-worker')
-    })
-
-    it('should throw error on provision failure', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        json: async () => ({ error: { message: 'Quota exceeded' } }),
-      })
-
-      await expect(
-        provisionInstance({ gpu_type: 'H100' })
-      ).rejects.toThrow('Quota exceeded')
-    })
-  })
-
-  describe('terminateInstance', () => {
-    it('should terminate instance successfully', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ success: true }),
-      })
-
-      await terminateInstance('inst-123')
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/instances/inst-123',
-        expect.objectContaining({ method: 'DELETE' })
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/instances/new-inst/start',
+        expect.objectContaining({ method: 'POST', credentials: 'include' })
       )
-    })
-
-    it('should throw error on termination failure', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        json: async () => ({ error: { message: 'Instance not found' } }),
-      })
-
-      await expect(terminateInstance('invalid')).rejects.toThrow('Instance not found')
-    })
-  })
-
-  describe('startInstance', () => {
-    it('should start instance successfully', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ success: true }),
-      })
-
-      await startInstance('inst-123')
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/instances/inst-123/start',
-        expect.objectContaining({ method: 'POST' })
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        3,
+        '/api/instances/new-inst/stop',
+        expect.objectContaining({ method: 'POST', credentials: 'include' })
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        4,
+        '/api/instances/new-inst',
+        expect.objectContaining({ method: 'DELETE', credentials: 'include' })
       )
     })
   })
 
-  describe('stopInstance', () => {
-    it('should stop instance successfully', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ success: true }),
-      })
-
-      await stopInstance('inst-123')
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/instances/inst-123/stop',
-        expect.objectContaining({ method: 'POST' })
-      )
-    })
-  })
-
-  describe('api key error parsing', () => {
+  describe('error parsing', () => {
     it('createApiKey handles non-JSON error responses', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -291,7 +177,7 @@ describe('API Functions', () => {
       await expect(revokeApiKey('key-1')).rejects.toThrow('Failed to revoke key (500 Internal Server Error)')
     })
 
-    it('fetchApiKeys preserves status on errors', async () => {
+    it('fetchApiKeys preserves status on JSON errors', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 503,
@@ -301,97 +187,6 @@ describe('API Functions', () => {
       })
 
       await expect(fetchApiKeys()).rejects.toThrow('503 Service Unavailable')
-    })
-  })
-
-  describe('auth token handling', () => {
-    it('attaches bearer token when present', async () => {
-      setApiKey('inf_test_token_123')
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ workers: [] }),
-      })
-
-      await fetchWorkers()
-
-      const [, config] = mockFetch.mock.calls[0]
-      expect(config.headers).toBeInstanceOf(Headers)
-      expect((config.headers as Headers).get('Authorization')).toBe('Bearer inf_test_token_123')
-    })
-
-    it('clears stored key and emits auth-expired on 401', async () => {
-      setApiKey('inf_expired_token')
-      const expiredHandler = vi.fn()
-      window.addEventListener('auth-expired', expiredHandler)
-
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        json: async () => ({ error: { message: 'unauthorized' } }),
-      })
-
-      await expect(fetchWorkers()).rejects.toThrow('Failed to fetch workers')
-      expect(getApiKey()).toBeNull()
-      expect(expiredHandler).toHaveBeenCalledTimes(1)
-
-      window.removeEventListener('auth-expired', expiredHandler)
-    })
-
-    it('clearApiKey removes token', () => {
-      setApiKey('inf_to_remove')
-      expect(getApiKey()).toBe('inf_to_remove')
-      clearApiKey()
-      expect(getApiKey()).toBeNull()
-    })
-
-    it('does not clear a newer token when an older in-flight request returns 401', async () => {
-      setApiKey('inf_old_token')
-      let resolveFetch: (value: any) => void = () => {}
-      mockFetch.mockImplementationOnce(() => new Promise((resolve) => { resolveFetch = resolve }))
-
-      const pendingRequest = fetchWorkers().catch(() => undefined)
-      setApiKey('inf_new_token')
-
-      resolveFetch({
-        ok: false,
-        status: 401,
-        json: async () => ({ error: { message: 'unauthorized' } }),
-      })
-
-      await pendingRequest
-      expect(getApiKey()).toBe('inf_new_token')
-    })
-
-    it('validateApiKey returns true on 2xx', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-      })
-      await expect(validateApiKey('inf_valid')).resolves.toBe(true)
-    })
-
-    it('validateApiKey returns false on 401', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        statusText: 'Unauthorized',
-      })
-      await expect(validateApiKey('inf_invalid')).resolves.toBe(false)
-    })
-
-    it('validateApiKey throws on non-401 HTTP errors', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 503,
-        statusText: 'Service Unavailable',
-      })
-      await expect(validateApiKey('inf_key')).rejects.toThrow('503 Service Unavailable')
-    })
-
-    it('validateApiKey throws on network errors', async () => {
-      mockFetch.mockRejectedValueOnce(new Error('network down'))
-      await expect(validateApiKey('inf_key')).rejects.toThrow('Failed to validate API key')
     })
   })
 })

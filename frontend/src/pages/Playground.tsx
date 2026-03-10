@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { useModels } from '../hooks/useApi';
 import { useChat } from '../App';
-import { clearApiKey, getApiKey } from '../lib/api';
+import { streamChatCompletion } from '../lib/api';
 
 interface HistoryEntry {
   id: string;
@@ -90,66 +90,25 @@ export function Playground() {
       }
       messages.push({ role: 'user' as const, content: prompt });
 
-      // Stream response
-      const apiKey = getApiKey();
-      const res = await fetch('/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
-        },
-        body: JSON.stringify({
-          model: selectedModel,
-          messages,
-          temperature,
-          max_tokens: maxTokens,
-          top_p: topP,
-          frequency_penalty: freqPenalty,
-          stream: true,
-        }),
-      });
+      const request = {
+        model: selectedModel,
+        messages,
+        temperature,
+        max_tokens: maxTokens,
+        top_p: topP,
+        frequency_penalty: freqPenalty,
+      };
 
-      if (res.status === 401) {
-        clearApiKey();
-        window.dispatchEvent(new Event('auth-expired'));
-        throw new Error('Authentication expired. Please sign in again.');
-      }
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
       let fullResponse = '';
-      let usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } = {};
 
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
-
-          for (const line of lines) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            try {
-              const parsed = JSON.parse(data);
-              const delta = parsed.choices?.[0]?.delta?.content || '';
-              fullResponse += delta;
-              setResponse(fullResponse);
-              // Capture usage data if present (some providers send it in the last chunk)
-              if (parsed.usage) {
-                usage = parsed.usage;
-              }
-            } catch { /* skip invalid JSON */ }
-          }
-        }
+      for await (const chunk of streamChatCompletion(request)) {
+        fullResponse += chunk;
+        setResponse(fullResponse);
       }
 
       const latency = Date.now() - startTime;
-      const completionTokens = usage.completion_tokens || Math.round(fullResponse.split(/\s+/).length * 1.3);
-      const promptTokens = usage.prompt_tokens || Math.round(prompt.split(/\s+/).length * 1.3);
+      const completionTokens = Math.round(fullResponse.split(/\s+/).length * 1.3);
+      const promptTokens = Math.round(prompt.split(/\s+/).length * 1.3);
       const tokensPerSec = latency > 0 ? (completionTokens / (latency / 1000)) : 0;
 
       setTokenUsage({

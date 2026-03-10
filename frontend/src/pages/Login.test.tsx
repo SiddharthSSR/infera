@@ -7,15 +7,13 @@ import { Login } from './Login'
 
 // Mock the api module
 vi.mock('../lib/api', () => ({
-  validateApiKey: vi.fn(),
-  setApiKey: vi.fn(),
+  createSession: vi.fn(),
 }))
 
-import { validateApiKey, setApiKey } from '../lib/api'
+import { createSession } from '../lib/api'
 
 const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>
-const mockValidateApiKey = validateApiKey as ReturnType<typeof vi.fn>
-const mockSetApiKey = setApiKey as ReturnType<typeof vi.fn>
+const mockCreateSession = createSession as ReturnType<typeof vi.fn>
 
 describe('Login', () => {
   const mockOnAuthenticated = vi.fn()
@@ -85,11 +83,11 @@ describe('Login', () => {
     })
 
     expect(screen.getByText('Please enter your API key')).toBeInTheDocument()
-    expect(mockValidateApiKey).not.toHaveBeenCalled()
+    expect(mockCreateSession).not.toHaveBeenCalled()
   })
 
   it('shows error for invalid key', async () => {
-    mockValidateApiKey.mockResolvedValueOnce(false)
+    mockCreateSession.mockRejectedValueOnce(new Error('Invalid API key'))
 
     render(<Login onAuthenticated={mockOnAuthenticated} />)
 
@@ -111,7 +109,10 @@ describe('Login', () => {
 
   it('authenticates with valid key', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
-    mockValidateApiKey.mockResolvedValueOnce(true)
+    mockCreateSession.mockResolvedValueOnce({
+      session: { id: 'sess-1', expires_at: '2099-01-01T00:00:00Z' },
+      key: { id: 'k1', key_prefix: 'inf_abcd', name: 'admin', role: 'admin' },
+    })
 
     render(<Login onAuthenticated={mockOnAuthenticated} />)
 
@@ -123,7 +124,7 @@ describe('Login', () => {
     })
 
     await waitFor(() => {
-      expect(mockSetApiKey).toHaveBeenCalledWith('inf_validkey123')
+      expect(mockCreateSession).toHaveBeenCalledWith('inf_validkey123')
     })
 
     // onAuthenticated fires after 500ms timeout
@@ -134,8 +135,8 @@ describe('Login', () => {
     expect(mockOnAuthenticated).toHaveBeenCalled()
   })
 
-  it('shows connection error when validateApiKey throws', async () => {
-    mockValidateApiKey.mockRejectedValueOnce(new Error('Network error'))
+  it('shows connection error when createSession throws unknown error', async () => {
+    mockCreateSession.mockRejectedValueOnce(new Error('Network error'))
 
     render(<Login onAuthenticated={mockOnAuthenticated} />)
 
