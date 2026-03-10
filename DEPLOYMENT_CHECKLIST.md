@@ -20,6 +20,8 @@ git pull origin main
   - [ ] `INFERA_GATEWAY_ADDRESS`
   - [ ] `INFERA_WORKER_SHARED_TOKEN`
   - [ ] `INFERA_WORKER_IMAGE`
+  - [ ] `GRAFANA_ADMIN_USER`
+  - [ ] `GRAFANA_ADMIN_PASSWORD`
 - [ ] `data` directory exists for persistent DB files:
 
 ```bash
@@ -84,9 +86,28 @@ docker compose -f docker-compose.prod.yml logs frontend --tail=200
 docker compose -f docker-compose.prod.yml logs caddy --tail=200
 ```
 
+- [ ] Grafana endpoint responds:
+
+```bash
+curl -I https://dashboard.inferai.co.in
+```
+
+- [ ] Prometheus target discovery is healthy:
+
+```bash
+docker compose -f docker-compose.prod.yml logs prometheus --tail=200
+```
+
+- [ ] Grafana logs show datasource/dashboard provisioning success:
+
+```bash
+docker compose -f docker-compose.prod.yml logs grafana --tail=200
+```
+
 ## 4. Functional Smoke Test
 
 - [ ] Open `https://inferai.co.in` in browser.
+- [ ] Open `https://dashboard.inferai.co.in` and log in.
 - [ ] Login/API-key flow works.
 - [ ] Dashboard loads.
 - [ ] Instances page loads.
