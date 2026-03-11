@@ -10,6 +10,7 @@ groups:
         annotations:
           summary: Infera gateway is down
           description: Gateway metrics endpoint has been unreachable for 2 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewaydown
 
       - alert: InferaGatewayHigh5xxRate
         expr: |
@@ -24,6 +25,7 @@ groups:
         annotations:
           summary: High 5xx ratio on gateway
           description: More than 5% of gateway requests are returning 5xx for 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewayhigh5xxrate
 
       - alert: InferaGatewayP95LatencyHigh
         expr: |
@@ -38,6 +40,7 @@ groups:
         annotations:
           summary: Gateway p95 latency is high
           description: Gateway p95 HTTP latency is above 2 seconds for 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewayp95latencyhigh
 
   - name: infera-worker-alerts
     rules:
@@ -50,3 +53,4 @@ groups:
         annotations:
           summary: Worker heartbeats rejected by auth
           description: At least one worker heartbeat was rejected by gateway auth in the last 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferaworkerheartbeatauthrejected

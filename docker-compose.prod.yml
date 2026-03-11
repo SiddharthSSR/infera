@@ -94,12 +94,41 @@ services:
       - prometheus_data:/prometheus
     depends_on:
       - gateway
+      - alertmanager
     restart: unless-stopped
     deploy:
       resources:
         limits:
           memory: 512M
           cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--config.expand-env"
+    environment:
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-alerts@your-domain.com}
+      - ALERT_SMTP_FROM=${ALERT_SMTP_FROM:-alerts@your-domain.com}
+      - ALERT_SMTP_SMARTHOST=${ALERT_SMTP_SMARTHOST:-smtp.gmail.com:587}
+      - ALERT_SMTP_USERNAME=${ALERT_SMTP_USERNAME:-alerts@your-domain.com}
+      - ALERT_SMTP_PASSWORD=${ALERT_SMTP_PASSWORD:-}
+    volumes:
+      - ./deploy/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./deploy/observability/alertmanager/templates:/etc/alertmanager/templates:ro
+      - alertmanager_data:/alertmanager
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
     logging:
       driver: json-file
       options:
@@ -137,4 +166,5 @@ volumes:
   caddy_data:
   caddy_config:
   prometheus_data:
+  alertmanager_data:
   grafana_data:
