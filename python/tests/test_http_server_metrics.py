@@ -62,3 +62,20 @@ def test_refresh_runtime_gauges_populates_resource_metrics(mock_worker_config):
     assert "infera_worker_memory_used_bytes" in metrics
     assert "infera_worker_memory_total_bytes" in metrics
     assert "infera_worker_gpu_utilization" in metrics
+
+
+def test_gateway_metrics_and_worker_info_are_exposed(mock_worker_config):
+    worker = Worker(mock_worker_config)
+    server = HTTPServer(worker, mock_worker_config)
+
+    server._record_gateway_registration("success")
+    server._record_gateway_heartbeat("success")
+
+    metrics = generate_latest(server._metrics_registry).decode()
+
+    assert "infera_worker_gateway_registration_total" in metrics
+    assert 'status="success"' in metrics
+    assert "infera_worker_gateway_heartbeats_total" in metrics
+    assert "infera_worker_info" in metrics
+    assert f'worker_id="{worker.worker_id}"' in metrics
+    assert f'engine="{mock_worker_config.engine}"' in metrics

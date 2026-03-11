@@ -132,6 +132,7 @@ Notes:
 
 - Keep `INFERA_WORKER_SHARED_TOKEN` identical on gateway and workers.
 - Avoid using `latest` for worker image in production.
+- Alertmanager values in `docker-compose.prod.yml` are required in production; do not leave them as placeholders.
 
 ### 3. Deploy
 

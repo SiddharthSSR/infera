@@ -99,15 +99,22 @@ export function Playground() {
       };
 
       let fullResponse = '';
+      let streamingPromptTokens: number | undefined;
+      let streamingCompletionTokens: number | undefined;
 
-      for await (const chunk of streamChatCompletion(request)) {
+      for await (const chunk of streamChatCompletion(request, {
+        onUsage: (usage) => {
+          streamingPromptTokens = usage.prompt_tokens;
+          streamingCompletionTokens = usage.completion_tokens;
+        },
+      })) {
         fullResponse += chunk;
         setResponse(fullResponse);
       }
 
       const latency = Date.now() - startTime;
-      const completionTokens = Math.round(fullResponse.split(/\s+/).length * 1.3);
-      const promptTokens = Math.round(prompt.split(/\s+/).length * 1.3);
+      const completionTokens = streamingCompletionTokens ?? Math.round(fullResponse.split(/\s+/).length * 1.3);
+      const promptTokens = streamingPromptTokens ?? Math.round(prompt.split(/\s+/).length * 1.3);
       const tokensPerSec = latency > 0 ? (completionTokens / (latency / 1000)) : 0;
 
       setTokenUsage({
@@ -133,7 +140,7 @@ export function Playground() {
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, selectedModel, systemPrompt, temperature, maxTokens, topP, freqPenalty]);
+  }, [prompt, selectedModel, systemPrompt, temperature, maxTokens, topP, freqPenalty, setHistory]);
 
   const handleClear = () => {
     setPrompt('');

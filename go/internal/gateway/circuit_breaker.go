@@ -25,12 +25,13 @@ var ErrCircuitOpen = errors.New("circuit breaker is open: worker unavailable")
 //	HALF-OPEN → CLOSED: on success
 //	HALF-OPEN → OPEN: on failure
 type CircuitBreaker struct {
-	mu               sync.Mutex
-	state            int
-	failures         int
-	failureThreshold int
-	resetTimeout     time.Duration
-	lastFailure      time.Time
+	mu                    sync.Mutex
+	state                 int
+	failures              int
+	failureThreshold      int
+	resetTimeout          time.Duration
+	lastFailure           time.Time
+	halfOpenProbeInFlight bool
 }
 
 // NewCircuitBreaker creates a circuit breaker with sensible defaults.
@@ -52,10 +53,15 @@ func (cb *CircuitBreaker) Allow() bool {
 	case circuitOpen:
 		if time.Since(cb.lastFailure) > cb.resetTimeout {
 			cb.state = circuitHalfOpen
+			cb.halfOpenProbeInFlight = true
 			return true
 		}
 		return false
 	case circuitHalfOpen:
+		if cb.halfOpenProbeInFlight {
+			return false
+		}
+		cb.halfOpenProbeInFlight = true
 		return true
 	}
 	return false
@@ -68,6 +74,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 
 	cb.failures = 0
 	cb.state = circuitClosed
+	cb.halfOpenProbeInFlight = false
 }
 
 // RecordFailure records a failed request and potentially opens the circuit.
@@ -77,6 +84,7 @@ func (cb *CircuitBreaker) RecordFailure() {
 
 	cb.failures++
 	cb.lastFailure = time.Now()
+	cb.halfOpenProbeInFlight = false
 
 	if cb.failures >= cb.failureThreshold {
 		cb.state = circuitOpen
@@ -105,4 +113,5 @@ func (cb *CircuitBreaker) Reset() {
 
 	cb.state = circuitClosed
 	cb.failures = 0
+	cb.halfOpenProbeInFlight = false
 }

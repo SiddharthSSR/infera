@@ -58,7 +58,7 @@ export function Dashboard() {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               <span className="status-dot inactive" />
-              Retrying every 5 seconds...
+              Retrying periodically...
             </div>
           </div>
         </div>

@@ -3,6 +3,7 @@
 #
 # Uses SQLite's .backup command which creates a consistent snapshot
 # without blocking writers. Safe to run while the gateway is serving.
+# Without sqlite3, the script falls back to a best-effort live copy.
 #
 # Usage:
 #   ./scripts/backup-sqlite.sh                    # backup to ./backups/
@@ -39,20 +40,22 @@ for db in "${DBS[@]}"; do
 
     # Use SQLite .backup for online-safe copy
     if command -v sqlite3 &> /dev/null; then
-        if sqlite3 "${src}" ".backup '${dst}'"; then
+        if sqlite3 "${src}" <<EOF
+.backup "${dst}"
+EOF
+        then
             echo "  OK:   ${db} → ${dst}"
         else
             echo "  FAIL: ${db} — sqlite3 .backup failed"
             FAILED=1
         fi
     else
-        # Fallback: cp with WAL checkpoint first
-        # This is less safe but works without sqlite3 binary
+        # Fallback: best-effort live copy. This does not checkpoint WAL and may be unsafe.
         cp "${src}" "${dst}"
         # Also copy WAL/SHM if they exist
         [ -f "${src}-wal" ] && cp "${src}-wal" "${dst}-wal"
         [ -f "${src}-shm" ] && cp "${src}-shm" "${dst}-shm"
-        echo "  OK:   ${db} → ${dst} (cp fallback, sqlite3 not found)"
+        echo "  WARN: ${db} → ${dst} (live-copy fallback without sqlite3; consistency is not guaranteed)"
     fi
 done
 
@@ -92,10 +95,11 @@ fi
 
 # Prune old local backups (keep last 48 = ~2 days of hourly backups)
 KEEP_COUNT="${BACKUP_KEEP_COUNT:-48}"
-BACKUP_COUNT=$(ls -1d "${BACKUP_DIR}"/20* 2>/dev/null | wc -l | tr -d ' ')
+mapfile -t BACKUP_DIRS < <(find "${BACKUP_DIR}" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9][0-1][0-9][0-3][0-9]_[0-2][0-9][0-5][0-9][0-5][0-9]' | sort)
+BACKUP_COUNT="${#BACKUP_DIRS[@]}"
 if [ "${BACKUP_COUNT}" -gt "${KEEP_COUNT}" ]; then
     PRUNE_COUNT=$((BACKUP_COUNT - KEEP_COUNT))
-    ls -1d "${BACKUP_DIR}"/20* | head -n "${PRUNE_COUNT}" | while read -r old; do
+    printf '%s\n' "${BACKUP_DIRS[@]}" | head -n "${PRUNE_COUNT}" | while read -r old; do
         rm -rf "${old}"
         echo "  PRUNE: ${old}"
     done

@@ -54,6 +54,11 @@ func main() {
 		GatewayAddress:  "localhost:8080",
 		CostDBPath:      "data/costs.db",
 	})
+	defer func() {
+		if err := instanceMgr.Close(); err != nil {
+			log.Warn("failed to close instance manager", slog.String("error", err.Error()))
+		}
+	}()
 
 	// Register mock provider (always available for testing)
 	instanceMgr.RegisterProvider(mock.New())

@@ -53,6 +53,12 @@ docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 docker compose -f docker-compose.prod.yml ps
 ```
 
+- [ ] Validate Prometheus worker discovery targets before enabling observability alerts:
+
+```bash
+./scripts/validate-worker-targets.sh deploy/observability/prometheus/worker_targets.json
+```
+
 ## 3. Post-Deploy Verification
 
 - [ ] Site responds:
@@ -119,7 +125,8 @@ docker compose -f docker-compose.prod.yml logs alertmanager --tail=200
 
 - [ ] Open `https://inferai.co.in` in browser.
 - [ ] Open `https://dashboard.inferai.co.in` and log in.
-- [ ] Login/API-key flow works.
+- [ ] Session-based login works (UI login sets and persists cookies/session).
+- [ ] API-key auth works (verify token-based access), if still used by your clients.
 - [ ] Dashboard loads.
 - [ ] Instances page loads.
 - [ ] Playground page loads and can issue a request.

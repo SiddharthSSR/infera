@@ -9,10 +9,12 @@ import (
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
 	if err != nil {
 		t.Fatal(err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	t.Cleanup(func() { db.Close() })
 	return db
 }
@@ -120,5 +122,19 @@ func TestRunIdempotent(t *testing.T) {
 	}
 	if err := Run(db, migrations); err != nil {
 		t.Fatal("second run should succeed (no-op):", err)
+	}
+}
+
+func TestRunRejectsNonIncreasingUnappliedVersions(t *testing.T) {
+	db := openTestDB(t)
+
+	migrations := []Migration{
+		{Version: 2, Description: "create t2", SQL: "CREATE TABLE t2 (id INTEGER PRIMARY KEY)"},
+		{Version: 2, Description: "duplicate t2", SQL: "CREATE TABLE t2_dup (id INTEGER PRIMARY KEY)"},
+	}
+
+	err := Run(db, migrations)
+	if err == nil {
+		t.Fatal("expected error for duplicate unapplied versions")
 	}
 }

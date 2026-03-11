@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -17,9 +19,10 @@ import (
 // WorkerClient communicates with a worker via HTTP.
 // In production, this would use gRPC, but HTTP is simpler for the vertical slice.
 type WorkerClient struct {
-	address    string
-	httpClient *http.Client
-	breaker    *CircuitBreaker
+	address             string
+	httpClient          *http.Client
+	streamingHTTPClient *http.Client
+	breaker             *CircuitBreaker
 }
 
 // NewWorkerClient creates a new worker client.
@@ -29,8 +32,23 @@ func NewWorkerClient(address string) *WorkerClient {
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
-		breaker: NewCircuitBreaker(),
+		streamingHTTPClient: &http.Client{},
+		breaker:             NewCircuitBreaker(),
 	}
+}
+
+func shouldRecordFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+	return true
 }
 
 // WorkerInferRequest is the request format for the worker.
@@ -123,7 +141,9 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		c.breaker.RecordFailure()
+		if shouldRecordFailure(err) {
+			c.breaker.RecordFailure()
+		}
 		return nil, fmt.Errorf("failed to call worker: %w", err)
 	}
 	defer resp.Body.Close()
@@ -134,13 +154,15 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 		return nil, fmt.Errorf("worker error (status %d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	c.breaker.RecordSuccess()
-
 	// Parse response
 	var workerResp WorkerInferResponse
 	if err := json.NewDecoder(resp.Body).Decode(&workerResp); err != nil {
+		if shouldRecordFailure(err) {
+			c.breaker.RecordFailure()
+		}
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+	c.breaker.RecordSuccess()
 
 	// Convert to internal format
 	choices := make([]types.Choice, len(workerResp.Choices))
@@ -217,9 +239,11 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set(HeaderRequestID, req.RequestID)
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.streamingHTTPClient.Do(httpReq)
 	if err != nil {
-		c.breaker.RecordFailure()
+		if shouldRecordFailure(err) {
+			c.breaker.RecordFailure()
+		}
 		return nil, fmt.Errorf("failed to call worker: %w", err)
 	}
 
@@ -230,8 +254,6 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 		return nil, fmt.Errorf("worker error (status %d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	c.breaker.RecordSuccess()
-
 	// Create channel for chunks
 	chunks := make(chan *types.TokenChunk, 100)
 
@@ -241,6 +263,7 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 
 		decoder := json.NewDecoder(resp.Body)
 		index := 0
+		recordedSuccess := false
 
 		for {
 			select {
@@ -259,10 +282,22 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 
 				if err := decoder.Decode(&chunk); err != nil {
 					if err == io.EOF {
+						if !recordedSuccess {
+							c.breaker.RecordFailure()
+						}
 						return
 					}
-					// Try to continue on parse errors
+					if !recordedSuccess && shouldRecordFailure(err) {
+						c.breaker.RecordFailure()
+						return
+					}
+					// Try to continue on parse errors after the stream has already started.
 					continue
+				}
+
+				if !recordedSuccess {
+					c.breaker.RecordSuccess()
+					recordedSuccess = true
 				}
 
 				tokenChunk := &types.TokenChunk{

@@ -1,7 +1,12 @@
-import { Component, type ReactNode } from 'react';
+import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 interface Props {
   children: ReactNode;
+}
+
+interface ErrorBoundaryProps extends Props {
+  navigate: (to: string) => void;
 }
 
 interface State {
@@ -9,14 +14,18 @@ interface State {
   error: Error | null;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
-  constructor(props: Props) {
+class ErrorBoundaryInner extends Component<ErrorBoundaryProps, State> {
+  constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
   }
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('Unhandled error in ErrorBoundary', error, info);
   }
 
   handleReset = () => {
@@ -74,7 +83,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <button className="action-btn" onClick={this.handleReset}>
               TRY AGAIN
             </button>
-            <button className="action-btn" onClick={() => window.location.href = '/'}>
+            <button className="action-btn" onClick={() => this.props.navigate('/')}>
               GO TO DASHBOARD
             </button>
           </div>
@@ -84,4 +93,9 @@ export class ErrorBoundary extends Component<Props, State> {
 
     return this.props.children;
   }
+}
+
+export function ErrorBoundary({ children }: Props) {
+  const navigate = useNavigate();
+  return <ErrorBoundaryInner navigate={navigate}>{children}</ErrorBoundaryInner>;
 }

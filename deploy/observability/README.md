@@ -39,8 +39,7 @@ Set in `.env`:
 - `ALERT_SMTP_SMARTHOST`
 - `ALERT_SMTP_USERNAME`
 - `ALERT_SMTP_PASSWORD`
-
-Default receiver is `alerts@your-domain.com` unless overridden.
+- These must be set to real SMTP/email values before go-live; production compose no longer supplies placeholder defaults.
 
 ## Gmail SMTP Notes
 

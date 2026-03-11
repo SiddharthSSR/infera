@@ -82,6 +82,8 @@ func NewStore(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if err := migrate.Run(db, auditMigrations); err != nil {
 		_ = db.Close()
 		return nil, err

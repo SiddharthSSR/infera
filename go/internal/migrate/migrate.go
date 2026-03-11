@@ -30,10 +30,27 @@ func Run(db *sql.DB, migrations []Migration) error {
 		return fmt.Errorf("migrate: read current version: %w", err)
 	}
 
+	unapplied := make([]Migration, 0, len(migrations))
 	for _, m := range migrations {
-		if m.Version <= current {
-			continue
+		if m.Version > current {
+			unapplied = append(unapplied, m)
 		}
+	}
+	for i := 1; i < len(unapplied); i++ {
+		prev := unapplied[i-1]
+		curr := unapplied[i]
+		if curr.Version <= prev.Version {
+			return fmt.Errorf(
+				"migrate: unapplied migrations must be strictly increasing: v%d (%s) before v%d (%s)",
+				prev.Version,
+				prev.Description,
+				curr.Version,
+				curr.Description,
+			)
+		}
+	}
+
+	for _, m := range unapplied {
 
 		slog.Info("migrate: applying",
 			slog.Int("version", m.Version),

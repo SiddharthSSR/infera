@@ -114,11 +114,11 @@ services:
       - "--storage.path=/alertmanager"
       - "--config.expand-env"
     environment:
-      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-alerts@your-domain.com}
-      - ALERT_SMTP_FROM=${ALERT_SMTP_FROM:-alerts@your-domain.com}
-      - ALERT_SMTP_SMARTHOST=${ALERT_SMTP_SMARTHOST:-smtp.gmail.com:587}
-      - ALERT_SMTP_USERNAME=${ALERT_SMTP_USERNAME:-alerts@your-domain.com}
-      - ALERT_SMTP_PASSWORD=${ALERT_SMTP_PASSWORD:-}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:?ALERT_EMAIL_TO is required}
+      - ALERT_SMTP_FROM=${ALERT_SMTP_FROM:?ALERT_SMTP_FROM is required}
+      - ALERT_SMTP_SMARTHOST=${ALERT_SMTP_SMARTHOST:?ALERT_SMTP_SMARTHOST is required}
+      - ALERT_SMTP_USERNAME=${ALERT_SMTP_USERNAME:?ALERT_SMTP_USERNAME is required}
+      - ALERT_SMTP_PASSWORD=${ALERT_SMTP_PASSWORD:?ALERT_SMTP_PASSWORD is required}
     volumes:
       - ./deploy/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - ./deploy/observability/alertmanager/templates:/etc/alertmanager/templates:ro

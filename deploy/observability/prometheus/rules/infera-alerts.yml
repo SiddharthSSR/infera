@@ -2,7 +2,7 @@ groups:
   - name: infera-gateway-alerts
     rules:
       - alert: InferaGatewayDown
-        expr: up{job="infera_gateway"} == 0
+        expr: up{job="infera_gateway"} == 0 or absent(up{job="infera_gateway"})
         for: 2m
         labels:
           severity: critical
@@ -16,8 +16,10 @@ groups:
         expr: |
           sum(rate(infera_gateway_http_requests_total{status=~"5.."}[5m]))
           /
-          clamp_min(sum(rate(infera_gateway_http_requests_total[5m])), 1)
+          sum(rate(infera_gateway_http_requests_total[5m]))
           > 0.05
+          and
+          sum(rate(infera_gateway_http_requests_total[5m])) > 0.033
         for: 10m
         labels:
           severity: warning

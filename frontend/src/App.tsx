@@ -127,9 +127,13 @@ function AppContent() {
 
   // Check for existing session on startup
   useEffect(() => {
-    getSession().then((session) => {
-      setAuthenticated(session !== null);
-    });
+    getSession()
+      .then((session) => {
+        setAuthenticated(session !== null);
+      })
+      .catch(() => {
+        setAuthenticated(false);
+      });
   }, []);
 
   const handleLogout = useCallback(() => {

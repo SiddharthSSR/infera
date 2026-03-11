@@ -68,6 +68,7 @@ type KeyRecord struct {
 type Store struct {
 	db         *sql.DB
 	lastUsedCh chan string
+	lastSeenCh chan string
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup
 	closeOnce  sync.Once
@@ -86,10 +87,13 @@ func NewStore(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping auth database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	s := &Store{
 		db:         db,
 		lastUsedCh: make(chan string, 2048),
+		lastSeenCh: make(chan string, 2048),
 		shutdownCh: make(chan struct{}),
 	}
 	if err := s.migrate(); err != nil {
@@ -97,6 +101,7 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to run auth migrations: %w", err)
 	}
 	s.startLastUsedUpdater()
+	s.startSessionLastSeenUpdater()
 	s.startSessionPruner()
 
 	return s, nil
@@ -371,10 +376,11 @@ func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, er
 		return nil, nil, fmt.Errorf("failed to validate session: %w", err)
 	}
 
-	// Update last_seen asynchronously
-	go func() {
-		_, _ = s.db.Exec("UPDATE sessions SET last_seen = CURRENT_TIMESTAMP WHERE id = ?", session.ID)
-	}()
+	select {
+	case <-s.shutdownCh:
+	case s.lastSeenCh <- session.ID:
+	default:
+	}
 
 	return session, key, nil
 }
@@ -442,6 +448,64 @@ func (s *Store) startLastUsedUpdater() {
 			select {
 			case id := <-s.lastUsedCh:
 				pending[id] = time.Now()
+			case <-ticker.C:
+				flush()
+			case <-s.shutdownCh:
+				flush()
+				return
+			}
+		}
+	}()
+}
+
+func (s *Store) startSessionLastSeenUpdater() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		pending := make(map[string]struct{})
+		flush := func() {
+			if len(pending) == 0 {
+				return
+			}
+
+			tx, err := s.db.Begin()
+			if err != nil {
+				slog.Warn("failed to begin session last_seen update transaction", slog.String("error", err.Error()))
+				pending = make(map[string]struct{})
+				return
+			}
+
+			stmt, err := tx.Prepare("UPDATE sessions SET last_seen = CURRENT_TIMESTAMP WHERE id = ?")
+			if err != nil {
+				_ = tx.Rollback()
+				slog.Warn("failed to prepare session last_seen update", slog.String("error", err.Error()))
+				pending = make(map[string]struct{})
+				return
+			}
+
+			for id := range pending {
+				if _, err := stmt.Exec(id); err != nil {
+					slog.Warn("failed to update session last_seen", slog.String("session_id", id), slog.String("error", err.Error()))
+				}
+			}
+
+			_ = stmt.Close()
+			if err := tx.Commit(); err != nil {
+				slog.Warn("failed to commit session last_seen updates", slog.String("error", err.Error()))
+			}
+			pending = make(map[string]struct{})
+		}
+
+		for {
+			select {
+			case id := <-s.lastSeenCh:
+				pending[id] = struct{}{}
+				if len(pending) >= 128 {
+					flush()
+				}
 			case <-ticker.C:
 				flush()
 			case <-s.shutdownCh:

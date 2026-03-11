@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/infera/infera/go/internal/auth"
 )
 
 // RateLimiterConfig configures the rate limiter.
@@ -155,6 +157,14 @@ func RateLimitMiddleware(rl *RateLimiter) func(http.HandlerFunc) http.HandlerFun
 			key := r.Header.Get("Authorization")
 			if key == "" {
 				key = r.Header.Get("X-API-Key")
+			}
+			if key == "" {
+				if record := auth.KeyFromContext(r.Context()); record != nil {
+					key = record.ID
+					if key == "" {
+						key = record.Name
+					}
+				}
 			}
 			if key == "" {
 				// No key = let auth middleware handle rejection

@@ -40,6 +40,10 @@ func NewManager(config ManagerConfig) *Manager {
 		costs, err = NewPersistentCostTracker(config.CostDBPath)
 		if err != nil {
 			// Fall back to in-memory if DB fails
+			slog.Warn("providers.manager: failed to initialize persistent cost tracker",
+				slog.String("db_path", config.CostDBPath),
+				slog.String("error", err.Error()),
+			)
 			costs = NewCostTracker()
 		}
 	} else {
@@ -54,6 +58,11 @@ func NewManager(config ManagerConfig) *Manager {
 		workerImage:     config.WorkerImage,
 		gatewayAddress:  config.GatewayAddress,
 	}
+}
+
+// Close releases provider manager resources.
+func (m *Manager) Close() error {
+	return m.costs.Close()
 }
 
 // RegisterProvider adds a provider to the manager.

@@ -90,6 +90,7 @@ class HTTPServer:
             "infera_worker_inference_duration_seconds",
             "Inference request duration in seconds.",
             ["stream", "status"],
+            buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120),
             registry=self._metrics_registry,
         )
         self._inference_tokens = Counter(
@@ -136,6 +137,12 @@ class HTTPServer:
             registry=self._metrics_registry,
         )
         self._worker_info.labels(worker_id=self.worker.worker_id, engine=self.config.engine).set(1)
+
+    def _record_gateway_registration(self, status: str) -> None:
+        self._gateway_registration.labels(status=status).inc()
+
+    def _record_gateway_heartbeat(self, status: str) -> None:
+        self._gateway_heartbeats.labels(status=status).inc()
 
     def _record_inference_metrics(
         self,
@@ -240,7 +247,7 @@ class HTTPServer:
                     )
 
                     if response.status_code == 200:
-                        self._gateway_registration.labels(status="success").inc()
+                        self._record_gateway_registration("success")
                         logger.info(
                             "Registered with gateway",
                             gateway=self.config.router_address,
@@ -248,7 +255,7 @@ class HTTPServer:
                         )
                         return
                     elif response.status_code in (401, 403):
-                        self._gateway_registration.labels(status="auth_rejected").inc()
+                        self._record_gateway_registration("auth_rejected")
                         logger.error(
                             "Gateway registration rejected by auth",
                             status=response.status_code,
@@ -259,7 +266,7 @@ class HTTPServer:
                         )
                         raise RuntimeError("Gateway auth rejected worker registration")
                     elif 400 <= response.status_code < 500:
-                        self._gateway_registration.labels(status="client_error").inc()
+                        self._record_gateway_registration("client_error")
                         logger.error(
                             "Gateway registration failed with non-retriable client error",
                             status=response.status_code,
@@ -270,7 +277,7 @@ class HTTPServer:
                         )
                         raise RuntimeError("Gateway registration failed with non-retriable client error")
                     else:
-                        self._gateway_registration.labels(status="http_error").inc()
+                        self._record_gateway_registration("http_error")
                         logger.warning(
                             "Gateway registration failed",
                             status=response.status_code,
@@ -280,7 +287,7 @@ class HTTPServer:
             except RuntimeError:
                 raise
             except Exception as e:
-                self._gateway_registration.labels(status="exception").inc()
+                self._record_gateway_registration("exception")
                 logger.warning(
                     "Gateway registration attempt failed",
                     attempt=attempt + 1,
@@ -365,11 +372,11 @@ class HTTPServer:
                         timeout=5.0,
                     )
                     if response.status_code == 200:
-                        self._gateway_heartbeats.labels(status="success").inc()
+                        self._record_gateway_heartbeat("success")
                         self._consecutive_auth_failures = 0
                         logger.debug("Heartbeat sent successfully")
                     elif response.status_code in (401, 403):
-                        self._gateway_heartbeats.labels(status="auth_rejected").inc()
+                        self._record_gateway_heartbeat("auth_rejected")
                         self._consecutive_auth_failures += 1
                         logger.error(
                             "Heartbeat rejected by gateway auth",
@@ -388,7 +395,7 @@ class HTTPServer:
                             self.worker.request_shutdown()
                             break
                     else:
-                        self._gateway_heartbeats.labels(status="http_error").inc()
+                        self._record_gateway_heartbeat("http_error")
                         self._consecutive_auth_failures = 0
                         logger.warning(
                             "Heartbeat failed with non-200 response",
@@ -401,7 +408,7 @@ class HTTPServer:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self._gateway_heartbeats.labels(status="exception").inc()
+                self._record_gateway_heartbeat("exception")
                 logger.debug("Heartbeat failed", error=str(e))
 
     def _get_worker_address(self) -> str:

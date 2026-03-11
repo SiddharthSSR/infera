@@ -25,6 +25,8 @@ type GatewayMetrics struct {
 	inferenceTokens   prometheus.Counter
 }
 
+var inferenceDurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60}
+
 func NewGatewayMetrics() *GatewayMetrics {
 	registry := prometheus.NewRegistry()
 
@@ -50,7 +52,7 @@ func NewGatewayMetrics() *GatewayMetrics {
 		inferenceDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "infera_gateway_inference_duration_seconds",
 			Help:    "Inference request duration in seconds.",
-			Buckets: prometheus.DefBuckets,
+			Buckets: inferenceDurationBuckets,
 		}, []string{"stream", "status"}),
 		inferenceTokens: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "infera_gateway_inference_tokens_total",

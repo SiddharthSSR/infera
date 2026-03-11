@@ -3,7 +3,10 @@ package gateway
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
+
+	"github.com/infera/infera/go/internal/auth"
 )
 
 func TestRateLimiterAllowsBurst(t *testing.T) {
@@ -121,6 +124,51 @@ func TestRateLimitMiddleware(t *testing.T) {
 
 		if rec.Code != http.StatusOK {
 			t.Errorf("expected 200 for no-key request, got %d", rec.Code)
+		}
+	})
+
+	t.Run("uses auth context when session auth is present", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := auth.NewStore(filepath.Join(dir, "auth.db"))
+		if err != nil {
+			t.Fatalf("failed to create auth store: %v", err)
+		}
+		defer store.Close()
+
+		_, keyRecord, err := store.CreateKey("session-user", "admin")
+		if err != nil {
+			t.Fatalf("failed to create API key: %v", err)
+		}
+		sessionToken, _, err := store.CreateSession(keyRecord.ID)
+		if err != nil {
+			t.Fatalf("failed to create session: %v", err)
+		}
+
+		authHandler := auth.NewHandler(store)
+		authHandler.SetSecure(false)
+		sessionProtectedHandler := authHandler.RequireAuth(handler)
+
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		req.AddCookie(&http.Cookie{Name: "infera_session", Value: sessionToken})
+		rec := httptest.NewRecorder()
+		sessionProtectedHandler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected first session-authenticated request to pass, got %d", rec.Code)
+		}
+
+		for i := 0; i < 10; i++ {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			req.AddCookie(&http.Cookie{Name: "infera_session", Value: sessionToken})
+			rec := httptest.NewRecorder()
+			sessionProtectedHandler(rec, req)
+		}
+
+		req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		req.AddCookie(&http.Cookie{Name: "infera_session", Value: sessionToken})
+		rec = httptest.NewRecorder()
+		sessionProtectedHandler(rec, req)
+		if rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("expected 429 for session-authenticated request, got %d", rec.Code)
 		}
 	})
 }

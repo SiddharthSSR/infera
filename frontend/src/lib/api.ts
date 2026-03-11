@@ -12,6 +12,10 @@ export interface SessionInfo {
   key: { id: string; key_prefix: string; name: string; role: string };
 }
 
+export interface StreamChatCompletionOptions {
+  onUsage?: (usage: ChatCompletionResponse['usage']) => void;
+}
+
 // Create a server-side session (login). Sets HttpOnly cookie.
 export async function createSession(apiKey: string): Promise<SessionInfo> {
   const response = await fetch(`${API_BASE}/api/auth/session`, {
@@ -134,7 +138,8 @@ export async function sendChatCompletion(request: ChatCompletionRequest): Promis
 }
 
 export async function* streamChatCompletion(
-  request: ChatCompletionRequest
+  request: ChatCompletionRequest,
+  options?: StreamChatCompletionOptions,
 ): AsyncGenerator<string, void, unknown> {
   const response = await authFetch(`${API_BASE}/v1/chat/completions`, {
     method: 'POST',
@@ -173,6 +178,10 @@ export async function* streamChatCompletion(
 
         try {
           const parsed = JSON.parse(data);
+          const usage = parsed.usage;
+          if (usage?.prompt_tokens != null && usage?.completion_tokens != null && usage?.total_tokens != null) {
+            options?.onUsage?.(usage);
+          }
           const content = parsed.choices?.[0]?.delta?.content;
           if (content) yield content;
         } catch {
@@ -349,4 +358,3 @@ export async function revokeApiKey(id: string): Promise<void> {
     throw new Error(await readResponseError(response, 'Failed to revoke key'));
   }
 }
-

@@ -85,6 +85,9 @@ func TestCircuitBreakerHalfOpen(t *testing.T) {
 	if !cb.Allow() {
 		t.Error("should allow after reset timeout (half-open)")
 	}
+	if cb.Allow() {
+		t.Error("should allow only one probe while half-open")
+	}
 	if cb.State() != "half_open" {
 		t.Errorf("expected half_open, got %s", cb.State())
 	}

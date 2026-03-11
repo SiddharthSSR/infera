@@ -107,6 +107,27 @@ describe('Login', () => {
     })
   })
 
+  it('shows admin access required when createSession returns 403', async () => {
+    mockCreateSession.mockRejectedValueOnce(new Error('Admin access required'))
+
+    render(<Login onAuthenticated={mockOnAuthenticated} />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
+    })
+
+    const input = screen.getByPlaceholderText('inf_...')
+    fireEvent.change(input, { target: { value: 'inf_userkey123' } })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /connect/i }))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Admin access required. Only admin keys can access the dashboard.')).toBeInTheDocument()
+    })
+  })
+
   it('authenticates with valid key', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     mockCreateSession.mockResolvedValueOnce({

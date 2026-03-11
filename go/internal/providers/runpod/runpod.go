@@ -203,10 +203,9 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		logInput[k] = v
 	}
 	logInput["env"] = redactEnvForLog(env)
-	inputJSON, _ := json.Marshal(logInput)
 	slog.Info("runpod.provision.request",
 		slog.String("provider", string(providers.ProviderRunPod)),
-		slog.String("input", string(inputJSON)),
+		slog.Any("input", logInput),
 	)
 
 	variables := map[string]interface{}{
