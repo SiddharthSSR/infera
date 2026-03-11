@@ -1,5 +1,7 @@
 """Tests for worker HTTP server metrics."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 from aiohttp.test_utils import make_mocked_request
 from prometheus_client import generate_latest
@@ -79,3 +81,22 @@ def test_gateway_metrics_and_worker_info_are_exposed(mock_worker_config):
     assert "infera_worker_info" in metrics
     assert f'worker_id="{worker.worker_id}"' in metrics
     assert f'engine="{mock_worker_config.engine}"' in metrics
+
+
+@pytest.mark.asyncio
+async def test_streaming_invalid_request_returns_error_before_prepare(mock_worker_config):
+    worker = Worker(mock_worker_config)
+    server = HTTPServer(worker, mock_worker_config)
+
+    request = make_mocked_request("POST", "/infer/stream")
+    request.json = AsyncMock(return_value={})
+
+    response = await server.handle_infer_stream(request)
+
+    assert response.status == 400
+    assert response.body is not None
+
+    metrics = generate_latest(server._metrics_registry).decode()
+    assert "infera_worker_inference_requests_total" in metrics
+    assert 'status="invalid_request"' in metrics
+    assert 'stream="true"' in metrics

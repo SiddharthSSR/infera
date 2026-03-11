@@ -222,6 +222,7 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 		workerID           string
 		sinceHeartbeat     time.Duration
 		unhealthyThreshold time.Duration
+		removalThreshold   time.Duration
 	}
 	logEntries := []registryLogEntry{}
 
@@ -231,9 +232,10 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 		if timeSinceHeartbeat > r.config.RemovalThreshold {
 			toRemove = append(toRemove, workerID)
 			logEntries = append(logEntries, registryLogEntry{
-				message:        "removing worker after missed heartbeats",
-				workerID:       workerID,
-				sinceHeartbeat: timeSinceHeartbeat,
+				message:          "removing worker after missed heartbeats",
+				workerID:         workerID,
+				sinceHeartbeat:   timeSinceHeartbeat,
+				removalThreshold: r.config.RemovalThreshold,
 			})
 		} else if timeSinceHeartbeat > r.config.UnhealthyThreshold {
 			if worker.Status != types.WorkerStatusUnhealthy {
@@ -264,6 +266,9 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 		}
 		if entry.unhealthyThreshold > 0 {
 			attrs = append(attrs, slog.Duration("unhealthy_threshold", entry.unhealthyThreshold))
+		}
+		if entry.removalThreshold > 0 {
+			attrs = append(attrs, slog.Duration("removal_threshold", entry.removalThreshold))
 		}
 		slog.Info(entry.message, attrs...)
 	}

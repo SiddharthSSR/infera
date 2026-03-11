@@ -64,8 +64,9 @@ for db in "${DBS[@]}"; do
     dst="${BACKUP_SUBDIR}/${db}"
     if [ -f "${dst}" ]; then
         if command -v sqlite3 &> /dev/null; then
-            if ! sqlite3 "${dst}" "PRAGMA integrity_check;" > /dev/null 2>&1; then
-                echo "  WARN: ${dst} failed integrity check"
+            result="$(sqlite3 "${dst}" "PRAGMA integrity_check;" 2>&1 | tr -d '\r' | xargs)"
+            if [ "${result}" != "ok" ]; then
+                echo "  WARN: ${dst} failed integrity check: ${result}"
                 FAILED=1
             fi
         fi
@@ -95,7 +96,11 @@ fi
 
 # Prune old local backups (keep last 48 = ~2 days of hourly backups)
 KEEP_COUNT="${BACKUP_KEEP_COUNT:-48}"
-mapfile -t BACKUP_DIRS < <(find "${BACKUP_DIR}" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9][0-1][0-9][0-3][0-9]_[0-2][0-9][0-5][0-9][0-5][0-9]' | sort)
+mapfile -t BACKUP_DIRS < <(
+    find "${BACKUP_DIR}" -mindepth 1 -maxdepth 1 -type d -print \
+      | grep -E '/20[0-9]{2}(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])_([01][0-9]|2[0-3])([0-5][0-9])([0-5][0-9])$' \
+      | sort
+)
 BACKUP_COUNT="${#BACKUP_DIRS[@]}"
 if [ "${BACKUP_COUNT}" -gt "${KEEP_COUNT}" ]; then
     PRUNE_COUNT=$((BACKUP_COUNT - KEEP_COUNT))

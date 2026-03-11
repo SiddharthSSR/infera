@@ -47,13 +47,21 @@ func main() {
 	if workerImage == "" {
 		workerImage = "infera/worker:latest"
 	}
+	gatewayAddress := strings.TrimSpace(os.Getenv("INFERA_GATEWAY_ADDRESS"))
+	if gatewayAddress == "" {
+		gatewayAddress = fmt.Sprintf("localhost:%d", *httpPort)
+	}
 
-	instanceMgr := providers.NewManager(providers.ManagerConfig{
+	instanceMgr, err := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider: providers.ProviderMock,
 		WorkerImage:     workerImage,
-		GatewayAddress:  "localhost:8080",
+		GatewayAddress:  gatewayAddress,
 		CostDBPath:      "data/costs.db",
 	})
+	if err != nil {
+		log.Error("failed to initialize instance manager", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 	defer func() {
 		if err := instanceMgr.Close(); err != nil {
 			log.Warn("failed to close instance manager", slog.String("error", err.Error()))

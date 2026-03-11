@@ -57,7 +57,7 @@ After deploy:
 
 ```bash
 docker compose -f docker-compose.prod.yml ps
-curl -I https://dashboard.inferai.co.in
+curl --fail --silent --show-error --max-time 5 https://dashboard.inferai.co.in/api/health
 docker compose -f docker-compose.prod.yml logs alertmanager --tail=100
 ```
 

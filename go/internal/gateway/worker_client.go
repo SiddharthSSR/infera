@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -291,6 +292,12 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 						c.breaker.RecordFailure()
 						return
 					}
+					slog.Debug("worker stream decode error after stream start",
+						slog.String("worker_address", c.address),
+						slog.String("request_id", req.RequestID),
+						slog.Int("chunk_index", index),
+						slog.String("error", err.Error()),
+					)
 					// Try to continue on parse errors after the stream has already started.
 					continue
 				}

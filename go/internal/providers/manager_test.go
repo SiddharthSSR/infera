@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+func newTestManager(t *testing.T, config ManagerConfig) *Manager {
+	t.Helper()
+	mgr, err := NewManager(config)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	return mgr
+}
+
 // mockTestProvider is a simple mock for testing the manager
 type mockTestProvider struct {
 	instances map[string]*Instance
@@ -44,7 +53,7 @@ func (p *mockTestProvider) Provision(ctx context.Context, req *ProvisionRequest)
 
 func TestManagerProvisionSetsDefaultGatewayAddress(t *testing.T) {
 	provider := newMockTestProvider()
-	mgr := NewManager(ManagerConfig{
+	mgr := newTestManager(t, ManagerConfig{
 		DefaultProvider: ProviderMock,
 		WorkerImage:     "worker:latest",
 		GatewayAddress:  "https://inferai.co.in",
@@ -121,7 +130,7 @@ func TestNewManager(t *testing.T) {
 		GatewayAddress:  "localhost:8080",
 	}
 
-	mgr := NewManager(config)
+	mgr := newTestManager(t, config)
 
 	if mgr == nil {
 		t.Fatal("NewManager returned nil")
@@ -135,7 +144,7 @@ func TestNewManager(t *testing.T) {
 }
 
 func TestRegisterProvider(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
+	mgr := newTestManager(t, ManagerConfig{})
 	provider := newMockTestProvider()
 
 	mgr.RegisterProvider(provider)
@@ -150,7 +159,7 @@ func TestRegisterProvider(t *testing.T) {
 }
 
 func TestListProviders(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
+	mgr := newTestManager(t, ManagerConfig{})
 
 	t.Run("Empty initially", func(t *testing.T) {
 		providers := mgr.ListProviders()
@@ -170,7 +179,7 @@ func TestListProviders(t *testing.T) {
 }
 
 func TestManagerProvision(t *testing.T) {
-	mgr := NewManager(ManagerConfig{
+	mgr := newTestManager(t, ManagerConfig{
 		DefaultProvider: ProviderMock,
 		WorkerImage:     "worker:latest",
 	})
@@ -217,7 +226,7 @@ func TestManagerProvision(t *testing.T) {
 }
 
 func TestManagerProvisionWithDefaults(t *testing.T) {
-	mgr := NewManager(ManagerConfig{
+	mgr := newTestManager(t, ManagerConfig{
 		DefaultProvider: ProviderMock,
 		WorkerImage:     "default-worker:latest",
 	})
@@ -242,7 +251,7 @@ func TestManagerProvisionWithDefaults(t *testing.T) {
 }
 
 func TestManagerProvisionUnregisteredProvider(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
+	mgr := newTestManager(t, ManagerConfig{})
 	// Don't register any providers
 
 	ctx := context.Background()
@@ -259,7 +268,7 @@ func TestManagerProvisionUnregisteredProvider(t *testing.T) {
 }
 
 func TestManagerTerminate(t *testing.T) {
-	mgr := NewManager(ManagerConfig{DefaultProvider: ProviderMock})
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
 	mgr.RegisterProvider(newMockTestProvider())
 
 	ctx := context.Background()
@@ -282,7 +291,7 @@ func TestManagerTerminate(t *testing.T) {
 }
 
 func TestManagerTerminateNonExistent(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
+	mgr := newTestManager(t, ManagerConfig{})
 
 	ctx := context.Background()
 	err := mgr.Terminate(ctx, "non-existent")
@@ -292,7 +301,7 @@ func TestManagerTerminateNonExistent(t *testing.T) {
 }
 
 func TestManagerStartStop(t *testing.T) {
-	mgr := NewManager(ManagerConfig{DefaultProvider: ProviderMock})
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
 	mgr.RegisterProvider(newMockTestProvider())
 
 	ctx := context.Background()
@@ -315,7 +324,7 @@ func TestManagerStartStop(t *testing.T) {
 }
 
 func TestManagerListOfferings(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
+	mgr := newTestManager(t, ManagerConfig{})
 	mgr.RegisterProvider(newMockTestProvider())
 
 	ctx := context.Background()
@@ -330,7 +339,7 @@ func TestManagerListOfferings(t *testing.T) {
 }
 
 func TestManagerGetProviderStatus(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
+	mgr := newTestManager(t, ManagerConfig{})
 	mgr.RegisterProvider(newMockTestProvider())
 
 	ctx := context.Background()
@@ -345,7 +354,7 @@ func TestManagerGetProviderStatus(t *testing.T) {
 }
 
 func TestManagerGetCostSummary(t *testing.T) {
-	mgr := NewManager(ManagerConfig{DefaultProvider: ProviderMock})
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
 	mgr.RegisterProvider(newMockTestProvider())
 
 	// Create some instances
@@ -367,7 +376,7 @@ func TestManagerGetCostSummary(t *testing.T) {
 }
 
 func TestManagerLinkWorker(t *testing.T) {
-	mgr := NewManager(ManagerConfig{DefaultProvider: ProviderMock})
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
 	mgr.RegisterProvider(newMockTestProvider())
 
 	ctx := context.Background()
@@ -386,7 +395,7 @@ func TestManagerLinkWorker(t *testing.T) {
 }
 
 func TestManagerLinkWorkerNonExistent(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
+	mgr := newTestManager(t, ManagerConfig{})
 
 	err := mgr.LinkWorker("non-existent", "worker-123")
 	if err == nil {

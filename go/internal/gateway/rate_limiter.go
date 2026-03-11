@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -101,7 +102,7 @@ func (rl *RateLimiter) Allow(key string) bool {
 	bucket, exists := rl.buckets[key]
 	if !exists {
 		refillRate := float64(rl.config.RequestsPerMinute) / 60.0
-		maxTokens := float64(rl.config.BurstSize) + refillRate // burst + 1 second of tokens
+		maxTokens := math.Max(1.0, float64(rl.config.BurstSize)+refillRate) // burst + 1 second of tokens
 		bucket = newTokenBucket(maxTokens, refillRate)
 		rl.buckets[key] = bucket
 	}

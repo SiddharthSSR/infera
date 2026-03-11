@@ -33,18 +33,13 @@ type ManagerConfig struct {
 }
 
 // NewManager creates a new instance manager.
-func NewManager(config ManagerConfig) *Manager {
+func NewManager(config ManagerConfig) (*Manager, error) {
 	var costs *CostTracker
 	if config.CostDBPath != "" {
 		var err error
 		costs, err = NewPersistentCostTracker(config.CostDBPath)
 		if err != nil {
-			// Fall back to in-memory if DB fails
-			slog.Warn("providers.manager: failed to initialize persistent cost tracker",
-				slog.String("db_path", config.CostDBPath),
-				slog.String("error", err.Error()),
-			)
-			costs = NewCostTracker()
+			return nil, fmt.Errorf("initialize persistent cost tracker %q: %w", config.CostDBPath, err)
 		}
 	} else {
 		costs = NewCostTracker()
@@ -57,7 +52,7 @@ func NewManager(config ManagerConfig) *Manager {
 		defaultProvider: config.DefaultProvider,
 		workerImage:     config.WorkerImage,
 		gatewayAddress:  config.GatewayAddress,
-	}
+	}, nil
 }
 
 // Close releases provider manager resources.

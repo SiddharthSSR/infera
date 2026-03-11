@@ -29,7 +29,7 @@ for idx, entry in enumerate(data):
         continue
     if isinstance(entry, dict):
         targets = entry.get("targets")
-        if isinstance(targets, list) and any(isinstance(item, str) and item.strip() for item in targets):
+        if isinstance(targets, list) and targets and all(isinstance(item, str) and item.strip() for item in targets):
             continue
     print(
         f"worker target validation failed: entry {idx} in {path} must be a target string or object with a non-empty targets list",

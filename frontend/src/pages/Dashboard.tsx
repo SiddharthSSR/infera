@@ -25,7 +25,7 @@ export function Dashboard() {
   const { data: models, isLoading: loadingModels } = useModels();
   const isLoading = loadingWorkers || loadingStats || loadingInstances || loadingCosts || loadingModels;
 
-  const gatewayDown = errorWorkers && errorStats;
+  const gatewayDown = !isLoading && (errorWorkers && !workers) && (errorStats && !stats);
 
   const activeInstances = instances?.filter(i => i.status === 'running') || [];
   const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];

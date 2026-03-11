@@ -195,10 +195,15 @@ class HTTPServer:
     async def stop(self) -> None:
         """Stop the HTTP server."""
         # Cancel background tasks
+        tasks = []
         if self._registration_task:
             self._registration_task.cancel()
+            tasks.append(self._registration_task)
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
+            tasks.append(self._heartbeat_task)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         # Deregister only if registration succeeded.
         if self._gateway_registered:
@@ -477,21 +482,22 @@ class HTTPServer:
         start_time = time.perf_counter()
         status = "success"
         token_count = 0
-        response = web.StreamResponse(
-            status=200,
-            reason="OK",
-            headers={
-                "Content-Type": "application/x-ndjson",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
-        )
-        await response.prepare(request)
 
         try:
             data = await request.json()
             inference_request = self._parse_request(data)
             inference_request.stream = True
+
+            response = web.StreamResponse(
+                status=200,
+                reason="OK",
+                headers={
+                    "Content-Type": "application/x-ndjson",
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                }
+            )
+            await response.prepare(request)
 
             async for chunk in self.worker.infer_stream(inference_request):
                 chunk_data = {
@@ -513,11 +519,27 @@ class HTTPServer:
 
                 await response.write(json.dumps(chunk_data).encode() + b"\n")
 
+            await response.write_eof()
+            return response
+        except ValueError as e:
+            status = "invalid_request"
+            return web.json_response(
+                {"error": {"type": "invalid_request", "message": str(e)}},
+                status=400
+            )
+        except RuntimeError as e:
+            status = "worker_error"
+            return web.json_response(
+                {"error": {"type": "worker_error", "message": str(e)}},
+                status=503
+            )
         except Exception as e:
             status = "internal_error"
             logger.error("Streaming error", error=str(e))
-            error_data = {"error": {"message": str(e)}}
-            await response.write(json.dumps(error_data).encode() + b"\n")
+            return web.json_response(
+                {"error": {"type": "internal_error", "message": str(e)}},
+                status=500
+            )
         finally:
             self._record_inference_metrics(
                 stream=True,
@@ -525,9 +547,6 @@ class HTTPServer:
                 duration_seconds=time.perf_counter() - start_time,
                 token_count=token_count,
             )
-
-        await response.write_eof()
-        return response
 
     async def handle_health(self, request: web.Request) -> web.Response:
         """Handle health check."""

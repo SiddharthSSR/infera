@@ -138,3 +138,17 @@ func TestRunRejectsNonIncreasingUnappliedVersions(t *testing.T) {
 		t.Fatal("expected error for duplicate unapplied versions")
 	}
 }
+
+func TestRunRejectsOutOfOrderUnappliedVersions(t *testing.T) {
+	db := openTestDB(t)
+
+	migrations := []Migration{
+		{Version: 3, Description: "create t3", SQL: "CREATE TABLE t3 (id INTEGER PRIMARY KEY)"},
+		{Version: 1, Description: "create t1", SQL: "CREATE TABLE t1 (id INTEGER PRIMARY KEY)"},
+	}
+
+	err := Run(db, migrations)
+	if err == nil {
+		t.Fatal("expected error for out-of-order unapplied versions")
+	}
+}
