@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { setApiKey, validateApiKey } from '../lib/api';
+import { createSession } from '../lib/api';
 
 interface LoginProps {
   onAuthenticated: () => void;
@@ -60,16 +60,21 @@ export function Login({ onAuthenticated }: LoginProps) {
     setError('');
 
     try {
-      const valid = await validateApiKey(key.trim());
-      if (valid) {
-        setApiKey(key.trim());
-        setConnected(true);
-        setTimeout(() => onAuthenticated(), 500);
+      await createSession(key.trim());
+      setConnected(true);
+      setTimeout(() => onAuthenticated(), 500);
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.message.includes('Invalid API key')) {
+          setError('Invalid API key. Check your key and try again.');
+        } else if (err.message.includes('Admin access required')) {
+          setError('Admin access required. Only admin keys can access the dashboard.');
+        } else {
+          setError('Could not connect to gateway. Is it running?');
+        }
       } else {
-        setError('Invalid API key. Check your key and try again.');
+        setError('Could not connect to gateway. Is it running?');
       }
-    } catch {
-      setError('Could not connect to gateway. Is it running?');
     } finally {
       if (!connected) setLoading(false);
     }

@@ -1,0 +1,58 @@
+groups:
+  - name: infera-gateway-alerts
+    rules:
+      - alert: InferaGatewayDown
+        expr: up{job="infera_gateway"} == 0 or absent(up{job="infera_gateway"})
+        for: 2m
+        labels:
+          severity: critical
+          service: gateway
+        annotations:
+          summary: Infera gateway is down
+          description: Gateway metrics endpoint has been unreachable for 2 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewaydown
+
+      - alert: InferaGatewayHigh5xxRate
+        expr: |
+          sum(rate(infera_gateway_http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(infera_gateway_http_requests_total[5m]))
+          > 0.05
+          and
+          sum(rate(infera_gateway_http_requests_total[5m])) > 0.033
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: High 5xx ratio on gateway
+          description: More than 5% of gateway requests are returning 5xx for 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewayhigh5xxrate
+
+      - alert: InferaGatewayP95LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(infera_gateway_http_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: Gateway p95 latency is high
+          description: Gateway p95 HTTP latency is above 2 seconds for 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewayp95latencyhigh
+
+  - name: infera-worker-alerts
+    rules:
+      - alert: InferaWorkerHeartbeatAuthRejected
+        expr: sum(increase(infera_worker_gateway_heartbeats_total{status="auth_rejected"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: Worker heartbeats rejected by auth
+          description: At least one worker heartbeat was rejected by gateway auth in the last 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferaworkerheartbeatauthrejected

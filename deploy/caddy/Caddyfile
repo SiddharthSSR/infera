@@ -1,3 +1,7 @@
+www.inferai.co.in {
+  redir https://inferai.co.in{uri} permanent
+}
+
 inferai.co.in {
   encode gzip
   header {
@@ -13,7 +17,9 @@ inferai.co.in {
   }
 
   handle /v1/* {
-    reverse_proxy gateway:8080
+    reverse_proxy gateway:8080 {
+      flush_interval -1
+    }
   }
 
   handle /health {
@@ -22,5 +28,20 @@ inferai.co.in {
 
   handle {
     reverse_proxy frontend:3000
+  }
+}
+
+dashboard.inferai.co.in {
+  encode gzip
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "SAMEORIGIN"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    -Server
+  }
+
+  handle {
+    reverse_proxy grafana:3000
   }
 }

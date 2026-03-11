@@ -3,15 +3,20 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/router"
@@ -35,6 +40,22 @@ type Gateway struct {
 
 	// Vault (model registry)
 	vaultHandler *vault.Handler
+
+	// Audit (inference usage tracking)
+	auditStore *audit.Store
+
+	// Rate limiting
+	rateLimiter *RateLimiter
+
+	// Metrics
+	metrics *GatewayMetrics
+
+	// Backpressure: track in-flight inference requests
+	inFlightRequests   int64
+	maxInFlightDefault int64
+
+	// Structured logger
+	log *slog.Logger
 
 	// Worker clients for direct inference calls
 	workerClients   map[string]*WorkerClient
@@ -70,11 +91,15 @@ func DefaultConfig() Config {
 // New creates a new gateway.
 func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gateway {
 	gw := &Gateway{
-		router:          r,
-		config:          config,
-		instanceManager: instanceMgr,
-		workerClients:   make(map[string]*WorkerClient),
-		startedAt:       time.Now(),
+		router:             r,
+		config:             config,
+		instanceManager:    instanceMgr,
+		rateLimiter:        NewRateLimiter(DefaultRateLimiterConfig()),
+		metrics:            NewGatewayMetrics(),
+		maxInFlightDefault: 100,
+		log:                NewLogger(),
+		workerClients:      make(map[string]*WorkerClient),
+		startedAt:          time.Now(),
 	}
 
 	if instanceMgr != nil {
@@ -92,6 +117,11 @@ func (g *Gateway) SetAuthHandler(h *auth.Handler) {
 // SetVaultHandler sets the vault model registry handler.
 func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 	g.vaultHandler = h
+}
+
+// SetAuditStore sets the inference audit store.
+func (g *Gateway) SetAuditStore(s *audit.Store) {
+	g.auditStore = s
 }
 
 // Start starts the HTTP server.
@@ -112,9 +142,15 @@ func (g *Gateway) Start() error {
 		return g.handleCORS(h)
 	}
 
-	// OpenAI-compatible endpoints (require auth)
-	mux.HandleFunc("/v1/chat/completions", withAuth(g.handleChatCompletions))
+	// Rate limit wrapper for inference endpoints
+	withRateLimit := RateLimitMiddleware(g.rateLimiter)
+
+	// OpenAI-compatible endpoints (require auth + rate limit)
+	mux.HandleFunc("/v1/chat/completions", withAuth(withRateLimit(g.handleChatCompletions)))
 	mux.HandleFunc("/v1/models", withAuth(g.handleListModels))
+	if g.metrics != nil {
+		mux.Handle("/metrics", g.metrics.Handler())
+	}
 
 	// Public endpoints (no auth — workers need these, plus health checks)
 	mux.HandleFunc("/api/workers/register", g.handleCORS(g.requireWorkerToken(g.handleRegisterWorker)))
@@ -125,6 +161,9 @@ func (g *Gateway) Start() error {
 	// Protected internal API endpoints (require auth)
 	mux.HandleFunc("/api/workers", withAdmin(g.handleGetWorkers))
 	mux.HandleFunc("/api/stats", withAdmin(g.handleGetStats))
+	if g.auditStore != nil {
+		mux.HandleFunc("/api/audit/usage", withAdmin(g.handleGetAuditUsage))
+	}
 
 	// Instance management endpoints (require admin)
 	if g.instanceHandlers != nil {
@@ -145,9 +184,23 @@ func (g *Gateway) Start() error {
 		g.authHandler.RegisterRoutes(mux, g.handleCORS)
 	}
 
+	// Apply middleware chain: recovery → request ID → body size limit.
+	// Note: we intentionally do NOT apply http.TimeoutHandler globally
+	// because streaming endpoints need long-lived connections. The
+	// inference timeout is enforced per-request in handleChatCompletions.
+	handler := chainMiddleware(
+		mux,
+		recoveryMiddleware(g.log),
+		requestIDMiddleware,
+		bodySizeLimitMiddleware(maxRequestBodyBytes),
+	)
+	if g.metrics != nil {
+		handler = g.metrics.HTTPMiddleware(handler)
+	}
+
 	g.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", g.config.HTTPPort),
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  g.config.ReadTimeout,
 		WriteTimeout: g.config.WriteTimeout,
 	}
@@ -157,6 +210,9 @@ func (g *Gateway) Start() error {
 
 // Stop gracefully stops the server.
 func (g *Gateway) Stop(ctx context.Context) error {
+	if g.rateLimiter != nil {
+		g.rateLimiter.Stop()
+	}
 	if g.httpServer != nil {
 		return g.httpServer.Shutdown(ctx)
 	}
@@ -183,7 +239,7 @@ func (g *Gateway) handleCORS(next http.HandlerFunc) http.HandlerFunc {
 				w.Header().Set("Vary", "Origin")
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Worker-Token")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Worker-Token, X-API-Key")
 
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
@@ -308,9 +364,39 @@ type ChatDelta struct {
 	Content string `json:"content,omitempty"`
 }
 
+func hashPrompt(messages []ChatMessage) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	hasher := sha256.New()
+	for _, msg := range messages {
+		_, _ = hasher.Write([]byte(msg.Role))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(msg.Name))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(msg.Content))
+		_, _ = hasher.Write([]byte{0})
+	}
+	sum := hex.EncodeToString(hasher.Sum(nil))
+	if len(sum) > 16 {
+		return sum[:16]
+	}
+	return sum
+}
+
 func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed")
+		return
+	}
+
+	// Backpressure: reject if too many in-flight requests
+	current := atomic.AddInt64(&g.inFlightRequests, 1)
+	defer atomic.AddInt64(&g.inFlightRequests, -1)
+
+	if current > g.maxInFlightDefault {
+		w.Header().Set("Retry-After", "5")
+		g.writeError(w, http.StatusServiceUnavailable, "overloaded", "Server is overloaded. Please retry shortly.")
 		return
 	}
 
@@ -331,6 +417,65 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Audit log fields
+	requestStart := time.Now()
+	requestID := r.Header.Get(HeaderRequestID)
+	keyID := ""
+	if record := auth.KeyFromContext(r.Context()); record != nil {
+		keyID = record.KeyPrefix
+	}
+	promptHash := hashPrompt(req.Messages)
+	auditStatus := "unknown_error"
+	auditTokenCount := 0
+	auditWorkerID := ""
+	auditErrorCode := ""
+	defer func() {
+		latencyMS := time.Since(requestStart).Milliseconds()
+		attrs := []any{
+			slog.String("request_id", requestID),
+			slog.String("key_id", keyID),
+			slog.String("model", req.Model),
+			slog.String("worker_id", auditWorkerID),
+			slog.Bool("stream", req.Stream),
+			slog.Int("message_count", len(req.Messages)),
+			slog.Int("token_count", auditTokenCount),
+			slog.String("prompt_hash", promptHash),
+			slog.String("status", auditStatus),
+			slog.Int64("latency_ms", latencyMS),
+		}
+		if auditErrorCode != "" {
+			attrs = append(attrs, slog.String("error_code", auditErrorCode))
+		}
+		g.log.Info("inference.audit", attrs...)
+
+		if g.auditStore != nil {
+			err := g.auditStore.AppendInference(audit.InferenceAuditRecord{
+				Timestamp:    requestStart.UTC(),
+				RequestID:    requestID,
+				KeyID:        keyID,
+				Model:        req.Model,
+				WorkerID:     auditWorkerID,
+				Stream:       req.Stream,
+				MessageCount: len(req.Messages),
+				TokenCount:   auditTokenCount,
+				PromptHash:   promptHash,
+				Status:       auditStatus,
+				ErrorCode:    auditErrorCode,
+				LatencyMS:    latencyMS,
+			})
+			if err != nil {
+				g.log.Warn("inference.audit_persist_failed",
+					slog.String("request_id", requestID),
+					slog.String("error", err.Error()),
+				)
+			}
+		}
+
+		if g.metrics != nil {
+			g.metrics.RecordInference(req.Stream, auditStatus, auditTokenCount, time.Since(requestStart))
+		}
+	}()
+
 	// Apply inference timeout — cancel if worker takes too long
 	ctx, cancel := context.WithTimeout(r.Context(), g.config.InferenceTimeout)
 	defer cancel()
@@ -342,43 +487,68 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// Route the request
 	routed, err := g.router.Route(inferenceReq)
 	if err != nil {
+		g.log.Warn("inference.route_failed",
+			slog.String("request_id", requestID),
+			slog.String("key_id", keyID),
+			slog.String("model", req.Model),
+			slog.String("error", err.Error()),
+			slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
+		)
 		if inferaErr, ok := err.(*types.InferaError); ok {
+			auditStatus = "failed"
+			auditErrorCode = string(inferaErr.Code)
 			status := g.errorCodeToStatus(inferaErr.Code)
 			g.writeError(w, status, string(inferaErr.Code), inferaErr.Message)
 			return
 		}
 		// No healthy workers → 503
+		auditStatus = "failed"
+		auditErrorCode = "no_workers"
 		g.writeError(w, http.StatusServiceUnavailable, "no_workers", "No healthy workers available for model: "+req.Model)
 		return
 	}
 
 	// Get worker client
+	auditWorkerID = routed.WorkerID
 	client, err := g.getWorkerClient(routed.WorkerID)
 	if err != nil {
+		g.log.Warn("inference.worker_unavailable",
+			slog.String("request_id", requestID),
+			slog.String("key_id", keyID),
+			slog.String("model", req.Model),
+			slog.String("worker_id", routed.WorkerID),
+			slog.String("error", err.Error()),
+			slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
+		)
+		auditStatus = "failed"
+		auditErrorCode = "worker_unavailable"
 		g.writeError(w, http.StatusServiceUnavailable, "worker_unavailable", err.Error())
 		return
 	}
 
 	if req.Stream {
-		g.handleStreamingInference(w, r, client, inferenceReq, req.Model)
+		auditTokenCount, auditStatus = g.handleStreamingInference(w, r, client, inferenceReq, req.Model)
 	} else {
-		g.handleNonStreamingInference(w, ctx, client, inferenceReq, req.Model)
+		auditTokenCount, auditStatus = g.handleNonStreamingInference(w, ctx, client, inferenceReq, req.Model)
+	}
+	if auditStatus != "success" {
+		auditErrorCode = auditStatus
 	}
 }
 
-func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context.Context, client *WorkerClient, req *types.InferenceRequest, model string) {
+func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context.Context, client *WorkerClient, req *types.InferenceRequest, model string) (int, string) {
 	// Call worker
 	resp, err := client.InferWithContext(ctx, req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			g.writeError(w, http.StatusGatewayTimeout, "inference_timeout", "Inference request timed out")
-			return
+			return 0, "inference_timeout"
 		}
 		if errors.Is(err, context.Canceled) {
-			return
+			return 0, "client_canceled"
 		}
 		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
-		return
+		return 0, "inference_error"
 	}
 
 	// Convert to OpenAI format
@@ -407,16 +577,17 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 	}
 
 	g.writeJSON(w, http.StatusOK, openAIResp)
+	return openAIResp.Usage.TotalTokens, "success"
 }
 
-func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) {
+func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) (int, string) {
 	// First, try to get the stream from worker
 	// This validates the request before we commit to SSE
 	chunks, err := client.InferStream(r.Context(), req)
 	if err != nil {
 		// Return regular error response (not SSE) since we haven't committed to streaming yet
 		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
-		return
+		return 0, "inference_error"
 	}
 
 	// Now commit to SSE
@@ -428,7 +599,7 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		g.writeError(w, http.StatusInternalServerError, "streaming_not_supported", "Streaming not supported")
-		return
+		return 0, "streaming_not_supported"
 	}
 
 	requestID := "chatcmpl-" + req.RequestID
@@ -453,7 +624,15 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
 
+	tokenCount := 0
+	generatedChars := 0
+
 	for chunk := range chunks {
+		generatedChars += len(chunk.Delta)
+		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
+			tokenCount = chunk.Usage.TotalTokens
+		}
+
 		openAIChunk := ChatCompletionChunk{
 			ID:      requestID,
 			Object:  "chat.completion.chunk",
@@ -482,6 +661,12 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	// Send [DONE]
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+
+	if tokenCount == 0 {
+		tokenCount = req.TokenEstimate() + (generatedChars / 4)
+	}
+
+	return tokenCount, "success"
 }
 
 func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
@@ -854,6 +1039,91 @@ func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {
 			"total_bytes": totalMemoryTotal,
 		},
 		"uptime_seconds": int64(time.Since(g.startedAt).Seconds()),
+	})
+}
+
+func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+	if g.auditStore == nil {
+		g.writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "Audit store is not configured")
+		return
+	}
+
+	now := time.Now().UTC()
+	start := now.Add(-24 * time.Hour)
+	end := now
+
+	if rawStart := strings.TrimSpace(r.URL.Query().Get("start")); rawStart != "" {
+		parsed, err := time.Parse(time.RFC3339, rawStart)
+		if err != nil {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "start must be RFC3339")
+			return
+		}
+		start = parsed.UTC()
+	}
+	if rawEnd := strings.TrimSpace(r.URL.Query().Get("end")); rawEnd != "" {
+		parsed, err := time.Parse(time.RFC3339, rawEnd)
+		if err != nil {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "end must be RFC3339")
+			return
+		}
+		end = parsed.UTC()
+	}
+	if !start.Before(end) {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "start must be before end")
+		return
+	}
+
+	bucket := strings.TrimSpace(r.URL.Query().Get("bucket"))
+	if bucket == "" {
+		bucket = "day"
+	}
+	if bucket != "day" && bucket != "hour" {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "bucket must be 'day' or 'hour'")
+		return
+	}
+
+	rows, err := g.auditStore.UsageByKey(audit.UsageQuery{
+		Start:  start,
+		End:    end,
+		Bucket: bucket,
+		KeyID:  strings.TrimSpace(r.URL.Query().Get("key_id")),
+		Model:  strings.TrimSpace(r.URL.Query().Get("model")),
+	})
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "audit_query_failed", err.Error())
+		return
+	}
+
+	type usageRow struct {
+		BucketStart string `json:"bucket_start"`
+		KeyID       string `json:"key_id"`
+		Requests    int64  `json:"requests"`
+		Tokens      int64  `json:"tokens"`
+		Successes   int64  `json:"successes"`
+		Errors      int64  `json:"errors"`
+	}
+
+	out := make([]usageRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, usageRow{
+			BucketStart: time.UnixMilli(row.BucketStartMS).UTC().Format(time.RFC3339),
+			KeyID:       row.KeyID,
+			Requests:    row.RequestCount,
+			Tokens:      row.TokenCount,
+			Successes:   row.SuccessCount,
+			Errors:      row.ErrorCount,
+		})
+	}
+
+	g.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"bucket": bucket,
+		"start":  start.Format(time.RFC3339),
+		"end":    end.Format(time.RFC3339),
+		"rows":   out,
 	})
 }
 

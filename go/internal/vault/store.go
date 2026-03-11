@@ -9,8 +9,37 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/infera/infera/go/internal/migrate"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// vaultMigrations defines the versioned schema for the vault database.
+var vaultMigrations = []migrate.Migration{
+	{
+		Version:     1,
+		Description: "create models table",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS models (
+			id            TEXT PRIMARY KEY,
+			name          TEXT NOT NULL,
+			source        TEXT NOT NULL DEFAULT 'huggingface',
+			source_uri    TEXT NOT NULL,
+			parameters    TEXT NOT NULL DEFAULT '',
+			quantization  TEXT NOT NULL DEFAULT 'none',
+			vram_required INTEGER NOT NULL DEFAULT 0,
+			max_context   INTEGER NOT NULL DEFAULT 4096,
+			family        TEXT NOT NULL DEFAULT '',
+			tags          TEXT NOT NULL DEFAULT '[]',
+			metadata      TEXT NOT NULL DEFAULT '{}',
+			status        TEXT NOT NULL DEFAULT 'available',
+			created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_models_family ON models(family);
+		CREATE INDEX IF NOT EXISTS idx_models_status ON models(status);
+		CREATE INDEX IF NOT EXISTS idx_models_name ON models(name);`,
+	},
+}
 
 // Model represents a model in the registry.
 type Model struct {
@@ -71,30 +100,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	query := `
-	CREATE TABLE IF NOT EXISTS models (
-		id            TEXT PRIMARY KEY,
-		name          TEXT NOT NULL,
-		source        TEXT NOT NULL DEFAULT 'huggingface',
-		source_uri    TEXT NOT NULL,
-		parameters    TEXT NOT NULL DEFAULT '',
-		quantization  TEXT NOT NULL DEFAULT 'none',
-		vram_required INTEGER NOT NULL DEFAULT 0,
-		max_context   INTEGER NOT NULL DEFAULT 4096,
-		family        TEXT NOT NULL DEFAULT '',
-		tags          TEXT NOT NULL DEFAULT '[]',
-		metadata      TEXT NOT NULL DEFAULT '{}',
-		status        TEXT NOT NULL DEFAULT 'available',
-		created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_models_family ON models(family);
-	CREATE INDEX IF NOT EXISTS idx_models_status ON models(status);
-	CREATE INDEX IF NOT EXISTS idx_models_name ON models(name);
-	`
-	_, err := s.db.Exec(query)
-	return err
+	return migrate.Run(s.db, vaultMigrations)
 }
 
 // Create inserts a new model into the registry.

@@ -1,0 +1,22 @@
+{{ define "infera.default.html" }}
+<h3>Infera Alert: {{ .CommonLabels.alertname }}</h3>
+<p><b>Status:</b> {{ .Status | toUpper }}</p>
+<p><b>Severity:</b> {{ .CommonLabels.severity }}</p>
+<p><b>Service:</b> {{ .CommonLabels.service }}</p>
+
+{{ if .CommonAnnotations.summary }}
+<p><b>Summary:</b> {{ .CommonAnnotations.summary }}</p>
+{{ end }}
+
+{{ if .CommonAnnotations.description }}
+<p><b>Description:</b> {{ .CommonAnnotations.description }}</p>
+{{ end }}
+
+{{ if .CommonAnnotations.runbook_url }}
+<p><b>Runbook:</b> <a href="{{ .CommonAnnotations.runbook_url }}">{{ .CommonAnnotations.runbook_url }}</a></p>
+{{ end }}
+
+<hr/>
+<p>Alert labels:</p>
+<pre>{{ range .Alerts }}{{ .Labels }}{{ "\n" }}{{ end }}</pre>
+{{ end }}

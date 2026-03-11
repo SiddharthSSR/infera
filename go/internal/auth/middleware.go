@@ -3,7 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -11,6 +11,8 @@ import (
 type contextKey string
 
 const keyContextKey contextKey = "auth_key"
+const sessionContextKey contextKey = "auth_session"
+const sessionCookieName = "infera_session"
 
 // KeyFromContext extracts the KeyRecord from the request context.
 func KeyFromContext(ctx context.Context) *KeyRecord {
@@ -20,14 +22,29 @@ func KeyFromContext(ctx context.Context) *KeyRecord {
 	return nil
 }
 
+// SessionFromContext extracts the SessionRecord from the request context.
+func SessionFromContext(ctx context.Context) *SessionRecord {
+	if v := ctx.Value(sessionContextKey); v != nil {
+		return v.(*SessionRecord)
+	}
+	return nil
+}
+
 // Handler wraps the auth store and provides middleware.
 type Handler struct {
-	store *Store
+	store  *Store
+	secure bool // true = Secure flag on cookies (HTTPS only)
 }
 
 // NewHandler creates a new auth handler.
 func NewHandler(store *Store) *Handler {
-	return &Handler{store: store}
+	return &Handler{store: store, secure: true}
+}
+
+// SetSecure controls the Secure flag on session cookies.
+// Set to false for local development (HTTP).
+func (h *Handler) SetSecure(secure bool) {
+	h.secure = secure
 }
 
 // Store returns the underlying store.
@@ -35,9 +52,24 @@ func (h *Handler) Store() *Store {
 	return h.store
 }
 
-// RequireAuth middleware rejects requests without a valid API key.
+// RequireAuth middleware rejects requests without a valid API key or session cookie.
+// It tries the session cookie first, then falls back to Bearer/X-API-Key headers.
 func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Try session cookie first
+		if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+			session, keyRecord, err := h.store.ValidateSession(cookie.Value)
+			if err == nil {
+				ctx := context.WithValue(r.Context(), keyContextKey, keyRecord)
+				ctx = context.WithValue(ctx, sessionContextKey, session)
+				next(w, r.WithContext(ctx))
+				return
+			}
+			// Cookie invalid/expired — clear it and fall through to Bearer
+			http.SetCookie(w, h.expiredSessionCookie())
+		}
+
+		// Fall back to Bearer / X-API-Key
 		key := extractKey(r)
 		if key == "" {
 			writeAuthError(w, http.StatusUnauthorized, "Authentication required. Provide API key via Authorization: Bearer <key> or X-API-Key header.")
@@ -83,6 +115,30 @@ func extractKey(r *http.Request) string {
 	return ""
 }
 
+func (h *Handler) sessionCookie(token string) *http.Cookie {
+	return &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   h.secure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(sessionDuration.Seconds()),
+	}
+}
+
+func (h *Handler) expiredSessionCookie() *http.Cookie {
+	return &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   h.secure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	}
+}
+
 func writeAuthError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -93,6 +149,6 @@ func writeAuthError(w http.ResponseWriter, status int, message string) {
 		},
 	}
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		log.Printf("failed to encode auth error response: %v", err)
+		slog.Error("failed to encode auth error response", slog.String("error", err.Error()))
 	}
 }

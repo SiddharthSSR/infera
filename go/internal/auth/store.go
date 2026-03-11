@@ -7,13 +7,51 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/infera/infera/go/internal/migrate"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// authMigrations defines the versioned schema for the auth database.
+var authMigrations = []migrate.Migration{
+	{
+		Version:     1,
+		Description: "create api_keys table",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS api_keys (
+			id         TEXT PRIMARY KEY,
+			key_hash   TEXT NOT NULL UNIQUE,
+			key_prefix TEXT NOT NULL,
+			name       TEXT NOT NULL,
+			role       TEXT NOT NULL DEFAULT 'user',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			last_used  DATETIME,
+			status     TEXT NOT NULL DEFAULT 'active'
+		);
+		CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+		CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status);`,
+	},
+	{
+		Version:     2,
+		Description: "create sessions table",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS sessions (
+			id         TEXT PRIMARY KEY,
+			key_id     TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+			token_hash TEXT NOT NULL UNIQUE,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at DATETIME NOT NULL,
+			last_seen  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
+		CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);`,
+	},
+}
 
 // KeyRecord represents a stored API key.
 type KeyRecord struct {
@@ -30,6 +68,7 @@ type KeyRecord struct {
 type Store struct {
 	db         *sql.DB
 	lastUsedCh chan string
+	lastSeenCh chan string
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup
 	closeOnce  sync.Once
@@ -48,10 +87,13 @@ func NewStore(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping auth database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	s := &Store{
 		db:         db,
 		lastUsedCh: make(chan string, 2048),
+		lastSeenCh: make(chan string, 2048),
 		shutdownCh: make(chan struct{}),
 	}
 	if err := s.migrate(); err != nil {
@@ -59,6 +101,8 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to run auth migrations: %w", err)
 	}
 	s.startLastUsedUpdater()
+	s.startSessionLastSeenUpdater()
+	s.startSessionPruner()
 
 	return s, nil
 }
@@ -73,23 +117,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	query := `
-	CREATE TABLE IF NOT EXISTS api_keys (
-		id         TEXT PRIMARY KEY,
-		key_hash   TEXT NOT NULL UNIQUE,
-		key_prefix TEXT NOT NULL,
-		name       TEXT NOT NULL,
-		role       TEXT NOT NULL DEFAULT 'user',
-		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		last_used  DATETIME,
-		status     TEXT NOT NULL DEFAULT 'active'
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
-	CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status);
-	`
-	_, err := s.db.Exec(query)
-	return err
+	return migrate.Run(s.db, authMigrations)
 }
 
 // CreateKey generates a new API key and stores its hash.
@@ -278,9 +306,124 @@ func (s *Store) CreateKeyFromRaw(fullKey, name, role string) (*KeyRecord, error)
 	}, nil
 }
 
+// SessionRecord represents a stored session.
+type SessionRecord struct {
+	ID        string    `json:"id"`
+	KeyID     string    `json:"key_id"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	LastSeen  time.Time `json:"last_seen"`
+}
+
+const sessionDuration = 24 * time.Hour
+
+// CreateSession creates a new session for the given key ID.
+// Returns the raw token (to be set as cookie) and the session record.
+func (s *Store) CreateSession(keyID string) (string, *SessionRecord, error) {
+	rawBytes := make([]byte, 32)
+	if _, err := rand.Read(rawBytes); err != nil {
+		return "", nil, fmt.Errorf("failed to generate session token: %w", err)
+	}
+	rawToken := hex.EncodeToString(rawBytes)
+	tokenHash := hashKey(rawToken)
+
+	id := uuid.New().String()
+	now := time.Now()
+	expiresAt := now.Add(sessionDuration)
+
+	_, err := s.db.Exec(`
+		INSERT INTO sessions (id, key_id, token_hash, created_at, expires_at, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		id, keyID, tokenHash, now, expiresAt, now,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	return rawToken, &SessionRecord{
+		ID:        id,
+		KeyID:     keyID,
+		CreatedAt: now,
+		ExpiresAt: expiresAt,
+		LastSeen:  now,
+	}, nil
+}
+
+// ValidateSession checks a raw session token.
+// Returns the session and associated key record if valid.
+func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, error) {
+	tokenHash := hashKey(rawToken)
+
+	row := s.db.QueryRow(`
+		SELECT s.id, s.key_id, s.created_at, s.expires_at, s.last_seen,
+		       k.id, k.key_prefix, k.name, k.role, k.created_at, k.last_used, k.status
+		FROM sessions s
+		JOIN api_keys k ON s.key_id = k.id
+		WHERE s.token_hash = ? AND s.expires_at > ? AND k.status = 'active'`,
+		tokenHash, time.Now(),
+	)
+
+	session := &SessionRecord{}
+	key := &KeyRecord{}
+	err := row.Scan(
+		&session.ID, &session.KeyID, &session.CreatedAt, &session.ExpiresAt, &session.LastSeen,
+		&key.ID, &key.KeyPrefix, &key.Name, &key.Role, &key.CreatedAt, &key.LastUsed, &key.Status,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil, fmt.Errorf("invalid or expired session")
+		}
+		return nil, nil, fmt.Errorf("failed to validate session: %w", err)
+	}
+
+	select {
+	case <-s.shutdownCh:
+	case s.lastSeenCh <- session.ID:
+	default:
+	}
+
+	return session, key, nil
+}
+
+// DeleteSession removes a session by ID.
+func (s *Store) DeleteSession(id string) error {
+	_, err := s.db.Exec("DELETE FROM sessions WHERE id = ?", id)
+	return err
+}
+
+// DeleteSessionByToken removes a session by raw token.
+func (s *Store) DeleteSessionByToken(rawToken string) error {
+	tokenHash := hashKey(rawToken)
+	_, err := s.db.Exec("DELETE FROM sessions WHERE token_hash = ?", tokenHash)
+	return err
+}
+
 func hashKey(key string) string {
 	h := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(h[:])
+}
+
+func (s *Store) startSessionPruner() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				result, err := s.db.Exec("DELETE FROM sessions WHERE expires_at <= ?", time.Now())
+				if err != nil {
+					slog.Warn("failed to prune expired sessions", slog.String("error", err.Error()))
+				} else if n, _ := result.RowsAffected(); n > 0 {
+					slog.Info("pruned expired sessions", slog.Int64("count", n))
+				}
+			case <-s.shutdownCh:
+				return
+			}
+		}
+	}()
 }
 
 func (s *Store) startLastUsedUpdater() {
@@ -305,6 +448,64 @@ func (s *Store) startLastUsedUpdater() {
 			select {
 			case id := <-s.lastUsedCh:
 				pending[id] = time.Now()
+			case <-ticker.C:
+				flush()
+			case <-s.shutdownCh:
+				flush()
+				return
+			}
+		}
+	}()
+}
+
+func (s *Store) startSessionLastSeenUpdater() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		pending := make(map[string]struct{})
+		flush := func() {
+			if len(pending) == 0 {
+				return
+			}
+
+			tx, err := s.db.Begin()
+			if err != nil {
+				slog.Warn("failed to begin session last_seen update transaction", slog.String("error", err.Error()))
+				pending = make(map[string]struct{})
+				return
+			}
+
+			stmt, err := tx.Prepare("UPDATE sessions SET last_seen = CURRENT_TIMESTAMP WHERE id = ?")
+			if err != nil {
+				_ = tx.Rollback()
+				slog.Warn("failed to prepare session last_seen update", slog.String("error", err.Error()))
+				pending = make(map[string]struct{})
+				return
+			}
+
+			for id := range pending {
+				if _, err := stmt.Exec(id); err != nil {
+					slog.Warn("failed to update session last_seen", slog.String("session_id", id), slog.String("error", err.Error()))
+				}
+			}
+
+			_ = stmt.Close()
+			if err := tx.Commit(); err != nil {
+				slog.Warn("failed to commit session last_seen updates", slog.String("error", err.Error()))
+			}
+			pending = make(map[string]struct{})
+		}
+
+		for {
+			select {
+			case id := <-s.lastSeenCh:
+				pending[id] = struct{}{}
+				if len(pending) >= 128 {
+					flush()
+				}
 			case <-ticker.C:
 				flush()
 			case <-s.shutdownCh:

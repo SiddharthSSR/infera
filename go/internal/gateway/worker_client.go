@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -17,8 +20,10 @@ import (
 // WorkerClient communicates with a worker via HTTP.
 // In production, this would use gRPC, but HTTP is simpler for the vertical slice.
 type WorkerClient struct {
-	address    string
-	httpClient *http.Client
+	address             string
+	httpClient          *http.Client
+	streamingHTTPClient *http.Client
+	breaker             *CircuitBreaker
 }
 
 // NewWorkerClient creates a new worker client.
@@ -26,9 +31,25 @@ func NewWorkerClient(address string) *WorkerClient {
 	return &WorkerClient{
 		address: address,
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: 120 * time.Second,
 		},
+		streamingHTTPClient: &http.Client{},
+		breaker:             NewCircuitBreaker(),
 	}
+}
+
+func shouldRecordFailure(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() && ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	return true
 }
 
 // WorkerInferRequest is the request format for the worker.
@@ -79,6 +100,10 @@ func (c *WorkerClient) Infer(req *types.InferenceRequest) (*types.InferenceRespo
 
 // InferWithContext sends an inference request with context propagation.
 func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.InferenceRequest) (*types.InferenceResponse, error) {
+	if !c.breaker.Allow() {
+		return nil, ErrCircuitOpen
+	}
+
 	// Convert to worker format
 	workerReq := WorkerInferRequest{
 		RequestID:  req.RequestID,
@@ -113,14 +138,19 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set(HeaderRequestID, req.RequestID)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		if shouldRecordFailure(ctx, err) {
+			c.breaker.RecordFailure()
+		}
 		return nil, fmt.Errorf("failed to call worker: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		c.breaker.RecordFailure()
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("worker error (status %d): %s", resp.StatusCode, string(bodyBytes))
 	}
@@ -128,8 +158,12 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 	// Parse response
 	var workerResp WorkerInferResponse
 	if err := json.NewDecoder(resp.Body).Decode(&workerResp); err != nil {
+		if shouldRecordFailure(ctx, err) {
+			c.breaker.RecordFailure()
+		}
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+	c.breaker.RecordSuccess()
 
 	// Convert to internal format
 	choices := make([]types.Choice, len(workerResp.Choices))
@@ -165,6 +199,10 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 
 // InferStream sends a streaming inference request to the worker.
 func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequest) (<-chan *types.TokenChunk, error) {
+	if !c.breaker.Allow() {
+		return nil, ErrCircuitOpen
+	}
+
 	// Convert to worker format
 	workerReq := WorkerInferRequest{
 		RequestID:  req.RequestID,
@@ -200,13 +238,18 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set(HeaderRequestID, req.RequestID)
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.streamingHTTPClient.Do(httpReq)
 	if err != nil {
+		if shouldRecordFailure(ctx, err) {
+			c.breaker.RecordFailure()
+		}
 		return nil, fmt.Errorf("failed to call worker: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		c.breaker.RecordFailure()
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		return nil, fmt.Errorf("worker error (status %d): %s", resp.StatusCode, string(bodyBytes))
@@ -221,6 +264,8 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 
 		decoder := json.NewDecoder(resp.Body)
 		index := 0
+		recordedSuccess := false
+		streamCompleted := false
 
 		for {
 			select {
@@ -239,10 +284,33 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 
 				if err := decoder.Decode(&chunk); err != nil {
 					if err == io.EOF {
+						if !recordedSuccess {
+							c.breaker.RecordFailure()
+						} else if !streamCompleted && ctx.Err() == nil {
+							c.breaker.RecordFailure()
+						}
 						return
 					}
-					// Try to continue on parse errors
+					if !recordedSuccess && shouldRecordFailure(ctx, err) {
+						c.breaker.RecordFailure()
+						return
+					}
+					if recordedSuccess && !streamCompleted && shouldRecordFailure(ctx, err) {
+						c.breaker.RecordFailure()
+					}
+					slog.Debug("worker stream decode error after stream start",
+						slog.String("worker_address", c.address),
+						slog.String("request_id", req.RequestID),
+						slog.Int("chunk_index", index),
+						slog.String("error", err.Error()),
+					)
+					// Try to continue on parse errors after the stream has already started.
 					continue
+				}
+
+				if !recordedSuccess {
+					c.breaker.RecordSuccess()
+					recordedSuccess = true
 				}
 
 				tokenChunk := &types.TokenChunk{
@@ -269,6 +337,7 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 				index++
 
 				if chunk.FinishReason != nil {
+					streamCompleted = true
 					return
 				}
 			}

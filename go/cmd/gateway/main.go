@@ -5,31 +5,38 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/gateway"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/providers/mock"
 	_ "github.com/infera/infera/go/internal/providers/runpod"
-	_ "github.com/infera/infera/go/internal/providers/vastai"
+	// vastai is stubbed — not registered until implemented
+	// _ "github.com/infera/infera/go/internal/providers/vastai"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/internal/vault"
 )
 
 func main() {
+	// Initialize structured logger
+	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(log)
+
 	// Parse flags
 	httpPort := flag.Int("port", 8080, "HTTP port")
 	runpodKey := flag.String("runpod-key", os.Getenv("RUNPOD_API_KEY"), "RunPod API key")
 	vastaiKey := flag.String("vastai-key", os.Getenv("VASTAI_API_KEY"), "Vast.ai API key")
 	flag.Parse()
 
-	log.Println("Starting Infera Gateway...")
+	log.Info("Starting Infera Gateway...")
 
 	// Create router
 	routerConfig := router.DefaultConfig()
@@ -41,12 +48,30 @@ func main() {
 	if workerImage == "" {
 		workerImage = "infera/worker:latest"
 	}
+	gatewayAddress := strings.TrimSpace(os.Getenv("INFERA_GATEWAY_ADDRESS"))
+	if gatewayAddress == "" {
+		gatewayAddress = fmt.Sprintf("localhost:%d", *httpPort)
+	}
+	if err := os.MkdirAll("data", 0755); err != nil {
+		log.Error("failed to create data directory", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 
-	instanceMgr := providers.NewManager(providers.ManagerConfig{
+	instanceMgr, err := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider: providers.ProviderMock,
 		WorkerImage:     workerImage,
-		GatewayAddress:  "localhost:8080",
+		GatewayAddress:  gatewayAddress,
+		CostDBPath:      "data/costs.db",
 	})
+	if err != nil {
+		log.Error("failed to initialize instance manager", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer func() {
+		if err := instanceMgr.Close(); err != nil {
+			log.Warn("failed to close instance manager", slog.String("error", err.Error()))
+		}
+	}()
 
 	// Register mock provider (always available for testing)
 	instanceMgr.RegisterProvider(mock.New())
@@ -58,33 +83,24 @@ func main() {
 			APIKey: *runpodKey,
 		})
 		if err != nil {
-			log.Printf("Warning: Failed to create RunPod provider: %v", err)
+			log.Warn("failed to create RunPod provider", slog.String("error", err.Error()))
 		} else {
 			instanceMgr.RegisterProvider(runpodProvider)
-			log.Println("RunPod provider registered")
+			log.Info("provider registered", slog.String("provider", "runpod"))
 		}
 	}
 
-	// Register Vast.ai if API key provided
-	if *vastaiKey != "" {
-		vastaiProvider, err := providers.CreateProvider(providers.ProviderConfig{
-			Type:   providers.ProviderVastAI,
-			APIKey: *vastaiKey,
-		})
-		if err != nil {
-			log.Printf("Warning: Failed to create Vast.ai provider: %v", err)
-		} else {
-			instanceMgr.RegisterProvider(vastaiProvider)
-			log.Println("Vast.ai provider registered")
-		}
-	}
+	// Vast.ai provider is stubbed — registration disabled until implemented.
+	// When ready, uncomment the import and this block.
+	_ = vastaiKey
 
 	// Create gateway
 	gatewayConfig := gateway.DefaultConfig()
 	gatewayConfig.HTTPPort = *httpPort
 	gatewayConfig.WorkerSharedToken = strings.TrimSpace(os.Getenv("INFERA_WORKER_SHARED_TOKEN"))
 	if gatewayConfig.WorkerSharedToken == "" {
-		log.Fatal("INFERA_WORKER_SHARED_TOKEN is required and cannot be empty")
+		log.Error("INFERA_WORKER_SHARED_TOKEN is required and cannot be empty")
+		os.Exit(1)
 	}
 	if allowedOrigins := parseAllowedOrigins(os.Getenv("INFERA_ALLOWED_ORIGINS")); len(allowedOrigins) > 0 {
 		gatewayConfig.AllowedOrigins = allowedOrigins
@@ -92,17 +108,15 @@ func main() {
 	gw := gateway.New(gatewayConfig, r, instanceMgr)
 
 	// Initialize vault (model registry)
-	if err := os.MkdirAll("data", 0755); err != nil {
-		log.Printf("Warning: Failed to create data directory: %v", err)
-	}
 	vaultStore, err := vault.NewStore("data/vault.db")
 	if err != nil {
-		log.Fatalf("Failed to initialize vault: %v", err)
+		log.Error("failed to initialize vault", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 	defer vaultStore.Close()
 
 	if err := vault.SeedDefaultModels(vaultStore); err != nil {
-		log.Printf("Warning: Failed to seed vault: %v", err)
+		log.Warn("failed to seed vault", slog.String("error", err.Error()))
 	}
 
 	gw.SetVaultHandler(vault.NewHandler(vaultStore))
@@ -110,44 +124,57 @@ func main() {
 	// Initialize auth (API key authentication)
 	authStore, err := auth.NewStore("data/auth.db")
 	if err != nil {
-		log.Fatalf("Failed to initialize auth store: %v", err)
+		log.Error("failed to initialize auth store", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 	defer authStore.Close()
 
 	// Bootstrap admin key from env or auto-generate on first run
 	keyCount, err := authStore.Count()
 	if err != nil {
-		log.Fatalf("Failed to count existing API keys: %v", err)
+		log.Error("failed to count existing API keys", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 	if keyCount == 0 {
 		adminKey := os.Getenv("INFERA_ADMIN_KEY")
 		if adminKey != "" {
-			// Use provided admin key
 			if _, err := authStore.CreateKeyFromRaw(adminKey, "Bootstrap Admin", "admin"); err != nil {
-				log.Fatalf("Failed to store bootstrap admin key from INFERA_ADMIN_KEY: %v", err)
-			} else {
-				log.Println("Admin key configured from INFERA_ADMIN_KEY")
+				log.Error("failed to store bootstrap admin key", slog.String("error", err.Error()))
+				os.Exit(1)
 			}
+			log.Info("admin key configured from INFERA_ADMIN_KEY")
 		} else {
-			// Auto-generate admin key
 			fullKey, record, err := authStore.CreateKey("Auto Admin", "admin")
 			if err != nil {
-				log.Fatalf("Failed to generate admin key: %v", err)
-			} else {
-				if err := persistBootstrapAdminKey("data/bootstrap_admin_key.txt", fullKey); err != nil {
-					if rollbackErr := authStore.DeleteKey(record.ID); rollbackErr != nil {
-						log.Printf("Failed to rollback bootstrap admin key %s after persist failure: %v", record.KeyPrefix, rollbackErr)
-					}
-					log.Fatalf("Failed to persist bootstrap admin key: %v", err)
-				}
-				log.Println("Auto-generated admin API key created.")
-				log.Printf("Key prefix: %s", record.KeyPrefix)
-				log.Println("Plaintext key stored at data/bootstrap_admin_key.txt with 0600 permissions.")
+				log.Error("failed to generate admin key", slog.String("error", err.Error()))
+				os.Exit(1)
 			}
+			if err := persistBootstrapAdminKey("data/bootstrap_admin_key.txt", fullKey); err != nil {
+				if rollbackErr := authStore.DeleteKey(record.ID); rollbackErr != nil {
+					log.Error("failed to rollback bootstrap admin key", slog.String("key_prefix", record.KeyPrefix), slog.String("error", rollbackErr.Error()))
+				}
+				log.Error("failed to persist bootstrap admin key", slog.String("error", err.Error()))
+				os.Exit(1)
+			}
+			log.Info("auto-generated admin API key created",
+				slog.String("key_prefix", record.KeyPrefix),
+				slog.String("key_file", "data/bootstrap_admin_key.txt"),
+			)
 		}
 	}
 
-	gw.SetAuthHandler(auth.NewHandler(authStore))
+	authHandler := auth.NewHandler(authStore)
+	authHandler.SetSecure(os.Getenv("INFERA_DEV_MODE") != "1")
+	gw.SetAuthHandler(authHandler)
+
+	// Initialize inference audit store (best-effort, non-fatal)
+	auditStore, err := audit.NewStore("data/audit.db")
+	if err != nil {
+		log.Warn("failed to initialize audit store", slog.String("error", err.Error()))
+	} else {
+		defer auditStore.Close()
+		gw.SetAuditStore(auditStore)
+	}
 
 	// Handle shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -165,7 +192,7 @@ func main() {
 			select {
 			case <-ticker.C:
 				if err := instanceMgr.RefreshInstances(ctx); err != nil {
-					log.Printf("Warning: Failed to refresh instances: %v", err)
+					log.Warn("failed to refresh instances", slog.String("error", err.Error()))
 				}
 			case <-ctx.Done():
 				return
@@ -175,25 +202,25 @@ func main() {
 
 	go func() {
 		<-sigChan
-		log.Println("Shutting down...")
+		log.Info("shutting down...")
 
 		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer shutdownCancel()
 
 		if err := gw.Stop(shutdownCtx); err != nil {
-			log.Printf("Error during shutdown: %v", err)
+			log.Error("error during shutdown", slog.String("error", err.Error()))
 		}
 
 		r.Stop()
 		cancel()
-		log.Println("Shutdown complete")
+		log.Info("shutdown complete")
 	}()
 
 	// Start gateway
-	log.Printf("Gateway listening on :%d", *httpPort)
-	log.Printf("Registered providers: %v", instanceMgr.ListProviders())
+	log.Info("gateway listening", slog.Int("port", *httpPort), slog.Any("providers", instanceMgr.ListProviders()))
 	if err := gw.Start(); err != nil {
-		log.Fatalf("Gateway error: %v", err)
+		log.Error("gateway error", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 }
 
@@ -215,14 +242,39 @@ func parseAllowedOrigins(raw string) []string {
 }
 
 func persistBootstrapAdminKey(path, fullKey string) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("bootstrap key file already exists: %s", path)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, ".bootstrap_admin_key.*")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	tmpPath := tmpFile.Name()
+	cleanup := func() {
+		_ = os.Remove(tmpPath)
+	}
 
-	if _, err := fmt.Fprintf(f, "%s\n", fullKey); err != nil {
+	if _, err := fmt.Fprintf(tmpFile, "%s\n", fullKey); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
 		return err
 	}
-	return f.Sync()
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
 }

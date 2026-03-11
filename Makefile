@@ -3,7 +3,7 @@
 .PHONY: python-build python-test python-lint run-worker
 .PHONY: frontend-build frontend-test frontend-lint run-frontend
 .PHONY: docker-build docker-push docker-up docker-down
-.PHONY: ngrok
+.PHONY: ngrok smoke-prod
 
 # ============================================================================
 # Configuration (override with environment variables)
@@ -14,6 +14,7 @@ INFERA_GATEWAY_ADDRESS ?=
 INFERA_WORKER_IMAGE ?= 
 INFERA_GITHUB_REPO ?= 
 DOCKER_USERNAME ?= 
+INFERA_BASE_URL ?= https://inferai.co.in
 
 # Ports
 GATEWAY_PORT ?= 8080
@@ -249,6 +250,15 @@ check-providers:
 
 check-offerings:
 	@curl -s http://localhost:$(GATEWAY_PORT)/api/offerings | python3 -m json.tool 2>/dev/null || echo "Gateway not running"
+
+# Production smoke test (health + authenticated models list)
+smoke-prod:
+	@if [ -z "$(INFERA_SMOKE_API_KEY)" ] && [ -z "$(INFERA_ADMIN_KEY)" ]; then \
+		echo "Error: INFERA_SMOKE_API_KEY (or INFERA_ADMIN_KEY) is required"; \
+		echo "Usage: make smoke-prod INFERA_SMOKE_API_KEY=inf_xxx [INFERA_BASE_URL=https://inferai.co.in]"; \
+		exit 1; \
+	fi
+	@./scripts/smoke-test.sh "$(INFERA_BASE_URL)"
 
 # ============================================================================
 # Clean

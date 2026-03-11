@@ -4,6 +4,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -28,18 +29,35 @@ type ManagerConfig struct {
 	DefaultProvider ProviderType
 	WorkerImage     string // Docker image for workers
 	GatewayAddress  string // Gateway address for workers to connect
+	CostDBPath      string // Path to SQLite DB for persistent cost tracking (empty = in-memory)
 }
 
 // NewManager creates a new instance manager.
-func NewManager(config ManagerConfig) *Manager {
+func NewManager(config ManagerConfig) (*Manager, error) {
+	var costs *CostTracker
+	if config.CostDBPath != "" {
+		var err error
+		costs, err = NewPersistentCostTracker(config.CostDBPath)
+		if err != nil {
+			return nil, fmt.Errorf("initialize persistent cost tracker %q: %w", config.CostDBPath, err)
+		}
+	} else {
+		costs = NewCostTracker()
+	}
+
 	return &Manager{
 		providers:       make(map[ProviderType]Provider),
 		instances:       make(map[string]*Instance),
-		costs:           NewCostTracker(),
+		costs:           costs,
 		defaultProvider: config.DefaultProvider,
 		workerImage:     config.WorkerImage,
 		gatewayAddress:  config.GatewayAddress,
-	}
+	}, nil
+}
+
+// Close releases provider manager resources.
+func (m *Manager) Close() error {
+	return m.costs.Close()
 }
 
 // RegisterProvider adds a provider to the manager.
@@ -268,8 +286,10 @@ func (m *Manager) ListOfferings(ctx context.Context) ([]*GPUOffering, error) {
 	for _, provider := range providers {
 		offerings, err := provider.ListOfferings(ctx)
 		if err != nil {
-			// Log the error for debugging
-			fmt.Printf("Warning: Failed to get offerings from %s: %v\n", provider.Name(), err)
+			slog.Warn("providers.list_offerings_failed",
+				slog.String("provider", string(provider.Name())),
+				slog.String("error", err.Error()),
+			)
 			continue // Skip failed providers
 		}
 		allOfferings = append(allOfferings, offerings...)
