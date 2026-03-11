@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -9,187 +10,156 @@ import (
 
 func newTestHandler(t *testing.T) (*Handler, *Store) {
 	t.Helper()
-	dir := t.TempDir()
-	s, err := NewStore(filepath.Join(dir, "auth_test.db"))
+	dbPath := filepath.Join(t.TempDir(), "test_auth.db")
+	s, err := NewStore(dbPath)
 	if err != nil {
-		t.Fatalf("NewStore: %v", err)
+		t.Fatalf("failed to create test store: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	h := NewHandler(s)
-	h.SetSecure(false)
-	return h, s
+	return NewHandler(s), s
 }
 
-func okHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
-}
-
-// ---------- Bearer / X-API-Key ----------
-
-func TestRequireAuth_ValidBearer(t *testing.T) {
+func TestRequireAuth(t *testing.T) {
 	h, s := newTestHandler(t)
-	fullKey, _, _ := s.CreateKey("k", "user")
 
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+fullKey)
-	rr := httptest.NewRecorder()
-	h.RequireAuth(okHandler)(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rr.Code)
+	// Create a valid key
+	fullKey, _, err := s.CreateKey("auth-test", "user")
+	if err != nil {
+		t.Fatalf("CreateKey failed: %v", err)
 	}
-}
 
-func TestRequireAuth_ValidXAPIKey(t *testing.T) {
-	h, s := newTestHandler(t)
-	fullKey, _, _ := s.CreateKey("k", "user")
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("X-API-Key", fullKey)
-	rr := httptest.NewRecorder()
-	h.RequireAuth(okHandler)(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rr.Code)
-	}
-}
-
-func TestRequireAuth_NoKey(t *testing.T) {
-	h, _ := newTestHandler(t)
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	rr := httptest.NewRecorder()
-	h.RequireAuth(okHandler)(rr, req)
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", rr.Code)
-	}
-}
-
-func TestRequireAuth_InvalidKey(t *testing.T) {
-	h, _ := newTestHandler(t)
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer inf_invalid")
-	rr := httptest.NewRecorder()
-	h.RequireAuth(okHandler)(rr, req)
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", rr.Code)
-	}
-}
-
-// ---------- RequireAdmin ----------
-
-func TestRequireAdmin_AdminKey(t *testing.T) {
-	h, s := newTestHandler(t)
-	fullKey, _, _ := s.CreateKey("k", "admin")
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+fullKey)
-	rr := httptest.NewRecorder()
-	h.RequireAdmin(okHandler)(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rr.Code)
-	}
-}
-
-func TestRequireAdmin_UserKey(t *testing.T) {
-	h, s := newTestHandler(t)
-	fullKey, _, _ := s.CreateKey("k", "user")
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+fullKey)
-	rr := httptest.NewRecorder()
-	h.RequireAdmin(okHandler)(rr, req)
-
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("expected 403, got %d", rr.Code)
-	}
-}
-
-func TestRequireAdmin_NoKey(t *testing.T) {
-	h, _ := newTestHandler(t)
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	rr := httptest.NewRecorder()
-	h.RequireAdmin(okHandler)(rr, req)
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", rr.Code)
-	}
-}
-
-// ---------- Cookie auth ----------
-
-func TestRequireAuth_ValidCookie(t *testing.T) {
-	h, s := newTestHandler(t)
-	_, rec, _ := s.CreateKey("k", "admin")
-	token, _, _ := s.CreateSession(rec.ID)
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-	rr := httptest.NewRecorder()
-
-	var ctxKey *KeyRecord
-	var ctxSession *SessionRecord
-	h.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
-		ctxKey = KeyFromContext(r.Context())
-		ctxSession = SessionFromContext(r.Context())
+	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})(rr, req)
+		w.Write([]byte("ok"))
+	})
 
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rr.Code)
-	}
-	if ctxKey == nil || ctxKey.ID != rec.ID {
-		t.Error("KeyFromContext missing or wrong after cookie auth")
-	}
-	if ctxSession == nil {
-		t.Error("SessionFromContext missing after cookie auth")
-	}
+	t.Run("valid Bearer token", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Authorization", "Bearer "+fullKey)
+		w := httptest.NewRecorder()
+
+		h.RequireAuth(okHandler)(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("valid X-API-Key header", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("X-API-Key", fullKey)
+		w := httptest.NewRecorder()
+
+		h.RequireAuth(okHandler)(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("KeyRecord in context", func(t *testing.T) {
+		var gotRecord *KeyRecord
+		contextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotRecord = KeyFromContext(r.Context())
+			w.WriteHeader(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Authorization", "Bearer "+fullKey)
+		w := httptest.NewRecorder()
+
+		h.RequireAuth(contextHandler)(w, req)
+
+		if gotRecord == nil {
+			t.Fatal("expected KeyRecord in context, got nil")
+		}
+		if gotRecord.Name != "auth-test" {
+			t.Errorf("expected name auth-test, got %s", gotRecord.Name)
+		}
+	})
+
+	t.Run("no key returns 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		w := httptest.NewRecorder()
+
+		h.RequireAuth(okHandler)(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401, got %d", w.Code)
+		}
+	})
+
+	t.Run("invalid key returns 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Authorization", "Bearer inf_invalidkey000000000000000000000000000000000000")
+		w := httptest.NewRecorder()
+
+		h.RequireAuth(okHandler)(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401, got %d", w.Code)
+		}
+	})
 }
 
-func TestRequireAuth_ExpiredCookieFallsThrough(t *testing.T) {
-	h, _ := newTestHandler(t)
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "expired_token"})
-	rr := httptest.NewRecorder()
-	h.RequireAuth(okHandler)(rr, req)
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", rr.Code)
-	}
-}
-
-func TestRequireAuth_InvalidCookieValidBearer(t *testing.T) {
+func TestRequireAdmin(t *testing.T) {
 	h, s := newTestHandler(t)
-	fullKey, _, _ := s.CreateKey("k", "user")
 
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "bad_token"})
-	req.Header.Set("Authorization", "Bearer "+fullKey)
-	rr := httptest.NewRecorder()
-	h.RequireAuth(okHandler)(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected 200 (Bearer fallback), got %d", rr.Code)
+	adminKey, _, err := s.CreateKey("admin-key", "admin")
+	if err != nil {
+		t.Fatalf("CreateKey failed for admin key: %v", err)
 	}
+	userKey, _, err := s.CreateKey("user-key", "user")
+	if err != nil {
+		t.Fatalf("CreateKey failed for user key: %v", err)
+	}
+
+	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	t.Run("admin key returns 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+		req.Header.Set("Authorization", "Bearer "+adminKey)
+		w := httptest.NewRecorder()
+
+		h.RequireAdmin(okHandler)(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("user key returns 403", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+		req.Header.Set("Authorization", "Bearer "+userKey)
+		w := httptest.NewRecorder()
+
+		h.RequireAdmin(okHandler)(w, req)
+
+		if w.Code != http.StatusForbidden {
+			t.Errorf("expected 403, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("no key returns 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+		w := httptest.NewRecorder()
+
+		h.RequireAdmin(okHandler)(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401, got %d", w.Code)
+		}
+	})
 }
 
-func TestKeyFromContext_Nil(t *testing.T) {
-	req := httptest.NewRequest("GET", "/test", nil)
-	if KeyFromContext(req.Context()) != nil {
-		t.Error("expected nil for empty context")
-	}
-}
-
-func TestSessionFromContext_Nil(t *testing.T) {
-	req := httptest.NewRequest("GET", "/test", nil)
-	if SessionFromContext(req.Context()) != nil {
-		t.Error("expected nil for empty context")
-	}
+func TestKeyFromContext(t *testing.T) {
+	t.Run("returns nil when no key in context", func(t *testing.T) {
+		ctx := context.Background()
+		record := KeyFromContext(ctx)
+		if record != nil {
+			t.Error("expected nil, got a record")
+		}
+	})
 }

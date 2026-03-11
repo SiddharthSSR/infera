@@ -118,13 +118,6 @@ INFERA_GATEWAY_ADDRESS=https://inferai.co.in
 INFERA_ALLOWED_ORIGINS=https://inferai.co.in
 INFERA_WORKER_SHARED_TOKEN=<long-random-token>
 INFERA_WORKER_IMAGE=<registry>/infera-worker:<pinned-tag>
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=<strong-password>
-ALERT_EMAIL_TO=alerts@your-domain.com
-ALERT_SMTP_FROM=alerts@your-domain.com
-ALERT_SMTP_SMARTHOST=smtp.gmail.com:587
-ALERT_SMTP_USERNAME=alerts@your-domain.com
-ALERT_SMTP_PASSWORD=<gmail-app-password>
 HF_TOKEN=... # optional
 ```
 
@@ -132,7 +125,6 @@ Notes:
 
 - Keep `INFERA_WORKER_SHARED_TOKEN` identical on gateway and workers.
 - Avoid using `latest` for worker image in production.
-- Alertmanager values in `docker-compose.prod.yml` are required in production; do not leave them as placeholders.
 
 ### 3. Deploy
 
@@ -148,35 +140,15 @@ docker compose -f docker-compose.prod.yml ps
 ```bash
 curl -I https://inferai.co.in
 curl -I https://inferai.co.in/health
-curl -I https://dashboard.inferai.co.in
 curl -i https://inferai.co.in/api/stats
 ```
 
 Expected:
 
 - `/` and `/health` return `200`
-- `dashboard.inferai.co.in` returns `200` and serves Grafana login
 - `/api/stats` returns `401` without API key
 
-### 5. Monitoring Bootstrap
-
-Production compose now includes Prometheus, Alertmanager, and Grafana:
-
-- Prometheus config: `deploy/observability/prometheus/prometheus.yml`
-- Alert rules: `deploy/observability/prometheus/rules/infera-alerts.yml`
-- Alertmanager routing: `deploy/observability/alertmanager/alertmanager.yml`
-- Alertmanager templates: `deploy/observability/alertmanager/templates/`
-- Grafana provisioning: `deploy/observability/grafana/provisioning/`
-- Starter dashboard: `deploy/observability/grafana/dashboards/infera-overview.json`
-- Runbooks: `deploy/observability/RUNBOOKS.md`
-
-For worker scraping, edit:
-
-- `deploy/observability/prometheus/worker_targets.json`
-
-Use `worker_targets.example.json` as template.
-
-### 6. Worker Registration Checklist
+### 5. Worker Registration Checklist
 
 If `/health` shows `workers: 0`:
 

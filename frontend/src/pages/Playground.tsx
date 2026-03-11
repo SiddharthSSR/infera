@@ -5,7 +5,16 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { useModels } from '../hooks/useApi';
 import { useChat } from '../App';
-import { streamChatCompletion } from '../lib/api';
+import { clearApiKey, getApiKey } from '../lib/api';
+
+interface HistoryEntry {
+  id: string;
+  time: string;
+  latencyMs: number;
+  preview: string;
+  promptTokens?: number;
+  completionTokens?: number;
+}
 
 interface TokenUsage {
   promptTokens: number;
@@ -15,16 +24,7 @@ interface TokenUsage {
 }
 
 export function Playground() {
-  const {
-    history,
-    setHistory,
-    selectedModel,
-    setSelectedModel,
-    temperature,
-    setTemperature,
-    maxTokens,
-    setMaxTokens,
-  } = useChat();
+  const { selectedModel, setSelectedModel, temperature, setTemperature, maxTokens, setMaxTokens } = useChat();
   const { data: models } = useModels();
   const allModels = models || [];
 
@@ -34,6 +34,7 @@ export function Playground() {
   const [isLoading, setIsLoading] = useState(false);
   const [topP, setTopP] = useState(1.0);
   const [freqPenalty, setFreqPenalty] = useState(0.0);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const [focusMode, setFocusMode] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 900);
@@ -89,32 +90,66 @@ export function Playground() {
       }
       messages.push({ role: 'user' as const, content: prompt });
 
-      const request = {
-        model: selectedModel,
-        messages,
-        temperature,
-        max_tokens: maxTokens,
-        top_p: topP,
-        frequency_penalty: freqPenalty,
-      };
-
-      let fullResponse = '';
-      let streamingPromptTokens: number | undefined;
-      let streamingCompletionTokens: number | undefined;
-
-      for await (const chunk of streamChatCompletion(request, {
-        onUsage: (usage) => {
-          streamingPromptTokens = usage.prompt_tokens;
-          streamingCompletionTokens = usage.completion_tokens;
+      // Stream response
+      const apiKey = getApiKey();
+      const res = await fetch('/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
         },
-      })) {
-        fullResponse += chunk;
-        setResponse(fullResponse);
+        body: JSON.stringify({
+          model: selectedModel,
+          messages,
+          temperature,
+          max_tokens: maxTokens,
+          top_p: topP,
+          frequency_penalty: freqPenalty,
+          stream: true,
+        }),
+      });
+
+      if (res.status === 401) {
+        clearApiKey();
+        window.dispatchEvent(new Event('auth-expired'));
+        throw new Error('Authentication expired. Please sign in again.');
+      }
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullResponse = '';
+      let usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } = {};
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
+
+          for (const line of lines) {
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta?.content || '';
+              fullResponse += delta;
+              setResponse(fullResponse);
+              // Capture usage data if present (some providers send it in the last chunk)
+              if (parsed.usage) {
+                usage = parsed.usage;
+              }
+            } catch { /* skip invalid JSON */ }
+          }
+        }
       }
 
       const latency = Date.now() - startTime;
-      const completionTokens = streamingCompletionTokens ?? Math.round(fullResponse.split(/\s+/).length * 1.3);
-      const promptTokens = streamingPromptTokens ?? Math.round(prompt.split(/\s+/).length * 1.3);
+      const completionTokens = usage.completion_tokens || Math.round(fullResponse.split(/\s+/).length * 1.3);
+      const promptTokens = usage.prompt_tokens || Math.round(prompt.split(/\s+/).length * 1.3);
       const tokensPerSec = latency > 0 ? (completionTokens / (latency / 1000)) : 0;
 
       setTokenUsage({
@@ -140,7 +175,7 @@ export function Playground() {
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, selectedModel, systemPrompt, temperature, maxTokens, topP, freqPenalty, setHistory]);
+  }, [prompt, selectedModel, systemPrompt, temperature, maxTokens, topP, freqPenalty]);
 
   const handleClear = () => {
     setPrompt('');

@@ -18,14 +18,12 @@ function ChartBars({ heights, activeIndex }: { heights: number[]; activeIndex?: 
 
 export function Dashboard() {
   const navigate = useNavigate();
-  const { data: workers, isLoading: loadingWorkers, isError: errorWorkers } = useWorkers();
-  const { data: stats, isLoading: loadingStats, isError: errorStats } = useStats();
+  const { data: workers, isLoading: loadingWorkers } = useWorkers();
+  const { data: stats, isLoading: loadingStats } = useStats();
   const { data: instances, isLoading: loadingInstances } = useInstances();
   const { data: costs, isLoading: loadingCosts } = useCosts();
   const { data: models, isLoading: loadingModels } = useModels();
   const isLoading = loadingWorkers || loadingStats || loadingInstances || loadingCosts || loadingModels;
-
-  const gatewayDown = !isLoading && (errorWorkers && !workers) && (errorStats && !stats);
 
   const activeInstances = instances?.filter(i => i.status === 'running') || [];
   const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];
@@ -39,28 +37,6 @@ export function Dashboard() {
           <SkeletonCell />
           <SkeletonCell />
           <SkeletonCell />
-        </div>
-      </div>
-    );
-  }
-
-  if (gatewayDown) {
-    return (
-      <div className="animate-fade-in">
-        <div className="grid-row">
-          <div className="cell" style={{ gridColumn: 'span 4', textAlign: 'center', padding: '4rem 2rem' }}>
-            <div style={{ fontSize: '2rem', fontWeight: 700, marginBottom: '1rem', letterSpacing: '-0.02em' }}>
-              Gateway Unreachable
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', maxWidth: 480, margin: '0 auto 2rem', lineHeight: 1.6 }}>
-              Unable to connect to the Infera gateway. The service may be restarting or experiencing an outage.
-              The dashboard will automatically reconnect when the gateway is available.
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              <span className="status-dot inactive" />
-              Retrying periodically...
-            </div>
-          </div>
         </div>
       </div>
     );

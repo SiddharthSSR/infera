@@ -12,20 +12,16 @@ import (
 	"github.com/infera/infera/go/internal/providers/mock"
 )
 
-func setupTestHandlers(t *testing.T) *InstanceHandlers {
-	t.Helper()
-	mgr, err := providers.NewManager(providers.ManagerConfig{
+func setupTestHandlers() *InstanceHandlers {
+	mgr := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider: providers.ProviderMock,
 	})
-	if err != nil {
-		t.Fatalf("failed to create manager: %v", err)
-	}
 	mgr.RegisterProvider(mock.New())
 	return NewInstanceHandlers(mgr)
 }
 
 func TestHandleInstances(t *testing.T) {
-	h := setupTestHandlers(t)
+	h := setupTestHandlers()
 
 	t.Run("GET empty list", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/instances", nil)
@@ -59,7 +55,7 @@ func TestHandleInstances(t *testing.T) {
 }
 
 func TestHandleProvision(t *testing.T) {
-	h := setupTestHandlers(t)
+	h := setupTestHandlers()
 
 	t.Run("Successful provision", func(t *testing.T) {
 		body := map[string]interface{}{
@@ -134,7 +130,7 @@ func TestHandleProvision(t *testing.T) {
 }
 
 func TestHandleInstanceByID(t *testing.T) {
-	h := setupTestHandlers(t)
+	h := setupTestHandlers()
 
 	// First provision an instance
 	body := map[string]interface{}{
@@ -203,7 +199,7 @@ func TestHandleInstanceByID(t *testing.T) {
 }
 
 func TestHandleStartStop(t *testing.T) {
-	h := setupTestHandlers(t)
+	h := setupTestHandlers()
 
 	// Provision an instance
 	body := map[string]interface{}{
@@ -258,7 +254,7 @@ func TestHandleStartStop(t *testing.T) {
 }
 
 func TestHandleOfferings(t *testing.T) {
-	h := setupTestHandlers(t)
+	h := setupTestHandlers()
 
 	t.Run("GET offerings", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/offerings", nil)
@@ -292,7 +288,7 @@ func TestHandleOfferings(t *testing.T) {
 }
 
 func TestHandleProviders(t *testing.T) {
-	h := setupTestHandlers(t)
+	h := setupTestHandlers()
 
 	t.Run("GET providers", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/providers", nil)
@@ -321,7 +317,7 @@ func TestHandleProviders(t *testing.T) {
 }
 
 func TestHandleCosts(t *testing.T) {
-	h := setupTestHandlers(t)
+	h := setupTestHandlers()
 
 	t.Run("GET costs - empty", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/costs", nil)

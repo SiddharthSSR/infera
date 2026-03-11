@@ -10,8 +10,7 @@ import { Logs } from './pages/Logs';
 import { Models } from './pages/Models';
 import { ApiKeys } from './pages/ApiKeys';
 import { Login } from './pages/Login';
-import { getSession, destroySession } from './lib/api';
-import { ErrorBoundary } from './components/ErrorBoundary';
+import { getApiKey, clearApiKey } from './lib/api';
 import type { ChatMessage } from './types';
 
 // Chat message with metadata
@@ -20,21 +19,10 @@ interface Message extends ChatMessage {
   timestamp: Date;
 }
 
-interface PlaygroundHistoryEntry {
-  id: string;
-  time: string;
-  latencyMs: number;
-  preview: string;
-  promptTokens?: number;
-  completionTokens?: number;
-}
-
 // Chat Context - to persist chat state across page switches
 interface ChatContextType {
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
-  history: PlaygroundHistoryEntry[];
-  setHistory: React.Dispatch<React.SetStateAction<PlaygroundHistoryEntry[]>>;
   selectedModel: string;
   setSelectedModel: (model: string) => void;
   temperature: number;
@@ -115,37 +103,23 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
 // Main App Content
 function AppContent() {
   const location = useLocation();
-  // null = loading, true = authenticated, false = not authenticated
-  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [authenticated, setAuthenticated] = useState(() => !!getApiKey());
 
   // Chat state - persisted across page switches
   const [messages, setMessages] = useState<Message[]>([]);
-  const [history, setHistory] = useState<PlaygroundHistoryEntry[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
 
-  // Check for existing session on startup
-  useEffect(() => {
-    getSession()
-      .then((session) => {
-        setAuthenticated(session !== null);
-      })
-      .catch(() => {
-        setAuthenticated(false);
-      });
-  }, []);
-
   const handleLogout = useCallback(() => {
     setMessages([]);
-    setHistory([]);
     setSelectedModel('');
     setTemperature(0.7);
     setMaxTokens(2048);
-    destroySession();
+    clearApiKey();
     setAuthenticated(false);
     queryClient.clear();
-  }, [setMessages, setHistory, setSelectedModel, setTemperature, setMaxTokens]);
+  }, [setMessages, setSelectedModel, setTemperature, setMaxTokens]);
 
   // Listen for auth-expired events from api.ts
   useEffect(() => {
@@ -153,23 +127,6 @@ function AppContent() {
     window.addEventListener('auth-expired', handler);
     return () => window.removeEventListener('auth-expired', handler);
   }, [handleLogout]);
-
-  if (authenticated === null) {
-    return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: '100vh',
-        color: 'var(--text-secondary)',
-        fontFamily: 'var(--font-main)',
-        fontSize: '0.85rem',
-        letterSpacing: '0.05em',
-      }}>
-        LOADING...
-      </div>
-    );
-  }
 
   if (!authenticated) {
     return <Login onAuthenticated={() => setAuthenticated(true)} />;
@@ -180,8 +137,6 @@ function AppContent() {
   const chatContextValue: ChatContextType = {
     messages,
     setMessages,
-    history,
-    setHistory,
     selectedModel,
     setSelectedModel,
     temperature,
@@ -215,7 +170,6 @@ function AppContent() {
 // Root App with Providers
 function App() {
   return (
-    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <AppContent />
       <Toaster
@@ -230,7 +184,6 @@ function App() {
         }}
       />
     </QueryClientProvider>
-    </ErrorBoundary>
   );
 }
 

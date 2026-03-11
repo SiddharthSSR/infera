@@ -3,7 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"log"
 	"sync"
 	"time"
 
@@ -217,34 +217,17 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 
 	now := time.Now()
 	toRemove := []string{}
-	type registryLogEntry struct {
-		message            string
-		workerID           string
-		sinceHeartbeat     time.Duration
-		unhealthyThreshold time.Duration
-		removalThreshold   time.Duration
-	}
-	logEntries := []registryLogEntry{}
+	logMessages := []string{}
 
 	for workerID, worker := range r.workers {
 		timeSinceHeartbeat := now.Sub(worker.LastHealthCheck)
 
 		if timeSinceHeartbeat > r.config.RemovalThreshold {
 			toRemove = append(toRemove, workerID)
-			logEntries = append(logEntries, registryLogEntry{
-				message:          "removing worker after missed heartbeats",
-				workerID:         workerID,
-				sinceHeartbeat:   timeSinceHeartbeat,
-				removalThreshold: r.config.RemovalThreshold,
-			})
+			logMessages = append(logMessages, fmt.Sprintf("Removing worker %s: no heartbeat for %v", workerID, timeSinceHeartbeat.Round(time.Second)))
 		} else if timeSinceHeartbeat > r.config.UnhealthyThreshold {
 			if worker.Status != types.WorkerStatusUnhealthy {
-				logEntries = append(logEntries, registryLogEntry{
-					message:            "marking worker unhealthy after missed heartbeats",
-					workerID:           workerID,
-					sinceHeartbeat:     timeSinceHeartbeat,
-					unhealthyThreshold: r.config.UnhealthyThreshold,
-				})
+				logMessages = append(logMessages, fmt.Sprintf("Worker %s unhealthy: no heartbeat for %v", workerID, timeSinceHeartbeat.Round(time.Second)))
 			}
 			worker.UpdateStatus(types.WorkerStatusUnhealthy)
 		}
@@ -259,18 +242,8 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 	}
 
 	r.mu.Unlock()
-	for _, entry := range logEntries {
-		attrs := []any{
-			slog.String("worker_id", entry.workerID),
-			slog.Duration("since_heartbeat", entry.sinceHeartbeat.Round(time.Second)),
-		}
-		if entry.unhealthyThreshold > 0 {
-			attrs = append(attrs, slog.Duration("unhealthy_threshold", entry.unhealthyThreshold))
-		}
-		if entry.removalThreshold > 0 {
-			attrs = append(attrs, slog.Duration("removal_threshold", entry.removalThreshold))
-		}
-		slog.Info(entry.message, attrs...)
+	for _, msg := range logMessages {
+		log.Print(msg)
 	}
 }
 

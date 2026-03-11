@@ -1,278 +1,324 @@
 package auth
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	dir := t.TempDir()
-	s, err := NewStore(filepath.Join(dir, "auth_test.db"))
+	dbPath := filepath.Join(t.TempDir(), "test_auth.db")
+	s, err := NewStore(dbPath)
 	if err != nil {
-		t.Fatalf("NewStore: %v", err)
+		t.Fatalf("failed to create test store: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
 }
 
-// ---------- Key CRUD ----------
-
 func TestCreateKey(t *testing.T) {
 	s := newTestStore(t)
-	fullKey, rec, err := s.CreateKey("test-key", "user")
-	if err != nil {
-		t.Fatalf("CreateKey: %v", err)
-	}
-	if !strings.HasPrefix(fullKey, "inf_") {
-		t.Errorf("expected key prefix inf_, got %s", fullKey[:4])
-	}
-	if rec.Name != "test-key" || rec.Role != "user" || rec.Status != "active" {
-		t.Errorf("unexpected record: %+v", rec)
-	}
-}
 
-func TestCreateKey_MissingName(t *testing.T) {
-	s := newTestStore(t)
-	_, _, err := s.CreateKey("", "user")
-	if err == nil {
-		t.Fatal("expected error for empty name")
-	}
-}
+	t.Run("valid key", func(t *testing.T) {
+		fullKey, record, err := s.CreateKey("test-key", "user")
+		if err != nil {
+			t.Fatalf("CreateKey failed: %v", err)
+		}
+		if !strings.HasPrefix(fullKey, "inf_") {
+			t.Errorf("expected key to start with inf_, got %s", fullKey[:8])
+		}
+		if record.Name != "test-key" {
+			t.Errorf("expected name test-key, got %s", record.Name)
+		}
+		if record.Role != "user" {
+			t.Errorf("expected role user, got %s", record.Role)
+		}
+		if record.Status != "active" {
+			t.Errorf("expected status active, got %s", record.Status)
+		}
+		if record.ID == "" {
+			t.Error("expected non-empty ID")
+		}
+		if record.KeyPrefix == "" {
+			t.Error("expected non-empty key prefix")
+		}
+	})
 
-func TestCreateKey_InvalidRole(t *testing.T) {
-	s := newTestStore(t)
-	_, _, err := s.CreateKey("k", "superuser")
-	if err == nil {
-		t.Fatal("expected error for invalid role")
-	}
+	t.Run("admin role", func(t *testing.T) {
+		_, record, err := s.CreateKey("admin-key", "admin")
+		if err != nil {
+			t.Fatalf("CreateKey failed: %v", err)
+		}
+		if record.Role != "admin" {
+			t.Errorf("expected role admin, got %s", record.Role)
+		}
+	})
+
+	t.Run("empty role defaults to user", func(t *testing.T) {
+		_, record, err := s.CreateKey("default-role", "")
+		if err != nil {
+			t.Fatalf("CreateKey failed: %v", err)
+		}
+		if record.Role != "user" {
+			t.Errorf("expected role user, got %s", record.Role)
+		}
+	})
+
+	t.Run("invalid role returns error", func(t *testing.T) {
+		_, _, err := s.CreateKey("bad-role", "superuser")
+		if err == nil {
+			t.Error("expected error for invalid role")
+		}
+	})
+
+	t.Run("empty name returns error", func(t *testing.T) {
+		_, _, err := s.CreateKey("", "user")
+		if err == nil {
+			t.Error("expected error for empty name")
+		}
+	})
 }
 
 func TestValidateKey(t *testing.T) {
 	s := newTestStore(t)
-	fullKey, _, err := s.CreateKey("k", "admin")
-	if err != nil {
-		t.Fatalf("CreateKey: %v", err)
-	}
 
-	rec, err := s.ValidateKey(fullKey)
-	if err != nil {
-		t.Fatalf("ValidateKey: %v", err)
-	}
-	if rec.Role != "admin" {
-		t.Errorf("expected admin, got %s", rec.Role)
-	}
-}
+	t.Run("valid active key", func(t *testing.T) {
+		fullKey, original, err := s.CreateKey("validate-test", "user")
+		if err != nil {
+			t.Fatalf("CreateKey failed: %v", err)
+		}
 
-func TestValidateKey_Invalid(t *testing.T) {
-	s := newTestStore(t)
-	_, err := s.ValidateKey("inf_0000000000000000000000000000000000000000000000000000")
-	if err == nil {
-		t.Fatal("expected error for nonexistent key")
-	}
-}
+		record, err := s.ValidateKey(fullKey)
+		if err != nil {
+			t.Fatalf("ValidateKey failed: %v", err)
+		}
+		if record.ID != original.ID {
+			t.Errorf("expected ID %s, got %s", original.ID, record.ID)
+		}
+		if record.Name != "validate-test" {
+			t.Errorf("expected name validate-test, got %s", record.Name)
+		}
+	})
 
-func TestValidateKey_Revoked(t *testing.T) {
-	s := newTestStore(t)
-	fullKey, rec, _ := s.CreateKey("k", "user")
-	_ = s.RevokeKey(rec.ID)
+	t.Run("revoked key returns error", func(t *testing.T) {
+		fullKey, record, err := s.CreateKey("revoke-validate", "user")
+		if err != nil {
+			t.Fatalf("CreateKey failed: %v", err)
+		}
+		if err := s.RevokeKey(record.ID); err != nil {
+			t.Fatalf("RevokeKey failed: %v", err)
+		}
 
-	_, err := s.ValidateKey(fullKey)
-	if err == nil {
-		t.Fatal("expected error for revoked key")
-	}
+		_, err = s.ValidateKey(fullKey)
+		if err == nil {
+			t.Error("expected error validating revoked key")
+		}
+	})
+
+	t.Run("nonexistent key returns error", func(t *testing.T) {
+		_, err := s.ValidateKey("inf_nonexistent000000000000000000000000000000000000")
+		if err == nil {
+			t.Error("expected error for nonexistent key")
+		}
+	})
 }
 
 func TestListKeys(t *testing.T) {
 	s := newTestStore(t)
-	s.CreateKey("a", "user")
-	s.CreateKey("b", "admin")
 
-	keys, err := s.ListKeys()
-	if err != nil {
-		t.Fatalf("ListKeys: %v", err)
-	}
-	if len(keys) != 2 {
-		t.Fatalf("expected 2 keys, got %d", len(keys))
-	}
+	t.Run("empty list", func(t *testing.T) {
+		keys, err := s.ListKeys()
+		if err != nil {
+			t.Fatalf("ListKeys failed: %v", err)
+		}
+		if len(keys) != 0 {
+			t.Errorf("expected 0 keys, got %d", len(keys))
+		}
+	})
+
+	t.Run("returns all created keys", func(t *testing.T) {
+		if _, _, err := s.CreateKey("first", "user"); err != nil {
+			t.Fatalf("CreateKey(first) failed: %v", err)
+		}
+		if _, _, err := s.CreateKey("second", "admin"); err != nil {
+			t.Fatalf("CreateKey(second) failed: %v", err)
+		}
+
+		keys, err := s.ListKeys()
+		if err != nil {
+			t.Fatalf("ListKeys failed: %v", err)
+		}
+		if len(keys) != 2 {
+			t.Fatalf("expected 2 keys, got %d", len(keys))
+		}
+
+		found := map[string]bool{
+			"first":  false,
+			"second": false,
+		}
+		for _, key := range keys {
+			if _, ok := found[key.Name]; ok {
+				found[key.Name] = true
+			}
+		}
+		for name, ok := range found {
+			if !ok {
+				t.Errorf("expected key %q in list", name)
+			}
+		}
+	})
 }
 
 func TestRevokeKey(t *testing.T) {
 	s := newTestStore(t)
-	_, rec, _ := s.CreateKey("k", "user")
-	if err := s.RevokeKey(rec.ID); err != nil {
-		t.Fatalf("RevokeKey: %v", err)
-	}
-	if err := s.RevokeKey(rec.ID); err == nil {
-		t.Fatal("expected error revoking already-revoked key")
-	}
+
+	t.Run("revoke active key", func(t *testing.T) {
+		fullKey, record, err := s.CreateKey("revoke-me", "user")
+		if err != nil {
+			t.Fatalf("CreateKey failed: %v", err)
+		}
+
+		if err := s.RevokeKey(record.ID); err != nil {
+			t.Fatalf("RevokeKey failed: %v", err)
+		}
+
+		// Key should no longer validate
+		_, err = s.ValidateKey(fullKey)
+		if err == nil {
+			t.Error("expected error validating revoked key")
+		}
+
+		// Key should still appear in list with revoked status
+		keys, _ := s.ListKeys()
+		found := false
+		for _, k := range keys {
+			if k.ID == record.ID {
+				found = true
+				if k.Status != "revoked" {
+					t.Errorf("expected status revoked, got %s", k.Status)
+				}
+			}
+		}
+		if !found {
+			t.Error("revoked key should still appear in list")
+		}
+	})
+
+	t.Run("nonexistent ID returns error", func(t *testing.T) {
+		err := s.RevokeKey("nonexistent-id")
+		if err == nil {
+			t.Error("expected error revoking nonexistent key")
+		}
+	})
 }
 
 func TestDeleteKey(t *testing.T) {
 	s := newTestStore(t)
-	_, rec, _ := s.CreateKey("k", "user")
-	if err := s.DeleteKey(rec.ID); err != nil {
-		t.Fatalf("DeleteKey: %v", err)
-	}
-	if err := s.DeleteKey(rec.ID); err == nil {
-		t.Fatal("expected error deleting nonexistent key")
-	}
+
+	t.Run("delete existing key", func(t *testing.T) {
+		_, record, err := s.CreateKey("delete-me", "user")
+		if err != nil {
+			t.Fatalf("CreateKey failed: %v", err)
+		}
+
+		if err := s.DeleteKey(record.ID); err != nil {
+			t.Fatalf("DeleteKey failed: %v", err)
+		}
+
+		// Key should not appear in list
+		keys, _ := s.ListKeys()
+		for _, k := range keys {
+			if k.ID == record.ID {
+				t.Error("deleted key should not appear in list")
+			}
+		}
+	})
+
+	t.Run("nonexistent ID returns error", func(t *testing.T) {
+		err := s.DeleteKey("nonexistent-id")
+		if err == nil {
+			t.Error("expected error deleting nonexistent key")
+		}
+	})
 }
 
 func TestCount(t *testing.T) {
 	s := newTestStore(t)
-	c, _ := s.Count()
-	if c != 0 {
-		t.Fatalf("expected 0, got %d", c)
+
+	count, err := s.Count()
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
 	}
-	s.CreateKey("a", "user")
-	s.CreateKey("b", "user")
-	c, _ = s.Count()
-	if c != 2 {
-		t.Fatalf("expected 2, got %d", c)
+	if count != 0 {
+		t.Errorf("expected 0, got %d", count)
+	}
+
+	_, r1, _ := s.CreateKey("key1", "user")
+	s.CreateKey("key2", "admin")
+
+	count, err = s.Count()
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2, got %d", count)
+	}
+
+	// Revoke one — count should decrease
+	s.RevokeKey(r1.ID)
+
+	count, err = s.Count()
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 after revoke, got %d", count)
 	}
 }
 
 func TestCreateKeyFromRaw(t *testing.T) {
 	s := newTestStore(t)
-	raw := "inf_" + strings.Repeat("ab", 24)
-	rec, err := s.CreateKeyFromRaw(raw, "bootstrap", "admin")
+
+	rawKey := "inf_" + strings.Repeat("ab", 24)
+	record, err := s.CreateKeyFromRaw(rawKey, "bootstrap-admin", "admin")
 	if err != nil {
-		t.Fatalf("CreateKeyFromRaw: %v", err)
+		t.Fatalf("CreateKeyFromRaw failed: %v", err)
 	}
-	if rec.Role != "admin" {
-		t.Errorf("expected admin, got %s", rec.Role)
+	if record.Name != "bootstrap-admin" {
+		t.Errorf("expected name bootstrap-admin, got %s", record.Name)
+	}
+	if record.Role != "admin" {
+		t.Errorf("expected role admin, got %s", record.Role)
 	}
 
-	validated, err := s.ValidateKey(raw)
+	// Should validate
+	validated, err := s.ValidateKey(rawKey)
 	if err != nil {
-		t.Fatalf("ValidateKey after CreateKeyFromRaw: %v", err)
+		t.Fatalf("ValidateKey failed: %v", err)
 	}
-	if validated.ID != rec.ID {
-		t.Errorf("ID mismatch")
-	}
-}
-
-func TestCreateKeyFromRaw_InvalidFormat(t *testing.T) {
-	s := newTestStore(t)
-	_, err := s.CreateKeyFromRaw("bad_key", "test", "admin")
-	if err == nil {
-		t.Fatal("expected error for invalid key format")
-	}
-}
-
-// ---------- Session CRUD ----------
-
-func TestCreateSession(t *testing.T) {
-	s := newTestStore(t)
-	_, rec, _ := s.CreateKey("k", "admin")
-
-	token, session, err := s.CreateSession(rec.ID)
-	if err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	if token == "" {
-		t.Fatal("expected non-empty token")
-	}
-	if session.KeyID != rec.ID {
-		t.Errorf("expected key_id %s, got %s", rec.ID, session.KeyID)
-	}
-	if session.ExpiresAt.Before(time.Now()) {
-		t.Error("session already expired")
-	}
-}
-
-func TestValidateSession(t *testing.T) {
-	s := newTestStore(t)
-	_, rec, _ := s.CreateKey("k", "admin")
-	token, _, _ := s.CreateSession(rec.ID)
-
-	session, key, err := s.ValidateSession(token)
-	if err != nil {
-		t.Fatalf("ValidateSession: %v", err)
-	}
-	if session.KeyID != rec.ID {
-		t.Errorf("session key_id mismatch")
-	}
-	if key.ID != rec.ID {
-		t.Errorf("key ID mismatch")
-	}
-}
-
-func TestValidateSession_Invalid(t *testing.T) {
-	s := newTestStore(t)
-	_, _, err := s.ValidateSession("nonexistent_token")
-	if err == nil {
-		t.Fatal("expected error for invalid session token")
-	}
-}
-
-func TestValidateSession_Expired(t *testing.T) {
-	s := newTestStore(t)
-	_, rec, _ := s.CreateKey("k", "admin")
-	token, session, _ := s.CreateSession(rec.ID)
-
-	_, err := s.db.Exec("UPDATE sessions SET expires_at = ? WHERE id = ?",
-		time.Now().Add(-1*time.Hour), session.ID)
-	if err != nil {
-		t.Fatalf("failed to expire session: %v", err)
+	if validated.ID != record.ID {
+		t.Errorf("expected ID %s, got %s", record.ID, validated.ID)
 	}
 
-	_, _, err = s.ValidateSession(token)
-	if err == nil {
-		t.Fatal("expected error for expired session")
-	}
-}
+	t.Run("rejects short key", func(t *testing.T) {
+		_, err := s.CreateKeyFromRaw("inf_short", "bad", "admin")
+		if err == nil {
+			t.Fatal("expected error for short key")
+		}
+	})
 
-func TestValidateSession_RevokedKey(t *testing.T) {
-	s := newTestStore(t)
-	_, rec, _ := s.CreateKey("k", "admin")
-	token, _, _ := s.CreateSession(rec.ID)
+	t.Run("rejects invalid prefix", func(t *testing.T) {
+		_, err := s.CreateKeyFromRaw("bad_abcdef1234567890abcdef1234567890abcdef12345678", "bad", "admin")
+		if err == nil {
+			t.Fatal("expected error for invalid key prefix")
+		}
+	})
 
-	_ = s.RevokeKey(rec.ID)
-
-	_, _, err := s.ValidateSession(token)
-	if err == nil {
-		t.Fatal("expected error for session with revoked key")
-	}
-}
-
-func TestDeleteSession(t *testing.T) {
-	s := newTestStore(t)
-	_, rec, _ := s.CreateKey("k", "admin")
-	token, session, _ := s.CreateSession(rec.ID)
-
-	if err := s.DeleteSession(session.ID); err != nil {
-		t.Fatalf("DeleteSession: %v", err)
-	}
-
-	_, _, err := s.ValidateSession(token)
-	if err == nil {
-		t.Fatal("expected error after DeleteSession")
-	}
-}
-
-func TestDeleteSessionByToken(t *testing.T) {
-	s := newTestStore(t)
-	_, rec, _ := s.CreateKey("k", "admin")
-	token, _, _ := s.CreateSession(rec.ID)
-
-	if err := s.DeleteSessionByToken(token); err != nil {
-		t.Fatalf("DeleteSessionByToken: %v", err)
-	}
-
-	_, _, err := s.ValidateSession(token)
-	if err == nil {
-		t.Fatal("expected error after DeleteSessionByToken")
-	}
-}
-
-func TestNewStore_BadPath(t *testing.T) {
-	_, err := NewStore(filepath.Join(os.DevNull, "impossible", "path.db"))
-	if err == nil {
-		t.Fatal("expected error for bad path")
-	}
+	t.Run("rejects non-hex key body", func(t *testing.T) {
+		_, err := s.CreateKeyFromRaw("inf_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "bad", "admin")
+		if err == nil {
+			t.Fatal("expected error for non-hex key body")
+		}
+	})
 }

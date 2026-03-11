@@ -5,55 +5,35 @@ import type {
 } from '../types';
 
 const API_BASE = '';
+const API_KEY_STORAGE = 'infera_api_key';
+let inMemoryApiKey: string | null = null;
 
-// Session info returned by session endpoints
-export interface SessionInfo {
-  session: { id: string; expires_at: string };
-  key: { id: string; key_prefix: string; name: string; role: string };
-}
-
-export interface StreamChatCompletionOptions {
-  onUsage?: (usage: ChatCompletionResponse['usage']) => void;
-}
-
-// Create a server-side session (login). Sets HttpOnly cookie.
-export async function createSession(apiKey: string): Promise<SessionInfo> {
-  const response = await fetch(`${API_BASE}/api/auth/session`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ api_key: apiKey }),
-  });
-  if (!response.ok) {
-    if (response.status === 401) throw new Error('Invalid API key');
-    if (response.status === 403) throw new Error('Admin access required');
-    throw new Error(await readResponseError(response, 'Login failed'));
-  }
-  return response.json();
-}
-
-// Check if a valid session exists (used on startup).
-export async function getSession(): Promise<SessionInfo | null> {
+// Auth token management
+export function getApiKey(): string | null {
+  if (inMemoryApiKey) return inMemoryApiKey;
   try {
-    const response = await fetch(`${API_BASE}/api/auth/session`, {
-      credentials: 'include',
-    });
-    if (!response.ok) return null;
-    return response.json();
+    inMemoryApiKey = sessionStorage.getItem(API_KEY_STORAGE);
   } catch {
-    return null;
+    inMemoryApiKey = null;
+  }
+  return inMemoryApiKey;
+}
+
+export function setApiKey(key: string) {
+  inMemoryApiKey = key;
+  try {
+    sessionStorage.setItem(API_KEY_STORAGE, key);
+  } catch {
+    // Ignore storage errors and continue with in-memory key.
   }
 }
 
-// Destroy the current session (logout). Always succeeds.
-export async function destroySession(): Promise<void> {
+export function clearApiKey() {
+  inMemoryApiKey = null;
   try {
-    await fetch(`${API_BASE}/api/auth/session`, {
-      method: 'DELETE',
-      credentials: 'include',
-    });
+    sessionStorage.removeItem(API_KEY_STORAGE);
   } catch {
-    // Ignore errors — cookie will expire anyway.
+    // Ignore storage errors.
   }
 }
 
@@ -89,12 +69,16 @@ async function readResponseError(response: Response, fallbackMessage: string): P
 }
 
 async function authFetch(url: string, init?: RequestInit): Promise<Response> {
-  const response = await fetch(url, {
-    ...init,
-    credentials: 'include',
-  });
+  const sentKey = getApiKey();
+  const headers = new Headers(init?.headers);
+  if (sentKey) {
+    headers.set('Authorization', `Bearer ${sentKey}`);
+  }
+  const response = await fetch(url, { ...init, headers });
 
-  if (response.status === 401) {
+  // If 401, clear only if this request used the current key.
+  if (response.status === 401 && sentKey && getApiKey() === sentKey) {
+    clearApiKey();
     window.dispatchEvent(new Event('auth-expired'));
   }
 
@@ -138,8 +122,7 @@ export async function sendChatCompletion(request: ChatCompletionRequest): Promis
 }
 
 export async function* streamChatCompletion(
-  request: ChatCompletionRequest,
-  options?: StreamChatCompletionOptions,
+  request: ChatCompletionRequest
 ): AsyncGenerator<string, void, unknown> {
   const response = await authFetch(`${API_BASE}/v1/chat/completions`, {
     method: 'POST',
@@ -178,10 +161,6 @@ export async function* streamChatCompletion(
 
         try {
           const parsed = JSON.parse(data);
-          const usage = parsed.usage;
-          if (usage?.prompt_tokens != null && usage?.completion_tokens != null && usage?.total_tokens != null) {
-            options?.onUsage?.(usage);
-          }
           const content = parsed.choices?.[0]?.delta?.content;
           if (content) yield content;
         } catch {
@@ -356,5 +335,23 @@ export async function revokeApiKey(id: string): Promise<void> {
   });
   if (!response.ok) {
     throw new Error(await readResponseError(response, 'Failed to revoke key'));
+  }
+}
+
+// Validate API key by hitting a protected endpoint
+export async function validateApiKey(key: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/api/stats`, {
+      headers: { 'Authorization': `Bearer ${key}` },
+    });
+
+    if (response.ok) return true;
+    if (response.status === 401) return false;
+    throw new Error(`Validation failed: ${response.status} ${response.statusText}`);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Failed to validate API key: ${error.message}`);
+    }
+    throw new Error('Failed to validate API key: unknown network error');
   }
 }

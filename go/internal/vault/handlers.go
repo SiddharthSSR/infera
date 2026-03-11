@@ -2,7 +2,7 @@ package vault
 
 import (
 	"encoding/json"
-	"log/slog"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -98,7 +98,7 @@ func (h *Handler) createModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("vault model registered", slog.String("name", m.Name), slog.String("id", m.ID))
+	log.Printf("Vault: registered model %s (%s)", m.Name, m.ID)
 	h.writeJSON(w, http.StatusCreated, m)
 }
 
@@ -143,7 +143,7 @@ func (h *Handler) handleModelByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		slog.Info("vault model updated", slog.String("name", m.Name), slog.String("id", m.ID))
+		log.Printf("Vault: updated model %s (%s)", m.Name, m.ID)
 
 		// Return the updated model
 		updated, err := h.store.Get(id)
@@ -163,7 +163,7 @@ func (h *Handler) handleModelByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		slog.Info("vault model deleted", slog.String("id", id))
+		log.Printf("Vault: deleted model %s", id)
 		h.writeJSON(w, http.StatusOK, map[string]interface{}{
 			"deleted": id,
 		})
