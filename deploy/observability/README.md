@@ -23,8 +23,7 @@ Prometheus uses file-based discovery for worker metrics:
 
 - File: `deploy/observability/prometheus/worker_targets.json`
 
-Default is `[]` (no worker targets).
-
+At least one worker target is required for production scraping.
 Use `deploy/observability/prometheus/worker_targets.example.json` as template.
 Each target should be `host:port` where worker metrics are reachable at `/metrics`.
 
@@ -59,6 +58,12 @@ After deploy:
 docker compose -f docker-compose.prod.yml ps
 curl --fail --silent --show-error --max-time 5 https://dashboard.inferai.co.in/api/health
 docker compose -f docker-compose.prod.yml logs alertmanager --tail=100
+```
+
+For local or dev deployments, you can probe Grafana directly without DNS/TLS:
+
+```bash
+curl --fail --silent --show-error --max-time 5 http://localhost:3000/api/health
 ```
 
 Then log in to Grafana and open the `Infera / Infera Overview` dashboard.

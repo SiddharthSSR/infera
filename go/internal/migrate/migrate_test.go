@@ -2,6 +2,8 @@ package migrate
 
 import (
 	"database/sql"
+	"fmt"
+	"net/url"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -9,7 +11,8 @@ import (
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=private", url.QueryEscape(t.Name()))
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +106,10 @@ func TestRunFailsOnBadSQL(t *testing.T) {
 	}
 
 	// Version should still be 0 (rolled back)
-	v, _ := currentVersion(db)
+	v, err := currentVersion(db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if v != 0 {
 		t.Errorf("expected version 0 after rollback, got %d", v)
 	}

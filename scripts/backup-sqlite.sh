@@ -79,15 +79,18 @@ if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
     if command -v aws &> /dev/null; then
         for db in "${DBS[@]}"; do
             dst="${BACKUP_SUBDIR}/${db}"
-            if [ -f "${dst}" ]; then
-                s3_path="s3://${BACKUP_S3_BUCKET}/${S3_PREFIX}/${TIMESTAMP}/${db}"
-                if aws s3 cp "${dst}" "${s3_path}" --quiet; then
-                    echo "  S3:   ${db} → ${s3_path}"
-                else
-                    echo "  FAIL: S3 upload failed for ${db}"
-                    FAILED=1
+            for artifact in "${dst}" "${dst}-wal" "${dst}-shm"; do
+                if [ -f "${artifact}" ]; then
+                    artifact_name="$(basename "${artifact}")"
+                    s3_path="s3://${BACKUP_S3_BUCKET}/${S3_PREFIX}/${TIMESTAMP}/${artifact_name}"
+                    if aws s3 cp "${artifact}" "${s3_path}" --quiet; then
+                        echo "  S3:   ${artifact_name} → ${s3_path}"
+                    else
+                        echo "  FAIL: S3 upload failed for ${artifact_name}"
+                        FAILED=1
+                    fi
                 fi
-            fi
+            done
         done
     else
         echo "  WARN: aws CLI not found, skipping S3 upload"

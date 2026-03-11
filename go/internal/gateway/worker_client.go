@@ -38,7 +38,7 @@ func NewWorkerClient(address string) *WorkerClient {
 	}
 }
 
-func shouldRecordFailure(err error) bool {
+func shouldRecordFailure(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}
@@ -46,7 +46,7 @@ func shouldRecordFailure(err error) bool {
 		return false
 	}
 	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	if errors.As(err, &netErr) && netErr.Timeout() && ctx != nil && ctx.Err() != nil {
 		return false
 	}
 	return true
@@ -142,7 +142,7 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		if shouldRecordFailure(err) {
+		if shouldRecordFailure(ctx, err) {
 			c.breaker.RecordFailure()
 		}
 		return nil, fmt.Errorf("failed to call worker: %w", err)
@@ -158,7 +158,7 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 	// Parse response
 	var workerResp WorkerInferResponse
 	if err := json.NewDecoder(resp.Body).Decode(&workerResp); err != nil {
-		if shouldRecordFailure(err) {
+		if shouldRecordFailure(ctx, err) {
 			c.breaker.RecordFailure()
 		}
 		return nil, fmt.Errorf("failed to decode response: %w", err)
@@ -242,7 +242,7 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 
 	resp, err := c.streamingHTTPClient.Do(httpReq)
 	if err != nil {
-		if shouldRecordFailure(err) {
+		if shouldRecordFailure(ctx, err) {
 			c.breaker.RecordFailure()
 		}
 		return nil, fmt.Errorf("failed to call worker: %w", err)
@@ -265,6 +265,7 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 		decoder := json.NewDecoder(resp.Body)
 		index := 0
 		recordedSuccess := false
+		streamCompleted := false
 
 		for {
 			select {
@@ -285,12 +286,17 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 					if err == io.EOF {
 						if !recordedSuccess {
 							c.breaker.RecordFailure()
+						} else if !streamCompleted && ctx.Err() == nil {
+							c.breaker.RecordFailure()
 						}
 						return
 					}
-					if !recordedSuccess && shouldRecordFailure(err) {
+					if !recordedSuccess && shouldRecordFailure(ctx, err) {
 						c.breaker.RecordFailure()
 						return
+					}
+					if recordedSuccess && !streamCompleted && shouldRecordFailure(ctx, err) {
+						c.breaker.RecordFailure()
 					}
 					slog.Debug("worker stream decode error after stream start",
 						slog.String("worker_address", c.address),
@@ -331,6 +337,7 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 				index++
 
 				if chunk.FinishReason != nil {
+					streamCompleted = true
 					return
 				}
 			}

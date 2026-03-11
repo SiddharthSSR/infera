@@ -10,6 +10,8 @@ import (
 	"github.com/infera/infera/go/internal/auth"
 )
 
+const maxRetryAfterSeconds = int(^uint32(0) >> 1)
+
 // RateLimiterConfig configures the rate limiter.
 type RateLimiterConfig struct {
 	// RequestsPerMinute is the max requests per key per minute.
@@ -67,6 +69,9 @@ func (b *tokenBucket) retryAfterSeconds() int {
 	if b.tokens >= 1 {
 		return 0
 	}
+	if b.refillRate <= 0 {
+		return maxRetryAfterSeconds
+	}
 	deficit := 1 - b.tokens
 	seconds := deficit / b.refillRate
 	return int(seconds) + 1
@@ -82,6 +87,10 @@ type RateLimiter struct {
 
 // NewRateLimiter creates a new rate limiter.
 func NewRateLimiter(config RateLimiterConfig) *RateLimiter {
+	if config.CleanupInterval <= 0 {
+		config.CleanupInterval = DefaultRateLimiterConfig().CleanupInterval
+	}
+
 	rl := &RateLimiter{
 		buckets: make(map[string]*tokenBucket),
 		config:  config,

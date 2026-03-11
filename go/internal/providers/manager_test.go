@@ -12,6 +12,9 @@ func newTestManager(t *testing.T, config ManagerConfig) *Manager {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = mgr.Close()
+	})
 	return mgr
 }
 

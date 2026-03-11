@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -50,6 +51,10 @@ func main() {
 	gatewayAddress := strings.TrimSpace(os.Getenv("INFERA_GATEWAY_ADDRESS"))
 	if gatewayAddress == "" {
 		gatewayAddress = fmt.Sprintf("localhost:%d", *httpPort)
+	}
+	if err := os.MkdirAll("data", 0755); err != nil {
+		log.Error("failed to create data directory", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
 	instanceMgr, err := providers.NewManager(providers.ManagerConfig{
@@ -103,9 +108,6 @@ func main() {
 	gw := gateway.New(gatewayConfig, r, instanceMgr)
 
 	// Initialize vault (model registry)
-	if err := os.MkdirAll("data", 0755); err != nil {
-		log.Warn("failed to create data directory", slog.String("error", err.Error()))
-	}
 	vaultStore, err := vault.NewStore("data/vault.db")
 	if err != nil {
 		log.Error("failed to initialize vault", slog.String("error", err.Error()))
@@ -240,14 +242,39 @@ func parseAllowedOrigins(raw string) []string {
 }
 
 func persistBootstrapAdminKey(path, fullKey string) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("bootstrap key file already exists: %s", path)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, ".bootstrap_admin_key.*")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	tmpPath := tmpFile.Name()
+	cleanup := func() {
+		_ = os.Remove(tmpPath)
+	}
 
-	if _, err := fmt.Fprintf(f, "%s\n", fullKey); err != nil {
+	if _, err := fmt.Fprintf(tmpFile, "%s\n", fullKey); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
 		return err
 	}
-	return f.Sync()
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
 }

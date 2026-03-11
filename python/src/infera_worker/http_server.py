@@ -487,6 +487,7 @@ class HTTPServer:
             data = await request.json()
             inference_request = self._parse_request(data)
             inference_request.stream = True
+            stream = self.worker.infer_stream(inference_request)
 
             response = web.StreamResponse(
                 status=200,
@@ -499,25 +500,42 @@ class HTTPServer:
             )
             await response.prepare(request)
 
-            async for chunk in self.worker.infer_stream(inference_request):
-                chunk_data = {
-                    "request_id": chunk.request_id,
-                    "index": chunk.index,
-                    "delta": chunk.delta,
-                }
-
-                if chunk.finish_reason is not None:
-                    chunk_data["finish_reason"] = chunk.finish_reason.value
-
-                if chunk.usage is not None:
-                    chunk_data["usage"] = {
-                        "prompt_tokens": chunk.usage.prompt_tokens,
-                        "completion_tokens": chunk.usage.completion_tokens,
-                        "total_tokens": chunk.usage.total_tokens,
+            try:
+                async for chunk in stream:
+                    chunk_data = {
+                        "request_id": chunk.request_id,
+                        "index": chunk.index,
+                        "delta": chunk.delta,
                     }
-                    token_count = max(token_count, chunk.usage.total_tokens)
 
-                await response.write(json.dumps(chunk_data).encode() + b"\n")
+                    if chunk.finish_reason is not None:
+                        chunk_data["finish_reason"] = chunk.finish_reason.value
+
+                    if chunk.usage is not None:
+                        chunk_data["usage"] = {
+                            "prompt_tokens": chunk.usage.prompt_tokens,
+                            "completion_tokens": chunk.usage.completion_tokens,
+                            "total_tokens": chunk.usage.total_tokens,
+                        }
+                        token_count = max(token_count, chunk.usage.total_tokens)
+
+                    await response.write(json.dumps(chunk_data).encode() + b"\n")
+            except ValueError as e:
+                status = "invalid_request"
+                await response.write(json.dumps({
+                    "error": {"type": "invalid_request", "message": str(e)}
+                }).encode() + b"\n")
+            except RuntimeError as e:
+                status = "worker_error"
+                await response.write(json.dumps({
+                    "error": {"type": "worker_error", "message": str(e)}
+                }).encode() + b"\n")
+            except Exception as e:
+                status = "internal_error"
+                logger.error("Streaming error", error=str(e))
+                await response.write(json.dumps({
+                    "error": {"type": "internal_error", "message": str(e)}
+                }).encode() + b"\n")
 
             await response.write_eof()
             return response
@@ -526,12 +544,6 @@ class HTTPServer:
             return web.json_response(
                 {"error": {"type": "invalid_request", "message": str(e)}},
                 status=400
-            )
-        except RuntimeError as e:
-            status = "worker_error"
-            return web.json_response(
-                {"error": {"type": "worker_error", "message": str(e)}},
-                status=503
             )
         except Exception as e:
             status = "internal_error"
