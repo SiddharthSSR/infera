@@ -120,10 +120,10 @@ INFERA_WORKER_SHARED_TOKEN=<long-random-token>
 INFERA_WORKER_IMAGE=<registry>/infera-worker:<pinned-tag>
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD=<strong-password>
-ALERT_EMAIL_TO=codingtensor@gmail.com
-ALERT_SMTP_FROM=codingtensor@gmail.com
+ALERT_EMAIL_TO=alerts@your-domain.com
+ALERT_SMTP_FROM=alerts@your-domain.com
 ALERT_SMTP_SMARTHOST=smtp.gmail.com:587
-ALERT_SMTP_USERNAME=codingtensor@gmail.com
+ALERT_SMTP_USERNAME=alerts@your-domain.com
 ALERT_SMTP_PASSWORD=<gmail-app-password>
 HF_TOKEN=... # optional
 ```

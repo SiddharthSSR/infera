@@ -40,7 +40,7 @@ Set in `.env`:
 - `ALERT_SMTP_USERNAME`
 - `ALERT_SMTP_PASSWORD`
 
-Default receiver is `codingtensor@gmail.com` unless overridden.
+Default receiver is `alerts@your-domain.com` unless overridden.
 
 ## Gmail SMTP Notes
 
