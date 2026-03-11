@@ -111,3 +111,33 @@ func TestGatewayMetricsHandler(t *testing.T) {
 		}
 	}
 }
+
+type flusherRecorder struct {
+	*httptest.ResponseRecorder
+	flushed bool
+}
+
+func (r *flusherRecorder) Flush() {
+	r.flushed = true
+}
+
+func TestStatusRecorderPreservesFlusher(t *testing.T) {
+	m := NewGatewayMetrics()
+
+	handler := m.HTTPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatalf("expected wrapped response writer to implement http.Flusher")
+		}
+		flusher.Flush()
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
+	rec := &flusherRecorder{ResponseRecorder: httptest.NewRecorder()}
+	handler.ServeHTTP(rec, req)
+
+	if !rec.flushed {
+		t.Fatalf("expected underlying flusher to be invoked")
+	}
+}

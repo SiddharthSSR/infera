@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -129,6 +131,28 @@ func (w *statusRecorder) Status() int {
 		return http.StatusOK
 	}
 	return w.status
+}
+
+func (w *statusRecorder) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+func (w *statusRecorder) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
 }
 
 func normalizeMetricPath(path string) string {
