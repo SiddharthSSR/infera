@@ -109,10 +109,9 @@ services:
 
   alertmanager:
     image: prom/alertmanager:v0.27.0
-    command:
-      - "--config.file=/etc/alertmanager/alertmanager.yml"
-      - "--storage.path=/alertmanager"
-      - "--config.expand-env"
+    entrypoint:
+      - /bin/sh
+      - /etc/alertmanager/render-and-run.sh
     environment:
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:?ALERT_EMAIL_TO is required}
       - ALERT_SMTP_FROM=${ALERT_SMTP_FROM:?ALERT_SMTP_FROM is required}
@@ -120,7 +119,8 @@ services:
       - ALERT_SMTP_USERNAME=${ALERT_SMTP_USERNAME:?ALERT_SMTP_USERNAME is required}
       - ALERT_SMTP_PASSWORD=${ALERT_SMTP_PASSWORD:?ALERT_SMTP_PASSWORD is required}
     volumes:
-      - ./deploy/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./deploy/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml.tmpl:ro
+      - ./deploy/observability/alertmanager/render-and-run.sh:/etc/alertmanager/render-and-run.sh:ro
       - ./deploy/observability/alertmanager/templates:/etc/alertmanager/templates:ro
       - alertmanager_data:/alertmanager
     restart: unless-stopped
