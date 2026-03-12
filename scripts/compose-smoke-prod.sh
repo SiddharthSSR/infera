@@ -27,6 +27,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+prepare_ci_bind_mounts() {
+  if [[ "${CI:-}" != "true" ]]; then
+    return
+  fi
+
+  # The production compose file bind-mounts ./data into /app/data. In CI the
+  # gateway container runs as a non-root user, so make the host path writable
+  # before startup.
+  mkdir -p data
+  chmod 0777 data
+}
+
 wait_for_service() {
   local service="$1"
   local timeout_seconds="$2"
@@ -55,11 +67,16 @@ wait_for_service() {
   return 1
 }
 
-echo "Building and starting gateway/frontend from ${COMPOSE_FILE}"
-docker compose -f "${COMPOSE_FILE}" up -d --build gateway frontend
+prepare_ci_bind_mounts
+
+echo "Building and starting gateway from ${COMPOSE_FILE}"
+docker compose -f "${COMPOSE_FILE}" up -d --build gateway
 
 echo "Waiting for gateway"
 wait_for_service gateway "${SMOKE_TIMEOUT}"
+
+echo "Starting frontend"
+docker compose -f "${COMPOSE_FILE}" up -d frontend
 
 echo "Waiting for frontend"
 wait_for_service frontend "${SMOKE_TIMEOUT}"
