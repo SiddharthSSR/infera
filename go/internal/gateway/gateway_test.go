@@ -116,6 +116,12 @@ func TestHandlePrometheusWorkerTargets(t *testing.T) {
 		WorkerID: "worker-1",
 		Address:  "abc-8081.proxy.runpod.net",
 		Status:   types.WorkerStatusHealthy,
+		Tags: map[string]string{
+			"provider": "runpod",
+			"engine":   "vllm",
+			"version":  "test-version",
+			"env":      "test",
+		},
 	}); err != nil {
 		t.Fatalf("RegisterWorker healthy: %v", err)
 	}
@@ -151,6 +157,15 @@ func TestHandlePrometheusWorkerTargets(t *testing.T) {
 	}
 	if got := payload[0].Labels["__scheme__"]; got != "https" {
 		t.Fatalf("expected https scheme for runpod target, got %q", got)
+	}
+	if got := payload[0].Labels["provider"]; got != "runpod" {
+		t.Fatalf("expected provider label, got %q", got)
+	}
+	if got := payload[0].Labels["engine"]; got != "vllm" {
+		t.Fatalf("expected engine label, got %q", got)
+	}
+	if got := payload[0].Labels["version"]; got != "test-version" {
+		t.Fatalf("expected version label, got %q", got)
 	}
 }
 

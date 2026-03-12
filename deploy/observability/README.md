@@ -31,6 +31,21 @@ dashboard without manually editing `worker_targets.json`.
 The old `deploy/observability/prometheus/worker_targets.json` file is no longer
 the active source of truth for production scraping.
 
+Discovery labels now include:
+
+- `service`
+- `env`
+- `worker_id`
+- `status`
+- `provider` (when reported by the worker)
+- `engine` (when reported by the worker)
+- `version` (when reported by the worker)
+
+Static build metadata is exposed via:
+
+- `infera_gateway_info`
+- `infera_worker_info`
+
 ## Required Environment Variables
 
 Set in `.env`:
