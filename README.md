@@ -170,11 +170,11 @@ Production compose now includes Prometheus, Alertmanager, and Grafana:
 - Starter dashboard: `deploy/observability/grafana/dashboards/infera-overview.json`
 - Runbooks: `deploy/observability/RUNBOOKS.md`
 
-For worker scraping, edit:
+For worker scraping, Prometheus now discovers targets dynamically from:
 
-- `deploy/observability/prometheus/worker_targets.json`
+- `http://gateway:8080/internal/prometheus/worker-targets`
 
-Use `worker_targets.example.json` as template.
+Healthy workers that register with the gateway should appear automatically.
 
 ### 6. Worker Registration Checklist
 

@@ -53,10 +53,10 @@ docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 docker compose -f docker-compose.prod.yml ps
 ```
 
-- [ ] Validate Prometheus worker discovery targets before enabling observability alerts:
+- [ ] Validate gateway-backed worker discovery before enabling observability alerts:
 
 ```bash
-./scripts/validate-worker-targets.sh deploy/observability/prometheus/worker_targets.json
+curl --fail --silent http://localhost:8080/internal/prometheus/worker-targets
 ```
 
 ## 3. Post-Deploy Verification

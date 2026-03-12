@@ -28,6 +28,6 @@ scrape_configs:
 
   - job_name: infera_worker
     metrics_path: /metrics
-    file_sd_configs:
-      - files:
-          - /etc/prometheus/worker_targets.json
+    http_sd_configs:
+      - url: http://gateway:8080/internal/prometheus/worker-targets
+        refresh_interval: 30s
