@@ -17,6 +17,7 @@
 #   INFERA_SMOKE_MODEL    Optional model ID for inference contract checks
 #   INFERA_SMOKE_PROMPT   Optional prompt for inference checks
 #   INFERA_SMOKE_STREAM   Set to 1 to also validate streaming SSE output
+#   SKIP_CHAT_CHECKS      Set to 1 to skip /v1/chat/completions checks explicitly
 
 set -euo pipefail
 
@@ -27,6 +28,7 @@ SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-10}"
 SMOKE_MODEL="${INFERA_SMOKE_MODEL:-}"
 SMOKE_PROMPT="${INFERA_SMOKE_PROMPT:-hello from smoke test}"
 SMOKE_STREAM="${INFERA_SMOKE_STREAM:-0}"
+SKIP_CHAT_CHECKS="${SKIP_CHAT_CHECKS:-0}"
 TMP_DIR="$(mktemp -d)"
 
 cleanup() {
@@ -52,6 +54,11 @@ PY
 
 if [[ -z "${API_KEY}" ]]; then
   echo "ERROR: INFERA_SMOKE_API_KEY (or INFERA_ADMIN_KEY) is required."
+  exit 1
+fi
+
+if [[ -z "${SMOKE_MODEL}" && "${SKIP_CHAT_CHECKS}" != "1" ]]; then
+  echo "ERROR: set INFERA_SMOKE_MODEL to run chat completion smoke checks, or set SKIP_CHAT_CHECKS=1 to skip them."
   exit 1
 fi
 
@@ -149,7 +156,7 @@ PY
     echo "   OK: streaming chat completions endpoint"
   fi
 else
-  echo "4) Skipping chat completion checks (set INFERA_SMOKE_MODEL to enable)"
+  echo "4) Skipping chat completion checks (SKIP_CHAT_CHECKS=1)"
 fi
 
 echo "Smoke test passed."

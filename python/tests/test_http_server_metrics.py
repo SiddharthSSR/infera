@@ -86,6 +86,17 @@ def test_gateway_metrics_and_worker_info_are_exposed(mock_worker_config):
     assert 'version="dev"' in metrics
 
 
+def test_explicit_worker_address_overrides_provider_derived_address(mock_worker_config, monkeypatch):
+    worker = Worker(mock_worker_config)
+    server = HTTPServer(worker, mock_worker_config)
+
+    monkeypatch.setenv("INFERA_WORKER_ADDRESS", "worker.internal:9999")
+    monkeypatch.setenv("RUNPOD_POD_ID", "pod-123")
+    monkeypatch.setenv("RUNPOD_PUBLIC_IP", "203.0.113.10")
+
+    assert server._get_worker_address() == "worker.internal:9999"
+
+
 @pytest.mark.asyncio
 async def test_streaming_invalid_request_returns_error_before_prepare(mock_worker_config):
     worker = Worker(mock_worker_config)

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -198,5 +199,48 @@ func TestUsageTotalTokensFallsBackToComponentSum(t *testing.T) {
 	}
 	if got := usageTotalTokens(12, 34, 99); got != 99 {
 		t.Fatalf("expected explicit total to win, got %d", got)
+	}
+}
+
+func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *testing.T) {
+	g := New(DefaultConfig(), nil, nil)
+	client := NewWorkerClient("worker.test:8081")
+	client.streamingHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var builder strings.Builder
+		encoder := json.NewEncoder(&builder)
+		if err := encoder.Encode(map[string]any{
+			"delta": "Hello",
+			"usage": map[string]int{
+				"prompt_tokens": 5,
+			},
+		}); err != nil {
+			t.Fatalf("encode first chunk: %v", err)
+		}
+		if err := encoder.Encode(map[string]any{
+			"delta":         " world",
+			"finish_reason": "stop",
+		}); err != nil {
+			t.Fatalf("encode second chunk: %v", err)
+		}
+		return jsonHTTPResponse(http.StatusOK, builder.String()), nil
+	})
+
+	req := &types.InferenceRequest{
+		RequestID: "req-1",
+		ModelID:   "model-1",
+		Messages: []types.Message{
+			{Role: types.RoleUser, Content: "say hello"},
+		},
+	}
+	rec := httptest.NewRecorder()
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(context.Background())
+
+	tokenCount, status := g.handleStreamingInference(rec, httpReq, client, req, "model-1")
+
+	if status != "success" {
+		t.Fatalf("expected success status, got %q", status)
+	}
+	if tokenCount != 7 {
+		t.Fatalf("expected recomputed token count 7, got %d", tokenCount)
 	}
 }

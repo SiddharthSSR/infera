@@ -5,6 +5,9 @@ set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-180}"
+INGRESS_URL="${INGRESS_URL:-http://127.0.0.1}"
+INGRESS_URL="${INGRESS_URL%/}"
+INGRESS_HOST="${INGRESS_HOST:-inferai.co.in}"
 
 : "${INFERA_ADMIN_KEY:=inf_0123456789abcdef0123456789abcdef0123456789abcdef}"
 : "${INFERA_ALLOWED_ORIGINS:=https://example.com}"
@@ -85,10 +88,17 @@ docker compose -f "${COMPOSE_FILE}" up -d frontend
 echo "Waiting for frontend"
 wait_for_service frontend "${SMOKE_TIMEOUT}"
 
-echo "Checking gateway /health"
-HEALTH_BODY="$(docker compose -f "${COMPOSE_FILE}" exec -T gateway wget -qO- http://127.0.0.1:8080/health)"
+echo "Starting caddy ingress"
+docker compose -f "${COMPOSE_FILE}" up -d caddy
+
+echo "Waiting for caddy"
+wait_for_service caddy "${SMOKE_TIMEOUT}"
+
+echo "Checking ingress /health"
+HEALTH_BODY="$(curl -fsS --max-time 10 \
+  -H "Host: ${INGRESS_HOST}" \
+  "${INGRESS_URL}/health")"
 HEALTH_BODY="${HEALTH_BODY}" python3 - <<'PY'
-import sys
 import os
 
 body = os.environ["HEALTH_BODY"]
@@ -96,10 +106,11 @@ if "healthy" not in body and "ok" not in body:
     raise SystemExit(f"/health did not report healthy state: {body}")
 PY
 
-echo "Checking authenticated gateway /v1/models"
-MODELS_BODY="$(docker compose -f "${COMPOSE_FILE}" exec -T gateway \
-  wget -qO- --header="Authorization: Bearer ${INFERA_ADMIN_KEY}" \
-  http://127.0.0.1:8080/v1/models)"
+echo "Checking authenticated ingress /v1/models"
+MODELS_BODY="$(curl -fsS --max-time 10 \
+  -H "Host: ${INGRESS_HOST}" \
+  -H "Authorization: Bearer ${INFERA_ADMIN_KEY}" \
+  "${INGRESS_URL}/v1/models")"
 MODELS_BODY="${MODELS_BODY}" python3 - <<'PY'
 import json
 import os
@@ -109,8 +120,10 @@ if not isinstance(payload.get("data"), list):
     raise SystemExit(f"/v1/models missing data array: {payload}")
 PY
 
-echo "Checking frontend root document"
-FRONTEND_BODY="$(docker compose -f "${COMPOSE_FILE}" exec -T frontend wget -qO- http://127.0.0.1:3000/)"
+echo "Checking ingress root document"
+FRONTEND_BODY="$(curl -fsS --max-time 10 \
+  -H "Host: ${INGRESS_HOST}" \
+  "${INGRESS_URL}/")"
 if [[ "${FRONTEND_BODY}" != *"<html"* ]]; then
   echo "ERROR: frontend root did not return HTML"
   exit 1

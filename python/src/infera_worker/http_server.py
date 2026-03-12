@@ -430,6 +430,12 @@ class HTTPServer:
 
     def _get_worker_address(self) -> str:
         """Get the address where the gateway can reach this worker."""
+        # Explicit address should always win when operators need to override
+        # provider-derived routing.
+        explicit_address = os.environ.get("INFERA_WORKER_ADDRESS")
+        if explicit_address:
+            return explicit_address
+
         # Check for RunPod pod ID to construct proxy URL
         runpod_pod_id = os.environ.get("RUNPOD_POD_ID")
         if runpod_pod_id:
@@ -439,11 +445,6 @@ class HTTPServer:
         runpod_public_ip = os.environ.get("RUNPOD_PUBLIC_IP")
         if runpod_public_ip:
             return f"{runpod_public_ip}:{self.config.http_port}"
-
-        # Check for explicit address
-        explicit_address = os.environ.get("INFERA_WORKER_ADDRESS")
-        if explicit_address:
-            return explicit_address
 
         # Default to localhost for local development
         return f"localhost:{self.config.http_port}"

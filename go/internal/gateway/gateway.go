@@ -642,23 +642,16 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 
 	tokenCount := 0
 	generatedChars := 0
+	bestPromptTokens := 0
+	bestCompletionTokens := 0
+	bestTotalTokens := 0
 
 	for chunk := range chunks {
 		generatedChars += len(chunk.Delta)
 		if chunk.Usage != nil {
-			promptTokens := chunk.Usage.PromptTokens
-			if promptTokens == 0 {
-				promptTokens = req.TokenEstimate()
-			}
-			completionTokens := chunk.Usage.CompletionTokens
-			if completionTokens == 0 {
-				completionTokens = estimateCompletionChars(generatedChars)
-			}
-			tokenCount = maxInt(tokenCount, usageTotalTokens(
-				promptTokens,
-				completionTokens,
-				chunk.Usage.TotalTokens,
-			))
+			bestPromptTokens = maxInt(bestPromptTokens, chunk.Usage.PromptTokens)
+			bestCompletionTokens = maxInt(bestCompletionTokens, chunk.Usage.CompletionTokens)
+			bestTotalTokens = maxInt(bestTotalTokens, chunk.Usage.TotalTokens)
 		}
 
 		openAIChunk := ChatCompletionChunk{
@@ -690,9 +683,17 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
-	if tokenCount == 0 {
-		tokenCount = req.TokenEstimate() + estimateCompletionChars(generatedChars)
+	if bestPromptTokens == 0 {
+		bestPromptTokens = req.TokenEstimate()
 	}
+	if bestCompletionTokens == 0 {
+		bestCompletionTokens = estimateCompletionChars(generatedChars)
+	}
+	tokenCount = maxInt(tokenCount, usageTotalTokens(
+		bestPromptTokens,
+		bestCompletionTokens,
+		bestTotalTokens,
+	))
 
 	return tokenCount, "success"
 }

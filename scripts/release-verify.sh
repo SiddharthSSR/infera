@@ -50,6 +50,15 @@ import os
 payload = json.loads(os.environ["WORKER_TARGETS_BODY"])
 if not isinstance(payload, list):
     raise SystemExit("worker-target discovery did not return a JSON array")
+if not payload:
+    raise SystemExit("worker-target discovery returned an empty target list")
+if not any(
+    isinstance(item, dict)
+    and isinstance(item.get("targets"), list)
+    and len(item["targets"]) > 0
+    for item in payload
+):
+    raise SystemExit("worker-target discovery did not include any discoverable targets")
 PY
 echo "   OK: worker discovery endpoint responds with JSON"
 
