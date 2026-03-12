@@ -133,10 +133,16 @@ class HTTPServer:
         self._worker_info = Gauge(
             "infera_worker_info",
             "Static worker metadata.",
-            ["worker_id", "engine"],
+            ["worker_id", "engine", "provider", "env", "version"],
             registry=self._metrics_registry,
         )
-        self._worker_info.labels(worker_id=self.worker.worker_id, engine=self.config.engine).set(1)
+        self._worker_info.labels(
+            worker_id=self.worker.worker_id,
+            engine=self.config.engine,
+            provider=self._runtime_provider(),
+            env=self._runtime_env(),
+            version=self._runtime_version(),
+        ).set(1)
 
     def _record_gateway_registration(self, status: str) -> None:
         self._gateway_registration.labels(status=status).inc()
@@ -224,6 +230,12 @@ class HTTPServer:
             "worker_id": self.worker.worker_id,
             "address": worker_address,
             "status": "healthy",
+            "tags": {
+                "provider": self._runtime_provider(),
+                "engine": self.config.engine,
+                "env": self._runtime_env(),
+                "version": self._runtime_version(),
+            },
             "loaded_models": [
                 {
                     "model_id": m.model_id,
@@ -435,6 +447,17 @@ class HTTPServer:
 
         # Default to localhost for local development
         return f"localhost:{self.config.http_port}"
+
+    def _runtime_provider(self) -> str:
+        if os.environ.get("RUNPOD_POD_ID") or os.environ.get("RUNPOD_PUBLIC_IP"):
+            return "runpod"
+        return "local"
+
+    def _runtime_env(self) -> str:
+        return os.environ.get("INFERA_ENV", "production")
+
+    def _runtime_version(self) -> str:
+        return os.environ.get("INFERA_VERSION", "dev")
 
     async def handle_infer(self, request: web.Request) -> web.Response:
         """Handle non-streaming inference request."""

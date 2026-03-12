@@ -81,6 +81,9 @@ def test_gateway_metrics_and_worker_info_are_exposed(mock_worker_config):
     assert "infera_worker_info" in metrics
     assert f'worker_id="{worker.worker_id}"' in metrics
     assert f'engine="{mock_worker_config.engine}"' in metrics
+    assert 'provider="local"' in metrics
+    assert 'env="production"' in metrics
+    assert 'version="dev"' in metrics
 
 
 @pytest.mark.asyncio

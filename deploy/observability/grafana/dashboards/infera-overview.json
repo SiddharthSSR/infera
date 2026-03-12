@@ -134,7 +134,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(infera_gateway_http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(infera_gateway_http_requests_total[5m])), 1)",
+          "expr": "((sum(rate(infera_gateway_http_requests_total{status=~\"5..\"}[5m])) or vector(0)) / clamp_min(sum(rate(infera_gateway_http_requests_total[5m])), 1)) or vector(0)",
           "legendFormat": "5xx ratio",
           "range": true,
           "refId": "A"
@@ -191,7 +191,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(increase(infera_gateway_inference_tokens_total[5m]))",
+          "expr": "sum(increase(infera_gateway_inference_tokens_total[5m])) or vector(0)",
           "legendFormat": "Tokens/5m",
           "range": true,
           "refId": "A"
@@ -362,17 +362,31 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(infera_worker_loaded_models)",
+          "expr": "sum(infera_worker_loaded_models) or vector(0)",
           "legendFormat": "loaded models",
           "range": true,
           "refId": "A"
         },
         {
           "editorMode": "code",
-          "expr": "sum(rate(infera_worker_inference_requests_total[5m]))",
+          "expr": "sum(rate(infera_worker_inference_requests_total[5m])) or vector(0)",
           "legendFormat": "worker req/s",
           "range": true,
           "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(up{job=\"infera_worker\"}) or vector(0)",
+          "legendFormat": "scraped workers",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "count(infera_worker_info) or vector(0)",
+          "legendFormat": "registered worker info",
+          "range": true,
+          "refId": "D"
         }
       ],
       "title": "Worker Capacity and Throughput",

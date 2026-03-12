@@ -709,9 +709,16 @@ func (g *Gateway) handlePrometheusWorkerTargets(w http.ResponseWriter, r *http.R
 
 		labels := map[string]string{
 			"job":        "infera_worker",
+			"service":    "worker",
+			"env":        inferaEnv(),
 			"worker_id":  worker.WorkerID,
 			"status":     string(worker.Status),
 			"__scheme__": workerMetricsScheme(address),
+		}
+		for _, key := range []string{"provider", "engine", "version", "env"} {
+			if value := strings.TrimSpace(worker.Tags[key]); value != "" {
+				labels[key] = value
+			}
 		}
 
 		targets = append(targets, targetGroup{
@@ -922,9 +929,10 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		WorkerID     string `json:"worker_id"`
-		Address      string `json:"address"`
-		Status       string `json:"status"`
+		WorkerID     string            `json:"worker_id"`
+		Address      string            `json:"address"`
+		Status       string            `json:"status"`
+		Tags         map[string]string `json:"tags"`
 		LoadedModels []struct {
 			ModelID           string `json:"model_id"`
 			Version           string `json:"version"`
@@ -980,6 +988,7 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 		},
 		LastHealthCheck: time.Now(),
 		RegisteredAt:    time.Now(),
+		Tags:            req.Tags,
 	}
 
 	if err := g.router.RegisterWorker(workerInfo); err != nil {
