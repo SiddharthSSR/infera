@@ -146,17 +146,19 @@ docker compose -f docker-compose.prod.yml ps
 ### 4. Verify
 
 ```bash
-curl -I https://inferai.co.in
-curl -I https://inferai.co.in/health
-curl -I https://dashboard.inferai.co.in
-curl -i https://inferai.co.in/api/stats
+INFERA_SMOKE_API_KEY=<admin-or-smoke-key> \
+INFERA_SMOKE_MODEL=<optional-model-id> \
+INFERA_SMOKE_STREAM=1 \
+./scripts/release-verify.sh https://inferai.co.in
 ```
 
 Expected:
 
-- `/` and `/health` return `200`
-- `dashboard.inferai.co.in` returns `200` and serves Grafana login
-- `/api/stats` returns `401` without API key
+- site root and `/health` return successfully
+- `dashboard.inferai.co.in/api/health` returns successfully
+- gateway-backed worker discovery returns JSON
+- authenticated `/v1/models` succeeds
+- if `INFERA_SMOKE_MODEL` is set, chat completion checks also pass
 
 ### 5. Monitoring Bootstrap
 
