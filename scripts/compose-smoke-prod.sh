@@ -83,9 +83,11 @@ wait_for_service frontend "${SMOKE_TIMEOUT}"
 
 echo "Checking gateway /health"
 HEALTH_BODY="$(docker compose -f "${COMPOSE_FILE}" exec -T gateway wget -qO- http://127.0.0.1:8080/health)"
-python3 - <<'PY' <<<"${HEALTH_BODY}"
+HEALTH_BODY="${HEALTH_BODY}" python3 - <<'PY'
 import sys
-body = sys.stdin.read()
+import os
+
+body = os.environ["HEALTH_BODY"]
 if "healthy" not in body and "ok" not in body:
     raise SystemExit(f"/health did not report healthy state: {body}")
 PY
@@ -94,10 +96,11 @@ echo "Checking authenticated gateway /v1/models"
 MODELS_BODY="$(docker compose -f "${COMPOSE_FILE}" exec -T gateway \
   wget -qO- --header="Authorization: Bearer ${INFERA_ADMIN_KEY}" \
   http://127.0.0.1:8080/v1/models)"
-python3 - <<'PY' <<<"${MODELS_BODY}"
+MODELS_BODY="${MODELS_BODY}" python3 - <<'PY'
 import json
-import sys
-payload = json.load(sys.stdin)
+import os
+
+payload = json.loads(os.environ["MODELS_BODY"])
 if not isinstance(payload.get("data"), list):
     raise SystemExit(f"/v1/models missing data array: {payload}")
 PY

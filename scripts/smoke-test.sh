@@ -73,11 +73,11 @@ echo "3) Checking authenticated ${BASE_URL}/v1/models"
 MODELS_BODY="$(curl -fsS --max-time "${SMOKE_TIMEOUT}" \
   -H "Authorization: Bearer ${API_KEY}" \
   "${BASE_URL}/v1/models")"
-python3 - <<'PY' <<<"${MODELS_BODY}"
+MODELS_BODY="${MODELS_BODY}" python3 - <<'PY'
 import json
-import sys
+import os
 
-payload = json.load(sys.stdin)
+payload = json.loads(os.environ["MODELS_BODY"])
 if not isinstance(payload.get("data"), list):
     raise SystemExit("models response missing data array")
 PY
@@ -91,11 +91,11 @@ if [[ -n "${SMOKE_MODEL}" ]]; then
     -H "Content-Type: application/json" \
     -d "${CHAT_PAYLOAD}" \
     "${BASE_URL}/v1/chat/completions")"
-  python3 - <<'PY' <<<"${CHAT_BODY}"
+  CHAT_BODY="${CHAT_BODY}" python3 - <<'PY'
 import json
-import sys
+import os
 
-payload = json.load(sys.stdin)
+payload = json.loads(os.environ["CHAT_BODY"])
 if payload.get("object") != "chat.completion":
     raise SystemExit(f"unexpected object: {payload.get('object')!r}")
 choices = payload.get("choices")
@@ -120,11 +120,11 @@ PY
       -H "Content-Type: application/json" \
       -d "${STREAM_PAYLOAD}" \
       "${BASE_URL}/v1/chat/completions")"
-    python3 - <<'PY' <<<"${STREAM_BODY}"
+    STREAM_BODY="${STREAM_BODY}" python3 - <<'PY'
 import json
-import sys
+import os
 
-lines = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
+lines = [line.strip() for line in os.environ["STREAM_BODY"].splitlines() if line.strip()]
 if not lines or lines[-1] != "data: [DONE]":
     raise SystemExit("stream did not terminate with data: [DONE]")
 payload_lines = [line for line in lines[:-1] if line.startswith("data: ")]
