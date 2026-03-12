@@ -299,6 +299,9 @@ The instance will:
 | `/v1/chat/completions` | POST | Chat completion (streaming supported) |
 | `/v1/models` | GET | List available models |
 
+Compatibility notes:
+- [OpenAI Compatibility Guide](/Users/siddharthsingh/codingtensor/infera/docs/openai/COMPATIBILITY.md)
+
 ### Instance Management
 
 | Endpoint | Method | Description |
