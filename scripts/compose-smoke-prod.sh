@@ -8,6 +8,21 @@ SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-180}"
 INGRESS_URL="${INGRESS_URL:-http://127.0.0.1}"
 INGRESS_URL="${INGRESS_URL%/}"
 INGRESS_HOST="${INGRESS_HOST:-inferai.co.in}"
+TMP_DIR="$(mktemp -d)"
+
+cleanup() {
+  if [[ -f "${TMP_DIR}/Caddyfile.backup" ]]; then
+    cp "${TMP_DIR}/Caddyfile.backup" deploy/caddy/Caddyfile
+  fi
+
+  local down_args=("down" "--remove-orphans")
+  if [[ "${REMOVE_COMPOSE_VOLUMES:-false}" == "true" ]]; then
+    down_args+=("-v")
+  fi
+  docker compose -f "${COMPOSE_FILE}" "${down_args[@]}" >/dev/null 2>&1 || true
+  rm -rf "${TMP_DIR}"
+}
+trap cleanup EXIT
 
 : "${INFERA_ADMIN_KEY:=inf_0123456789abcdef0123456789abcdef0123456789abcdef}"
 : "${INFERA_ALLOWED_ORIGINS:=https://example.com}"
@@ -25,15 +40,6 @@ INGRESS_HOST="${INGRESS_HOST:-inferai.co.in}"
 : "${VASTAI_API_KEY:=}"
 : "${HF_TOKEN:=}"
 
-cleanup() {
-  local down_args=("down" "--remove-orphans")
-  if [[ "${REMOVE_COMPOSE_VOLUMES:-false}" == "true" ]]; then
-    down_args+=("-v")
-  fi
-  docker compose -f "${COMPOSE_FILE}" "${down_args[@]}" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 prepare_ci_bind_mounts() {
   if [[ "${CI:-}" != "true" ]]; then
     return
@@ -44,6 +50,43 @@ prepare_ci_bind_mounts() {
   # before startup.
   mkdir -p data
   chmod 0777 data
+}
+
+prepare_ci_caddyfile() {
+  if [[ "${CI:-}" != "true" ]]; then
+    return
+  fi
+
+  cp deploy/caddy/Caddyfile "${TMP_DIR}/Caddyfile.backup"
+  cat > deploy/caddy/Caddyfile <<'EOF'
+:80 {
+  encode gzip
+  header {
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "SAMEORIGIN"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    -Server
+  }
+
+  handle /api/* {
+    reverse_proxy gateway:8080
+  }
+
+  handle /v1/* {
+    reverse_proxy gateway:8080 {
+      flush_interval -1
+    }
+  }
+
+  handle /health {
+    reverse_proxy gateway:8080
+  }
+
+  handle {
+    reverse_proxy frontend:3000
+  }
+}
+EOF
 }
 
 wait_for_service() {
@@ -75,6 +118,7 @@ wait_for_service() {
 }
 
 prepare_ci_bind_mounts
+prepare_ci_caddyfile
 
 echo "Building and starting gateway from ${COMPOSE_FILE}"
 docker compose -f "${COMPOSE_FILE}" up -d --build gateway
@@ -96,7 +140,6 @@ wait_for_service caddy "${SMOKE_TIMEOUT}"
 
 echo "Checking ingress /health"
 HEALTH_BODY="$(curl -fsS --max-time 10 \
-  -H "Host: ${INGRESS_HOST}" \
   "${INGRESS_URL}/health")"
 HEALTH_BODY="${HEALTH_BODY}" python3 - <<'PY'
 import os
@@ -108,7 +151,6 @@ PY
 
 echo "Checking authenticated ingress /v1/models"
 MODELS_BODY="$(curl -fsS --max-time 10 \
-  -H "Host: ${INGRESS_HOST}" \
   -H "Authorization: Bearer ${INFERA_ADMIN_KEY}" \
   "${INGRESS_URL}/v1/models")"
 MODELS_BODY="${MODELS_BODY}" python3 - <<'PY'
@@ -122,7 +164,6 @@ PY
 
 echo "Checking ingress root document"
 FRONTEND_BODY="$(curl -fsS --max-time 10 \
-  -H "Host: ${INGRESS_HOST}" \
   "${INGRESS_URL}/")"
 if [[ "${FRONTEND_BODY}" != *"<html"* ]]; then
   echo "ERROR: frontend root did not return HTML"
