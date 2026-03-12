@@ -454,7 +454,14 @@ class HTTPServer:
         return "local"
 
     def _runtime_env(self) -> str:
-        return os.environ.get("INFERA_ENV", "production")
+        raw = os.environ.get("INFERA_ENV", "").strip().lower()
+        if raw in {"prod", "production"}:
+            return "production"
+        if raw in {"stage", "staging"}:
+            return "staging"
+        if raw in {"", "dev", "development", "local"}:
+            return "development"
+        return raw
 
     def _runtime_version(self) -> str:
         return os.environ.get("INFERA_VERSION", "dev")

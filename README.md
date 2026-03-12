@@ -154,10 +154,10 @@ INFERA_SMOKE_STREAM=1 \
 
 Expected:
 
-- site root and `/health` return successfully
-- `dashboard.inferai.co.in/api/health` returns successfully
+- site root and `/health` respond OK
+- `dashboard.inferai.co.in/api/health` is reachable
 - gateway-backed worker discovery returns JSON
-- authenticated `/v1/models` succeeds
+- authenticated `/v1/models` responds with model data
 - if `INFERA_SMOKE_MODEL` is set, chat completion checks also pass
 
 ### 5. Monitoring Bootstrap

@@ -23,7 +23,11 @@ SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-180}"
 : "${HF_TOKEN:=}"
 
 cleanup() {
-  docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
+  local down_args=("down" "--remove-orphans")
+  if [[ "${REMOVE_COMPOSE_VOLUMES:-false}" == "true" ]]; then
+    down_args+=("-v")
+  fi
+  docker compose -f "${COMPOSE_FILE}" "${down_args[@]}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

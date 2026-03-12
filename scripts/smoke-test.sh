@@ -27,6 +27,12 @@ SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-10}"
 SMOKE_MODEL="${INFERA_SMOKE_MODEL:-}"
 SMOKE_PROMPT="${INFERA_SMOKE_PROMPT:-hello from smoke test}"
 SMOKE_STREAM="${INFERA_SMOKE_STREAM:-0}"
+TMP_DIR="$(mktemp -d)"
+
+cleanup() {
+  rm -rf "${TMP_DIR}"
+}
+trap cleanup EXIT
 
 build_chat_payload() {
   local stream_flag="$1"
@@ -70,14 +76,16 @@ fi
 echo "   OK: api health endpoint"
 
 echo "3) Checking authenticated ${BASE_URL}/v1/models"
-MODELS_BODY="$(curl -fsS --max-time "${SMOKE_TIMEOUT}" \
+MODELS_FILE="${TMP_DIR}/models.json"
+curl -fsS --max-time "${SMOKE_TIMEOUT}" \
   -H "Authorization: Bearer ${API_KEY}" \
-  "${BASE_URL}/v1/models")"
-MODELS_BODY="${MODELS_BODY}" python3 - <<'PY'
+  "${BASE_URL}/v1/models" >"${MODELS_FILE}"
+python3 - "${MODELS_FILE}" <<'PY'
 import json
-import os
+import sys
+from pathlib import Path
 
-payload = json.loads(os.environ["MODELS_BODY"])
+payload = json.loads(Path(sys.argv[1]).read_text())
 if not isinstance(payload.get("data"), list):
     raise SystemExit("models response missing data array")
 PY
@@ -86,16 +94,18 @@ echo "   OK: models endpoint"
 if [[ -n "${SMOKE_MODEL}" ]]; then
   echo "4) Checking authenticated ${BASE_URL}/v1/chat/completions"
   CHAT_PAYLOAD="$(build_chat_payload 0)"
-  CHAT_BODY="$(curl -fsS --max-time "${SMOKE_TIMEOUT}" \
+  CHAT_FILE="${TMP_DIR}/chat.json"
+  curl -fsS --max-time "${SMOKE_TIMEOUT}" \
     -H "Authorization: Bearer ${API_KEY}" \
     -H "Content-Type: application/json" \
     -d "${CHAT_PAYLOAD}" \
-    "${BASE_URL}/v1/chat/completions")"
-  CHAT_BODY="${CHAT_BODY}" python3 - <<'PY'
+    "${BASE_URL}/v1/chat/completions" >"${CHAT_FILE}"
+  python3 - "${CHAT_FILE}" <<'PY'
 import json
-import os
+import sys
+from pathlib import Path
 
-payload = json.loads(os.environ["CHAT_BODY"])
+payload = json.loads(Path(sys.argv[1]).read_text())
 if payload.get("object") != "chat.completion":
     raise SystemExit(f"unexpected object: {payload.get('object')!r}")
 choices = payload.get("choices")
@@ -115,16 +125,18 @@ PY
   if [[ "${SMOKE_STREAM}" == "1" ]]; then
     echo "5) Checking streaming ${BASE_URL}/v1/chat/completions"
     STREAM_PAYLOAD="$(build_chat_payload 1)"
-    STREAM_BODY="$(curl -fsS --max-time "${SMOKE_TIMEOUT}" \
+    STREAM_FILE="${TMP_DIR}/stream.txt"
+    curl -fsS --max-time "${SMOKE_TIMEOUT}" \
       -H "Authorization: Bearer ${API_KEY}" \
       -H "Content-Type: application/json" \
       -d "${STREAM_PAYLOAD}" \
-      "${BASE_URL}/v1/chat/completions")"
-    STREAM_BODY="${STREAM_BODY}" python3 - <<'PY'
+      "${BASE_URL}/v1/chat/completions" >"${STREAM_FILE}"
+    python3 - "${STREAM_FILE}" <<'PY'
 import json
-import os
+import sys
+from pathlib import Path
 
-lines = [line.strip() for line in os.environ["STREAM_BODY"].splitlines() if line.strip()]
+lines = [line.strip() for line in Path(sys.argv[1]).read_text().splitlines() if line.strip()]
 if not lines or lines[-1] != "data: [DONE]":
     raise SystemExit("stream did not terminate with data: [DONE]")
 payload_lines = [line for line in lines[:-1] if line.startswith("data: ")]

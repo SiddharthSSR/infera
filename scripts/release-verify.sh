@@ -54,6 +54,10 @@ PY
 echo "   OK: worker discovery endpoint responds with JSON"
 
 echo "5) Running authenticated gateway smoke checks"
+if [[ -z "${INFERA_SMOKE_API_KEY:-}" ]]; then
+  echo "INFERA_SMOKE_API_KEY must be set to run smoke tests" >&2
+  exit 1
+fi
 "$(dirname "$0")/smoke-test.sh" "${BASE_URL}"
 
 echo "Release verification passed."

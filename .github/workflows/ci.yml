@@ -15,6 +15,16 @@ permissions:
   contents: read
 
 jobs:
+  ci-secrets:
+    name: CI Shared Values
+    runs-on: ubuntu-latest
+    outputs:
+      admin_key: ${{ steps.generate.outputs.admin_key }}
+    steps:
+      - name: Generate bootstrap admin key
+        id: generate
+        run: echo "admin_key=inf_$(openssl rand -hex 24)" >> "$GITHUB_OUTPUT"
+
   go:
     name: Go Tests
     runs-on: ubuntu-latest
@@ -87,13 +97,14 @@ jobs:
   prod-config:
     name: Production Compose Validation
     runs-on: ubuntu-latest
+    needs: ci-secrets
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Validate docker-compose.prod.yml
         env:
-          INFERA_ADMIN_KEY: inf_0123456789abcdef0123456789abcdef0123456789abcdef
+          INFERA_ADMIN_KEY: ${{ needs.ci-secrets.outputs.admin_key }}
           INFERA_ALLOWED_ORIGINS: https://example.com
           INFERA_GATEWAY_ADDRESS: https://example.com
           INFERA_WORKER_SHARED_TOKEN: test-worker-token
@@ -113,13 +124,14 @@ jobs:
   prod-smoke:
     name: Production Compose Smoke
     runs-on: ubuntu-latest
+    needs: ci-secrets
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Run production compose smoke test
         env:
-          INFERA_ADMIN_KEY: inf_0123456789abcdef0123456789abcdef0123456789abcdef
+          INFERA_ADMIN_KEY: ${{ needs.ci-secrets.outputs.admin_key }}
           INFERA_ALLOWED_ORIGINS: https://example.com
           INFERA_GATEWAY_ADDRESS: https://example.com
           INFERA_WORKER_SHARED_TOKEN: test-worker-token
@@ -134,4 +146,5 @@ jobs:
           RUNPOD_API_KEY: ""
           VASTAI_API_KEY: ""
           HF_TOKEN: ""
+          REMOVE_COMPOSE_VOLUMES: "true"
         run: bash ./scripts/compose-smoke-prod.sh

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -157,7 +158,7 @@ func (g *Gateway) Start() error {
 	mux.HandleFunc("/api/workers/heartbeat", g.handleCORS(g.requireWorkerToken(g.handleWorkerHeartbeat)))
 	mux.HandleFunc("/api/health", g.handleCORS(g.handleHealth))
 	mux.HandleFunc("/health", g.handleHealth)
-	mux.HandleFunc("/internal/prometheus/worker-targets", g.handlePrometheusWorkerTargets)
+	mux.HandleFunc("/internal/prometheus/worker-targets", g.internalOnlyHandler(g.handlePrometheusWorkerTargets))
 
 	// Protected internal API endpoints (require auth)
 	mux.HandleFunc("/api/workers", withAdmin(g.handleGetWorkers))
@@ -553,14 +554,19 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 	}
 
 	// Convert to OpenAI format
+	promptTokens := resp.Usage.PromptTokens
+	if promptTokens == 0 {
+		promptTokens = req.TokenEstimate()
+	}
+	completionTokens := resp.Usage.CompletionTokens
+	if completionTokens == 0 {
+		completionTokens = estimateCompletionTokens(resp)
+	}
 	totalTokens := usageTotalTokens(
-		resp.Usage.PromptTokens,
-		resp.Usage.CompletionTokens,
+		promptTokens,
+		completionTokens,
 		resp.Usage.TotalTokens,
 	)
-	if totalTokens == 0 {
-		totalTokens = req.TokenEstimate() + estimateCompletionTokens(resp)
-	}
 
 	openAIResp := ChatCompletionResponse{
 		ID:      "chatcmpl-" + req.RequestID,
@@ -569,8 +575,8 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 		Model:   model,
 		Choices: make([]ChatChoice, len(resp.Choices)),
 		Usage: Usage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
 			TotalTokens:      totalTokens,
 		},
 	}
@@ -640,9 +646,17 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	for chunk := range chunks {
 		generatedChars += len(chunk.Delta)
 		if chunk.Usage != nil {
+			promptTokens := chunk.Usage.PromptTokens
+			if promptTokens == 0 {
+				promptTokens = req.TokenEstimate()
+			}
+			completionTokens := chunk.Usage.CompletionTokens
+			if completionTokens == 0 {
+				completionTokens = estimateCompletionChars(generatedChars)
+			}
 			tokenCount = maxInt(tokenCount, usageTotalTokens(
-				chunk.Usage.PromptTokens,
-				chunk.Usage.CompletionTokens,
+				promptTokens,
+				completionTokens,
 				chunk.Usage.TotalTokens,
 			))
 		}
@@ -774,6 +788,21 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (g *Gateway) internalOnlyHandler(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+		if err != nil {
+			host = strings.TrimSpace(r.RemoteAddr)
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || !(ip.IsLoopback() || ip.IsPrivate()) {
+			g.writeError(w, http.StatusForbidden, "forbidden", "Internal endpoint")
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {

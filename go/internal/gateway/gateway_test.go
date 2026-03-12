@@ -169,6 +169,29 @@ func TestHandlePrometheusWorkerTargets(t *testing.T) {
 	}
 }
 
+func TestInternalOnlyHandlerAllowsPrivateAndBlocksPublic(t *testing.T) {
+	g := New(DefaultConfig(), nil, nil)
+	handler := g.internalOnlyHandler(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	privateReq := httptest.NewRequest(http.MethodGet, "/internal/prometheus/worker-targets", nil)
+	privateReq.RemoteAddr = "10.0.0.8:12345"
+	privateRec := httptest.NewRecorder()
+	handler(privateRec, privateReq)
+	if privateRec.Code != http.StatusNoContent {
+		t.Fatalf("expected private request to pass, got %d", privateRec.Code)
+	}
+
+	publicReq := httptest.NewRequest(http.MethodGet, "/internal/prometheus/worker-targets", nil)
+	publicReq.RemoteAddr = "8.8.8.8:12345"
+	publicRec := httptest.NewRecorder()
+	handler(publicRec, publicReq)
+	if publicRec.Code != http.StatusForbidden {
+		t.Fatalf("expected public request to be forbidden, got %d body=%s", publicRec.Code, publicRec.Body.String())
+	}
+}
+
 func TestUsageTotalTokensFallsBackToComponentSum(t *testing.T) {
 	if got := usageTotalTokens(12, 34, 0); got != 46 {
 		t.Fatalf("expected component sum fallback, got %d", got)

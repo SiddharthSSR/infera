@@ -43,13 +43,14 @@ Short release summary:
 
 ## Verification
 
-- `go test ./...`
-- `pytest -q`
-- `npm run test:run`
-- `npm run build`
-- `docker compose -f docker-compose.prod.yml config`
+- `REPO_ROOT="$(git rev-parse --show-toplevel)"`
+- `(cd "$REPO_ROOT/go" && go test ./...)`
+- `(cd "$REPO_ROOT/python" && pytest -q)`
+- `npm --prefix "$REPO_ROOT/frontend" run test:run`
+- `npm --prefix "$REPO_ROOT/frontend" run build`
+- `docker compose -f "$REPO_ROOT/docker-compose.prod.yml" config`
 - production compose smoke checks
-- post-deploy `./scripts/release-verify.sh`
+- post-deploy `"$REPO_ROOT/scripts/release-verify.sh"`
 
 ## Deploy Notes
 

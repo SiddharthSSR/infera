@@ -173,10 +173,6 @@ docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 - Symptom: vault/auth DB open errors.
 - Fix: ensure `./data:/app/data` volume exists and `data/` is writable.
 
-### D) CI compose smoke fails on bootstrap admin key
-- Symptom: `failed to store bootstrap admin key`.
-- Fix: ensure CI/test keys match `inf_` + 48 hexadecimal characters.
-
 ### B) Frontend 502 via Caddy
 - Symptom: Caddy `lookup frontend ... status 502`.
 - Fix: inspect frontend logs and fix nginx startup errors first.
@@ -184,6 +180,10 @@ docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 ### C) SSH timeout
 - Symptom: `ssh ... port 22: Operation timed out`.
 - Fix: add current public IP to VM firewall allowlist for `22/tcp`.
+
+### D) CI compose smoke fails on bootstrap admin key
+- Symptom: `failed to store bootstrap admin key`.
+- Fix: ensure CI/test keys match `inf_` + 48 hexadecimal characters.
 
 ## 7. Release Hygiene
 
