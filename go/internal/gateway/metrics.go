@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ type GatewayMetrics struct {
 	httpRequests *prometheus.CounterVec
 	httpDuration *prometheus.HistogramVec
 	httpInFlight prometheus.Gauge
+	gatewayInfo  *prometheus.GaugeVec
 
 	inferenceRequests *prometheus.CounterVec
 	inferenceDuration *prometheus.HistogramVec
@@ -45,6 +47,10 @@ func NewGatewayMetrics() *GatewayMetrics {
 			Name: "infera_gateway_http_in_flight_requests",
 			Help: "Current number of in-flight HTTP requests.",
 		}),
+		gatewayInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "infera_gateway_info",
+			Help: "Static gateway deployment metadata.",
+		}, []string{"service", "env", "version"}),
 		inferenceRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "infera_gateway_inference_requests_total",
 			Help: "Total number of inference requests.",
@@ -66,10 +72,12 @@ func NewGatewayMetrics() *GatewayMetrics {
 		m.httpRequests,
 		m.httpDuration,
 		m.httpInFlight,
+		m.gatewayInfo,
 		m.inferenceRequests,
 		m.inferenceDuration,
 		m.inferenceTokens,
 	)
+	m.gatewayInfo.WithLabelValues("gateway", inferaEnv(), inferaVersion()).Set(1)
 
 	return m
 }
@@ -191,9 +199,25 @@ func normalizeMetricPath(path string) string {
 		return "/api/auth/*"
 	case path == "/api/audit/usage":
 		return "/api/audit/usage"
+	case path == "/internal/prometheus/worker-targets":
+		return "/internal/prometheus/worker-targets"
 	case path == "/metrics":
 		return "/metrics"
 	default:
 		return "/unknown"
 	}
+}
+
+func inferaEnv() string {
+	if env := strings.TrimSpace(os.Getenv("INFERA_ENV")); env != "" {
+		return env
+	}
+	return "production"
+}
+
+func inferaVersion() string {
+	if version := strings.TrimSpace(os.Getenv("INFERA_VERSION")); version != "" {
+		return version
+	}
+	return "dev"
 }

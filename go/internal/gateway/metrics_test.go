@@ -19,6 +19,7 @@ func TestNormalizeMetricPath(t *testing.T) {
 		{in: "/api/vault/models/families", want: "/api/vault/models/families"},
 		{in: "/api/vault/models/model_123", want: "/api/vault/models/:id"},
 		{in: "/api/auth/login", want: "/api/auth/*"},
+		{in: "/internal/prometheus/worker-targets", want: "/internal/prometheus/worker-targets"},
 		{in: "/random-path", want: "/unknown"},
 	}
 
@@ -102,6 +103,7 @@ func TestGatewayMetricsHandler(t *testing.T) {
 		"infera_gateway_http_requests_total",
 		"infera_gateway_http_request_duration_seconds",
 		"infera_gateway_http_in_flight_requests",
+		"infera_gateway_info",
 		"infera_gateway_inference_requests_total",
 		"infera_gateway_inference_duration_seconds",
 		"infera_gateway_inference_tokens_total",

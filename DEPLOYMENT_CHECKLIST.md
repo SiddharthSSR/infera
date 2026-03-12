@@ -53,10 +53,11 @@ docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 docker compose -f docker-compose.prod.yml ps
 ```
 
-- [ ] Validate Prometheus worker discovery targets before enabling observability alerts:
+- [ ] Validate gateway-backed worker discovery before enabling observability alerts:
 
 ```bash
-./scripts/validate-worker-targets.sh deploy/observability/prometheus/worker_targets.json
+docker compose -f docker-compose.prod.yml exec -T gateway \
+  wget -qO- http://127.0.0.1:8080/internal/prometheus/worker-targets
 ```
 
 ## 3. Post-Deploy Verification
@@ -121,6 +122,15 @@ docker compose -f docker-compose.prod.yml logs grafana --tail=200
 docker compose -f docker-compose.prod.yml logs alertmanager --tail=200
 ```
 
+- [ ] Run the consolidated release verification script:
+
+```bash
+INFERA_SMOKE_API_KEY=<admin-or-smoke-key> \
+INFERA_SMOKE_MODEL=<model-id-if-you-want-inference-checks> \
+INFERA_SMOKE_STREAM=1 \
+./scripts/release-verify.sh https://inferai.co.in
+```
+
 ## 4. Functional Smoke Test
 
 - [ ] Open `https://inferai.co.in` in browser.
@@ -171,16 +181,20 @@ docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 - Symptom: `ssh ... port 22: Operation timed out`.
 - Fix: add current public IP to VM firewall allowlist for `22/tcp`.
 
+### D) CI compose smoke fails on bootstrap admin key
+- Symptom: `failed to store bootstrap admin key`.
+- Fix: ensure CI/test keys match `inf_` + 48 hexadecimal characters.
+
 ## 7. Release Hygiene
 
 - [ ] Tag release after successful verification:
 
 ```bash
-git tag -a v1.0.0 -m "v1.0.0 release"
-git push origin v1.0.0
+git tag -a v1.1.0 -m "v1.1.0 release"
+git push origin v1.1.0
 ```
 
-- [ ] Add/update GitHub release notes.
+- [ ] Add/update GitHub release notes using `docs/releases/RELEASE_TEMPLATE.md`.
 - [ ] Record deployment timestamp and commit hash.
 
 ---

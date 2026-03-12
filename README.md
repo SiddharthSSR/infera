@@ -146,17 +146,19 @@ docker compose -f docker-compose.prod.yml ps
 ### 4. Verify
 
 ```bash
-curl -I https://inferai.co.in
-curl -I https://inferai.co.in/health
-curl -I https://dashboard.inferai.co.in
-curl -i https://inferai.co.in/api/stats
+INFERA_SMOKE_API_KEY=<admin-or-smoke-key> \
+INFERA_SMOKE_MODEL=<optional-model-id> \
+INFERA_SMOKE_STREAM=1 \
+./scripts/release-verify.sh https://inferai.co.in
 ```
 
 Expected:
 
-- `/` and `/health` return `200`
-- `dashboard.inferai.co.in` returns `200` and serves Grafana login
-- `/api/stats` returns `401` without API key
+- site root and `/health` respond OK
+- `dashboard.inferai.co.in/api/health` is reachable
+- gateway-backed worker discovery returns JSON
+- authenticated `/v1/models` responds with model data
+- if `INFERA_SMOKE_MODEL` is set, chat completion checks also pass
 
 ### 5. Monitoring Bootstrap
 
@@ -170,11 +172,11 @@ Production compose now includes Prometheus, Alertmanager, and Grafana:
 - Starter dashboard: `deploy/observability/grafana/dashboards/infera-overview.json`
 - Runbooks: `deploy/observability/RUNBOOKS.md`
 
-For worker scraping, edit:
+For worker scraping, Prometheus now discovers targets dynamically from:
 
-- `deploy/observability/prometheus/worker_targets.json`
+- `http://gateway:8080/internal/prometheus/worker-targets`
 
-Use `worker_targets.example.json` as template.
+Healthy workers that register with the gateway should appear automatically.
 
 ### 6. Worker Registration Checklist
 

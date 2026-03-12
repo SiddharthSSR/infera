@@ -17,15 +17,34 @@ This directory contains baseline monitoring config for Infera production:
 
 Caddy routes `dashboard.inferai.co.in` to Grafana over TLS.
 
-## Configure Worker Scrape Targets
+## Worker Scrape Discovery
 
-Prometheus uses file-based discovery for worker metrics:
+Prometheus now discovers worker metrics dynamically from the gateway.
 
-- File: `deploy/observability/prometheus/worker_targets.json`
+- Discovery endpoint: `http://gateway:8080/internal/prometheus/worker-targets`
+- Refresh interval: `30s`
 
-At least one worker target is required for production scraping.
-Use `deploy/observability/prometheus/worker_targets.example.json` as template.
-Each target should be `host:port` where worker metrics are reachable at `/metrics`.
+Workers register themselves with the gateway, and healthy workers are exposed
+to Prometheus automatically. A newly provisioned worker should appear on the
+dashboard without manually editing `worker_targets.json`.
+
+The old `deploy/observability/prometheus/worker_targets.json` file is no longer
+the active source of truth for production scraping.
+
+Discovery labels now include:
+
+- `service`
+- `env`
+- `worker_id`
+- `status`
+- `provider` (when reported by the worker)
+- `engine` (when reported by the worker)
+- `version` (when reported by the worker)
+
+Static build metadata is exposed via:
+
+- `infera_gateway_info`
+- `infera_worker_info`
 
 ## Required Environment Variables
 

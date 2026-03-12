@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -157,6 +158,7 @@ func (g *Gateway) Start() error {
 	mux.HandleFunc("/api/workers/heartbeat", g.handleCORS(g.requireWorkerToken(g.handleWorkerHeartbeat)))
 	mux.HandleFunc("/api/health", g.handleCORS(g.handleHealth))
 	mux.HandleFunc("/health", g.handleHealth)
+	mux.HandleFunc("/internal/prometheus/worker-targets", g.internalOnlyHandler(g.handlePrometheusWorkerTargets))
 
 	// Protected internal API endpoints (require auth)
 	mux.HandleFunc("/api/workers", withAdmin(g.handleGetWorkers))
@@ -552,6 +554,20 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 	}
 
 	// Convert to OpenAI format
+	promptTokens := resp.Usage.PromptTokens
+	if promptTokens == 0 {
+		promptTokens = req.TokenEstimate()
+	}
+	completionTokens := resp.Usage.CompletionTokens
+	if completionTokens == 0 {
+		completionTokens = estimateCompletionTokens(resp)
+	}
+	totalTokens := usageTotalTokens(
+		promptTokens,
+		completionTokens,
+		resp.Usage.TotalTokens,
+	)
+
 	openAIResp := ChatCompletionResponse{
 		ID:      "chatcmpl-" + req.RequestID,
 		Object:  "chat.completion",
@@ -559,9 +575,9 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 		Model:   model,
 		Choices: make([]ChatChoice, len(resp.Choices)),
 		Usage: Usage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      totalTokens,
 		},
 	}
 
@@ -626,11 +642,16 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 
 	tokenCount := 0
 	generatedChars := 0
+	bestPromptTokens := 0
+	bestCompletionTokens := 0
+	bestTotalTokens := 0
 
 	for chunk := range chunks {
 		generatedChars += len(chunk.Delta)
-		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
-			tokenCount = chunk.Usage.TotalTokens
+		if chunk.Usage != nil {
+			bestPromptTokens = maxInt(bestPromptTokens, chunk.Usage.PromptTokens)
+			bestCompletionTokens = maxInt(bestCompletionTokens, chunk.Usage.CompletionTokens)
+			bestTotalTokens = maxInt(bestTotalTokens, chunk.Usage.TotalTokens)
 		}
 
 		openAIChunk := ChatCompletionChunk{
@@ -662,11 +683,127 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
-	if tokenCount == 0 {
-		tokenCount = req.TokenEstimate() + (generatedChars / 4)
+	if bestPromptTokens == 0 {
+		bestPromptTokens = req.TokenEstimate()
 	}
+	if bestCompletionTokens == 0 {
+		bestCompletionTokens = estimateCompletionChars(generatedChars)
+	}
+	tokenCount = maxInt(tokenCount, usageTotalTokens(
+		bestPromptTokens,
+		bestCompletionTokens,
+		bestTotalTokens,
+	))
 
 	return tokenCount, "success"
+}
+
+func (g *Gateway) handlePrometheusWorkerTargets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+
+	type targetGroup struct {
+		Targets []string          `json:"targets"`
+		Labels  map[string]string `json:"labels,omitempty"`
+	}
+
+	if g.router == nil {
+		g.writeJSON(w, http.StatusOK, []targetGroup{})
+		return
+	}
+
+	workers := g.router.GetWorkers("", true)
+	targets := make([]targetGroup, 0, len(workers))
+	for _, worker := range workers {
+		address := strings.TrimSpace(worker.Address)
+		if address == "" {
+			continue
+		}
+
+		labels := map[string]string{
+			"job":        "infera_worker",
+			"service":    "worker",
+			"env":        inferaEnv(),
+			"worker_id":  worker.WorkerID,
+			"status":     string(worker.Status),
+			"__scheme__": workerMetricsScheme(address),
+		}
+		for _, key := range []string{"provider", "engine", "version", "env"} {
+			if value := strings.TrimSpace(worker.Tags[key]); value != "" {
+				labels[key] = value
+			}
+		}
+
+		targets = append(targets, targetGroup{
+			Targets: []string{address},
+			Labels:  labels,
+		})
+	}
+
+	g.writeJSON(w, http.StatusOK, targets)
+}
+
+func workerMetricsScheme(address string) string {
+	switch {
+	case strings.Contains(address, ".proxy.runpod.net"), strings.Contains(address, ".runpod."):
+		return "https"
+	default:
+		return "http"
+	}
+}
+
+func usageTotalTokens(promptTokens, completionTokens, totalTokens int) int {
+	if totalTokens > 0 {
+		return totalTokens
+	}
+	sum := promptTokens + completionTokens
+	if sum > 0 {
+		return sum
+	}
+	return 0
+}
+
+func estimateCompletionTokens(resp *types.InferenceResponse) int {
+	totalChars := 0
+	for _, choice := range resp.Choices {
+		totalChars += len(choice.Message.Content)
+	}
+	return estimateCompletionChars(totalChars)
+}
+
+func estimateCompletionChars(chars int) int {
+	if chars <= 0 {
+		return 0
+	}
+	estimate := chars / 4
+	if estimate == 0 {
+		return 1
+	}
+	return estimate
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func (g *Gateway) internalOnlyHandler(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+		if err != nil {
+			host = strings.TrimSpace(r.RemoteAddr)
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || !(ip.IsLoopback() || ip.IsPrivate()) {
+			g.writeError(w, http.StatusForbidden, "forbidden", "Internal endpoint")
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
@@ -822,9 +959,10 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		WorkerID     string `json:"worker_id"`
-		Address      string `json:"address"`
-		Status       string `json:"status"`
+		WorkerID     string            `json:"worker_id"`
+		Address      string            `json:"address"`
+		Status       string            `json:"status"`
+		Tags         map[string]string `json:"tags"`
 		LoadedModels []struct {
 			ModelID           string `json:"model_id"`
 			Version           string `json:"version"`
@@ -880,6 +1018,7 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 		},
 		LastHealthCheck: time.Now(),
 		RegisteredAt:    time.Now(),
+		Tags:            req.Tags,
 	}
 
 	if err := g.router.RegisterWorker(workerInfo); err != nil {
