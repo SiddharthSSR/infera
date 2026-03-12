@@ -157,6 +157,7 @@ func (g *Gateway) Start() error {
 	mux.HandleFunc("/api/workers/heartbeat", g.handleCORS(g.requireWorkerToken(g.handleWorkerHeartbeat)))
 	mux.HandleFunc("/api/health", g.handleCORS(g.handleHealth))
 	mux.HandleFunc("/health", g.handleHealth)
+	mux.HandleFunc("/internal/prometheus/worker-targets", g.handlePrometheusWorkerTargets)
 
 	// Protected internal API endpoints (require auth)
 	mux.HandleFunc("/api/workers", withAdmin(g.handleGetWorkers))
@@ -552,6 +553,15 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 	}
 
 	// Convert to OpenAI format
+	totalTokens := usageTotalTokens(
+		resp.Usage.PromptTokens,
+		resp.Usage.CompletionTokens,
+		resp.Usage.TotalTokens,
+	)
+	if totalTokens == 0 {
+		totalTokens = req.TokenEstimate() + estimateCompletionTokens(resp)
+	}
+
 	openAIResp := ChatCompletionResponse{
 		ID:      "chatcmpl-" + req.RequestID,
 		Object:  "chat.completion",
@@ -561,7 +571,7 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 		Usage: Usage{
 			PromptTokens:     resp.Usage.PromptTokens,
 			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
+			TotalTokens:      totalTokens,
 		},
 	}
 
@@ -629,8 +639,12 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 
 	for chunk := range chunks {
 		generatedChars += len(chunk.Delta)
-		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
-			tokenCount = chunk.Usage.TotalTokens
+		if chunk.Usage != nil {
+			tokenCount = maxInt(tokenCount, usageTotalTokens(
+				chunk.Usage.PromptTokens,
+				chunk.Usage.CompletionTokens,
+				chunk.Usage.TotalTokens,
+			))
 		}
 
 		openAIChunk := ChatCompletionChunk{
@@ -663,10 +677,96 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	flusher.Flush()
 
 	if tokenCount == 0 {
-		tokenCount = req.TokenEstimate() + (generatedChars / 4)
+		tokenCount = req.TokenEstimate() + estimateCompletionChars(generatedChars)
 	}
 
 	return tokenCount, "success"
+}
+
+func (g *Gateway) handlePrometheusWorkerTargets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+
+	type targetGroup struct {
+		Targets []string          `json:"targets"`
+		Labels  map[string]string `json:"labels,omitempty"`
+	}
+
+	if g.router == nil {
+		g.writeJSON(w, http.StatusOK, []targetGroup{})
+		return
+	}
+
+	workers := g.router.GetWorkers("", true)
+	targets := make([]targetGroup, 0, len(workers))
+	for _, worker := range workers {
+		address := strings.TrimSpace(worker.Address)
+		if address == "" {
+			continue
+		}
+
+		labels := map[string]string{
+			"job":        "infera_worker",
+			"worker_id":  worker.WorkerID,
+			"status":     string(worker.Status),
+			"__scheme__": workerMetricsScheme(address),
+		}
+
+		targets = append(targets, targetGroup{
+			Targets: []string{address},
+			Labels:  labels,
+		})
+	}
+
+	g.writeJSON(w, http.StatusOK, targets)
+}
+
+func workerMetricsScheme(address string) string {
+	switch {
+	case strings.Contains(address, ".proxy.runpod.net"), strings.Contains(address, ".runpod."):
+		return "https"
+	default:
+		return "http"
+	}
+}
+
+func usageTotalTokens(promptTokens, completionTokens, totalTokens int) int {
+	if totalTokens > 0 {
+		return totalTokens
+	}
+	sum := promptTokens + completionTokens
+	if sum > 0 {
+		return sum
+	}
+	return 0
+}
+
+func estimateCompletionTokens(resp *types.InferenceResponse) int {
+	totalChars := 0
+	for _, choice := range resp.Choices {
+		totalChars += len(choice.Message.Content)
+	}
+	return estimateCompletionChars(totalChars)
+}
+
+func estimateCompletionChars(chars int) int {
+	if chars <= 0 {
+		return 0
+	}
+	estimate := chars / 4
+	if estimate == 0 {
+		return 1
+	}
+	return estimate
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {

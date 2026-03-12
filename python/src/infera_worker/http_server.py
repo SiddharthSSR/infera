@@ -426,7 +426,7 @@ class HTTPServer:
         # Check for RunPod public IP
         runpod_public_ip = os.environ.get("RUNPOD_PUBLIC_IP")
         if runpod_public_ip:
-            return runpod_public_ip
+            return f"{runpod_public_ip}:{self.config.http_port}"
 
         # Check for explicit address
         explicit_address = os.environ.get("INFERA_WORKER_ADDRESS")

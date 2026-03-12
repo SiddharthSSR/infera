@@ -90,7 +90,6 @@ services:
     volumes:
       - ./deploy/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./deploy/observability/prometheus/rules:/etc/prometheus/rules:ro
-      - ./deploy/observability/prometheus/worker_targets.json:/etc/prometheus/worker_targets.json:ro
       - prometheus_data:/prometheus
     depends_on:
       - gateway
