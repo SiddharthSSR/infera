@@ -121,6 +121,15 @@ docker compose -f docker-compose.prod.yml logs grafana --tail=200
 docker compose -f docker-compose.prod.yml logs alertmanager --tail=200
 ```
 
+- [ ] Run the consolidated release verification script:
+
+```bash
+INFERA_SMOKE_API_KEY=<admin-or-smoke-key> \
+INFERA_SMOKE_MODEL=<model-id-if-you-want-inference-checks> \
+INFERA_SMOKE_STREAM=1 \
+./scripts/release-verify.sh https://inferai.co.in
+```
+
 ## 4. Functional Smoke Test
 
 - [ ] Open `https://inferai.co.in` in browser.
@@ -163,6 +172,10 @@ docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 - Symptom: vault/auth DB open errors.
 - Fix: ensure `./data:/app/data` volume exists and `data/` is writable.
 
+### D) CI compose smoke fails on bootstrap admin key
+- Symptom: `failed to store bootstrap admin key`.
+- Fix: ensure CI/test keys match `inf_` + 48 hexadecimal characters.
+
 ### B) Frontend 502 via Caddy
 - Symptom: Caddy `lookup frontend ... status 502`.
 - Fix: inspect frontend logs and fix nginx startup errors first.
@@ -176,11 +189,11 @@ docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 - [ ] Tag release after successful verification:
 
 ```bash
-git tag -a v1.0.0 -m "v1.0.0 release"
-git push origin v1.0.0
+git tag -a v1.1.0 -m "v1.1.0 release"
+git push origin v1.1.0
 ```
 
-- [ ] Add/update GitHub release notes.
+- [ ] Add/update GitHub release notes using `docs/releases/RELEASE_TEMPLATE.md`.
 - [ ] Record deployment timestamp and commit hash.
 
 ---
