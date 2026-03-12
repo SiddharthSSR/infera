@@ -306,11 +306,35 @@ type ChatCompletionRequest struct {
 	Temperature      *float64      `json:"temperature,omitempty"`
 	TopP             *float64      `json:"top_p,omitempty"`
 	MaxTokens        *int          `json:"max_tokens,omitempty"`
-	Stop             []string      `json:"stop,omitempty"`
+	Stop             StopSequences `json:"stop,omitempty"`
 	Stream           bool          `json:"stream,omitempty"`
 	Seed             *int64        `json:"seed,omitempty"`
 	PresencePenalty  *float64      `json:"presence_penalty,omitempty"`
 	FrequencyPenalty *float64      `json:"frequency_penalty,omitempty"`
+}
+
+// StopSequences accepts either a single stop string or a list of stop strings.
+type StopSequences []string
+
+func (s *StopSequences) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*s = nil
+		return nil
+	}
+
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*s = StopSequences{single}
+		return nil
+	}
+
+	var many []string
+	if err := json.Unmarshal(data, &many); err == nil {
+		*s = StopSequences(many)
+		return nil
+	}
+
+	return fmt.Errorf("stop must be a string or array of strings")
 }
 
 // ChatMessage is a single message.
@@ -1308,7 +1332,7 @@ func (g *Gateway) toInferenceRequest(req *ChatCompletionRequest) *types.Inferenc
 		params.MaxTokens = *req.MaxTokens
 	}
 	if req.Stop != nil {
-		params.StopSequences = req.Stop
+		params.StopSequences = []string(req.Stop)
 	}
 	if req.Seed != nil {
 		params.Seed = req.Seed
