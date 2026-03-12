@@ -7,14 +7,19 @@ BASE_URL="${1:-${INFERA_BASE_URL:-https://inferai.co.in}}"
 BASE_URL="${BASE_URL%/}"
 DASHBOARD_URL="${INFERA_DASHBOARD_URL:-https://dashboard.inferai.co.in}"
 DASHBOARD_URL="${DASHBOARD_URL%/}"
-GATEWAY_INTERNAL_URL="${INFERA_GATEWAY_INTERNAL_URL:-http://localhost:8080}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+GATEWAY_INTERNAL_URL="${INFERA_GATEWAY_INTERNAL_URL:-}"
 GATEWAY_INTERNAL_URL="${GATEWAY_INTERNAL_URL%/}"
 VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-10}"
 
 echo "Release verification"
 echo "  app:       ${BASE_URL}"
 echo "  dashboard: ${DASHBOARD_URL}"
-echo "  gateway:   ${GATEWAY_INTERNAL_URL}"
+if [[ -n "${GATEWAY_INTERNAL_URL}" ]]; then
+  echo "  gateway:   ${GATEWAY_INTERNAL_URL}"
+else
+  echo "  gateway:   docker compose exec gateway"
+fi
 
 echo "1) Checking public site root"
 curl --fail --silent --show-error --max-time "${VERIFY_TIMEOUT}" -I "${BASE_URL}" >/dev/null
@@ -31,8 +36,13 @@ curl --fail --silent --show-error --max-time "${VERIFY_TIMEOUT}" \
 echo "   OK: dashboard /api/health responds"
 
 echo "4) Checking gateway-backed worker discovery"
-WORKER_TARGETS_BODY="$(curl --fail --silent --show-error --max-time "${VERIFY_TIMEOUT}" \
-  "${GATEWAY_INTERNAL_URL}/internal/prometheus/worker-targets")"
+if [[ -n "${GATEWAY_INTERNAL_URL}" ]]; then
+  WORKER_TARGETS_BODY="$(curl --fail --silent --show-error --max-time "${VERIFY_TIMEOUT}" \
+    "${GATEWAY_INTERNAL_URL}/internal/prometheus/worker-targets")"
+else
+  WORKER_TARGETS_BODY="$(docker compose -f "${COMPOSE_FILE}" exec -T gateway \
+    wget -qO- http://127.0.0.1:8080/internal/prometheus/worker-targets)"
+fi
 WORKER_TARGETS_BODY="${WORKER_TARGETS_BODY}" python3 - <<'PY'
 import json
 import os

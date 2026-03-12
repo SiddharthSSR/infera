@@ -56,7 +56,8 @@ docker compose -f docker-compose.prod.yml ps
 - [ ] Validate gateway-backed worker discovery before enabling observability alerts:
 
 ```bash
-curl --fail --silent http://localhost:8080/internal/prometheus/worker-targets
+docker compose -f docker-compose.prod.yml exec -T gateway \
+  wget -qO- http://127.0.0.1:8080/internal/prometheus/worker-targets
 ```
 
 ## 3. Post-Deploy Verification
