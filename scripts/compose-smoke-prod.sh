@@ -6,7 +6,7 @@ set -euo pipefail
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-180}"
 
-: "${INFERA_ADMIN_KEY:=inf_0123456789abcdef0123456789abcdef0123456789abcd}"
+: "${INFERA_ADMIN_KEY:=inf_0123456789abcdef0123456789abcdef0123456789abcdef}"
 : "${INFERA_ALLOWED_ORIGINS:=https://example.com}"
 : "${INFERA_GATEWAY_ADDRESS:=https://example.com}"
 : "${INFERA_WORKER_SHARED_TOKEN:=test-worker-token}"
