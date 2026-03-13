@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/providers"
 )
 
@@ -30,6 +31,9 @@ func (h *InstanceHandlers) RegisterRoutes(mux *http.ServeMux, corsHandler func(h
 func (h *InstanceHandlers) handleInstances(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+	if !requireGatewayPermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
 		return
 	}
 
@@ -58,6 +62,9 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 
 	switch r.Method {
 	case http.MethodGet:
+		if !requireGatewayPermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
+			return
+		}
 		instance, exists := h.manager.GetInstance(instanceID)
 		if !exists {
 			writeError(w, http.StatusNotFound, "not_found", "Instance not found")
@@ -66,6 +73,9 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusOK, instanceToMap(instance))
 
 	case http.MethodDelete:
+		if !requireGatewayPermission(w, r, auth.PermissionManageInfrastructure, "Infrastructure management access required") {
+			return
+		}
 		if err := h.manager.Terminate(r.Context(), instanceID); err != nil {
 			writeProviderActionError(w, "terminate_failed", err)
 			return
@@ -73,6 +83,9 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "instance_id": instanceID})
 
 	case http.MethodPost:
+		if !requireGatewayPermission(w, r, auth.PermissionManageInfrastructure, "Infrastructure management access required") {
+			return
+		}
 		switch action {
 		case "start":
 			if err := h.manager.Start(r.Context(), instanceID); err != nil {
@@ -96,6 +109,9 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed")
+		return
+	}
+	if !requireGatewayPermission(w, r, auth.PermissionManageInfrastructure, "Infrastructure management access required") {
 		return
 	}
 
@@ -164,6 +180,9 @@ func (h *InstanceHandlers) handleOfferings(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
 		return
 	}
+	if !requireGatewayPermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
+		return
+	}
 
 	offerings, _ := h.manager.ListOfferings(r.Context())
 
@@ -185,6 +204,9 @@ func (h *InstanceHandlers) handleProviders(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
 		return
 	}
+	if !requireGatewayPermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
+		return
+	}
 
 	statuses := h.manager.GetProviderStatus(r.Context())
 
@@ -202,6 +224,13 @@ func (h *InstanceHandlers) handleProviders(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *InstanceHandlers) handleCosts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+	if !requireGatewayPermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
+		return
+	}
 	summary := h.manager.GetCostSummary()
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -261,4 +290,12 @@ func writeProviderActionError(w http.ResponseWriter, fallbackType string, err er
 		payload["error"].(map[string]interface{})["retry_after_seconds"] = providerErr.RetryAfter
 	}
 	writeJSON(w, providerErr.HTTPStatus(http.StatusInternalServerError), payload)
+}
+
+func requireGatewayPermission(w http.ResponseWriter, r *http.Request, permission, message string) bool {
+	if !auth.HasPermission(auth.KeyFromContext(r.Context()), permission) {
+		writeError(w, http.StatusForbidden, "forbidden", message)
+		return false
+	}
+	return true
 }

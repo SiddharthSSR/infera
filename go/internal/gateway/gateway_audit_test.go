@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/infera/infera/go/internal/audit"
+	"github.com/infera/infera/go/internal/auth"
 )
 
 func TestHandleGetAuditUsage_Success(t *testing.T) {
@@ -48,6 +49,12 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 	start := now.Add(-2 * time.Hour).Format(time.RFC3339)
 	end := now.Add(time.Hour).Format(time.RFC3339)
 	req := httptest.NewRequest(http.MethodGet, "/api/audit/usage?bucket=day&start="+start+"&end="+end, nil)
+	req = req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+		Role:          auth.RoleBilling,
+		PrincipalType: auth.PrincipalHuman,
+		Status:        "active",
+		WorkspaceID:   "ws_alpha",
+	}))
 	rec := httptest.NewRecorder()
 	g.handleGetAuditUsage(rec, req)
 
@@ -95,6 +102,12 @@ func TestHandleGetAuditUsage_InvalidBucket(t *testing.T) {
 	g.SetAuditStore(store)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/audit/usage?bucket=week", nil)
+	req = req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+		Role:          auth.RoleBilling,
+		PrincipalType: auth.PrincipalHuman,
+		Status:        "active",
+		WorkspaceID:   auth.DefaultWorkspaceID,
+	}))
 	rec := httptest.NewRecorder()
 	g.handleGetAuditUsage(rec, req)
 

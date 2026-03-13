@@ -14,6 +14,7 @@ export interface SessionInfo {
     key_prefix: string;
     name: string;
     role: string;
+    principal_type?: string;
     workspace_id?: string;
     workspace_slug?: string;
     workspace_name?: string;

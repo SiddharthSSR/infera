@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+
+	"github.com/infera/infera/go/internal/auth"
 )
 
 func newTestHandler(t *testing.T) *Handler {
@@ -20,6 +22,14 @@ func newTestHandler(t *testing.T) *Handler {
 	return NewHandler(s)
 }
 
+func authedVaultRequest(req *http.Request) *http.Request {
+	return req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+		Role:          auth.RoleAdmin,
+		PrincipalType: auth.PrincipalHuman,
+		Status:        "active",
+	}))
+}
+
 func TestHandleCreateModel(t *testing.T) {
 	h := newTestHandler(t)
 
@@ -29,7 +39,7 @@ func TestHandleCreateModel(t *testing.T) {
 			"source_uri": "test/model-7b",
 			"family":     "test",
 		})
-		req := httptest.NewRequest(http.MethodPost, "/api/vault/models", bytes.NewReader(body))
+		req := authedVaultRequest(httptest.NewRequest(http.MethodPost, "/api/vault/models", bytes.NewReader(body)))
 		w := httptest.NewRecorder()
 
 		h.createModel(w, req)
@@ -50,7 +60,7 @@ func TestHandleCreateModel(t *testing.T) {
 
 	t.Run("missing name returns 400", func(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{"source_uri": "test/model"})
-		req := httptest.NewRequest(http.MethodPost, "/api/vault/models", bytes.NewReader(body))
+		req := authedVaultRequest(httptest.NewRequest(http.MethodPost, "/api/vault/models", bytes.NewReader(body)))
 		w := httptest.NewRecorder()
 
 		h.createModel(w, req)
@@ -62,7 +72,7 @@ func TestHandleCreateModel(t *testing.T) {
 
 	t.Run("missing source_uri returns 400", func(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{"name": "X"})
-		req := httptest.NewRequest(http.MethodPost, "/api/vault/models", bytes.NewReader(body))
+		req := authedVaultRequest(httptest.NewRequest(http.MethodPost, "/api/vault/models", bytes.NewReader(body)))
 		w := httptest.NewRecorder()
 
 		h.createModel(w, req)
@@ -73,7 +83,7 @@ func TestHandleCreateModel(t *testing.T) {
 	})
 
 	t.Run("invalid JSON returns 400", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/vault/models", bytes.NewReader([]byte("not json")))
+		req := authedVaultRequest(httptest.NewRequest(http.MethodPost, "/api/vault/models", bytes.NewReader([]byte("not json"))))
 		w := httptest.NewRecorder()
 
 		h.createModel(w, req)
@@ -166,7 +176,7 @@ func TestHandleModelByID(t *testing.T) {
 			"source_uri": "target/model",
 			"family":     "updated",
 		})
-		req := httptest.NewRequest(http.MethodPut, "/api/vault/models/"+m.ID, bytes.NewReader(body))
+		req := authedVaultRequest(httptest.NewRequest(http.MethodPut, "/api/vault/models/"+m.ID, bytes.NewReader(body)))
 		w := httptest.NewRecorder()
 
 		h.handleModelByID(w, req)
@@ -186,7 +196,7 @@ func TestHandleModelByID(t *testing.T) {
 		dm := &Model{Name: "Delete", SourceURI: "delete/me"}
 		h.store.Create(dm)
 
-		req := httptest.NewRequest(http.MethodDelete, "/api/vault/models/"+dm.ID, nil)
+		req := authedVaultRequest(httptest.NewRequest(http.MethodDelete, "/api/vault/models/"+dm.ID, nil))
 		w := httptest.NewRecorder()
 
 		h.handleModelByID(w, req)
@@ -197,7 +207,7 @@ func TestHandleModelByID(t *testing.T) {
 	})
 
 	t.Run("DELETE nonexistent returns 404", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/vault/models/nonexistent", nil)
+		req := authedVaultRequest(httptest.NewRequest(http.MethodDelete, "/api/vault/models/nonexistent", nil))
 		w := httptest.NewRecorder()
 
 		h.handleModelByID(w, req)

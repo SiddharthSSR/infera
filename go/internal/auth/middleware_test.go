@@ -96,6 +96,20 @@ func TestRequireAdmin_AdminKey(t *testing.T) {
 	}
 }
 
+func TestRequireAdmin_OwnerKey(t *testing.T) {
+	h, s := newTestHandler(t)
+	fullKey, _, _ := s.CreateKey("k", RoleOwner)
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+fullKey)
+	rr := httptest.NewRecorder()
+	h.RequireAdmin(okHandler)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+}
+
 func TestRequireAdmin_UserKey(t *testing.T) {
 	h, s := newTestHandler(t)
 	fullKey, _, _ := s.CreateKey("k", "user")
@@ -119,6 +133,34 @@ func TestRequireAdmin_NoKey(t *testing.T) {
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestRequirePermission_BillingCanManageQuotas(t *testing.T) {
+	h, s := newTestHandler(t)
+	fullKey, _, _ := s.CreateKey("billing", RoleBilling)
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+fullKey)
+	rr := httptest.NewRecorder()
+	h.RequirePermission(PermissionManageQuotas, "quota access required", okHandler)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+}
+
+func TestRequirePermission_BillingCannotManageInfrastructure(t *testing.T) {
+	h, s := newTestHandler(t)
+	fullKey, _, _ := s.CreateKey("billing", RoleBilling)
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+fullKey)
+	rr := httptest.NewRecorder()
+	h.RequirePermission(PermissionManageInfrastructure, "infra access required", okHandler)(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", rr.Code)
 	}
 }
 

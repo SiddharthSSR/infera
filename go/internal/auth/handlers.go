@@ -9,10 +9,10 @@ import (
 // RegisterRoutes registers auth API routes on the mux.
 // corsWrap is the CORS middleware from the gateway.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, corsWrap func(http.HandlerFunc) http.HandlerFunc) {
-	mux.HandleFunc("/api/auth/keys", corsWrap(h.RequireAdmin(h.handleKeys)))
-	mux.HandleFunc("/api/auth/keys/", corsWrap(h.RequireAdmin(h.handleKeyByID)))
-	mux.HandleFunc("/api/auth/workspaces", corsWrap(h.RequireAdmin(h.handleWorkspaces)))
-	mux.HandleFunc("/api/auth/workspaces/", corsWrap(h.RequireAdmin(h.handleWorkspaceByID)))
+	mux.HandleFunc("/api/auth/keys", corsWrap(h.RequireAuth(h.handleKeys)))
+	mux.HandleFunc("/api/auth/keys/", corsWrap(h.RequireAuth(h.handleKeyByID)))
+	mux.HandleFunc("/api/auth/workspaces", corsWrap(h.RequireAuth(h.handleWorkspaces)))
+	mux.HandleFunc("/api/auth/workspaces/", corsWrap(h.RequireAuth(h.handleWorkspaceByID)))
 	mux.HandleFunc("/api/auth/session", corsWrap(h.handleSession))
 }
 
@@ -98,13 +98,16 @@ func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePermission(w, r, PermissionManageKeys, "Key management access required.") {
+		return
+	}
 	current := KeyFromContext(r.Context())
 	workspaceID := strings.TrimSpace(r.URL.Query().Get("workspace_id"))
 	if workspaceID == "" && current != nil {
 		workspaceID = current.WorkspaceID
 	}
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != "" && workspaceID != current.WorkspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped admins can only list keys in their own workspace.")
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only list keys in their own workspace.")
 		return
 	}
 
@@ -124,9 +127,10 @@ func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name        string `json:"name"`
-		Role        string `json:"role"`
-		WorkspaceID string `json:"workspace_id"`
+		Name          string `json:"name"`
+		Role          string `json:"role"`
+		PrincipalType string `json:"principal_type"`
+		WorkspaceID   string `json:"workspace_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
@@ -136,7 +140,14 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Role == "" {
-		req.Role = "user"
+		req.Role = RoleUser
+	}
+	if req.PrincipalType == "" {
+		req.PrincipalType = PrincipalHuman
+	}
+
+	if !h.requirePermission(w, r, PermissionManageKeys, "Key management access required.") {
+		return
 	}
 
 	current := KeyFromContext(r.Context())
@@ -145,11 +156,11 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		workspaceID = current.WorkspaceID
 	}
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != "" && workspaceID != current.WorkspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped admins can only create keys in their own workspace.")
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only create keys in their own workspace.")
 		return
 	}
 
-	fullKey, record, err := h.store.CreateKeyInWorkspace(workspaceID, req.Name, req.Role)
+	fullKey, record, err := h.store.CreateKeyWithPrincipalInWorkspace(workspaceID, req.Name, req.Role, req.PrincipalType)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"error": map[string]string{"message": err.Error()},
@@ -165,6 +176,9 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request, id string) {
+	if !h.requirePermission(w, r, PermissionManageKeys, "Key management access required.") {
+		return
+	}
 	workspaceID := ""
 	if current := KeyFromContext(r.Context()); current != nil {
 		workspaceID = current.WorkspaceID
@@ -184,6 +198,10 @@ func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request, id str
 
 func (h *Handler) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	current := KeyFromContext(r.Context())
+	if current == nil || current.Role == RoleUser {
+		writeAuthError(w, http.StatusForbidden, "Workspace access required.")
+		return
+	}
 	workspaces, err := h.store.ListWorkspaces()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
@@ -211,6 +229,9 @@ func (h *Handler) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	current := KeyFromContext(r.Context())
+	if !h.requirePermission(w, r, PermissionManageWorkspaces, "Workspace management access required.") {
+		return
+	}
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID {
 		writeAuthError(w, http.StatusForbidden, "Only platform admins can create workspaces.")
 		return
@@ -240,9 +261,12 @@ func (h *Handler) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) handleGetWorkspaceQuota(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !h.requirePermission(w, r, PermissionViewUsage, "Usage access required.") {
+		return
+	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != current.WorkspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped admins can only view quota for their own workspace.")
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only view quota for their own workspace.")
 		return
 	}
 
@@ -260,9 +284,12 @@ func (h *Handler) handleGetWorkspaceQuota(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) handlePutWorkspaceQuota(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !h.requirePermission(w, r, PermissionManageQuotas, "Quota management access required.") {
+		return
+	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != current.WorkspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped admins can only update quota for their own workspace.")
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only update quota for their own workspace.")
 		return
 	}
 
@@ -331,8 +358,12 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Only admin keys can create dashboard sessions
-	if keyRecord.Role != "admin" {
-		writeAuthError(w, http.StatusForbidden, "Admin access required.")
+	if keyRecord.PrincipalType == PrincipalServiceAccount {
+		writeAuthError(w, http.StatusForbidden, "Service accounts cannot create dashboard sessions.")
+		return
+	}
+	if !CanCreateSession(keyRecord) {
+		writeAuthError(w, http.StatusForbidden, "Dashboard access required.")
 		return
 	}
 
@@ -356,6 +387,7 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			"key_prefix":     keyRecord.KeyPrefix,
 			"name":           keyRecord.Name,
 			"role":           keyRecord.Role,
+			"principal_type": keyRecord.PrincipalType,
 			"workspace_id":   keyRecord.WorkspaceID,
 			"workspace_slug": keyRecord.WorkspaceSlug,
 			"workspace_name": keyRecord.WorkspaceName,
@@ -392,6 +424,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 			"key_prefix":     keyRecord.KeyPrefix,
 			"name":           keyRecord.Name,
 			"role":           keyRecord.Role,
+			"principal_type": keyRecord.PrincipalType,
 			"workspace_id":   keyRecord.WorkspaceID,
 			"workspace_slug": keyRecord.WorkspaceSlug,
 			"workspace_name": keyRecord.WorkspaceName,
@@ -420,4 +453,13 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
+}
+
+func (h *Handler) requirePermission(w http.ResponseWriter, r *http.Request, permission, message string) bool {
+	record := KeyFromContext(r.Context())
+	if !HasPermission(record, permission) {
+		writeAuthError(w, http.StatusForbidden, message)
+		return false
+	}
+	return true
 }
