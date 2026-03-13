@@ -266,6 +266,49 @@ func TestWorkspaceQuotaLifecycle(t *testing.T) {
 	}
 }
 
+func TestWorkspaceProviderConfigLifecycle(t *testing.T) {
+	s := newTestStore(t)
+
+	workspace, err := s.CreateWorkspace("Infra Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	config, err := s.UpsertWorkspaceProviderConfig(workspace.ID, "runpod", "rp_key", "", "https://api.runpod.io/graphql")
+	if err != nil {
+		t.Fatalf("UpsertWorkspaceProviderConfig: %v", err)
+	}
+	if !config.Configured {
+		t.Fatal("expected configured=true")
+	}
+	if config.Endpoint != "https://api.runpod.io/graphql" {
+		t.Fatalf("expected endpoint to round-trip, got %q", config.Endpoint)
+	}
+
+	listed, err := s.ListWorkspaceProviderConfigs(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceProviderConfigs: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Provider != "runpod" {
+		t.Fatalf("expected one runpod config, got %+v", listed)
+	}
+
+	apiKey, apiSecret, endpoint, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod")
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceProviderConfig: %v", err)
+	}
+	if apiKey != "rp_key" || apiSecret != "" || endpoint != "https://api.runpod.io/graphql" {
+		t.Fatalf("unexpected resolved provider config: %q %q %q", apiKey, apiSecret, endpoint)
+	}
+
+	if err := s.DeleteWorkspaceProviderConfig(workspace.ID, "runpod"); err != nil {
+		t.Fatalf("DeleteWorkspaceProviderConfig: %v", err)
+	}
+	if _, _, _, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod"); err == nil {
+		t.Fatal("expected resolve to fail after delete")
+	}
+}
+
 func TestCreateKeyFromRaw_InvalidFormat(t *testing.T) {
 	s := newTestStore(t)
 	_, err := s.CreateKeyFromRaw("bad_key", "test", "admin")

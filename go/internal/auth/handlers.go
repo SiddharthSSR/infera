@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/infera/infera/go/internal/providers"
 )
 
 // RegisterRoutes registers auth API routes on the mux.
@@ -107,9 +109,104 @@ func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleWorkspaceInviteByID(w, r, workspaceID, parts[2])
+	case "providers":
+		if len(parts) == 2 {
+			h.handleWorkspaceProviders(w, r, workspaceID)
+			return
+		}
+		h.handleWorkspaceProviderByID(w, r, workspaceID, parts[2])
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": map[string]string{"message": "Not found"},
+		})
+	}
+}
+
+func (h *Handler) handleWorkspaceProviders(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
+		})
+		return
+	}
+	if !h.requirePermission(w, r, PermissionManageProviderConfigs, "Provider configuration access required.") {
+		return
+	}
+	current := KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only view provider configs in their own workspace.")
+		return
+	}
+	configs, err := h.store.ListWorkspaceProviderConfigs(workspaceID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": err.Error()},
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"providers": configs,
+		"total":     len(configs),
+	})
+}
+
+func (h *Handler) handleWorkspaceProviderByID(w http.ResponseWriter, r *http.Request, workspaceID, providerName string) {
+	if !providers.IsRegisteredProviderType(providers.ProviderType(providerName)) {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": "Unknown provider"},
+		})
+		return
+	}
+	if !h.requirePermission(w, r, PermissionManageProviderConfigs, "Provider configuration access required.") {
+		return
+	}
+	current := KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only manage provider configs in their own workspace.")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		config, err := h.store.GetWorkspaceProviderConfig(workspaceID, providerName)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]interface{}{
+				"error": map[string]string{"message": err.Error()},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"provider": config})
+	case http.MethodPut:
+		var req struct {
+			APIKey    string `json:"api_key"`
+			APISecret string `json:"api_secret"`
+			Endpoint  string `json:"endpoint"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": map[string]string{"message": "Invalid JSON"},
+			})
+			return
+		}
+		config, err := h.store.UpsertWorkspaceProviderConfig(workspaceID, providerName, req.APIKey, req.APISecret, req.Endpoint)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": map[string]string{"message": err.Error()},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"provider": config})
+	case http.MethodDelete:
+		if err := h.store.DeleteWorkspaceProviderConfig(workspaceID, providerName); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]interface{}{
+				"error": map[string]string{"message": err.Error()},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
 		})
 	}
 }

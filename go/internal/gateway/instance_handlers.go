@@ -37,7 +37,11 @@ func (h *InstanceHandlers) handleInstances(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	current := auth.KeyFromContext(r.Context())
 	instances := h.manager.ListInstances()
+	if current != nil && current.WorkspaceID != auth.DefaultWorkspaceID {
+		instances = h.manager.ListInstancesByWorkspace(current.WorkspaceID)
+	}
 	response := make([]map[string]interface{}, 0, len(instances))
 	for _, inst := range instances {
 		response = append(response, instanceToMap(inst))
@@ -65,8 +69,13 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 		if !requireGatewayPermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
 			return
 		}
+		current := auth.KeyFromContext(r.Context())
 		instance, exists := h.manager.GetInstance(instanceID)
 		if !exists {
+			writeError(w, http.StatusNotFound, "not_found", "Instance not found")
+			return
+		}
+		if current != nil && current.WorkspaceID != auth.DefaultWorkspaceID && instance.WorkspaceID != current.WorkspaceID {
 			writeError(w, http.StatusNotFound, "not_found", "Instance not found")
 			return
 		}
@@ -75,6 +84,14 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 	case http.MethodDelete:
 		if !requireGatewayPermission(w, r, auth.PermissionManageInfrastructure, "Infrastructure management access required") {
 			return
+		}
+		current := auth.KeyFromContext(r.Context())
+		if current != nil && current.WorkspaceID != auth.DefaultWorkspaceID {
+			instance, exists := h.manager.GetInstance(instanceID)
+			if !exists || instance.WorkspaceID != current.WorkspaceID {
+				writeError(w, http.StatusNotFound, "not_found", "Instance not found")
+				return
+			}
 		}
 		if err := h.manager.Terminate(r.Context(), instanceID); err != nil {
 			writeProviderActionError(w, "terminate_failed", err)
@@ -85,6 +102,14 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 	case http.MethodPost:
 		if !requireGatewayPermission(w, r, auth.PermissionManageInfrastructure, "Infrastructure management access required") {
 			return
+		}
+		current := auth.KeyFromContext(r.Context())
+		if current != nil && current.WorkspaceID != auth.DefaultWorkspaceID {
+			instance, exists := h.manager.GetInstance(instanceID)
+			if !exists || instance.WorkspaceID != current.WorkspaceID {
+				writeError(w, http.StatusNotFound, "not_found", "Instance not found")
+				return
+			}
 		}
 		switch action {
 		case "start":
@@ -147,6 +172,7 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 	provisionReq := &providers.ProvisionRequest{
 		Name:           req.Name,
 		Provider:       providers.ProviderType(req.Provider),
+		WorkspaceID:    currentWorkspaceID(r),
 		GPUType:        providers.GPUType(req.GPUType),
 		GPUCount:       req.GPUCount,
 		Region:         req.Region,
@@ -184,7 +210,7 @@ func (h *InstanceHandlers) handleOfferings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	offerings, _ := h.manager.ListOfferings(r.Context())
+	offerings, _ := h.manager.ListOfferingsForWorkspace(r.Context(), currentWorkspaceID(r))
 
 	response := make([]map[string]interface{}, 0, len(offerings))
 	for _, o := range offerings {
@@ -208,7 +234,7 @@ func (h *InstanceHandlers) handleProviders(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	statuses := h.manager.GetProviderStatus(r.Context())
+	statuses := h.manager.GetProviderStatusForWorkspace(r.Context(), currentWorkspaceID(r))
 
 	response := make([]map[string]interface{}, 0, len(statuses))
 	for _, s := range statuses {
@@ -232,6 +258,10 @@ func (h *InstanceHandlers) handleCosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summary := h.manager.GetCostSummary()
+	current := auth.KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != auth.DefaultWorkspaceID {
+		summary = h.manager.GetCostSummaryForWorkspace(current.WorkspaceID)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"current_hourly": summary.CurrentHourly, "today_total": summary.TodayTotal,
@@ -243,7 +273,8 @@ func (h *InstanceHandlers) handleCosts(w http.ResponseWriter, r *http.Request) {
 func instanceToMap(inst *providers.Instance) map[string]interface{} {
 	m := map[string]interface{}{
 		"id": inst.ID, "provider_id": inst.ProviderID, "provider": inst.Provider,
-		"name": inst.Name, "status": inst.Status, "gpu_type": inst.GPUType,
+		"workspace_id": inst.WorkspaceID,
+		"name":         inst.Name, "status": inst.Status, "gpu_type": inst.GPUType,
 		"gpu_count": inst.GPUCount, "vcpu": inst.VCPU, "memory_gb": inst.MemoryGB,
 		"storage_gb": inst.StorageGB, "public_ip": inst.PublicIP,
 		"http_port": inst.HTTPPort, "ssh_port": inst.SSHPort,
@@ -258,6 +289,14 @@ func instanceToMap(inst *providers.Instance) map[string]interface{} {
 		m["stopped_at"] = inst.StoppedAt
 	}
 	return m
+}
+
+func currentWorkspaceID(r *http.Request) string {
+	current := auth.KeyFromContext(r.Context())
+	if current == nil {
+		return ""
+	}
+	return current.WorkspaceID
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

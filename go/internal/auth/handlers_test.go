@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/infera/infera/go/internal/providers/mock"
+	_ "github.com/infera/infera/go/internal/providers/runpod"
 )
 
 func newTestHandlerWithRoutes(t *testing.T) (*Handler, *Store, *http.ServeMux) {
@@ -196,6 +199,49 @@ func TestHandleWorkspaceQuota_BillingRole(t *testing.T) {
 
 	if putRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", putRec.Code, putRec.Body.String())
+	}
+}
+
+func TestHandleWorkspaceProviderConfig(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, _, _ := s.CreateKey("admin", "admin")
+	workspace, err := s.CreateWorkspace("Infra Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	putBody := `{"api_key":"rp_key","endpoint":"https://api.runpod.io/graphql"}`
+	putReq := httptest.NewRequest("PUT", "/api/auth/workspaces/"+workspace.ID+"/providers/runpod", strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("Authorization", "Bearer "+adminKey)
+	putRec := httptest.NewRecorder()
+	mux.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", putRec.Code, putRec.Body.String())
+	}
+
+	getReq := httptest.NewRequest("GET", "/api/auth/workspaces/"+workspace.ID+"/providers/runpod", nil)
+	getReq.Header.Set("Authorization", "Bearer "+adminKey)
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	listReq := httptest.NewRequest("GET", "/api/auth/workspaces/"+workspace.ID+"/providers", nil)
+	listReq.Header.Set("Authorization", "Bearer "+adminKey)
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+
+	deleteReq := httptest.NewRequest("DELETE", "/api/auth/workspaces/"+workspace.ID+"/providers/runpod", nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+adminKey)
+	deleteRec := httptest.NewRecorder()
+	mux.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", deleteRec.Code, deleteRec.Body.String())
 	}
 }
 
