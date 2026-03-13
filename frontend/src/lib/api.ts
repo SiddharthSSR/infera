@@ -61,6 +61,17 @@ export interface WorkspaceInvitationRecord {
   status: string;
 }
 
+export interface WorkspaceInvitationPreview {
+  workspace_id: string;
+  workspace_slug: string;
+  workspace_name: string;
+  email: string;
+  display_name: string;
+  role: string;
+  expires_at: string;
+  status: string;
+}
+
 export interface WorkspaceProviderConfigRecord {
   workspace_id: string;
   provider: string;
@@ -509,6 +520,29 @@ export async function fetchWorkspaceInvites(workspaceId: string): Promise<Worksp
   if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace invites'));
   const data = await response.json();
   return data.invitations;
+}
+
+export async function fetchInvitationPreview(token: string): Promise<WorkspaceInvitationPreview> {
+  const response = await fetch(`${API_BASE}/api/auth/invitations/preview?token=${encodeURIComponent(token)}`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to load invitation'));
+  const data = await response.json();
+  return data.invitation;
+}
+
+export async function acceptWorkspaceInvitation(
+  invitationToken: string,
+  displayName?: string,
+): Promise<{ membership: WorkspaceMemberRecord; key: string; record: ApiKeyRecord }> {
+  const response = await fetch(`${API_BASE}/api/auth/invitations/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      invitation_token: invitationToken,
+      display_name: displayName,
+    }),
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to accept invitation'));
+  return response.json();
 }
 
 export async function fetchWorkspaceProviderConfigs(workspaceId: string): Promise<WorkspaceProviderConfigRecord[]> {

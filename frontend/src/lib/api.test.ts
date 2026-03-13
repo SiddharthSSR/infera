@@ -19,6 +19,8 @@ import {
   updateWorkspaceMember,
   removeWorkspaceMember,
   fetchWorkspaceInvites,
+  fetchInvitationPreview,
+  acceptWorkspaceInvitation,
   fetchWorkspaceProviderConfigs,
   createWorkspaceInvite,
   upsertWorkspaceProviderConfig,
@@ -212,6 +214,47 @@ describe('API Functions', () => {
       await expect(fetchWorkspaceQuota('ws_1')).resolves.toEqual(expect.objectContaining({ workspace_id: 'ws_1' }))
       await expect(fetchWorkspaceMembers('ws_1')).resolves.toHaveLength(1)
       await expect(fetchWorkspaceInvites('ws_1')).resolves.toHaveLength(1)
+    })
+
+    it('fetchInvitationPreview/acceptWorkspaceInvitation hit expected methods', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            invitation: {
+              workspace_id: 'ws_1',
+              workspace_slug: 'workspace',
+              workspace_name: 'Workspace',
+              role: 'developer',
+              email: 'invite@example.com',
+              display_name: 'Invite User',
+              expires_at: '2026-03-20T00:00:00Z',
+              status: 'pending',
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            membership: { id: 'm1', workspace_id: 'ws_1', email: 'invite@example.com', display_name: 'Invite User', role: 'developer', status: 'active', created_at: '2026-03-14T00:00:00Z' },
+            key: 'inf_secret',
+            record: { id: 'k1', key_prefix: 'inf_abcd...', name: 'Invite User', role: 'developer', created_at: '2026-03-14T00:00:00Z', status: 'active' },
+          }),
+        })
+
+      await expect(fetchInvitationPreview('invite_token')).resolves.toEqual(
+        expect.objectContaining({ workspace_id: 'ws_1', role: 'developer' })
+      )
+      await expect(acceptWorkspaceInvitation('invite_token', 'Invite User')).resolves.toEqual(
+        expect.objectContaining({ key: 'inf_secret' })
+      )
+
+      expect(mockFetch).toHaveBeenNthCalledWith(1, '/api/auth/invitations/preview?token=invite_token')
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/auth/invitations/accept',
+        expect.objectContaining({ method: 'POST' })
+      )
     })
 
     it('updateWorkspaceMember/removeWorkspaceMember hit expected methods', async () => {

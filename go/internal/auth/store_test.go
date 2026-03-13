@@ -391,6 +391,37 @@ func TestWorkspaceInvitationLifecycle(t *testing.T) {
 	}
 }
 
+func TestWorkspaceInvitationPreview(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Preview Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	token, _, err := s.CreateWorkspaceInvitation(workspace.ID, "preview@example.com", "Preview User", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+
+	preview, err := s.GetWorkspaceInvitationPreview(token)
+	if err != nil {
+		t.Fatalf("GetWorkspaceInvitationPreview: %v", err)
+	}
+	if preview.WorkspaceID != workspace.ID {
+		t.Fatalf("expected workspace %s, got %s", workspace.ID, preview.WorkspaceID)
+	}
+	if preview.WorkspaceName != workspace.Name {
+		t.Fatalf("expected workspace name %q, got %q", workspace.Name, preview.WorkspaceName)
+	}
+	if preview.Role != RoleDeveloper {
+		t.Fatalf("expected role %q, got %q", RoleDeveloper, preview.Role)
+	}
+}
+
 func TestRevokeWorkspaceInvitation(t *testing.T) {
 	s := newTestStore(t)
 
