@@ -50,3 +50,43 @@ acts as the baseline for future providers.
 
 Before adding another provider, wire it into the shared conformance suite or
 add an equivalent adapter-specific contract harness.
+
+## Capability Model
+
+Provider status responses should expose adapter-level capabilities, not
+marketing-level provider claims.
+
+Current capability fields:
+
+- `supports_spot`
+- `supports_custom_images`
+- `supports_region_selection`
+- `supports_public_ip`
+- `supports_ssh_keys`
+- `supports_start_stop`
+- `startup_script_limit`
+- `known_regions`
+
+These fields should describe what the Infera adapter actually supports today.
+
+## Error Taxonomy
+
+Provider lifecycle paths should normalize provider errors into stable codes
+before they reach the API layer.
+
+Current canonical codes include:
+
+- `missing_api_key`
+- `auth_failed`
+- `invalid_config`
+- `invalid_request`
+- `not_found`
+- `rate_limited`
+- `service_unavailable`
+- `timeout`
+- `request_failed`
+- `api_error`
+- `graphql_error`
+- `instance_error`
+- `terminated`
+- `not_implemented`

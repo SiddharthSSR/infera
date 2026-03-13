@@ -135,13 +135,27 @@ type GPUOffering struct {
 
 // ProviderStatus contains provider health and quota info.
 type ProviderStatus struct {
-	Provider     ProviderType `json:"provider"`
-	Connected    bool         `json:"connected"`
-	AccountID    string       `json:"account_id,omitempty"`
-	Balance      float64      `json:"balance,omitempty"`
-	ActiveCount  int          `json:"active_instances"`
-	QuotaLimit   int          `json:"quota_limit,omitempty"`
-	ErrorMessage string       `json:"error_message,omitempty"`
+	Provider     ProviderType         `json:"provider"`
+	Connected    bool                 `json:"connected"`
+	AccountID    string               `json:"account_id,omitempty"`
+	Balance      float64              `json:"balance,omitempty"`
+	ActiveCount  int                  `json:"active_instances"`
+	QuotaLimit   int                  `json:"quota_limit,omitempty"`
+	ErrorCode    string               `json:"error_code,omitempty"`
+	ErrorMessage string               `json:"error_message,omitempty"`
+	Capabilities ProviderCapabilities `json:"capabilities"`
+}
+
+// ProviderCapabilities describes what the current adapter actually supports.
+type ProviderCapabilities struct {
+	SupportsSpot            bool     `json:"supports_spot"`
+	SupportsCustomImages    bool     `json:"supports_custom_images"`
+	SupportsRegionSelection bool     `json:"supports_region_selection"`
+	SupportsPublicIP        bool     `json:"supports_public_ip"`
+	SupportsSSHKeys         bool     `json:"supports_ssh_keys"`
+	SupportsStartStop       bool     `json:"supports_start_stop"`
+	StartupScriptLimit      int      `json:"startup_script_limit,omitempty"`
+	KnownRegions            []string `json:"known_regions,omitempty"`
 }
 
 // CostSummary contains cost information.

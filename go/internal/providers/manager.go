@@ -3,6 +3,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -311,14 +312,20 @@ func (m *Manager) GetProviderStatus(ctx context.Context) []*ProviderStatus {
 	for _, provider := range providers {
 		status, err := provider.GetStatus(ctx)
 		if err != nil {
-			statuses = append(statuses, &ProviderStatus{
+			failed := &ProviderStatus{
 				Provider:     provider.Name(),
 				Connected:    false,
 				ErrorMessage: err.Error(),
-			})
-		} else {
-			statuses = append(statuses, status)
+			}
+			var providerErr *ProviderError
+			if errors.As(err, &providerErr) {
+				failed.ErrorCode = providerErr.Code
+			}
+			statuses = append(statuses, failed)
+			continue
 		}
+
+		statuses = append(statuses, status)
 	}
 
 	return statuses
