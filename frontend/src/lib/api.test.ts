@@ -13,6 +13,12 @@ import {
   fetchApiKeys,
   createApiKey,
   revokeApiKey,
+  fetchWorkspaceQuota,
+  updateWorkspaceQuota,
+  fetchWorkspaceMembers,
+  fetchWorkspaceInvites,
+  createWorkspaceInvite,
+  revokeWorkspaceInvite,
   provisionInstance,
   terminateInstance,
   startInstance,
@@ -187,6 +193,46 @@ describe('API Functions', () => {
       })
 
       await expect(fetchApiKeys()).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('workspace admin endpoints', () => {
+    it('fetchWorkspaceQuota/fetchWorkspaceMembers/fetchWorkspaceInvites parse payloads', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ quota: { workspace_id: 'ws_1', enforce_hard_limits: true } }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ members: [{ id: 'm1', email: 'member@example.com' }] }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ invitations: [{ id: 'inv_1', email: 'invite@example.com' }] }) })
+
+      await expect(fetchWorkspaceQuota('ws_1')).resolves.toEqual(expect.objectContaining({ workspace_id: 'ws_1' }))
+      await expect(fetchWorkspaceMembers('ws_1')).resolves.toHaveLength(1)
+      await expect(fetchWorkspaceInvites('ws_1')).resolves.toHaveLength(1)
+    })
+
+    it('updateWorkspaceQuota/createWorkspaceInvite/revokeWorkspaceInvite hit expected methods', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ quota: { workspace_id: 'ws_1', enforce_hard_limits: false } }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ invitation_token: 'invite_token', invitation: { id: 'inv_1' } }) })
+        .mockResolvedValueOnce({ ok: true })
+
+      await updateWorkspaceQuota('ws_1', { monthly_request_limit: 100, monthly_token_limit: 1000, enforce_hard_limits: false })
+      await createWorkspaceInvite('ws_1', { email: 'new@example.com', role: 'developer' })
+      await revokeWorkspaceInvite('ws_1', 'inv_1')
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/auth/workspaces/ws_1/quota',
+        expect.objectContaining({ method: 'PUT', credentials: 'include' })
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/auth/workspaces/ws_1/invites',
+        expect.objectContaining({ method: 'POST', credentials: 'include' })
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        3,
+        '/api/auth/workspaces/ws_1/invites/inv_1',
+        expect.objectContaining({ method: 'DELETE', credentials: 'include' })
+      )
     })
   })
 })

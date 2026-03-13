@@ -23,6 +23,44 @@ export interface SessionInfo {
   member?: { id: string; email?: string; display_name?: string };
 }
 
+export interface WorkspaceRecord {
+  id: string;
+  slug: string;
+  name: string;
+  created_at: string;
+  status: string;
+}
+
+export interface WorkspaceQuotaRecord {
+  workspace_id: string;
+  monthly_request_limit?: number | null;
+  monthly_token_limit?: number | null;
+  enforce_hard_limits: boolean;
+  updated_at: string;
+}
+
+export interface WorkspaceMemberRecord {
+  id: string;
+  workspace_id: string;
+  email: string;
+  display_name: string;
+  role: string;
+  status: string;
+  created_at: string;
+}
+
+export interface WorkspaceInvitationRecord {
+  id: string;
+  workspace_id: string;
+  email: string;
+  display_name: string;
+  role: string;
+  invited_by_key_id: string;
+  created_at: string;
+  expires_at: string;
+  status: string;
+}
+
 export interface StreamChatCompletionOptions {
   onUsage?: (usage: ChatCompletionResponse['usage']) => void;
 }
@@ -340,6 +378,8 @@ export interface ApiKeyRecord {
   key_prefix: string;
   name: string;
   role: string;
+  principal_type?: string;
+  membership_id?: string;
   created_at: string;
   last_used: string | null;
   status: string;
@@ -352,11 +392,15 @@ export async function fetchApiKeys(): Promise<ApiKeyRecord[]> {
   return data.keys;
 }
 
-export async function createApiKey(name: string, role: string = 'user'): Promise<{ key: string; record: ApiKeyRecord }> {
+export async function createApiKey(
+  name: string,
+  role: string = 'user',
+  principalType: string = 'human',
+): Promise<{ key: string; record: ApiKeyRecord }> {
   const response = await authFetch(`${API_BASE}/api/auth/keys`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, role }),
+    body: JSON.stringify({ name, role, principal_type: principalType }),
   });
   if (!response.ok) {
     throw new Error(await readResponseError(response, 'Failed to create key'));
@@ -371,4 +415,70 @@ export async function revokeApiKey(id: string): Promise<void> {
   if (!response.ok) {
     throw new Error(await readResponseError(response, 'Failed to revoke key'));
   }
+}
+
+export async function fetchWorkspaces(): Promise<WorkspaceRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspaces'));
+  const data = await response.json();
+  return data.workspaces;
+}
+
+export async function fetchWorkspaceQuota(workspaceId: string): Promise<WorkspaceQuotaRecord> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/quota`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace quota'));
+  const data = await response.json();
+  return data.quota;
+}
+
+export async function updateWorkspaceQuota(
+  workspaceId: string,
+  payload: {
+    monthly_request_limit?: number | null;
+    monthly_token_limit?: number | null;
+    enforce_hard_limits: boolean;
+  },
+): Promise<WorkspaceQuotaRecord> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/quota`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to update workspace quota'));
+  const data = await response.json();
+  return data.quota;
+}
+
+export async function fetchWorkspaceMembers(workspaceId: string): Promise<WorkspaceMemberRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/members`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace members'));
+  const data = await response.json();
+  return data.members;
+}
+
+export async function fetchWorkspaceInvites(workspaceId: string): Promise<WorkspaceInvitationRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/invites`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace invites'));
+  const data = await response.json();
+  return data.invitations;
+}
+
+export async function createWorkspaceInvite(
+  workspaceId: string,
+  payload: { email: string; display_name?: string; role?: string },
+): Promise<{ invitation_token: string; invitation: WorkspaceInvitationRecord }> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/invites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to create workspace invite'));
+  return response.json();
+}
+
+export async function revokeWorkspaceInvite(workspaceId: string, inviteId: string): Promise<void> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/invites/${inviteId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to revoke workspace invite'));
 }
