@@ -9,10 +9,12 @@ import { Instances } from './pages/Instances';
 import { Logs } from './pages/Logs';
 import { Models } from './pages/Models';
 import { ApiKeys } from './pages/ApiKeys';
+import { WorkspaceAdmin } from './pages/WorkspaceAdmin';
 import { Login } from './pages/Login';
 import { PublicApiDocs } from './pages/PublicApiDocs';
 import { GettingStarted } from './pages/GettingStarted';
-import { getSession, destroySession } from './lib/api';
+import { getSession, destroySession, type SessionInfo } from './lib/api';
+import { AuthContext, useAuthSession } from './lib/auth-context';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import type { ChatMessage } from './types';
 
@@ -72,6 +74,7 @@ const navItems = [
   { path: '/playground', label: 'PLAYGROUND' },
   { path: '/logs', label: 'LOGS' },
   { path: '/api-keys', label: 'API KEYS' },
+  { path: '/workspace', label: 'WORKSPACE' },
 ];
 
 // Page display titles
@@ -82,10 +85,12 @@ const pageTitles: Record<string, string> = {
   '/playground': 'PLAYGROUND',
   '/logs': 'SYSTEM LOGS',
   '/api-keys': 'API KEYS',
+  '/workspace': 'WORKSPACE',
 };
 
 // Top Navigation
 function TopNav({ onLogout }: { onLogout: () => void }) {
+  const { session } = useAuthSession();
   return (
     <nav className="top-nav">
       <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
@@ -106,6 +111,11 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
         ))}
       </div>
       <div className="nav-group nav-auth-group" style={{ gap: '1rem' }}>
+        {session?.workspace?.name && (
+          <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+            {session.workspace.name}
+          </span>
+        )}
         <button className="nav-link" onClick={onLogout} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
           DISCONNECT
         </button>
@@ -117,8 +127,8 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
 // Main App Content
 function AppContent() {
   const location = useLocation();
-  // null = loading, true = authenticated, false = not authenticated
-  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [loadingSession, setLoadingSession] = useState(true);
 
   // Chat state - persisted across page switches
   const [messages, setMessages] = useState<Message[]>([]);
@@ -127,14 +137,26 @@ function AppContent() {
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
 
-  // Check for existing session on startup
+  const refreshSession = useCallback(async () => {
+    try {
+      const nextSession = await getSession();
+      setSession(nextSession);
+    } finally {
+      setLoadingSession(false);
+    }
+  }, []);
+
   useEffect(() => {
+    setLoadingSession(true);
     getSession()
-      .then((session) => {
-        setAuthenticated(session !== null);
+      .then((nextSession) => {
+        setSession(nextSession);
       })
       .catch(() => {
-        setAuthenticated(false);
+        setSession(null);
+      })
+      .finally(() => {
+        setLoadingSession(false);
       });
   }, []);
 
@@ -145,7 +167,7 @@ function AppContent() {
     setTemperature(0.7);
     setMaxTokens(2048);
     destroySession();
-    setAuthenticated(false);
+    setSession(null);
     queryClient.clear();
   }, [setMessages, setHistory, setSelectedModel, setTemperature, setMaxTokens]);
 
@@ -156,7 +178,7 @@ function AppContent() {
     return () => window.removeEventListener('auth-expired', handler);
   }, [handleLogout]);
 
-  if (authenticated === null) {
+  if (loadingSession) {
     return (
       <div style={{
         display: 'flex',
@@ -173,12 +195,12 @@ function AppContent() {
     );
   }
 
-  if (!authenticated) {
+  if (!session) {
     return (
       <Routes>
         <Route path="/docs" element={<PublicApiDocs />} />
         <Route path="/getting-started" element={<GettingStarted />} />
-        <Route path="*" element={<Login onAuthenticated={() => setAuthenticated(true)} />} />
+        <Route path="*" element={<Login onAuthenticated={(nextSession) => setSession(nextSession)} />} />
       </Routes>
     );
   }
@@ -199,6 +221,7 @@ function AppContent() {
   };
 
   return (
+    <AuthContext.Provider value={{ session, setSession, refreshSession }}>
     <ChatContext.Provider value={chatContextValue}>
       <div className="app-shell">
         <TopNav onLogout={handleLogout} />
@@ -213,12 +236,14 @@ function AppContent() {
           <Route path="/instances" element={<Instances />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/api-keys" element={<ApiKeys />} />
+          <Route path="/workspace" element={<WorkspaceAdmin />} />
           <Route path="/docs" element={<PublicApiDocs />} />
           <Route path="/getting-started" element={<GettingStarted />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
     </ChatContext.Provider>
+    </AuthContext.Provider>
   );
 }
 

@@ -1,9 +1,9 @@
 import { Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
-import { createSession } from '../lib/api';
+import { createSession, type SessionInfo } from '../lib/api';
 
 interface LoginProps {
-  onAuthenticated: () => void;
+  onAuthenticated: (session: SessionInfo) => void;
 }
 
 type HealthState = 'checking' | 'online' | 'offline';
@@ -61,9 +61,9 @@ export function Login({ onAuthenticated }: LoginProps) {
     setError('');
 
     try {
-      await createSession(key.trim());
+      const session = await createSession(key.trim());
       setConnected(true);
-      setTimeout(() => onAuthenticated(), 500);
+      setTimeout(() => onAuthenticated(session), 500);
     } catch (err) {
       if (err instanceof Error) {
         if (err.message.includes('Invalid API key')) {
