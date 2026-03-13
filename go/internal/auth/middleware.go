@@ -30,6 +30,11 @@ func SessionFromContext(ctx context.Context) *SessionRecord {
 	return nil
 }
 
+// ContextWithKey injects a key record into a context for internal handlers and tests.
+func ContextWithKey(ctx context.Context, record *KeyRecord) context.Context {
+	return context.WithValue(ctx, keyContextKey, record)
+}
+
 // Handler wraps the auth store and provides middleware.
 type Handler struct {
 	store  *Store
@@ -91,8 +96,19 @@ func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 func (h *Handler) RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return h.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		record := KeyFromContext(r.Context())
-		if record == nil || record.Role != "admin" {
+		if record == nil || (record.Role != RoleAdmin && record.Role != RoleOwner) {
 			writeAuthError(w, http.StatusForbidden, "Admin access required.")
+			return
+		}
+		next(w, r)
+	})
+}
+
+func (h *Handler) RequirePermission(permission, message string, next http.HandlerFunc) http.HandlerFunc {
+	return h.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		record := KeyFromContext(r.Context())
+		if !HasPermission(record, permission) {
+			writeAuthError(w, http.StatusForbidden, message)
 			return
 		}
 		next(w, r)

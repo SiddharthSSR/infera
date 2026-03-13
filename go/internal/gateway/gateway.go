@@ -136,13 +136,6 @@ func (g *Gateway) Start() error {
 		}
 		return g.handleCORS(h)
 	}
-	withAdmin := func(h http.HandlerFunc) http.HandlerFunc {
-		if g.authHandler != nil {
-			return g.handleCORS(g.authHandler.RequireAdmin(h))
-		}
-		return g.handleCORS(h)
-	}
-
 	// Rate limit wrapper for inference endpoints
 	withRateLimit := RateLimitMiddleware(g.rateLimiter)
 
@@ -161,20 +154,20 @@ func (g *Gateway) Start() error {
 	mux.HandleFunc("/internal/prometheus/worker-targets", g.internalOnlyHandler(g.handlePrometheusWorkerTargets))
 
 	// Protected internal API endpoints (require auth)
-	mux.HandleFunc("/api/workers", withAdmin(g.handleGetWorkers))
-	mux.HandleFunc("/api/stats", withAdmin(g.handleGetStats))
+	mux.HandleFunc("/api/workers", withAuth(g.handleGetWorkers))
+	mux.HandleFunc("/api/stats", withAuth(g.handleGetStats))
 	if g.auditStore != nil {
-		mux.HandleFunc("/api/audit/usage", withAdmin(g.handleGetAuditUsage))
+		mux.HandleFunc("/api/audit/usage", withAuth(g.handleGetAuditUsage))
 	}
 
-	// Instance management endpoints (require admin)
+	// Instance management endpoints (route-level auth, handler-level authorization)
 	if g.instanceHandlers != nil {
 		g.instanceHandlers.RegisterRoutes(mux, func(h http.HandlerFunc) http.HandlerFunc {
-			return withAdmin(h)
+			return withAuth(h)
 		})
 	}
 
-	// Vault (model registry) endpoints (require auth)
+	// Vault (model registry) endpoints (route-level auth, handler-level authorization)
 	if g.vaultHandler != nil {
 		g.vaultHandler.RegisterRoutes(mux, func(h http.HandlerFunc) http.HandlerFunc {
 			return withAuth(h)
@@ -997,6 +990,15 @@ func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (g *Gateway) requirePermission(w http.ResponseWriter, r *http.Request, permission, message string) bool {
+	record := auth.KeyFromContext(r.Context())
+	if !auth.HasPermission(record, permission) {
+		g.writeError(w, http.StatusForbidden, "forbidden", message)
+		return false
+	}
+	return true
+}
+
 // ============================================================================
 // Internal API Endpoints
 // ============================================================================
@@ -1004,6 +1006,9 @@ func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) handleGetWorkers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+	if !g.requirePermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
 		return
 	}
 
@@ -1201,6 +1206,9 @@ func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
 		return
 	}
+	if !g.requirePermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
+		return
+	}
 
 	stats := g.router.GetStats()
 	workers := g.router.GetWorkers("", false)
@@ -1274,6 +1282,9 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
 		return
 	}
+	if !g.requirePermission(w, r, auth.PermissionViewUsage, "Usage access required") {
+		return
+	}
 	if g.auditStore == nil {
 		g.writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "Audit store is not configured")
 		return
@@ -1320,7 +1331,7 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if currentKey != nil && currentKey.WorkspaceID != auth.DefaultWorkspaceID && workspaceID != "" && workspaceID != currentKey.WorkspaceID {
-		g.writeError(w, http.StatusForbidden, "forbidden", "Workspace-scoped admins can only query audit usage in their own workspace")
+		g.writeError(w, http.StatusForbidden, "forbidden", "Workspace-scoped identities can only query audit usage in their own workspace")
 		return
 	}
 

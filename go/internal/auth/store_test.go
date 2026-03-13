@@ -33,6 +33,9 @@ func TestCreateKey(t *testing.T) {
 	if rec.Name != "test-key" || rec.Role != "user" || rec.Status != "active" {
 		t.Errorf("unexpected record: %+v", rec)
 	}
+	if rec.PrincipalType != PrincipalHuman {
+		t.Fatalf("expected human principal, got %q", rec.PrincipalType)
+	}
 	if rec.WorkspaceID != DefaultWorkspaceID {
 		t.Fatalf("expected default workspace, got %q", rec.WorkspaceID)
 	}
@@ -54,6 +57,14 @@ func TestCreateKey_InvalidRole(t *testing.T) {
 	}
 }
 
+func TestCreateKey_InvalidPrincipalType(t *testing.T) {
+	s := newTestStore(t)
+	_, _, err := s.CreateKeyWithPrincipal("svc", RoleAdmin, "robot")
+	if err == nil {
+		t.Fatal("expected error for invalid principal type")
+	}
+}
+
 func TestValidateKey(t *testing.T) {
 	s := newTestStore(t)
 	fullKey, _, err := s.CreateKey("k", "admin")
@@ -67,6 +78,9 @@ func TestValidateKey(t *testing.T) {
 	}
 	if rec.Role != "admin" {
 		t.Errorf("expected admin, got %s", rec.Role)
+	}
+	if rec.PrincipalType != PrincipalHuman {
+		t.Fatalf("expected human principal, got %q", rec.PrincipalType)
 	}
 }
 
@@ -193,6 +207,26 @@ func TestCreateWorkspaceAndScopedKey(t *testing.T) {
 	}
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key in workspace, got %d", len(keys))
+	}
+}
+
+func TestCreateServiceAccountKey(t *testing.T) {
+	s := newTestStore(t)
+
+	key, rec, err := s.CreateKeyWithPrincipal("ci-bot", RoleOperator, PrincipalServiceAccount)
+	if err != nil {
+		t.Fatalf("CreateKeyWithPrincipal: %v", err)
+	}
+	if rec.PrincipalType != PrincipalServiceAccount {
+		t.Fatalf("expected service_account principal, got %q", rec.PrincipalType)
+	}
+
+	validated, err := s.ValidateKey(key)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	if validated.PrincipalType != PrincipalServiceAccount {
+		t.Fatalf("expected service_account principal after validate, got %q", validated.PrincipalType)
 	}
 }
 

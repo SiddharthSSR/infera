@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/providers/mock"
 )
@@ -87,11 +88,19 @@ func (p *failingProvider) GetStatus(ctx context.Context) (*providers.ProviderSta
 }
 func (p *failingProvider) WaitForReady(ctx context.Context, instanceID string) error { return nil }
 
+func authedRequest(req *http.Request, role string) *http.Request {
+	return req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+		Role:          role,
+		PrincipalType: auth.PrincipalHuman,
+		Status:        "active",
+	}))
+}
+
 func TestHandleInstances(t *testing.T) {
 	h := setupTestHandlers(t)
 
 	t.Run("GET empty list", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/instances", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/instances", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleInstances(w, req)
@@ -110,7 +119,7 @@ func TestHandleInstances(t *testing.T) {
 	})
 
 	t.Run("Method not allowed", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/instances", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleInstances(w, req)
@@ -133,7 +142,7 @@ func TestHandleProvision(t *testing.T) {
 		}
 		bodyBytes, _ := json.Marshal(body)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
@@ -161,7 +170,7 @@ func TestHandleProvision(t *testing.T) {
 		}
 		bodyBytes, _ := json.Marshal(body)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
@@ -173,7 +182,7 @@ func TestHandleProvision(t *testing.T) {
 	})
 
 	t.Run("Invalid JSON", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader([]byte("invalid")))
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader([]byte("invalid"))), auth.RoleOperator)
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
@@ -185,7 +194,7 @@ func TestHandleProvision(t *testing.T) {
 	})
 
 	t.Run("Method not allowed", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/instances/provision", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/instances/provision", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleProvision(w, req)
@@ -207,7 +216,7 @@ func TestHandleInstanceByID(t *testing.T) {
 	}
 	bodyBytes, _ := json.Marshal(body)
 
-	provReq := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+	provReq := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
 	provReq.Header.Set("Content-Type", "application/json")
 	provW := httptest.NewRecorder()
 	h.handleProvision(provW, provReq)
@@ -218,7 +227,7 @@ func TestHandleInstanceByID(t *testing.T) {
 	instanceID := instance["id"].(string)
 
 	t.Run("GET instance", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/instances/"+instanceID, nil)
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/instances/"+instanceID, nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleInstanceByID(w, req)
@@ -236,7 +245,7 @@ func TestHandleInstanceByID(t *testing.T) {
 	})
 
 	t.Run("GET non-existent", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/instances/non-existent", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/instances/non-existent", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleInstanceByID(w, req)
@@ -247,7 +256,7 @@ func TestHandleInstanceByID(t *testing.T) {
 	})
 
 	t.Run("DELETE instance", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/instances/"+instanceID, nil)
+		req := authedRequest(httptest.NewRequest(http.MethodDelete, "/api/instances/"+instanceID, nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleInstanceByID(w, req)
@@ -276,7 +285,7 @@ func TestHandleStartStop(t *testing.T) {
 	}
 	bodyBytes, _ := json.Marshal(body)
 
-	provReq := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+	provReq := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
 	provReq.Header.Set("Content-Type", "application/json")
 	provW := httptest.NewRecorder()
 	h.handleProvision(provW, provReq)
@@ -287,7 +296,7 @@ func TestHandleStartStop(t *testing.T) {
 	instanceID := instance["id"].(string)
 
 	t.Run("Stop instance", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/instances/"+instanceID+"/stop", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/"+instanceID+"/stop", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleInstanceByID(w, req)
@@ -298,7 +307,7 @@ func TestHandleStartStop(t *testing.T) {
 	})
 
 	t.Run("Start instance", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/instances/"+instanceID+"/start", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/"+instanceID+"/start", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleInstanceByID(w, req)
@@ -309,7 +318,7 @@ func TestHandleStartStop(t *testing.T) {
 	})
 
 	t.Run("Unknown action", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/instances/"+instanceID+"/unknown", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/"+instanceID+"/unknown", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleInstanceByID(w, req)
@@ -324,7 +333,7 @@ func TestHandleOfferings(t *testing.T) {
 	h := setupTestHandlers(t)
 
 	t.Run("GET offerings", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/offerings", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/offerings", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleOfferings(w, req)
@@ -343,7 +352,7 @@ func TestHandleOfferings(t *testing.T) {
 	})
 
 	t.Run("Method not allowed", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/offerings", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/offerings", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleOfferings(w, req)
@@ -358,7 +367,7 @@ func TestHandleProviders(t *testing.T) {
 	h := setupTestHandlers(t)
 
 	t.Run("GET providers", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/providers", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/providers", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleProviders(w, req)
@@ -390,7 +399,7 @@ func TestHandleProviders(t *testing.T) {
 	})
 
 	t.Run("Method not allowed", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/providers", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/providers", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleProviders(w, req)
@@ -425,7 +434,7 @@ func TestHandleProvisionMapsProviderErrors(t *testing.T) {
 	}
 	bodyBytes, _ := json.Marshal(body)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+	req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -473,7 +482,7 @@ func TestHandleStartStopMapsProviderErrors(t *testing.T) {
 	}
 	h := NewInstanceHandlers(mgr)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/instances/inst-1/start", nil)
+	req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/inst-1/start", nil), auth.RoleOperator)
 	w := httptest.NewRecorder()
 
 	h.handleInstanceByID(w, req)
@@ -495,7 +504,7 @@ func TestHandleCosts(t *testing.T) {
 	h := setupTestHandlers(t)
 
 	t.Run("GET costs - empty", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/costs", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/costs", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleCosts(w, req)
@@ -521,13 +530,13 @@ func TestHandleCosts(t *testing.T) {
 		}
 		bodyBytes, _ := json.Marshal(body)
 
-		provReq := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+		provReq := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
 		provReq.Header.Set("Content-Type", "application/json")
 		provW := httptest.NewRecorder()
 		h.handleProvision(provW, provReq)
 
 		// Now check costs
-		req := httptest.NewRequest(http.MethodGet, "/api/costs", nil)
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/costs", nil), auth.RoleOperator)
 		w := httptest.NewRecorder()
 
 		h.handleCosts(w, req)

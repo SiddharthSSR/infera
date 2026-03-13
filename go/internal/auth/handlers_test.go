@@ -52,6 +52,9 @@ func TestHandleCreateKey(t *testing.T) {
 	if record["workspace_id"] == "" {
 		t.Fatal("expected workspace_id in key record")
 	}
+	if record["principal_type"] != PrincipalHuman {
+		t.Fatalf("expected human principal, got %v", record["principal_type"])
+	}
 }
 
 func TestHandleCreateKey_MissingName(t *testing.T) {
@@ -172,6 +175,52 @@ func TestHandleWorkspaceQuota(t *testing.T) {
 	}
 }
 
+func TestHandleWorkspaceQuota_BillingRole(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	workspace, err := s.CreateWorkspace("Finance Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	billingKey, _, err := s.CreateKeyInWorkspace(workspace.ID, "billing", RoleBilling)
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace: %v", err)
+	}
+
+	putBody := `{"monthly_request_limit":250}`
+	putReq := httptest.NewRequest("PUT", "/api/auth/workspaces/"+workspace.ID+"/quota", strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("Authorization", "Bearer "+billingKey)
+	putRec := httptest.NewRecorder()
+	mux.ServeHTTP(putRec, putReq)
+
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", putRec.Code, putRec.Body.String())
+	}
+}
+
+func TestHandleCreateKey_BillingForbidden(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	workspace, err := s.CreateWorkspace("Finance Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	billingKey, _, err := s.CreateKeyInWorkspace(workspace.ID, "billing", RoleBilling)
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace: %v", err)
+	}
+
+	body := `{"name":"svc","role":"operator","principal_type":"service_account"}`
+	req := httptest.NewRequest("POST", "/api/auth/keys", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+billingKey)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestHandleRevokeKey(t *testing.T) {
 	_, s, mux := newTestHandlerWithRoutes(t)
 	adminKey, _, _ := s.CreateKey("admin", "admin")
@@ -275,6 +324,42 @@ func TestHandleCreateSession_UserKey(t *testing.T) {
 	}
 }
 
+func TestHandleCreateSession_ServiceAccountForbidden(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	serviceKey, _, err := s.CreateKeyWithPrincipal("svc-bot", RoleOperator, PrincipalServiceAccount)
+	if err != nil {
+		t.Fatalf("CreateKeyWithPrincipal: %v", err)
+	}
+
+	body := `{"api_key":"` + serviceKey + `"}`
+	req := httptest.NewRequest("POST", "/api/auth/session", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rr.Code)
+	}
+}
+
+func TestHandleCreateSession_OperatorKey(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	operatorKey, _, err := s.CreateKey("ops", RoleOperator)
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	body := `{"api_key":"` + operatorKey + `"}`
+	req := httptest.NewRequest("POST", "/api/auth/session", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestHandleCreateSession_InvalidKey(t *testing.T) {
 	_, _, mux := newTestHandlerWithRoutes(t)
 
@@ -310,6 +395,10 @@ func TestHandleGetSession_Valid(t *testing.T) {
 	}
 	if resp["workspace"] == nil {
 		t.Error("expected workspace in session response")
+	}
+	key := resp["key"].(map[string]interface{})
+	if key["principal_type"] != PrincipalHuman {
+		t.Fatalf("expected human principal in session payload, got %v", key["principal_type"])
 	}
 }
 

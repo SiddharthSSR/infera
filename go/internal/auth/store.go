@@ -89,6 +89,13 @@ var authMigrations = []migrate.Migration{
 		INSERT OR IGNORE INTO workspace_quotas (workspace_id, enforce_hard_limits)
 		SELECT id, 1 FROM workspaces;`,
 	},
+	{
+		Version:     5,
+		Description: "add key principal type",
+		SQL: `
+		ALTER TABLE api_keys ADD COLUMN principal_type TEXT NOT NULL DEFAULT 'human';
+		CREATE INDEX IF NOT EXISTS idx_api_keys_principal_type ON api_keys(principal_type);`,
+	},
 }
 
 // KeyRecord represents a stored API key.
@@ -100,6 +107,7 @@ type KeyRecord struct {
 	KeyPrefix     string     `json:"key_prefix"`
 	Name          string     `json:"name"`
 	Role          string     `json:"role"`
+	PrincipalType string     `json:"principal_type"`
 	CreatedAt     time.Time  `json:"created_at"`
 	LastUsed      *time.Time `json:"last_used,omitempty"`
 	Status        string     `json:"status"`
@@ -186,12 +194,20 @@ func (s *Store) migrate() error {
 // CreateKey generates a new API key and stores its hash.
 // Returns the full key (only shown once) and the record.
 func (s *Store) CreateKey(name, role string) (string, *KeyRecord, error) {
-	return s.CreateKeyInWorkspace(DefaultWorkspaceID, name, role)
+	return s.CreateKeyWithPrincipalInWorkspace(DefaultWorkspaceID, name, role, PrincipalHuman)
 }
 
 // CreateKeyInWorkspace generates a new API key scoped to a workspace and stores its hash.
 // Returns the full key (only shown once) and the record.
 func (s *Store) CreateKeyInWorkspace(workspaceID, name, role string) (string, *KeyRecord, error) {
+	return s.CreateKeyWithPrincipalInWorkspace(workspaceID, name, role, PrincipalHuman)
+}
+
+func (s *Store) CreateKeyWithPrincipal(name, role, principalType string) (string, *KeyRecord, error) {
+	return s.CreateKeyWithPrincipalInWorkspace(DefaultWorkspaceID, name, role, principalType)
+}
+
+func (s *Store) CreateKeyWithPrincipalInWorkspace(workspaceID, name, role, principalType string) (string, *KeyRecord, error) {
 	if name == "" {
 		return "", nil, fmt.Errorf("key name is required")
 	}
@@ -200,10 +216,16 @@ func (s *Store) CreateKeyInWorkspace(workspaceID, name, role string) (string, *K
 		workspaceID = DefaultWorkspaceID
 	}
 	if role == "" {
-		role = "user"
+		role = RoleUser
 	}
-	if role != "admin" && role != "user" {
-		return "", nil, fmt.Errorf("role must be 'admin' or 'user'")
+	if !IsValidRole(role) {
+		return "", nil, fmt.Errorf("invalid role %q", role)
+	}
+	if principalType == "" {
+		principalType = PrincipalHuman
+	}
+	if !IsValidPrincipalType(principalType) {
+		return "", nil, fmt.Errorf("invalid principal_type %q", principalType)
 	}
 	workspace, err := s.getWorkspace(workspaceID)
 	if err != nil {
@@ -225,9 +247,9 @@ func (s *Store) CreateKeyInWorkspace(workspaceID, name, role string) (string, *K
 	now := time.Now()
 
 	_, err = s.db.Exec(`
-		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, created_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
-		id, workspace.ID, hash, prefix, name, role, now,
+		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, principal_type, created_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+		id, workspace.ID, hash, prefix, name, role, principalType, now,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to store key: %w", err)
@@ -241,6 +263,7 @@ func (s *Store) CreateKeyInWorkspace(workspaceID, name, role string) (string, *K
 		KeyPrefix:     prefix,
 		Name:          name,
 		Role:          role,
+		PrincipalType: principalType,
 		CreatedAt:     now,
 		Status:        "active",
 	}
@@ -254,7 +277,7 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 	hash := hashKey(rawKey)
 
 	row := s.db.QueryRow(`
-		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.created_at, k.last_used, k.status
+		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.principal_type, k.created_at, k.last_used, k.status
 		FROM api_keys k
 		JOIN workspaces w ON w.id = k.workspace_id
 		WHERE k.key_hash = ? AND k.status = 'active'`,
@@ -264,7 +287,7 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 	record := &KeyRecord{}
 	err := row.Scan(
 		&record.ID, &record.WorkspaceID, &record.WorkspaceSlug, &record.WorkspaceName,
-		&record.KeyPrefix, &record.Name, &record.Role,
+		&record.KeyPrefix, &record.Name, &record.Role, &record.PrincipalType,
 		&record.CreatedAt, &record.LastUsed, &record.Status,
 	)
 	if err != nil {
@@ -297,7 +320,7 @@ func (s *Store) ListKeysByWorkspace(workspaceID string) ([]*KeyRecord, error) {
 
 func (s *Store) listKeys(workspaceID string) ([]*KeyRecord, error) {
 	query := `
-		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.created_at, k.last_used, k.status
+		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.principal_type, k.created_at, k.last_used, k.status
 		FROM api_keys k
 		JOIN workspaces w ON w.id = k.workspace_id`
 	args := []any{}
@@ -324,6 +347,7 @@ func (s *Store) listKeys(workspaceID string) ([]*KeyRecord, error) {
 			&k.KeyPrefix,
 			&k.Name,
 			&k.Role,
+			&k.PrincipalType,
 			&k.CreatedAt,
 			&k.LastUsed,
 			&k.Status,
@@ -393,11 +417,15 @@ func (s *Store) Count() (int, error) {
 
 // CreateKeyFromRaw stores a pre-generated key (used for bootstrap admin key).
 func (s *Store) CreateKeyFromRaw(fullKey, name, role string) (*KeyRecord, error) {
-	return s.CreateKeyFromRawInWorkspace(DefaultWorkspaceID, fullKey, name, role)
+	return s.CreateKeyFromRawWithPrincipalInWorkspace(DefaultWorkspaceID, fullKey, name, role, PrincipalHuman)
 }
 
 // CreateKeyFromRawInWorkspace stores a pre-generated key for the given workspace.
 func (s *Store) CreateKeyFromRawInWorkspace(workspaceID, fullKey, name, role string) (*KeyRecord, error) {
+	return s.CreateKeyFromRawWithPrincipalInWorkspace(workspaceID, fullKey, name, role, PrincipalHuman)
+}
+
+func (s *Store) CreateKeyFromRawWithPrincipalInWorkspace(workspaceID, fullKey, name, role, principalType string) (*KeyRecord, error) {
 	if !bootstrapKeyPattern.MatchString(fullKey) {
 		return nil, fmt.Errorf("key must match inf_ followed by exactly 48 hexadecimal characters")
 	}
@@ -409,10 +437,16 @@ func (s *Store) CreateKeyFromRawInWorkspace(workspaceID, fullKey, name, role str
 		workspaceID = DefaultWorkspaceID
 	}
 	if role == "" {
-		role = "user"
+		role = RoleUser
 	}
-	if role != "admin" && role != "user" {
-		return nil, fmt.Errorf("role must be 'admin' or 'user'")
+	if !IsValidRole(role) {
+		return nil, fmt.Errorf("invalid role %q", role)
+	}
+	if principalType == "" {
+		principalType = PrincipalHuman
+	}
+	if !IsValidPrincipalType(principalType) {
+		return nil, fmt.Errorf("invalid principal_type %q", principalType)
 	}
 	workspace, err := s.getWorkspace(workspaceID)
 	if err != nil {
@@ -426,9 +460,9 @@ func (s *Store) CreateKeyFromRawInWorkspace(workspaceID, fullKey, name, role str
 	now := time.Now()
 
 	_, err = s.db.Exec(`
-		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, created_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
-		id, workspace.ID, hash, prefix, name, role, now,
+		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, principal_type, created_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+		id, workspace.ID, hash, prefix, name, role, principalType, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store key: %w", err)
@@ -442,6 +476,7 @@ func (s *Store) CreateKeyFromRawInWorkspace(workspaceID, fullKey, name, role str
 		KeyPrefix:     prefix,
 		Name:          name,
 		Role:          role,
+		PrincipalType: principalType,
 		CreatedAt:     now,
 		Status:        "active",
 	}, nil
@@ -497,7 +532,7 @@ func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, er
 
 	row := s.db.QueryRow(`
 		SELECT s.id, s.key_id, s.created_at, s.expires_at, s.last_seen,
-		       k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.created_at, k.last_used, k.status
+		       k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.principal_type, k.created_at, k.last_used, k.status
 		FROM sessions s
 		JOIN api_keys k ON s.key_id = k.id
 		JOIN workspaces w ON w.id = k.workspace_id
@@ -509,7 +544,7 @@ func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, er
 	key := &KeyRecord{}
 	err := row.Scan(
 		&session.ID, &session.KeyID, &session.CreatedAt, &session.ExpiresAt, &session.LastSeen,
-		&key.ID, &key.WorkspaceID, &key.WorkspaceSlug, &key.WorkspaceName, &key.KeyPrefix, &key.Name, &key.Role, &key.CreatedAt, &key.LastUsed, &key.Status,
+		&key.ID, &key.WorkspaceID, &key.WorkspaceSlug, &key.WorkspaceName, &key.KeyPrefix, &key.Name, &key.Role, &key.PrincipalType, &key.CreatedAt, &key.LastUsed, &key.Status,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
