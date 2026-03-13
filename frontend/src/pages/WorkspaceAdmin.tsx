@@ -4,6 +4,7 @@ import {
   fetchApiKeys,
   createApiKey,
   revokeApiKey,
+  fetchAuditUsage,
   fetchWorkspaceQuota,
   updateWorkspaceQuota,
   fetchWorkspaceMembers,
@@ -11,6 +12,7 @@ import {
   createWorkspaceInvite,
   revokeWorkspaceInvite,
   type ApiKeyRecord,
+  type AuditUsageRow,
   type WorkspaceQuotaRecord,
   type WorkspaceMemberRecord,
   type WorkspaceInvitationRecord,
@@ -43,6 +45,25 @@ function parseNullableLimit(value: string): number | null {
   return parsed;
 }
 
+function formatCount(value: number): string {
+  return new Intl.NumberFormat('en-US').format(value);
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return Math.min(value * 100, 100);
+}
+
+function monthRange() {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+  return { start: start.toISOString(), end: now.toISOString() };
+}
+
 export function WorkspaceAdmin() {
   const { session } = useAuthSession();
   const workspaceId = session?.workspace?.id ?? '';
@@ -53,12 +74,14 @@ export function WorkspaceAdmin() {
   const canManageKeys = role === 'owner' || role === 'admin';
   const canManageQuota = role === 'owner' || role === 'admin' || role === 'billing';
   const canViewQuota = canManageQuota || role === 'read_only';
+  const canViewUsage = role === 'owner' || role === 'admin' || role === 'billing' || role === 'read_only';
 
   const [loading, setLoading] = useState(true);
   const [quota, setQuota] = useState<WorkspaceQuotaRecord | null>(null);
   const [members, setMembers] = useState<WorkspaceMemberRecord[]>([]);
   const [invites, setInvites] = useState<WorkspaceInvitationRecord[]>([]);
   const [serviceAccounts, setServiceAccounts] = useState<ApiKeyRecord[]>([]);
+  const [usageRows, setUsageRows] = useState<AuditUsageRow[]>([]);
 
   const [requestLimit, setRequestLimit] = useState('');
   const [tokenLimit, setTokenLimit] = useState('');
@@ -79,6 +102,54 @@ export function WorkspaceAdmin() {
     return assignableInviteRoles.filter((candidate) => candidate !== 'admin');
   }, [role]);
 
+  const usageSummary = useMemo(() => {
+    const byDay = new Map<string, { requests: number; tokens: number }>();
+    const byKey = new Map<string, { requests: number; tokens: number; successes: number; errors: number }>();
+    let requests = 0;
+    let tokens = 0;
+    let successes = 0;
+    let errors = 0;
+
+    for (const row of usageRows) {
+      requests += row.requests;
+      tokens += row.tokens;
+      successes += row.successes;
+      errors += row.errors;
+
+      const day = row.bucket_start.slice(0, 10);
+      const dayTotals = byDay.get(day) || { requests: 0, tokens: 0 };
+      dayTotals.requests += row.requests;
+      dayTotals.tokens += row.tokens;
+      byDay.set(day, dayTotals);
+
+      const keyId = row.key_id || 'unknown';
+      const keyTotals = byKey.get(keyId) || { requests: 0, tokens: 0, successes: 0, errors: 0 };
+      keyTotals.requests += row.requests;
+      keyTotals.tokens += row.tokens;
+      keyTotals.successes += row.successes;
+      keyTotals.errors += row.errors;
+      byKey.set(keyId, keyTotals);
+    }
+
+    const dailyTrend = Array.from(byDay.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(-14)
+      .map(([day, totals]) => ({ day, ...totals }));
+
+    const topKeys = Array.from(byKey.entries())
+      .sort(([, left], [, right]) => right.tokens - left.tokens || right.requests - left.requests)
+      .slice(0, 5)
+      .map(([keyId, totals]) => ({ keyId, ...totals }));
+
+    return { requests, tokens, successes, errors, dailyTrend, topKeys };
+  }, [usageRows]);
+
+  const requestUsageRatio = quota?.monthly_request_limit ? usageSummary.requests / quota.monthly_request_limit : 0;
+  const tokenUsageRatio = quota?.monthly_token_limit ? usageSummary.tokens / quota.monthly_token_limit : 0;
+  const quotaPressure = Math.max(requestUsageRatio, tokenUsageRatio);
+  const quotaState = quotaPressure >= 1 ? 'EXCEEDED' : quotaPressure >= 0.8 ? 'NEAR LIMIT' : 'HEALTHY';
+  const quotaStateClass = quotaPressure >= 1 ? 'error' : quotaPressure >= 0.8 ? 'warning' : '';
+
   const loadWorkspaceData = async () => {
     if (!workspaceId) return;
 
@@ -95,6 +166,17 @@ export function WorkspaceAdmin() {
       );
     } else {
       setQuota(null);
+    }
+
+    if (canViewUsage) {
+      const { start, end } = monthRange();
+      tasks.push(
+        fetchAuditUsage({ start, end, bucket: 'day', workspace_id: workspaceId })
+          .then((usage) => setUsageRows(usage.rows))
+          .catch(() => setUsageRows([])),
+      );
+    } else {
+      setUsageRows([]);
     }
 
     if (canManageMemberships) {
@@ -125,7 +207,7 @@ export function WorkspaceAdmin() {
   useEffect(() => {
     setLoading(true);
     loadWorkspaceData().finally(() => setLoading(false));
-  }, [workspaceId, canManageMemberships, canManageKeys, canViewQuota]);
+  }, [workspaceId, canManageMemberships, canManageKeys, canViewQuota, canViewUsage]);
 
   const handleSaveQuota = async () => {
     const parsedRequestLimit = parseNullableLimit(requestLimit);
@@ -292,6 +374,99 @@ export function WorkspaceAdmin() {
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage quota</span><span className="mono">{canManageQuota ? 'YES' : 'NO'}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>View quota</span><span className="mono">{canViewQuota ? 'YES' : 'NO'}</span></div>
           </div>
+        </div>
+      </div>
+
+      <div className="grid-row">
+        <div className="cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text" style={{ marginBottom: '1.5rem' }}>CURRENT MONTH USAGE</div>
+          {canViewUsage ? (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '1rem' }}>
+                <div style={{ padding: '1rem', backgroundColor: 'var(--bg-accent)' }}>
+                  <div className="label-text">REQUESTS</div>
+                  <div style={{ fontSize: '2rem', marginTop: '0.5rem' }}>{formatCount(usageSummary.requests)}</div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                    {formatCount(usageSummary.successes)} success / {formatCount(usageSummary.errors)} error
+                  </div>
+                </div>
+                <div style={{ padding: '1rem', backgroundColor: 'var(--bg-accent)' }}>
+                  <div className="label-text">TOKENS</div>
+                  <div style={{ fontSize: '2rem', marginTop: '0.5rem' }}>{formatCount(usageSummary.tokens)}</div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                    Aggregated from workspace audit records
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <span className={`status-dot ${quotaStateClass}`}></span>
+                <span className="label-text">QUOTA STATE</span>
+                <span className="badge">{quotaState}</span>
+              </div>
+
+              <div style={{ marginTop: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                  <span>Request quota</span>
+                  <span className="mono">
+                    {quota?.monthly_request_limit != null
+                      ? `${formatCount(usageSummary.requests)} / ${formatCount(quota.monthly_request_limit)} (${formatPercent(requestUsageRatio)})`
+                      : `${formatCount(usageSummary.requests)} / unlimited`}
+                  </span>
+                </div>
+                <div className="progress-track">
+                  <div className="progress-fill" style={{ width: `${clampPercent(requestUsageRatio)}%` }} />
+                </div>
+              </div>
+
+              <div style={{ marginTop: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                  <span>Token quota</span>
+                  <span className="mono">
+                    {quota?.monthly_token_limit != null
+                      ? `${formatCount(usageSummary.tokens)} / ${formatCount(quota.monthly_token_limit)} (${formatPercent(tokenUsageRatio)})`
+                      : `${formatCount(usageSummary.tokens)} / unlimited`}
+                  </span>
+                </div>
+                <div className="progress-track">
+                  <div className="progress-fill" style={{ width: `${clampPercent(tokenUsageRatio)}%` }} />
+                </div>
+              </div>
+            </>
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Usage visibility is restricted to workspace owners, admins, billing, and read-only roles.
+            </div>
+          )}
+        </div>
+
+        <div className="cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
+          <div className="label-text" style={{ marginBottom: '1.5rem' }}>RECENT DAILY TREND</div>
+          {canViewUsage ? (
+            usageSummary.dailyTrend.length > 0 ? (
+              <div className="mobile-data-list">
+                {usageSummary.dailyTrend.map((entry) => (
+                  <div key={entry.day} className="mobile-data-card">
+                    <div className="mobile-data-card-header">
+                      <div>
+                        <div className="mobile-data-title">{entry.day}</div>
+                        <div className="mobile-data-subtitle">{formatCount(entry.requests)} requests</div>
+                      </div>
+                      <span className="badge mono">{formatCount(entry.tokens)} TOKENS</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                No usage recorded for this workspace in the current month yet.
+              </div>
+            )
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Usage visibility is restricted for this role.
+            </div>
+          )}
         </div>
       </div>
 
@@ -480,6 +655,48 @@ export function WorkspaceAdmin() {
           ) : (
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
               Invitation management is restricted to workspace owners and admins.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="grid-row">
+        <div className="cell" style={{ gridColumn: 'span 4' }}>
+          <div className="label-text" style={{ marginBottom: '1.5rem' }}>TOP KEY ACTIVITY THIS MONTH</div>
+          {canViewUsage ? (
+            usageSummary.topKeys.length > 0 ? (
+              <div className="responsive-scroll-x">
+                <table className="data-table responsive-scroll-x-content">
+                  <thead>
+                    <tr>
+                      <th>KEY</th>
+                      <th>REQUESTS</th>
+                      <th>TOKENS</th>
+                      <th>SUCCESS</th>
+                      <th>ERRORS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usageSummary.topKeys.map((entry) => (
+                      <tr key={entry.keyId}>
+                        <td className="mono">{entry.keyId}</td>
+                        <td>{formatCount(entry.requests)}</td>
+                        <td>{formatCount(entry.tokens)}</td>
+                        <td>{formatCount(entry.successes)}</td>
+                        <td>{formatCount(entry.errors)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                Key-level usage will appear here once this workspace records traffic.
+              </div>
+            )
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Usage visibility is restricted for this role.
             </div>
           )}
         </div>

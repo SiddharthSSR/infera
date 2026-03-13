@@ -19,6 +19,7 @@ import {
   fetchWorkspaceInvites,
   createWorkspaceInvite,
   revokeWorkspaceInvite,
+  fetchAuditUsage,
   provisionInstance,
   terminateInstance,
   startInstance,
@@ -233,6 +234,32 @@ describe('API Functions', () => {
         '/api/auth/workspaces/ws_1/invites/inv_1',
         expect.objectContaining({ method: 'DELETE', credentials: 'include' })
       )
+    })
+
+    it('fetchAuditUsage builds query parameters and parses rows', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          bucket: 'day',
+          start: '2026-03-01T00:00:00Z',
+          end: '2026-03-31T23:59:59Z',
+          rows: [{ bucket_start: '2026-03-10T00:00:00Z', workspace_id: 'ws_1', key_id: 'key_1', requests: 12, tokens: 3456, successes: 11, errors: 1 }],
+        }),
+      })
+
+      const result = await fetchAuditUsage({
+        start: '2026-03-01T00:00:00Z',
+        end: '2026-03-31T23:59:59Z',
+        bucket: 'day',
+        workspace_id: 'ws_1',
+      })
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/audit/usage?start=2026-03-01T00%3A00%3A00Z&end=2026-03-31T23%3A59%3A59Z&bucket=day&workspace_id=ws_1',
+        expect.objectContaining({ credentials: 'include' })
+      )
+      expect(result.rows).toHaveLength(1)
+      expect(result.rows[0]).toEqual(expect.objectContaining({ requests: 12, tokens: 3456 }))
     })
   })
 })
