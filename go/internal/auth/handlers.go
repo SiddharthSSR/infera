@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // RegisterRoutes registers auth API routes on the mux.
@@ -13,6 +14,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, corsWrap func(http.HandlerF
 	mux.HandleFunc("/api/auth/keys/", corsWrap(h.RequireAuth(h.handleKeyByID)))
 	mux.HandleFunc("/api/auth/workspaces", corsWrap(h.RequireAuth(h.handleWorkspaces)))
 	mux.HandleFunc("/api/auth/workspaces/", corsWrap(h.RequireAuth(h.handleWorkspaceByID)))
+	mux.HandleFunc("/api/auth/invitations/accept", corsWrap(h.handleAcceptInvitation))
 	mux.HandleFunc("/api/auth/session", corsWrap(h.handleSession))
 }
 
@@ -70,14 +72,14 @@ func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !strings.HasSuffix(path, "/quota") {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 {
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": map[string]string{"message": "Not found"},
 		})
 		return
 	}
-	workspaceID := strings.TrimSuffix(path, "/quota")
-	workspaceID = strings.TrimSuffix(workspaceID, "/")
+	workspaceID := strings.TrimSpace(parts[0])
 	if workspaceID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"error": map[string]string{"message": "Workspace ID required"},
@@ -85,14 +87,29 @@ func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch r.Method {
-	case http.MethodGet:
-		h.handleGetWorkspaceQuota(w, r, workspaceID)
-	case http.MethodPut:
-		h.handlePutWorkspaceQuota(w, r, workspaceID)
+	switch parts[1] {
+	case "quota":
+		switch r.Method {
+		case http.MethodGet:
+			h.handleGetWorkspaceQuota(w, r, workspaceID)
+		case http.MethodPut:
+			h.handlePutWorkspaceQuota(w, r, workspaceID)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+				"error": map[string]string{"message": "Method not allowed"},
+			})
+		}
+	case "members":
+		h.handleWorkspaceMembers(w, r, workspaceID)
+	case "invites":
+		if len(parts) == 2 {
+			h.handleWorkspaceInvites(w, r, workspaceID)
+			return
+		}
+		h.handleWorkspaceInviteByID(w, r, workspaceID, parts[2])
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{
+			"error": map[string]string{"message": "Not found"},
 		})
 	}
 }
@@ -157,6 +174,10 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != "" && workspaceID != current.WorkspaceID {
 		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only create keys in their own workspace.")
+		return
+	}
+	if current != nil && !CanAssignRole(current, req.Role) {
+		writeAuthError(w, http.StatusForbidden, "You cannot assign that role.")
 		return
 	}
 
@@ -322,6 +343,167 @@ func (h *Handler) handlePutWorkspaceQuota(w http.ResponseWriter, r *http.Request
 	})
 }
 
+func (h *Handler) handleWorkspaceMembers(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
+		})
+		return
+	}
+	if !h.requirePermission(w, r, PermissionManageMemberships, "Membership management access required.") {
+		return
+	}
+	current := KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only view members in their own workspace.")
+		return
+	}
+	members, err := h.store.ListWorkspaceMemberships(workspaceID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": err.Error()},
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"members": members,
+		"total":   len(members),
+	})
+}
+
+func (h *Handler) handleWorkspaceInvites(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	switch r.Method {
+	case http.MethodGet:
+		h.handleListWorkspaceInvites(w, r, workspaceID)
+	case http.MethodPost:
+		h.handleCreateWorkspaceInvite(w, r, workspaceID)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
+		})
+	}
+}
+
+func (h *Handler) handleWorkspaceInviteByID(w http.ResponseWriter, r *http.Request, workspaceID, inviteID string) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
+		})
+		return
+	}
+	if !h.requirePermission(w, r, PermissionManageMemberships, "Membership management access required.") {
+		return
+	}
+	current := KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only manage invites in their own workspace.")
+		return
+	}
+	if err := h.store.RevokeWorkspaceInvitation(workspaceID, inviteID); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{
+			"error": map[string]string{"message": err.Error()},
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
+}
+
+func (h *Handler) handleListWorkspaceInvites(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !h.requirePermission(w, r, PermissionManageMemberships, "Membership management access required.") {
+		return
+	}
+	current := KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only view invites in their own workspace.")
+		return
+	}
+	invitations, err := h.store.ListWorkspaceInvitations(workspaceID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": err.Error()},
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"invitations": invitations,
+		"total":       len(invitations),
+	})
+}
+
+func (h *Handler) handleCreateWorkspaceInvite(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !h.requirePermission(w, r, PermissionManageMemberships, "Membership management access required.") {
+		return
+	}
+	current := KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only manage invites in their own workspace.")
+		return
+	}
+
+	var req struct {
+		Email       string `json:"email"`
+		DisplayName string `json:"display_name"`
+		Role        string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": "Invalid JSON"},
+		})
+		return
+	}
+	if req.Role == "" {
+		req.Role = RoleDeveloper
+	}
+	if !CanAssignRole(current, req.Role) {
+		writeAuthError(w, http.StatusForbidden, "You cannot assign that role.")
+		return
+	}
+
+	token, invitation, err := h.store.CreateWorkspaceInvitation(workspaceID, req.Email, req.DisplayName, req.Role, current.ID, time.Now().Add(7*24*time.Hour))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": err.Error()},
+		})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"invitation_token": token,
+		"invitation":       invitation,
+	})
+}
+
+func (h *Handler) handleAcceptInvitation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
+		})
+		return
+	}
+
+	var req struct {
+		InvitationToken string `json:"invitation_token"`
+		DisplayName     string `json:"display_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": "Invalid JSON"},
+		})
+		return
+	}
+	membership, fullKey, record, err := h.store.AcceptWorkspaceInvitation(req.InvitationToken, req.DisplayName)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": err.Error()},
+		})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"membership": membership,
+		"key":        fullKey,
+		"record":     record,
+	})
+}
+
 func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
@@ -357,7 +539,7 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only admin keys can create dashboard sessions
+	// Only human principals with dashboard access can create sessions.
 	if keyRecord.PrincipalType == PrincipalServiceAccount {
 		writeAuthError(w, http.StatusForbidden, "Service accounts cannot create dashboard sessions.")
 		return
@@ -397,6 +579,7 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			"slug": keyRecord.WorkspaceSlug,
 			"name": keyRecord.WorkspaceName,
 		},
+		"member": membershipPayload(keyRecord),
 	})
 }
 
@@ -434,6 +617,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 			"slug": keyRecord.WorkspaceSlug,
 			"name": keyRecord.WorkspaceName,
 		},
+		"member": membershipPayload(keyRecord),
 	})
 }
 
@@ -462,4 +646,20 @@ func (h *Handler) requirePermission(w http.ResponseWriter, r *http.Request, perm
 		return false
 	}
 	return true
+}
+
+func membershipPayload(keyRecord *KeyRecord) map[string]interface{} {
+	if keyRecord == nil || keyRecord.MembershipID == nil {
+		return nil
+	}
+	payload := map[string]interface{}{
+		"id": *keyRecord.MembershipID,
+	}
+	if keyRecord.MemberEmail != nil {
+		payload["email"] = *keyRecord.MemberEmail
+	}
+	if keyRecord.MemberName != nil {
+		payload["display_name"] = *keyRecord.MemberName
+	}
+	return payload
 }

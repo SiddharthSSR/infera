@@ -274,6 +274,145 @@ func TestCreateKeyFromRaw_InvalidFormat(t *testing.T) {
 	}
 }
 
+func TestWorkspaceInvitationLifecycle(t *testing.T) {
+	s := newTestStore(t)
+
+	adminKey, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	_ = adminKey
+
+	workspace, err := s.CreateWorkspace("Acme Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	token, invitation, err := s.CreateWorkspaceInvitation(workspace.ID, "teammate@example.com", "Teammate", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+	if token == "" {
+		t.Fatal("expected invitation token")
+	}
+	if invitation.Status != "pending" {
+		t.Fatalf("expected pending invitation, got %q", invitation.Status)
+	}
+
+	invitations, err := s.ListWorkspaceInvitations(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceInvitations: %v", err)
+	}
+	if len(invitations) != 1 {
+		t.Fatalf("expected 1 invitation, got %d", len(invitations))
+	}
+
+	membership, fullKey, record, err := s.AcceptWorkspaceInvitation(token, "Teammate Override")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation: %v", err)
+	}
+	if membership.WorkspaceID != workspace.ID {
+		t.Fatalf("expected membership workspace %q, got %q", workspace.ID, membership.WorkspaceID)
+	}
+	if membership.DisplayName != "Teammate Override" {
+		t.Fatalf("expected overridden display name, got %q", membership.DisplayName)
+	}
+	if record.MembershipID == nil || *record.MembershipID != membership.ID {
+		t.Fatalf("expected key linked to membership, got %+v", record.MembershipID)
+	}
+	if record.MemberEmail == nil || *record.MemberEmail != "teammate@example.com" {
+		t.Fatalf("expected member email on key record, got %+v", record.MemberEmail)
+	}
+	validated, err := s.ValidateKey(fullKey)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	if validated.Role != RoleDeveloper {
+		t.Fatalf("expected developer role from membership, got %q", validated.Role)
+	}
+
+	invitations, err = s.ListWorkspaceInvitations(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceInvitations after accept: %v", err)
+	}
+	if len(invitations) != 0 {
+		t.Fatalf("expected no pending invitations after accept, got %d", len(invitations))
+	}
+
+	members, err := s.ListWorkspaceMemberships(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceMemberships: %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("expected 1 membership, got %d", len(members))
+	}
+}
+
+func TestRevokeWorkspaceInvitation(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Revocation Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	token, invitation, err := s.CreateWorkspaceInvitation(workspace.ID, "revoke@example.com", "Revoke Me", RoleReadOnly, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+	if err := s.RevokeWorkspaceInvitation(workspace.ID, invitation.ID); err != nil {
+		t.Fatalf("RevokeWorkspaceInvitation: %v", err)
+	}
+	if _, _, _, err := s.AcceptWorkspaceInvitation(token, "Should Fail"); err == nil {
+		t.Fatal("expected revoked invitation acceptance to fail")
+	}
+}
+
+func TestValidateSession_WithMembership(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Session Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	token, _, err := s.CreateWorkspaceInvitation(workspace.ID, "member@example.com", "Member", RoleOperator, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+	membership, fullKey, _, err := s.AcceptWorkspaceInvitation(token, "Member")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation: %v", err)
+	}
+
+	validatedKey, err := s.ValidateKey(fullKey)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	sessionToken, _, err := s.CreateSession(validatedKey.ID)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	_, sessionKey, err := s.ValidateSession(sessionToken)
+	if err != nil {
+		t.Fatalf("ValidateSession: %v", err)
+	}
+	if sessionKey.MembershipID == nil || *sessionKey.MembershipID != membership.ID {
+		t.Fatalf("expected membership on session key, got %+v", sessionKey.MembershipID)
+	}
+	if sessionKey.MemberName == nil || *sessionKey.MemberName != "Member" {
+		t.Fatalf("expected member display name, got %+v", sessionKey.MemberName)
+	}
+}
+
 // ---------- Session CRUD ----------
 
 func TestCreateSession(t *testing.T) {

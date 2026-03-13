@@ -18,6 +18,7 @@ const (
 const (
 	PermissionDashboardAccess      = "dashboard_access"
 	PermissionManageKeys           = "manage_keys"
+	PermissionManageMemberships    = "manage_memberships"
 	PermissionManageWorkspaces     = "manage_workspaces"
 	PermissionManageQuotas         = "manage_quotas"
 	PermissionViewUsage            = "view_usage"
@@ -54,6 +55,8 @@ func HasPermission(record *KeyRecord, permission string) bool {
 		return record.PrincipalType == PrincipalHuman && record.Role != RoleUser
 	case PermissionManageKeys:
 		return record.Role == RoleOwner || record.Role == RoleAdmin
+	case PermissionManageMemberships:
+		return record.Role == RoleOwner || record.Role == RoleAdmin
 	case PermissionManageWorkspaces:
 		return record.Role == RoleOwner || record.Role == RoleAdmin
 	case PermissionManageQuotas:
@@ -73,4 +76,18 @@ func HasPermission(record *KeyRecord, permission string) bool {
 
 func CanCreateSession(record *KeyRecord) bool {
 	return HasPermission(record, PermissionDashboardAccess)
+}
+
+func CanAssignRole(actor *KeyRecord, targetRole string) bool {
+	if actor == nil || !IsValidRole(targetRole) {
+		return false
+	}
+	switch actor.Role {
+	case RoleOwner:
+		return targetRole != RoleOwner || actor.WorkspaceID == DefaultWorkspaceID
+	case RoleAdmin:
+		return targetRole != RoleOwner && targetRole != RoleAdmin
+	default:
+		return false
+	}
 }
