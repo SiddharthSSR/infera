@@ -482,6 +482,28 @@ export async function fetchWorkspaceMembers(workspaceId: string): Promise<Worksp
   return data.members;
 }
 
+export async function updateWorkspaceMember(
+  workspaceId: string,
+  memberId: string,
+  payload: { role: string },
+): Promise<WorkspaceMemberRecord> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/members/${memberId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to update workspace member'));
+  const data = await response.json();
+  return data.member;
+}
+
+export async function removeWorkspaceMember(workspaceId: string, memberId: string): Promise<void> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/members/${memberId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to remove workspace member'));
+}
+
 export async function fetchWorkspaceInvites(workspaceId: string): Promise<WorkspaceInvitationRecord[]> {
   const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/invites`);
   if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace invites'));

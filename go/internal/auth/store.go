@@ -967,6 +967,154 @@ func (s *Store) ListWorkspaceMemberships(workspaceID string) ([]*WorkspaceMember
 	return out, rows.Err()
 }
 
+func (s *Store) GetWorkspaceMembership(workspaceID, membershipID string) (*WorkspaceMembershipRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	membershipID = strings.TrimSpace(membershipID)
+	if workspaceID == "" || membershipID == "" {
+		return nil, fmt.Errorf("workspace id and membership id are required")
+	}
+
+	row := s.db.QueryRow(`
+		SELECT id, workspace_id, email, display_name, role, status, created_at
+		FROM workspace_memberships
+		WHERE workspace_id = ? AND id = ?`,
+		workspaceID, membershipID,
+	)
+
+	m := &WorkspaceMembershipRecord{}
+	if err := row.Scan(&m.ID, &m.WorkspaceID, &m.Email, &m.DisplayName, &m.Role, &m.Status, &m.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("membership not found")
+		}
+		return nil, fmt.Errorf("failed to load membership: %w", err)
+	}
+	return m, nil
+}
+
+func (s *Store) UpdateWorkspaceMembershipRole(workspaceID, membershipID, role string) (*WorkspaceMembershipRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	membershipID = strings.TrimSpace(membershipID)
+	role = strings.TrimSpace(role)
+	if workspaceID == "" || membershipID == "" {
+		return nil, fmt.Errorf("workspace id and membership id are required")
+	}
+	if !IsValidRole(role) || role == RoleUser {
+		return nil, fmt.Errorf("invalid membership role %q", role)
+	}
+
+	current, err := s.GetWorkspaceMembership(workspaceID, membershipID)
+	if err != nil {
+		return nil, err
+	}
+	if current.Status != "active" {
+		return nil, fmt.Errorf("membership is not active")
+	}
+	if current.Role == RoleOwner && role != RoleOwner {
+		var ownerCount int
+		if err := s.db.QueryRow(`
+			SELECT COUNT(1)
+			FROM workspace_memberships
+			WHERE workspace_id = ? AND role = ? AND status = 'active'`,
+			workspaceID, RoleOwner,
+		).Scan(&ownerCount); err != nil {
+			return nil, fmt.Errorf("failed to count workspace owners: %w", err)
+		}
+		if ownerCount <= 1 {
+			return nil, fmt.Errorf("cannot remove the last owner from a workspace")
+		}
+	}
+
+	result, err := s.db.Exec(`
+		UPDATE workspace_memberships
+		SET role = ?
+		WHERE workspace_id = ? AND id = ? AND status = 'active'`,
+		role, workspaceID, membershipID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update membership role: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if rows == 0 {
+		return nil, fmt.Errorf("membership not found")
+	}
+	return s.GetWorkspaceMembership(workspaceID, membershipID)
+}
+
+func (s *Store) RemoveWorkspaceMembership(workspaceID, membershipID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	membershipID = strings.TrimSpace(membershipID)
+	if workspaceID == "" || membershipID == "" {
+		return fmt.Errorf("workspace id and membership id are required")
+	}
+
+	current, err := s.GetWorkspaceMembership(workspaceID, membershipID)
+	if err != nil {
+		return err
+	}
+	if current.Status != "active" {
+		return fmt.Errorf("membership is not active")
+	}
+	if current.Role == RoleOwner {
+		var ownerCount int
+		if err := s.db.QueryRow(`
+			SELECT COUNT(1)
+			FROM workspace_memberships
+			WHERE workspace_id = ? AND role = ? AND status = 'active'`,
+			workspaceID, RoleOwner,
+		).Scan(&ownerCount); err != nil {
+			return fmt.Errorf("failed to count workspace owners: %w", err)
+		}
+		if ownerCount <= 1 {
+			return fmt.Errorf("cannot remove the last owner from a workspace")
+		}
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin membership removal transaction: %w", err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.Exec(`
+		UPDATE api_keys
+		SET status = 'revoked'
+		WHERE workspace_id = ? AND membership_id = ? AND status = 'active'`,
+		workspaceID, membershipID,
+	); err != nil {
+		return fmt.Errorf("failed to revoke membership keys: %w", err)
+	}
+
+	result, err := tx.Exec(`
+		UPDATE workspace_memberships
+		SET status = 'removed'
+		WHERE workspace_id = ? AND id = ? AND status = 'active'`,
+		workspaceID, membershipID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to remove membership: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("membership not found")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit membership removal: %w", err)
+	}
+	tx = nil
+	return nil
+}
+
 func (s *Store) CreateWorkspaceInvitation(workspaceID, email, displayName, role, invitedByKeyID string, expiresAt time.Time) (string, *WorkspaceInvitationRecord, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	email = strings.ToLower(strings.TrimSpace(email))

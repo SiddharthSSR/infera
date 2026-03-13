@@ -102,7 +102,11 @@ func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	case "members":
-		h.handleWorkspaceMembers(w, r, workspaceID)
+		if len(parts) == 2 {
+			h.handleWorkspaceMembers(w, r, workspaceID)
+			return
+		}
+		h.handleWorkspaceMemberByID(w, r, workspaceID, parts[2])
 	case "invites":
 		if len(parts) == 2 {
 			h.handleWorkspaceInvites(w, r, workspaceID)
@@ -466,6 +470,68 @@ func (h *Handler) handleWorkspaceMembers(w http.ResponseWriter, r *http.Request,
 		"members": members,
 		"total":   len(members),
 	})
+}
+
+func (h *Handler) handleWorkspaceMemberByID(w http.ResponseWriter, r *http.Request, workspaceID, membershipID string) {
+	if !h.requirePermission(w, r, PermissionManageMemberships, "Membership management access required.") {
+		return
+	}
+	current := KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only manage members in their own workspace.")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPut:
+		var req struct {
+			Role string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": map[string]string{"message": "Invalid JSON"},
+			})
+			return
+		}
+		if req.Role == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": map[string]string{"message": "role is required"},
+			})
+			return
+		}
+		if current != nil && !CanAssignRole(current, req.Role) {
+			writeAuthError(w, http.StatusForbidden, "You cannot assign that role.")
+			return
+		}
+		if current != nil && current.MembershipID != nil && *current.MembershipID == membershipID && current.Role != req.Role {
+			writeAuthError(w, http.StatusForbidden, "You cannot change your own membership role.")
+			return
+		}
+		member, err := h.store.UpdateWorkspaceMembershipRole(workspaceID, membershipID, req.Role)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": map[string]string{"message": err.Error()},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"member": member})
+	case http.MethodDelete:
+		if current != nil && current.MembershipID != nil && *current.MembershipID == membershipID {
+			writeAuthError(w, http.StatusForbidden, "You cannot remove your own membership.")
+			return
+		}
+		if err := h.store.RemoveWorkspaceMembership(workspaceID, membershipID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": map[string]string{"message": err.Error()},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
+		})
+	}
 }
 
 func (h *Handler) handleWorkspaceInvites(w http.ResponseWriter, r *http.Request, workspaceID string) {
