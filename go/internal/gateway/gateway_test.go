@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/infera/infera/go/internal/audit"
+	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/pkg/types"
 )
@@ -242,5 +246,77 @@ func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *
 	}
 	if tokenCount != 7 {
 		t.Fatalf("expected recomputed token count 7, got %d", tokenCount)
+	}
+}
+
+func TestHandleChatCompletions_RejectsWhenWorkspaceQuotaExceeded(t *testing.T) {
+	r := router.New(router.DefaultConfig())
+	defer r.Stop()
+
+	if err := r.RegisterWorker(&types.WorkerInfo{
+		WorkerID:     "worker-1",
+		Address:      "worker-1:8081",
+		Status:       types.WorkerStatusHealthy,
+		LoadedModels: []types.LoadedModel{{ModelID: "model-1"}},
+	}); err != nil {
+		t.Fatalf("RegisterWorker: %v", err)
+	}
+
+	authStore, err := auth.NewStore(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatalf("auth.NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = authStore.Close() })
+
+	auditStore, err := audit.NewStore(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatalf("audit.NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	workspace, err := authStore.CreateWorkspace("Billing Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	requestLimit := int64(1)
+	if _, err := authStore.UpsertWorkspaceQuota(workspace.ID, &requestLimit, nil, true); err != nil {
+		t.Fatalf("UpsertWorkspaceQuota: %v", err)
+	}
+	key, _, err := authStore.CreateKeyInWorkspace(workspace.ID, "workspace-admin", "admin")
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace: %v", err)
+	}
+	record, err := authStore.ValidateKey(key)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := auditStore.AppendInference(audit.InferenceAuditRecord{
+		Timestamp:   now.Add(-time.Minute),
+		RequestID:   "prior-req",
+		KeyID:       record.KeyPrefix,
+		WorkspaceID: workspace.ID,
+		Model:       "model-1",
+		Status:      "success",
+		TokenCount:  10,
+	}); err != nil {
+		t.Fatalf("AppendInference: %v", err)
+	}
+
+	g := New(DefaultConfig(), r, nil)
+	g.SetAuthHandler(auth.NewHandler(authStore))
+	g.SetAuditStore(auditStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"model-1","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	rec := httptest.NewRecorder()
+	g.authHandler.RequireAuth(g.handleChatCompletions)(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "quota_exceeded") {
+		t.Fatalf("expected quota_exceeded body, got %s", rec.Body.String())
 	}
 }
