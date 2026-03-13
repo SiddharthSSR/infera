@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -66,7 +67,7 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 
 	case http.MethodDelete:
 		if err := h.manager.Terminate(r.Context(), instanceID); err != nil {
-			writeError(w, http.StatusInternalServerError, "terminate_failed", err.Error())
+			writeProviderActionError(w, "terminate_failed", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "instance_id": instanceID})
@@ -75,13 +76,13 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 		switch action {
 		case "start":
 			if err := h.manager.Start(r.Context(), instanceID); err != nil {
-				writeError(w, http.StatusInternalServerError, "start_failed", err.Error())
+				writeProviderActionError(w, "start_failed", err)
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 		case "stop":
 			if err := h.manager.Stop(r.Context(), instanceID); err != nil {
-				writeError(w, http.StatusInternalServerError, "stop_failed", err.Error())
+				writeProviderActionError(w, "stop_failed", err)
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
@@ -148,7 +149,7 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 
 	instance, err := h.manager.Provision(r.Context(), provisionReq)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "provision_failed", err.Error())
+		writeProviderActionError(w, "provision_failed", err)
 		return
 	}
 
@@ -180,6 +181,11 @@ func (h *InstanceHandlers) handleOfferings(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *InstanceHandlers) handleProviders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+
 	statuses := h.manager.GetProviderStatus(r.Context())
 
 	response := make([]map[string]interface{}, 0, len(statuses))
@@ -187,7 +193,8 @@ func (h *InstanceHandlers) handleProviders(w http.ResponseWriter, r *http.Reques
 		response = append(response, map[string]interface{}{
 			"provider": s.Provider, "connected": s.Connected, "account_id": s.AccountID,
 			"balance": s.Balance, "active_instances": s.ActiveCount,
-			"quota_limit": s.QuotaLimit, "error": s.ErrorMessage,
+			"quota_limit": s.QuotaLimit, "error": s.ErrorMessage, "error_code": s.ErrorCode,
+			"capabilities": s.Capabilities,
 		})
 	}
 
@@ -232,4 +239,26 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 
 func writeError(w http.ResponseWriter, status int, errType, message string) {
 	writeJSON(w, status, map[string]interface{}{"error": map[string]interface{}{"type": errType, "message": message}})
+}
+
+func writeProviderActionError(w http.ResponseWriter, fallbackType string, err error) {
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		writeError(w, http.StatusInternalServerError, fallbackType, err.Error())
+		return
+	}
+
+	payload := map[string]interface{}{
+		"error": map[string]interface{}{
+			"type":                providerErr.APIErrorType(),
+			"message":             providerErr.Message,
+			"provider":            providerErr.Provider,
+			"provider_error_code": providerErr.Code,
+			"retryable":           providerErr.IsRetryable(),
+		},
+	}
+	if providerErr.RetryAfter > 0 {
+		payload["error"].(map[string]interface{})["retry_after_seconds"] = providerErr.RetryAfter
+	}
+	writeJSON(w, providerErr.HTTPStatus(http.StatusInternalServerError), payload)
 }

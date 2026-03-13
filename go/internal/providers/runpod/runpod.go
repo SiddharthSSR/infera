@@ -688,6 +688,14 @@ func (p *Provider) GetStatus(ctx context.Context) (*providers.ProviderStatus, er
 		Balance:     result.Myself.CurrentSpendHr, // This is spend, not balance
 		ActiveCount: podCount,
 		QuotaLimit:  result.Myself.MachineQuota,
+		Capabilities: providers.ProviderCapabilities{
+			SupportsSpot:            false,
+			SupportsCustomImages:    true,
+			SupportsRegionSelection: true,
+			SupportsPublicIP:        true,
+			SupportsSSHKeys:         true,
+			SupportsStartStop:       true,
+		},
 	}, nil
 }
 

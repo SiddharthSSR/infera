@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +24,68 @@ func setupTestHandlers(t *testing.T) *InstanceHandlers {
 	mgr.RegisterProvider(mock.New())
 	return NewInstanceHandlers(mgr)
 }
+
+type failingProvider struct {
+	provisionErr error
+	startErr     error
+	stopErr      error
+	terminateErr error
+	status       *providers.ProviderStatus
+	instances    map[string]*providers.Instance
+}
+
+func (p *failingProvider) Name() providers.ProviderType { return providers.ProviderMock }
+func (p *failingProvider) Provision(ctx context.Context, req *providers.ProvisionRequest) (*providers.Instance, error) {
+	if p.provisionErr != nil {
+		return nil, p.provisionErr
+	}
+	if p.instances == nil {
+		p.instances = map[string]*providers.Instance{}
+	}
+	inst := &providers.Instance{
+		ID:         "inst-1",
+		ProviderID: "mock-inst-1",
+		Provider:   providers.ProviderMock,
+		Name:       req.Name,
+		Status:     providers.InstanceStatusStopped,
+		CreatedAt:  time.Now(),
+	}
+	p.instances[inst.ID] = inst
+	return inst, nil
+}
+func (p *failingProvider) Terminate(ctx context.Context, instanceID string) error {
+	return p.terminateErr
+}
+func (p *failingProvider) Start(ctx context.Context, instanceID string) error { return p.startErr }
+func (p *failingProvider) Stop(ctx context.Context, instanceID string) error  { return p.stopErr }
+func (p *failingProvider) GetInstance(ctx context.Context, instanceID string) (*providers.Instance, error) {
+	if p.instances != nil {
+		if inst, ok := p.instances[instanceID]; ok {
+			return inst, nil
+		}
+	}
+	return nil, &providers.ProviderError{Provider: providers.ProviderMock, Code: providers.ProviderErrorNotFound, Message: "instance not found"}
+}
+func (p *failingProvider) ListInstances(ctx context.Context) ([]*providers.Instance, error) {
+	if p.instances == nil {
+		return nil, nil
+	}
+	out := make([]*providers.Instance, 0, len(p.instances))
+	for _, inst := range p.instances {
+		out = append(out, inst)
+	}
+	return out, nil
+}
+func (p *failingProvider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering, error) {
+	return nil, nil
+}
+func (p *failingProvider) GetStatus(ctx context.Context) (*providers.ProviderStatus, error) {
+	if p.status != nil {
+		return p.status, nil
+	}
+	return &providers.ProviderStatus{Provider: providers.ProviderMock, Connected: true}, nil
+}
+func (p *failingProvider) WaitForReady(ctx context.Context, instanceID string) error { return nil }
 
 func TestHandleInstances(t *testing.T) {
 	h := setupTestHandlers(t)
@@ -317,7 +380,115 @@ func TestHandleProviders(t *testing.T) {
 		if mockProvider["connected"] != true {
 			t.Error("mock provider should be connected")
 		}
+		capabilities, ok := mockProvider["capabilities"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected capabilities object, got %#v", mockProvider["capabilities"])
+		}
+		if capabilities["supports_start_stop"] != true {
+			t.Fatalf("expected supports_start_stop=true, got %#v", capabilities["supports_start_stop"])
+		}
 	})
+
+	t.Run("Method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/providers", nil)
+		w := httptest.NewRecorder()
+
+		h.handleProviders(w, req)
+
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405, got %d", w.Code)
+		}
+	})
+}
+
+func TestHandleProvisionMapsProviderErrors(t *testing.T) {
+	mgr, err := providers.NewManager(providers.ManagerConfig{DefaultProvider: providers.ProviderMock})
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	mgr.RegisterProvider(&failingProvider{
+		provisionErr: &providers.ProviderError{
+			Provider:   providers.ProviderMock,
+			Code:       providers.ProviderErrorRateLimited,
+			Message:    "provider rate limited",
+			StatusCode: 429,
+			RetryAfter: 30,
+		},
+	})
+	h := NewInstanceHandlers(mgr)
+
+	body := map[string]interface{}{
+		"name":     "test-worker",
+		"provider": "mock",
+		"gpu_type": "RTX_4090",
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.handleProvision(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"]["type"] != "provider_rate_limited" {
+		t.Fatalf("expected provider_rate_limited, got %#v", resp)
+	}
+	if resp["error"]["provider_error_code"] != providers.ProviderErrorRateLimited {
+		t.Fatalf("expected provider error code rate_limited, got %#v", resp)
+	}
+	if resp["error"]["retryable"] != true {
+		t.Fatalf("expected retryable=true, got %#v", resp)
+	}
+}
+
+func TestHandleStartStopMapsProviderErrors(t *testing.T) {
+	mgr, err := providers.NewManager(providers.ManagerConfig{DefaultProvider: providers.ProviderMock})
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	provider := &failingProvider{
+		startErr: &providers.ProviderError{
+			Provider: providers.ProviderMock,
+			Code:     providers.ProviderErrorNotImplemented,
+			Message:  "start not implemented",
+		},
+	}
+	mgr.RegisterProvider(provider)
+	if _, err := mgr.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:     "failing",
+		Provider: providers.ProviderMock,
+		GPUType:  providers.GPURTX4090,
+	}); err != nil {
+		t.Fatalf("provision instance: %v", err)
+	}
+	h := NewInstanceHandlers(mgr)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/instances/inst-1/start", nil)
+	w := httptest.NewRecorder()
+
+	h.handleInstanceByID(w, req)
+
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"]["type"] != "not_implemented" {
+		t.Fatalf("expected not_implemented, got %#v", resp)
+	}
 }
 
 func TestHandleCosts(t *testing.T) {

@@ -137,7 +137,16 @@ func (p *Provider) GetStatus(ctx context.Context) (*providers.ProviderStatus, er
 	return &providers.ProviderStatus{
 		Provider:     providers.ProviderVastAI,
 		Connected:    false,
+		ErrorCode:    providers.ProviderErrorNotImplemented,
 		ErrorMessage: "Vast.ai not yet implemented",
+		Capabilities: providers.ProviderCapabilities{
+			SupportsSpot:            false,
+			SupportsCustomImages:    false,
+			SupportsRegionSelection: false,
+			SupportsPublicIP:        false,
+			SupportsSSHKeys:         false,
+			SupportsStartStop:       false,
+		},
 	}, nil
 }
 
