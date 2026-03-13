@@ -6,7 +6,7 @@ Infera lets you provision GPU instances from cloud providers (RunPod, Vast.ai), 
 
 ## Features
 
-- 🚀 **One-click GPU provisioning** from RunPod (Vast.ai coming soon)
+- 🚀 **One-click GPU provisioning** from RunPod and Vast.ai
 - 🤖 **Automatic model loading** — Select a model, it loads on startup
 - 🔌 **OpenAI-compatible API** — Drop-in replacement for your apps
 - 📊 **Real-time dashboard** — Monitor instances, costs, and workers
@@ -451,7 +451,7 @@ For gated models (Llama, Gemma), you need to:
 |----------|--------|-----------|
 | **Mock** | ✅ Ready | Testing without real GPUs |
 | **RunPod** | ✅ Ready | RTX 4090, RTX 4080, A100, H100, L40S |
-| **Vast.ai** | 🚧 Stub | Interface ready, implementation pending |
+| **Vast.ai** | ✅ Ready | Workspace-scoped config supported |
 | **Lambda** | ⏳ Planned | — |
 
 ---
