@@ -10,6 +10,8 @@ import { Logs } from './pages/Logs';
 import { Models } from './pages/Models';
 import { ApiKeys } from './pages/ApiKeys';
 import { Login } from './pages/Login';
+import { PublicApiDocs } from './pages/PublicApiDocs';
+import { GettingStarted } from './pages/GettingStarted';
 import { getSession, destroySession } from './lib/api';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import type { ChatMessage } from './types';
@@ -172,7 +174,13 @@ function AppContent() {
   }
 
   if (!authenticated) {
-    return <Login onAuthenticated={() => setAuthenticated(true)} />;
+    return (
+      <Routes>
+        <Route path="/docs" element={<PublicApiDocs />} />
+        <Route path="/getting-started" element={<GettingStarted />} />
+        <Route path="*" element={<Login onAuthenticated={() => setAuthenticated(true)} />} />
+      </Routes>
+    );
   }
 
   const pageTitle = pageTitles[location.pathname] || 'INFERA';
@@ -205,6 +213,8 @@ function AppContent() {
           <Route path="/instances" element={<Instances />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/api-keys" element={<ApiKeys />} />
+          <Route path="/docs" element={<PublicApiDocs />} />
+          <Route path="/getting-started" element={<GettingStarted />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
