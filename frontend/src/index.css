@@ -265,6 +265,20 @@ h1, h2, h3, h4 {
   opacity: 0.85;
 }
 
+.code-block {
+  margin-top: 0.75rem;
+  padding: 1rem 1.25rem;
+  background: #111111;
+  color: #f6f2ea;
+  border: 1px solid #2b2b2b;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.7;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Form Elements */
 .control-input {
   width: 100%;
@@ -530,6 +544,11 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 @media (max-width: 600px) {
+  .code-block {
+    font-size: 0.72rem;
+    padding: 0.9rem 1rem;
+  }
+
   .top-nav {
     padding: 1rem;
     flex-wrap: wrap;

@@ -3,6 +3,7 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { Login } from './Login'
 
 // Mock the api module
@@ -14,6 +15,14 @@ import { createSession } from '../lib/api'
 
 const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>
 const mockCreateSession = createSession as ReturnType<typeof vi.fn>
+
+function renderLogin(onAuthenticated = vi.fn()) {
+  return render(
+    <MemoryRouter>
+      <Login onAuthenticated={onAuthenticated} />
+    </MemoryRouter>,
+  )
+}
 
 describe('Login', () => {
   const mockOnAuthenticated = vi.fn()
@@ -33,7 +42,7 @@ describe('Login', () => {
   })
 
   it('renders branding and form elements', async () => {
-    render(<Login onAuthenticated={mockOnAuthenticated} />)
+    renderLogin(mockOnAuthenticated)
 
     // Wait for health check to settle
     await waitFor(() => {
@@ -52,7 +61,7 @@ describe('Login', () => {
       json: async () => ({ status: 'healthy', workers: 2 }),
     })
 
-    render(<Login onAuthenticated={mockOnAuthenticated} />)
+    renderLogin(mockOnAuthenticated)
 
     await waitFor(() => {
       expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
@@ -63,7 +72,7 @@ describe('Login', () => {
   it('shows gateway unreachable on health check failure', async () => {
     mockFetch.mockRejectedValue(new Error('network error'))
 
-    render(<Login onAuthenticated={mockOnAuthenticated} />)
+    renderLogin(mockOnAuthenticated)
 
     await waitFor(() => {
       expect(screen.getByText('Gateway unreachable')).toBeInTheDocument()
@@ -71,7 +80,7 @@ describe('Login', () => {
   })
 
   it('shows error on empty submit', async () => {
-    render(<Login onAuthenticated={mockOnAuthenticated} />)
+    renderLogin(mockOnAuthenticated)
 
     // Wait for health check to settle
     await waitFor(() => {
@@ -89,7 +98,7 @@ describe('Login', () => {
   it('shows error for invalid key', async () => {
     mockCreateSession.mockRejectedValueOnce(new Error('Invalid API key'))
 
-    render(<Login onAuthenticated={mockOnAuthenticated} />)
+    renderLogin(mockOnAuthenticated)
 
     await waitFor(() => {
       expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
@@ -110,7 +119,7 @@ describe('Login', () => {
   it('shows admin access required when createSession returns 403', async () => {
     mockCreateSession.mockRejectedValueOnce(new Error('Admin access required'))
 
-    render(<Login onAuthenticated={mockOnAuthenticated} />)
+    renderLogin(mockOnAuthenticated)
 
     await waitFor(() => {
       expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
@@ -135,7 +144,7 @@ describe('Login', () => {
       key: { id: 'k1', key_prefix: 'inf_abcd', name: 'admin', role: 'admin' },
     })
 
-    render(<Login onAuthenticated={mockOnAuthenticated} />)
+    renderLogin(mockOnAuthenticated)
 
     const input = screen.getByPlaceholderText('inf_...')
     fireEvent.change(input, { target: { value: 'inf_validkey123' } })
@@ -159,7 +168,7 @@ describe('Login', () => {
   it('shows connection error when createSession throws unknown error', async () => {
     mockCreateSession.mockRejectedValueOnce(new Error('Network error'))
 
-    render(<Login onAuthenticated={mockOnAuthenticated} />)
+    renderLogin(mockOnAuthenticated)
 
     await waitFor(() => {
       expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
@@ -178,7 +187,7 @@ describe('Login', () => {
   })
 
   it('clears error when typing', async () => {
-    render(<Login onAuthenticated={mockOnAuthenticated} />)
+    renderLogin(mockOnAuthenticated)
 
     await waitFor(() => {
       expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
