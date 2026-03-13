@@ -61,6 +61,23 @@ export interface WorkspaceInvitationRecord {
   status: string;
 }
 
+export interface AuditUsageRow {
+  bucket_start: string;
+  workspace_id: string;
+  key_id: string;
+  requests: number;
+  tokens: number;
+  successes: number;
+  errors: number;
+}
+
+export interface AuditUsageResponse {
+  bucket: 'day' | 'hour';
+  start: string;
+  end: string;
+  rows: AuditUsageRow[];
+}
+
 export interface StreamChatCompletionOptions {
   onUsage?: (usage: ChatCompletionResponse['usage']) => void;
 }
@@ -481,4 +498,26 @@ export async function revokeWorkspaceInvite(workspaceId: string, inviteId: strin
     method: 'DELETE',
   });
   if (!response.ok) throw new Error(await readResponseError(response, 'Failed to revoke workspace invite'));
+}
+
+export async function fetchAuditUsage(params: {
+  start?: string;
+  end?: string;
+  bucket?: 'day' | 'hour';
+  workspace_id?: string;
+  key_id?: string;
+  model?: string;
+} = {}): Promise<AuditUsageResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.start) searchParams.set('start', params.start);
+  if (params.end) searchParams.set('end', params.end);
+  if (params.bucket) searchParams.set('bucket', params.bucket);
+  if (params.workspace_id) searchParams.set('workspace_id', params.workspace_id);
+  if (params.key_id) searchParams.set('key_id', params.key_id);
+  if (params.model) searchParams.set('model', params.model);
+
+  const query = searchParams.toString();
+  const response = await authFetch(`${API_BASE}/api/audit/usage${query ? `?${query}` : ''}`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch usage'));
+  return response.json();
 }
