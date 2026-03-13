@@ -13,6 +13,7 @@ import { WorkspaceAdmin } from './pages/WorkspaceAdmin';
 import { Login } from './pages/Login';
 import { PublicApiDocs } from './pages/PublicApiDocs';
 import { GettingStarted } from './pages/GettingStarted';
+import { AcceptInvitation } from './pages/AcceptInvitation';
 import { getSession, destroySession, type SessionInfo } from './lib/api';
 import { AuthContext, useAuthSession } from './lib/auth-context';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -200,6 +201,7 @@ function AppContent() {
       <Routes>
         <Route path="/docs" element={<PublicApiDocs />} />
         <Route path="/getting-started" element={<GettingStarted />} />
+        <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession) => setSession(nextSession)} />} />
         <Route path="*" element={<Login onAuthenticated={(nextSession) => setSession(nextSession)} />} />
       </Routes>
     );
@@ -239,6 +241,7 @@ function AppContent() {
           <Route path="/workspace" element={<WorkspaceAdmin />} />
           <Route path="/docs" element={<PublicApiDocs />} />
           <Route path="/getting-started" element={<GettingStarted />} />
+          <Route path="/accept-invite" element={<Navigate to="/workspace" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

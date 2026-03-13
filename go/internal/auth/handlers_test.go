@@ -410,6 +410,42 @@ func TestHandleWorkspaceInvitesAndMembers(t *testing.T) {
 	_ = adminRec
 }
 
+func TestHandlePreviewInvitation(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Preview Workspace")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	token, _, err := s.CreateWorkspaceInvitation(workspace.ID, "preview@example.com", "Preview User", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/auth/invitations/preview?token="+token, nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Invitation map[string]any `json:"invitation"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal preview: %v", err)
+	}
+	if resp.Invitation["workspace_name"] != workspace.Name {
+		t.Fatalf("expected workspace_name %q, got %v", workspace.Name, resp.Invitation["workspace_name"])
+	}
+	if resp.Invitation["role"] != RoleDeveloper {
+		t.Fatalf("expected role %q, got %v", RoleDeveloper, resp.Invitation["role"])
+	}
+}
+
 func TestHandleWorkspaceMemberUpdateAndRemoval(t *testing.T) {
 	_, s, mux := newTestHandlerWithRoutes(t)
 	workspace, err := s.CreateWorkspace("Membership Admin")

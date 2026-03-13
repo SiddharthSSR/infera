@@ -203,6 +203,17 @@ type WorkspaceInvitationRecord struct {
 	Status         string    `json:"status"`
 }
 
+type WorkspaceInvitationPreview struct {
+	WorkspaceID   string    `json:"workspace_id"`
+	WorkspaceSlug string    `json:"workspace_slug"`
+	WorkspaceName string    `json:"workspace_name"`
+	Email         string    `json:"email"`
+	DisplayName   string    `json:"display_name"`
+	Role          string    `json:"role"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	Status        string    `json:"status"`
+}
+
 type WorkspaceProviderConfigRecord struct {
 	WorkspaceID string    `json:"workspace_id"`
 	Provider    string    `json:"provider"`
@@ -1222,6 +1233,47 @@ func (s *Store) RevokeWorkspaceInvitation(workspaceID, invitationID string) erro
 		return fmt.Errorf("invitation not found")
 	}
 	return nil
+}
+
+func (s *Store) GetWorkspaceInvitationPreview(rawToken string) (*WorkspaceInvitationPreview, error) {
+	tokenHash := hashKey(strings.TrimSpace(rawToken))
+	if tokenHash == hashKey("") {
+		return nil, fmt.Errorf("invitation token is required")
+	}
+
+	var preview WorkspaceInvitationPreview
+	err := s.db.QueryRow(`
+		SELECT wi.workspace_id, w.slug, w.name, wi.email, wi.display_name, wi.role, wi.expires_at, wi.status
+		FROM workspace_invitations wi
+		JOIN workspaces w ON w.id = wi.workspace_id
+		WHERE wi.invite_token_hash = ?`,
+		tokenHash,
+	).Scan(
+		&preview.WorkspaceID,
+		&preview.WorkspaceSlug,
+		&preview.WorkspaceName,
+		&preview.Email,
+		&preview.DisplayName,
+		&preview.Role,
+		&preview.ExpiresAt,
+		&preview.Status,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("invalid invitation")
+		}
+		return nil, fmt.Errorf("failed to load invitation: %w", err)
+	}
+	if preview.DisplayName == "" {
+		preview.DisplayName = preview.Email
+	}
+	if preview.Status != "pending" {
+		return nil, fmt.Errorf("invitation is no longer pending")
+	}
+	if time.Now().After(preview.ExpiresAt) {
+		return nil, fmt.Errorf("invitation has expired")
+	}
+	return &preview, nil
 }
 
 func (s *Store) AcceptWorkspaceInvitation(rawToken, displayName string) (*WorkspaceMembershipRecord, string, *KeyRecord, error) {

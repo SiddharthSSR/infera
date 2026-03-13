@@ -16,6 +16,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, corsWrap func(http.HandlerF
 	mux.HandleFunc("/api/auth/keys/", corsWrap(h.RequireAuth(h.handleKeyByID)))
 	mux.HandleFunc("/api/auth/workspaces", corsWrap(h.RequireAuth(h.handleWorkspaces)))
 	mux.HandleFunc("/api/auth/workspaces/", corsWrap(h.RequireAuth(h.handleWorkspaceByID)))
+	mux.HandleFunc("/api/auth/invitations/preview", corsWrap(h.handlePreviewInvitation))
 	mux.HandleFunc("/api/auth/invitations/accept", corsWrap(h.handleAcceptInvitation))
 	mux.HandleFunc("/api/auth/session", corsWrap(h.handleSession))
 }
@@ -632,6 +633,35 @@ func (h *Handler) handleCreateWorkspaceInvite(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"invitation_token": token,
 		"invitation":       invitation,
+	})
+}
+
+func (h *Handler) handlePreviewInvitation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
+		})
+		return
+	}
+
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": "token is required"},
+		})
+		return
+	}
+
+	preview, err := h.store.GetWorkspaceInvitationPreview(token)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": err.Error()},
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"invitation": preview,
 	})
 }
 
