@@ -61,6 +61,15 @@ export interface WorkspaceInvitationRecord {
   status: string;
 }
 
+export interface WorkspaceProviderConfigRecord {
+  workspace_id: string;
+  provider: string;
+  configured: boolean;
+  endpoint?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AuditUsageRow {
   bucket_start: string;
   workspace_id: string;
@@ -478,6 +487,35 @@ export async function fetchWorkspaceInvites(workspaceId: string): Promise<Worksp
   if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace invites'));
   const data = await response.json();
   return data.invitations;
+}
+
+export async function fetchWorkspaceProviderConfigs(workspaceId: string): Promise<WorkspaceProviderConfigRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/providers`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace provider configs'));
+  const data = await response.json();
+  return data.providers;
+}
+
+export async function upsertWorkspaceProviderConfig(
+  workspaceId: string,
+  provider: string,
+  payload: { api_key: string; api_secret?: string; endpoint?: string },
+): Promise<WorkspaceProviderConfigRecord> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/providers/${provider}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to save workspace provider config'));
+  const data = await response.json();
+  return data.provider;
+}
+
+export async function deleteWorkspaceProviderConfig(workspaceId: string, provider: string): Promise<void> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/providers/${provider}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to delete workspace provider config'));
 }
 
 export async function createWorkspaceInvite(
