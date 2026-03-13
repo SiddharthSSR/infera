@@ -48,6 +48,10 @@ func TestHandleCreateKey(t *testing.T) {
 	if resp["key"] == nil {
 		t.Error("expected key in response")
 	}
+	record := resp["record"].(map[string]interface{})
+	if record["workspace_id"] == "" {
+		t.Fatal("expected workspace_id in key record")
+	}
 }
 
 func TestHandleCreateKey_MissingName(t *testing.T) {
@@ -80,6 +84,55 @@ func TestHandleListKeys(t *testing.T) {
 	}
 }
 
+func TestHandleCreateWorkspace(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, _, _ := s.CreateKey("admin", "admin")
+
+	body := `{"name":"Acme Team"}`
+	req := httptest.NewRequest("POST", "/api/auth/workspaces", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Workspace map[string]any `json:"workspace"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if resp.Workspace["slug"] != "acme-team" {
+		t.Fatalf("expected slug acme-team, got %v", resp.Workspace["slug"])
+	}
+}
+
+func TestHandleCreateWorkspace_WorkspaceAdminForbidden(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	workspace, err := s.CreateWorkspace("Acme Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	workspaceAdminKey, _, err := s.CreateKeyInWorkspace(workspace.ID, "workspace-admin", "admin")
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace: %v", err)
+	}
+
+	body := `{"name":"Another Team"}`
+	req := httptest.NewRequest("POST", "/api/auth/workspaces", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+workspaceAdminKey)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestHandleRevokeKey(t *testing.T) {
 	_, s, mux := newTestHandlerWithRoutes(t)
 	adminKey, _, _ := s.CreateKey("admin", "admin")
@@ -92,6 +145,48 @@ func TestHandleRevokeKey(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleListKeys_WorkspaceScoped(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	workspace, err := s.CreateWorkspace("Acme Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	adminKey, _, err := s.CreateKeyInWorkspace(workspace.ID, "workspace-admin", "admin")
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace admin: %v", err)
+	}
+	if _, _, err := s.CreateKeyInWorkspace(workspace.ID, "workspace-user", "user"); err != nil {
+		t.Fatalf("CreateKeyInWorkspace user: %v", err)
+	}
+	if _, _, err := s.CreateKey("default-user", "user"); err != nil {
+		t.Fatalf("CreateKey default: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/auth/keys", nil)
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Keys []map[string]any `json:"keys"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if len(resp.Keys) != 2 {
+		t.Fatalf("expected 2 keys in scoped workspace, got %d", len(resp.Keys))
+	}
+	for _, key := range resp.Keys {
+		if key["workspace_id"] != workspace.ID {
+			t.Fatalf("expected workspace %q, got %v", workspace.ID, key["workspace_id"])
+		}
 	}
 }
 
@@ -173,6 +268,9 @@ func TestHandleGetSession_Valid(t *testing.T) {
 	json.Unmarshal(rr.Body.Bytes(), &resp)
 	if resp["session"] == nil || resp["key"] == nil {
 		t.Error("expected session and key in response")
+	}
+	if resp["workspace"] == nil {
+		t.Error("expected workspace in session response")
 	}
 }
 

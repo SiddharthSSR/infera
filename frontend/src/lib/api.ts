@@ -9,7 +9,16 @@ const API_BASE = '';
 // Session info returned by session endpoints
 export interface SessionInfo {
   session: { id: string; expires_at: string };
-  key: { id: string; key_prefix: string; name: string; role: string };
+  key: {
+    id: string;
+    key_prefix: string;
+    name: string;
+    role: string;
+    workspace_id?: string;
+    workspace_slug?: string;
+    workspace_name?: string;
+  };
+  workspace?: { id: string; slug: string; name: string };
 }
 
 export interface StreamChatCompletionOptions {
@@ -323,6 +332,9 @@ export async function deleteVaultModel(id: string): Promise<void> {
 
 export interface ApiKeyRecord {
   id: string;
+  workspace_id?: string;
+  workspace_slug?: string;
+  workspace_name?: string;
   key_prefix: string;
   name: string;
   role: string;

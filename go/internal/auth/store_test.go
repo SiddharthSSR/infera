@@ -33,6 +33,9 @@ func TestCreateKey(t *testing.T) {
 	if rec.Name != "test-key" || rec.Role != "user" || rec.Status != "active" {
 		t.Errorf("unexpected record: %+v", rec)
 	}
+	if rec.WorkspaceID != DefaultWorkspaceID {
+		t.Fatalf("expected default workspace, got %q", rec.WorkspaceID)
+	}
 }
 
 func TestCreateKey_MissingName(t *testing.T) {
@@ -98,6 +101,11 @@ func TestListKeys(t *testing.T) {
 	if len(keys) != 2 {
 		t.Fatalf("expected 2 keys, got %d", len(keys))
 	}
+	for _, key := range keys {
+		if key.WorkspaceID == "" {
+			t.Fatalf("expected workspace data on listed key: %+v", key)
+		}
+	}
 }
 
 func TestRevokeKey(t *testing.T) {
@@ -154,6 +162,38 @@ func TestCreateKeyFromRaw(t *testing.T) {
 	if validated.ID != rec.ID {
 		t.Errorf("ID mismatch")
 	}
+	if validated.WorkspaceID != DefaultWorkspaceID {
+		t.Fatalf("expected default workspace, got %q", validated.WorkspaceID)
+	}
+}
+
+func TestCreateWorkspaceAndScopedKey(t *testing.T) {
+	s := newTestStore(t)
+
+	workspace, err := s.CreateWorkspace("Acme Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	_, rec, err := s.CreateKeyInWorkspace(workspace.ID, "acme-admin", "admin")
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace: %v", err)
+	}
+
+	if rec.WorkspaceID != workspace.ID {
+		t.Fatalf("expected workspace %q, got %q", workspace.ID, rec.WorkspaceID)
+	}
+	if rec.WorkspaceSlug != "acme-team" {
+		t.Fatalf("expected slug acme-team, got %q", rec.WorkspaceSlug)
+	}
+
+	keys, err := s.ListKeysByWorkspace(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListKeysByWorkspace: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key in workspace, got %d", len(keys))
+	}
 }
 
 func TestCreateKeyFromRaw_InvalidFormat(t *testing.T) {
@@ -199,6 +239,9 @@ func TestValidateSession(t *testing.T) {
 	}
 	if key.ID != rec.ID {
 		t.Errorf("key ID mismatch")
+	}
+	if key.WorkspaceID != rec.WorkspaceID {
+		t.Fatalf("expected session key workspace %q, got %q", rec.WorkspaceID, key.WorkspaceID)
 	}
 }
 

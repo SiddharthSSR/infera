@@ -447,8 +447,10 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	requestStart := time.Now()
 	requestID := r.Header.Get(HeaderRequestID)
 	keyID := ""
+	workspaceID := ""
 	if record := auth.KeyFromContext(r.Context()); record != nil {
 		keyID = record.KeyPrefix
+		workspaceID = record.WorkspaceID
 	}
 	promptHash := hashPrompt(req.Messages)
 	auditStatus := "unknown_error"
@@ -479,6 +481,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				Timestamp:    requestStart.UTC(),
 				RequestID:    requestID,
 				KeyID:        keyID,
+				WorkspaceID:  workspaceID,
 				Model:        req.Model,
 				WorkerID:     auditWorkerID,
 				Stream:       req.Stream,
@@ -1248,13 +1251,25 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "bucket must be 'day' or 'hour'")
 		return
 	}
+	currentKey := auth.KeyFromContext(r.Context())
+	workspaceID := strings.TrimSpace(r.URL.Query().Get("workspace_id"))
+	if workspaceID == "" {
+		if currentKey != nil {
+			workspaceID = currentKey.WorkspaceID
+		}
+	}
+	if currentKey != nil && currentKey.WorkspaceID != auth.DefaultWorkspaceID && workspaceID != "" && workspaceID != currentKey.WorkspaceID {
+		g.writeError(w, http.StatusForbidden, "forbidden", "Workspace-scoped admins can only query audit usage in their own workspace")
+		return
+	}
 
 	rows, err := g.auditStore.UsageByKey(audit.UsageQuery{
-		Start:  start,
-		End:    end,
-		Bucket: bucket,
-		KeyID:  strings.TrimSpace(r.URL.Query().Get("key_id")),
-		Model:  strings.TrimSpace(r.URL.Query().Get("model")),
+		Start:       start,
+		End:         end,
+		Bucket:      bucket,
+		KeyID:       strings.TrimSpace(r.URL.Query().Get("key_id")),
+		WorkspaceID: workspaceID,
+		Model:       strings.TrimSpace(r.URL.Query().Get("model")),
 	})
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "audit_query_failed", err.Error())
@@ -1263,6 +1278,7 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 
 	type usageRow struct {
 		BucketStart string `json:"bucket_start"`
+		WorkspaceID string `json:"workspace_id"`
 		KeyID       string `json:"key_id"`
 		Requests    int64  `json:"requests"`
 		Tokens      int64  `json:"tokens"`
@@ -1274,6 +1290,7 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		out = append(out, usageRow{
 			BucketStart: time.UnixMilli(row.BucketStartMS).UTC().Format(time.RFC3339),
+			WorkspaceID: row.WorkspaceID,
 			KeyID:       row.KeyID,
 			Requests:    row.RequestCount,
 			Tokens:      row.TokenCount,

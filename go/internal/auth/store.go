@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,17 +52,51 @@ var authMigrations = []migrate.Migration{
 		CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 		CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);`,
 	},
+	{
+		Version:     3,
+		Description: "create workspaces and scope api keys",
+		SQL: fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS workspaces (
+			id         TEXT PRIMARY KEY,
+			slug       TEXT NOT NULL UNIQUE,
+			name       TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			status     TEXT NOT NULL DEFAULT 'active'
+		);
+		INSERT OR IGNORE INTO workspaces (id, slug, name, status)
+		VALUES ('%s', '%s', '%s', 'active');
+		ALTER TABLE api_keys ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '%s';
+		UPDATE api_keys SET workspace_id = '%s' WHERE workspace_id IS NULL OR workspace_id = '';
+		CREATE INDEX IF NOT EXISTS idx_api_keys_workspace ON api_keys(workspace_id);`,
+			DefaultWorkspaceID,
+			DefaultWorkspaceSlug,
+			DefaultWorkspaceName,
+			DefaultWorkspaceID,
+			DefaultWorkspaceID,
+		),
+	},
 }
 
 // KeyRecord represents a stored API key.
 type KeyRecord struct {
-	ID        string     `json:"id"`
-	KeyPrefix string     `json:"key_prefix"`
-	Name      string     `json:"name"`
-	Role      string     `json:"role"`
-	CreatedAt time.Time  `json:"created_at"`
-	LastUsed  *time.Time `json:"last_used,omitempty"`
-	Status    string     `json:"status"`
+	ID            string     `json:"id"`
+	WorkspaceID   string     `json:"workspace_id"`
+	WorkspaceSlug string     `json:"workspace_slug"`
+	WorkspaceName string     `json:"workspace_name"`
+	KeyPrefix     string     `json:"key_prefix"`
+	Name          string     `json:"name"`
+	Role          string     `json:"role"`
+	CreatedAt     time.Time  `json:"created_at"`
+	LastUsed      *time.Time `json:"last_used,omitempty"`
+	Status        string     `json:"status"`
+}
+
+type WorkspaceRecord struct {
+	ID        string    `json:"id"`
+	Slug      string    `json:"slug"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	Status    string    `json:"status"`
 }
 
 // Store is a SQLite-backed API key store.
@@ -75,6 +110,12 @@ type Store struct {
 }
 
 var bootstrapKeyPattern = regexp.MustCompile(`^inf_[0-9a-fA-F]{48}$`)
+
+const (
+	DefaultWorkspaceID   = "ws_default"
+	DefaultWorkspaceSlug = "default"
+	DefaultWorkspaceName = "Default Workspace"
+)
 
 // NewStore opens a SQLite database and runs migrations.
 func NewStore(dbPath string) (*Store, error) {
@@ -123,14 +164,28 @@ func (s *Store) migrate() error {
 // CreateKey generates a new API key and stores its hash.
 // Returns the full key (only shown once) and the record.
 func (s *Store) CreateKey(name, role string) (string, *KeyRecord, error) {
+	return s.CreateKeyInWorkspace(DefaultWorkspaceID, name, role)
+}
+
+// CreateKeyInWorkspace generates a new API key scoped to a workspace and stores its hash.
+// Returns the full key (only shown once) and the record.
+func (s *Store) CreateKeyInWorkspace(workspaceID, name, role string) (string, *KeyRecord, error) {
 	if name == "" {
 		return "", nil, fmt.Errorf("key name is required")
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = DefaultWorkspaceID
 	}
 	if role == "" {
 		role = "user"
 	}
 	if role != "admin" && role != "user" {
 		return "", nil, fmt.Errorf("role must be 'admin' or 'user'")
+	}
+	workspace, err := s.getWorkspace(workspaceID)
+	if err != nil {
+		return "", nil, err
 	}
 
 	// Generate random key: inf_ + 48 hex chars
@@ -147,22 +202,25 @@ func (s *Store) CreateKey(name, role string) (string, *KeyRecord, error) {
 	id := uuid.New().String()
 	now := time.Now()
 
-	_, err := s.db.Exec(`
-		INSERT INTO api_keys (id, key_hash, key_prefix, name, role, created_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, 'active')`,
-		id, hash, prefix, name, role, now,
+	_, err = s.db.Exec(`
+		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, created_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
+		id, workspace.ID, hash, prefix, name, role, now,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to store key: %w", err)
 	}
 
 	record := &KeyRecord{
-		ID:        id,
-		KeyPrefix: prefix,
-		Name:      name,
-		Role:      role,
-		CreatedAt: now,
-		Status:    "active",
+		ID:            id,
+		WorkspaceID:   workspace.ID,
+		WorkspaceSlug: workspace.Slug,
+		WorkspaceName: workspace.Name,
+		KeyPrefix:     prefix,
+		Name:          name,
+		Role:          role,
+		CreatedAt:     now,
+		Status:        "active",
 	}
 
 	return fullKey, record, nil
@@ -174,14 +232,17 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 	hash := hashKey(rawKey)
 
 	row := s.db.QueryRow(`
-		SELECT id, key_prefix, name, role, created_at, last_used, status
-		FROM api_keys WHERE key_hash = ? AND status = 'active'`,
+		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.created_at, k.last_used, k.status
+		FROM api_keys k
+		JOIN workspaces w ON w.id = k.workspace_id
+		WHERE k.key_hash = ? AND k.status = 'active'`,
 		hash,
 	)
 
 	record := &KeyRecord{}
 	err := row.Scan(
-		&record.ID, &record.KeyPrefix, &record.Name, &record.Role,
+		&record.ID, &record.WorkspaceID, &record.WorkspaceSlug, &record.WorkspaceName,
+		&record.KeyPrefix, &record.Name, &record.Role,
 		&record.CreatedAt, &record.LastUsed, &record.Status,
 	)
 	if err != nil {
@@ -205,9 +266,26 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 
 // ListKeys returns all keys (prefix only, never the full key).
 func (s *Store) ListKeys() ([]*KeyRecord, error) {
-	rows, err := s.db.Query(`
-		SELECT id, key_prefix, name, role, created_at, last_used, status
-		FROM api_keys ORDER BY created_at DESC`)
+	return s.listKeys("")
+}
+
+func (s *Store) ListKeysByWorkspace(workspaceID string) ([]*KeyRecord, error) {
+	return s.listKeys(strings.TrimSpace(workspaceID))
+}
+
+func (s *Store) listKeys(workspaceID string) ([]*KeyRecord, error) {
+	query := `
+		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.created_at, k.last_used, k.status
+		FROM api_keys k
+		JOIN workspaces w ON w.id = k.workspace_id`
+	args := []any{}
+	if workspaceID != "" {
+		query += " WHERE k.workspace_id = ?"
+		args = append(args, workspaceID)
+	}
+	query += " ORDER BY k.created_at DESC"
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +294,18 @@ func (s *Store) ListKeys() ([]*KeyRecord, error) {
 	var keys []*KeyRecord
 	for rows.Next() {
 		k := &KeyRecord{}
-		if err := rows.Scan(&k.ID, &k.KeyPrefix, &k.Name, &k.Role, &k.CreatedAt, &k.LastUsed, &k.Status); err != nil {
+		if err := rows.Scan(
+			&k.ID,
+			&k.WorkspaceID,
+			&k.WorkspaceSlug,
+			&k.WorkspaceName,
+			&k.KeyPrefix,
+			&k.Name,
+			&k.Role,
+			&k.CreatedAt,
+			&k.LastUsed,
+			&k.Status,
+		); err != nil {
 			return nil, err
 		}
 		keys = append(keys, k)
@@ -229,7 +318,21 @@ func (s *Store) ListKeys() ([]*KeyRecord, error) {
 
 // RevokeKey soft-deletes a key by setting status to 'revoked'.
 func (s *Store) RevokeKey(id string) error {
-	result, err := s.db.Exec("UPDATE api_keys SET status = 'revoked' WHERE id = ? AND status = 'active'", id)
+	return s.revokeKey(id, "")
+}
+
+func (s *Store) RevokeKeyInWorkspace(id, workspaceID string) error {
+	return s.revokeKey(id, strings.TrimSpace(workspaceID))
+}
+
+func (s *Store) revokeKey(id, workspaceID string) error {
+	query := "UPDATE api_keys SET status = 'revoked' WHERE id = ? AND status = 'active'"
+	args := []any{id}
+	if workspaceID != "" {
+		query += " AND workspace_id = ?"
+		args = append(args, workspaceID)
+	}
+	result, err := s.db.Exec(query, args...)
 	if err != nil {
 		return err
 	}
@@ -268,17 +371,30 @@ func (s *Store) Count() (int, error) {
 
 // CreateKeyFromRaw stores a pre-generated key (used for bootstrap admin key).
 func (s *Store) CreateKeyFromRaw(fullKey, name, role string) (*KeyRecord, error) {
+	return s.CreateKeyFromRawInWorkspace(DefaultWorkspaceID, fullKey, name, role)
+}
+
+// CreateKeyFromRawInWorkspace stores a pre-generated key for the given workspace.
+func (s *Store) CreateKeyFromRawInWorkspace(workspaceID, fullKey, name, role string) (*KeyRecord, error) {
 	if !bootstrapKeyPattern.MatchString(fullKey) {
 		return nil, fmt.Errorf("key must match inf_ followed by exactly 48 hexadecimal characters")
 	}
 	if name == "" {
 		return nil, fmt.Errorf("key name is required")
 	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = DefaultWorkspaceID
+	}
 	if role == "" {
 		role = "user"
 	}
 	if role != "admin" && role != "user" {
 		return nil, fmt.Errorf("role must be 'admin' or 'user'")
+	}
+	workspace, err := s.getWorkspace(workspaceID)
+	if err != nil {
+		return nil, err
 	}
 
 	prefix := fullKey[:12] + "..."
@@ -287,22 +403,25 @@ func (s *Store) CreateKeyFromRaw(fullKey, name, role string) (*KeyRecord, error)
 	id := uuid.New().String()
 	now := time.Now()
 
-	_, err := s.db.Exec(`
-		INSERT INTO api_keys (id, key_hash, key_prefix, name, role, created_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, 'active')`,
-		id, hash, prefix, name, role, now,
+	_, err = s.db.Exec(`
+		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, created_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
+		id, workspace.ID, hash, prefix, name, role, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store key: %w", err)
 	}
 
 	return &KeyRecord{
-		ID:        id,
-		KeyPrefix: prefix,
-		Name:      name,
-		Role:      role,
-		CreatedAt: now,
-		Status:    "active",
+		ID:            id,
+		WorkspaceID:   workspace.ID,
+		WorkspaceSlug: workspace.Slug,
+		WorkspaceName: workspace.Name,
+		KeyPrefix:     prefix,
+		Name:          name,
+		Role:          role,
+		CreatedAt:     now,
+		Status:        "active",
 	}, nil
 }
 
@@ -356,9 +475,10 @@ func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, er
 
 	row := s.db.QueryRow(`
 		SELECT s.id, s.key_id, s.created_at, s.expires_at, s.last_seen,
-		       k.id, k.key_prefix, k.name, k.role, k.created_at, k.last_used, k.status
+		       k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.created_at, k.last_used, k.status
 		FROM sessions s
 		JOIN api_keys k ON s.key_id = k.id
+		JOIN workspaces w ON w.id = k.workspace_id
 		WHERE s.token_hash = ? AND s.expires_at > ? AND k.status = 'active'`,
 		tokenHash, time.Now(),
 	)
@@ -367,7 +487,7 @@ func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, er
 	key := &KeyRecord{}
 	err := row.Scan(
 		&session.ID, &session.KeyID, &session.CreatedAt, &session.ExpiresAt, &session.LastSeen,
-		&key.ID, &key.KeyPrefix, &key.Name, &key.Role, &key.CreatedAt, &key.LastUsed, &key.Status,
+		&key.ID, &key.WorkspaceID, &key.WorkspaceSlug, &key.WorkspaceName, &key.KeyPrefix, &key.Name, &key.Role, &key.CreatedAt, &key.LastUsed, &key.Status,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -401,6 +521,97 @@ func (s *Store) DeleteSessionByToken(rawToken string) error {
 func hashKey(key string) string {
 	h := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(h[:])
+}
+
+func (s *Store) CreateWorkspace(name string) (*WorkspaceRecord, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("workspace name is required")
+	}
+	slug := normalizeWorkspaceSlug(name)
+	id := "ws_" + uuid.New().String()
+	now := time.Now()
+
+	_, err := s.db.Exec(`
+		INSERT INTO workspaces (id, slug, name, created_at, status)
+		VALUES (?, ?, ?, ?, 'active')`,
+		id, slug, name, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create workspace: %w", err)
+	}
+
+	return &WorkspaceRecord{
+		ID:        id,
+		Slug:      slug,
+		Name:      name,
+		CreatedAt: now,
+		Status:    "active",
+	}, nil
+}
+
+func (s *Store) ListWorkspaces() ([]*WorkspaceRecord, error) {
+	rows, err := s.db.Query(`
+		SELECT id, slug, name, created_at, status
+		FROM workspaces
+		ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	workspaces := make([]*WorkspaceRecord, 0)
+	for rows.Next() {
+		w := &WorkspaceRecord{}
+		if err := rows.Scan(&w.ID, &w.Slug, &w.Name, &w.CreatedAt, &w.Status); err != nil {
+			return nil, err
+		}
+		workspaces = append(workspaces, w)
+	}
+	if workspaces == nil {
+		workspaces = []*WorkspaceRecord{}
+	}
+	return workspaces, rows.Err()
+}
+
+func (s *Store) getWorkspace(id string) (*WorkspaceRecord, error) {
+	row := s.db.QueryRow(`
+		SELECT id, slug, name, created_at, status
+		FROM workspaces
+		WHERE id = ? AND status = 'active'`,
+		id,
+	)
+	w := &WorkspaceRecord{}
+	if err := row.Scan(&w.ID, &w.Slug, &w.Name, &w.CreatedAt, &w.Status); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("workspace %s not found", id)
+		}
+		return nil, fmt.Errorf("failed to load workspace: %w", err)
+	}
+	return w, nil
+}
+
+func normalizeWorkspaceSlug(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range name {
+		isAlphaNum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if isAlphaNum {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteRune('-')
+			lastDash = true
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		slug = "workspace"
+	}
+	return slug
 }
 
 func (s *Store) startSessionPruner() {
