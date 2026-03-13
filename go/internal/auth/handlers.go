@@ -11,6 +11,7 @@ import (
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, corsWrap func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("/api/auth/keys", corsWrap(h.RequireAdmin(h.handleKeys)))
 	mux.HandleFunc("/api/auth/keys/", corsWrap(h.RequireAdmin(h.handleKeyByID)))
+	mux.HandleFunc("/api/auth/workspaces", corsWrap(h.RequireAdmin(h.handleWorkspaces)))
 	mux.HandleFunc("/api/auth/session", corsWrap(h.handleSession))
 }
 
@@ -47,8 +48,31 @@ func (h *Handler) handleKeyByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.handleListWorkspaces(w, r)
+	case http.MethodPost:
+		h.handleCreateWorkspace(w, r)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
+		})
+	}
+}
+
 func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
-	keys, err := h.store.ListKeys()
+	current := KeyFromContext(r.Context())
+	workspaceID := strings.TrimSpace(r.URL.Query().Get("workspace_id"))
+	if workspaceID == "" && current != nil {
+		workspaceID = current.WorkspaceID
+	}
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != "" && workspaceID != current.WorkspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped admins can only list keys in their own workspace.")
+		return
+	}
+
+	keys, err := h.store.ListKeysByWorkspace(workspaceID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
 			"error": map[string]string{"message": "Failed to list keys: " + err.Error()},
@@ -64,8 +88,9 @@ func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
-		Role string `json:"role"`
+		Name        string `json:"name"`
+		Role        string `json:"role"`
+		WorkspaceID string `json:"workspace_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
@@ -78,7 +103,17 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		req.Role = "user"
 	}
 
-	fullKey, record, err := h.store.CreateKey(req.Name, req.Role)
+	current := KeyFromContext(r.Context())
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	if workspaceID == "" && current != nil {
+		workspaceID = current.WorkspaceID
+	}
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != "" && workspaceID != current.WorkspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped admins can only create keys in their own workspace.")
+		return
+	}
+
+	fullKey, record, err := h.store.CreateKeyInWorkspace(workspaceID, req.Name, req.Role)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"error": map[string]string{"message": err.Error()},
@@ -94,7 +129,11 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request, id string) {
-	if err := h.store.RevokeKey(id); err != nil {
+	workspaceID := ""
+	if current := KeyFromContext(r.Context()); current != nil {
+		workspaceID = current.WorkspaceID
+	}
+	if err := h.store.RevokeKeyInWorkspace(id, workspaceID); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": map[string]string{"message": err.Error()},
 		})
@@ -104,6 +143,63 @@ func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request, id str
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"message": "Key revoked",
+	})
+}
+
+func (h *Handler) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
+	current := KeyFromContext(r.Context())
+	workspaces, err := h.store.ListWorkspaces()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"error": map[string]string{"message": "Failed to list workspaces: " + err.Error()},
+		})
+		return
+	}
+
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID {
+		filtered := make([]*WorkspaceRecord, 0, 1)
+		for _, workspace := range workspaces {
+			if workspace.ID == current.WorkspaceID {
+				filtered = append(filtered, workspace)
+				break
+			}
+		}
+		workspaces = filtered
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"workspaces": workspaces,
+		"total":      len(workspaces),
+	})
+}
+
+func (h *Handler) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
+	current := KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID {
+		writeAuthError(w, http.StatusForbidden, "Only platform admins can create workspaces.")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": "Invalid JSON"},
+		})
+		return
+	}
+
+	workspace, err := h.store.CreateWorkspace(req.Name)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": err.Error()},
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"workspace": workspace,
 	})
 }
 
@@ -164,10 +260,18 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			"expires_at": session.ExpiresAt,
 		},
 		"key": map[string]interface{}{
-			"id":         keyRecord.ID,
-			"key_prefix": keyRecord.KeyPrefix,
-			"name":       keyRecord.Name,
-			"role":       keyRecord.Role,
+			"id":             keyRecord.ID,
+			"key_prefix":     keyRecord.KeyPrefix,
+			"name":           keyRecord.Name,
+			"role":           keyRecord.Role,
+			"workspace_id":   keyRecord.WorkspaceID,
+			"workspace_slug": keyRecord.WorkspaceSlug,
+			"workspace_name": keyRecord.WorkspaceName,
+		},
+		"workspace": map[string]interface{}{
+			"id":   keyRecord.WorkspaceID,
+			"slug": keyRecord.WorkspaceSlug,
+			"name": keyRecord.WorkspaceName,
 		},
 	})
 }
@@ -192,10 +296,18 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 			"expires_at": session.ExpiresAt,
 		},
 		"key": map[string]interface{}{
-			"id":         keyRecord.ID,
-			"key_prefix": keyRecord.KeyPrefix,
-			"name":       keyRecord.Name,
-			"role":       keyRecord.Role,
+			"id":             keyRecord.ID,
+			"key_prefix":     keyRecord.KeyPrefix,
+			"name":           keyRecord.Name,
+			"role":           keyRecord.Role,
+			"workspace_id":   keyRecord.WorkspaceID,
+			"workspace_slug": keyRecord.WorkspaceSlug,
+			"workspace_name": keyRecord.WorkspaceName,
+		},
+		"workspace": map[string]interface{}{
+			"id":   keyRecord.WorkspaceID,
+			"slug": keyRecord.WorkspaceSlug,
+			"name": keyRecord.WorkspaceName,
 		},
 	})
 }
