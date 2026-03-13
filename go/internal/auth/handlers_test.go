@@ -410,6 +410,76 @@ func TestHandleWorkspaceInvitesAndMembers(t *testing.T) {
 	_ = adminRec
 }
 
+func TestHandleWorkspaceMemberUpdateAndRemoval(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	workspace, err := s.CreateWorkspace("Membership Admin")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	adminKey, adminRec, err := s.CreateKeyInWorkspace(workspace.ID, "workspace-owner", RoleOwner)
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace owner: %v", err)
+	}
+
+	token, _, err := s.CreateWorkspaceInvitation(workspace.ID, "dev@example.com", "Dev", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+	membership, _, _, err := s.AcceptWorkspaceInvitation(token, "Dev")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation: %v", err)
+	}
+
+	updateReq := httptest.NewRequest("PUT", "/api/auth/workspaces/"+workspace.ID+"/members/"+membership.ID, strings.NewReader(`{"role":"operator"}`))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateReq.Header.Set("Authorization", "Bearer "+adminKey)
+	updateRec := httptest.NewRecorder()
+	mux.ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on update, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+
+	deleteReq := httptest.NewRequest("DELETE", "/api/auth/workspaces/"+workspace.ID+"/members/"+membership.ID, nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+adminKey)
+	deleteRec := httptest.NewRecorder()
+	mux.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on delete, got %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+}
+
+func TestHandleWorkspaceMemberSelfRemovalForbidden(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	workspace, err := s.CreateWorkspace("Membership Self")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	ownerKey, ownerRec, err := s.CreateKeyInWorkspace(workspace.ID, "owner", RoleOwner)
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace: %v", err)
+	}
+
+	ownerMembershipID := "mbr_owner"
+	if _, err := s.db.Exec(`
+		INSERT INTO workspace_memberships (id, workspace_id, email, display_name, role, status, created_at)
+		VALUES (?, ?, ?, ?, ?, 'active', ?)`,
+		ownerMembershipID, workspace.ID, "owner@example.com", "Owner", RoleOwner, time.Now(),
+	); err != nil {
+		t.Fatalf("insert membership: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE api_keys SET membership_id = ? WHERE id = ?`, ownerMembershipID, ownerRec.ID); err != nil {
+		t.Fatalf("link membership: %v", err)
+	}
+
+	deleteReq := httptest.NewRequest("DELETE", "/api/auth/workspaces/"+workspace.ID+"/members/"+ownerMembershipID, nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+ownerKey)
+	deleteRec := httptest.NewRecorder()
+	mux.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 on self removal, got %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+}
+
 func TestHandleCreateWorkspaceInvite_RoleEscalationForbidden(t *testing.T) {
 	_, s, mux := newTestHandlerWithRoutes(t)
 	workspace, err := s.CreateWorkspace("Role Team")

@@ -456,6 +456,50 @@ func TestValidateSession_WithMembership(t *testing.T) {
 	}
 }
 
+func TestWorkspaceMembershipRoleUpdateAndRemoval(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Membership Ops")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	token, _, err := s.CreateWorkspaceInvitation(workspace.ID, "member@example.com", "Member", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+	membership, fullKey, _, err := s.AcceptWorkspaceInvitation(token, "Member")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation: %v", err)
+	}
+
+	updated, err := s.UpdateWorkspaceMembershipRole(workspace.ID, membership.ID, RoleOperator)
+	if err != nil {
+		t.Fatalf("UpdateWorkspaceMembershipRole: %v", err)
+	}
+	if updated.Role != RoleOperator {
+		t.Fatalf("expected operator role, got %q", updated.Role)
+	}
+
+	validated, err := s.ValidateKey(fullKey)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	if validated.Role != RoleOperator {
+		t.Fatalf("expected operator role from membership, got %q", validated.Role)
+	}
+
+	if err := s.RemoveWorkspaceMembership(workspace.ID, membership.ID); err != nil {
+		t.Fatalf("RemoveWorkspaceMembership: %v", err)
+	}
+	if _, err := s.ValidateKey(fullKey); err == nil {
+		t.Fatal("expected membership-linked key to be revoked")
+	}
+}
+
 // ---------- Session CRUD ----------
 
 func TestCreateSession(t *testing.T) {

@@ -8,6 +8,8 @@ import {
   fetchWorkspaceQuota,
   updateWorkspaceQuota,
   fetchWorkspaceMembers,
+  updateWorkspaceMember,
+  removeWorkspaceMember,
   fetchWorkspaceInvites,
   fetchWorkspaceProviderConfigs,
   createWorkspaceInvite,
@@ -25,6 +27,7 @@ import { useAuthSession } from '../lib/auth-context';
 
 const assignableInviteRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
 const serviceAccountRoles = ['operator', 'developer', 'read_only', 'billing'] as const;
+const workspaceMemberRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
 const configurableProviders = [
   { id: 'runpod', name: 'RunPod', endpointPlaceholder: 'https://api.runpod.io/graphql' },
   { id: 'vastai', name: 'Vast.ai', endpointPlaceholder: 'Optional custom endpoint' },
@@ -105,16 +108,24 @@ export function WorkspaceAdmin() {
   const [providerAPIKey, setProviderAPIKey] = useState('');
   const [providerAPISecret, setProviderAPISecret] = useState('');
   const [providerEndpoint, setProviderEndpoint] = useState('');
+  const [memberRoles, setMemberRoles] = useState<Record<string, string>>({});
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [createdInviteToken, setCreatedInviteToken] = useState<string | null>(null);
   const [savingQuota, setSavingQuota] = useState(false);
   const [creatingInvite, setCreatingInvite] = useState(false);
   const [creatingServiceAccount, setCreatingServiceAccount] = useState(false);
   const [savingProviderConfig, setSavingProviderConfig] = useState(false);
+  const [updatingMemberId, setUpdatingMemberId] = useState<string | null>(null);
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
 
   const visibleInviteRoles = useMemo(() => {
     if (role === 'owner') return assignableInviteRoles;
     return assignableInviteRoles.filter((candidate) => candidate !== 'admin');
+  }, [role]);
+
+  const visibleMemberRoles = useMemo(() => {
+    if (role === 'owner') return workspaceMemberRoles;
+    return workspaceMemberRoles.filter((candidate) => candidate !== 'admin');
   }, [role]);
 
   const usageSummary = useMemo(() => {
@@ -197,7 +208,18 @@ export function WorkspaceAdmin() {
 
     if (canManageMemberships) {
       tasks.push(
-        fetchWorkspaceMembers(workspaceId).then(setMembers).catch(() => setMembers([])),
+        fetchWorkspaceMembers(workspaceId).then((nextMembers) => {
+          setMembers(nextMembers);
+          setMemberRoles(
+            nextMembers.reduce<Record<string, string>>((acc, record) => {
+              acc[record.id] = record.role;
+              return acc;
+            }, {}),
+          );
+        }).catch(() => {
+          setMembers([]);
+          setMemberRoles({});
+        }),
       );
       tasks.push(
         fetchWorkspaceInvites(workspaceId).then(setInvites).catch(() => setInvites([])),
@@ -295,6 +317,56 @@ export function WorkspaceAdmin() {
       setInvites(await fetchWorkspaceInvites(workspaceId));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to revoke invitation');
+    }
+  };
+
+  const roleOptionsForMember = (currentRole: string) => {
+    const options = new Set<string>(visibleMemberRoles);
+    options.add(currentRole);
+    return Array.from(options);
+  };
+
+  const handleUpdateMemberRole = async (memberId: string, currentRole: string) => {
+    const nextRole = memberRoles[memberId] || currentRole;
+    if (nextRole === currentRole) return;
+    setUpdatingMemberId(memberId);
+    try {
+      await updateWorkspaceMember(workspaceId, memberId, { role: nextRole });
+      toast.success('Member role updated.');
+      const nextMembers = await fetchWorkspaceMembers(workspaceId);
+      setMembers(nextMembers);
+      setMemberRoles(
+        nextMembers.reduce<Record<string, string>>((acc, record) => {
+          acc[record.id] = record.role;
+          return acc;
+        }, {}),
+      );
+    } catch (error) {
+      setMemberRoles((current) => ({ ...current, [memberId]: currentRole }));
+      toast.error(error instanceof Error ? error.message : 'Failed to update member role');
+    } finally {
+      setUpdatingMemberId(null);
+    }
+  };
+
+  const handleRemoveMember = async (memberId: string) => {
+    if (!confirm('Remove this member from the workspace? Their linked human keys will be revoked.')) return;
+    setRemovingMemberId(memberId);
+    try {
+      await removeWorkspaceMember(workspaceId, memberId);
+      toast.success('Member removed.');
+      const nextMembers = await fetchWorkspaceMembers(workspaceId);
+      setMembers(nextMembers);
+      setMemberRoles(
+        nextMembers.reduce<Record<string, string>>((acc, record) => {
+          acc[record.id] = record.role;
+          return acc;
+        }, {}),
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to remove member');
+    } finally {
+      setRemovingMemberId(null);
     }
   };
 
@@ -712,11 +784,47 @@ export function WorkspaceAdmin() {
                         <div className="mobile-data-title">{memberRecord.display_name}</div>
                         <div className="mobile-data-subtitle">{memberRecord.email}</div>
                       </div>
-                      <span className="badge">{memberRecord.role.toUpperCase()}</span>
+                      <span className="badge">{(memberRoles[memberRecord.id] || memberRecord.role).toUpperCase()}</span>
                     </div>
                     <div className="mobile-data-meta">
                       <div><span className="label-text">STATUS</span> <span>{memberRecord.status}</span></div>
                       <div><span className="label-text">JOINED</span> <span>{formatDate(memberRecord.created_at)}</span></div>
+                    </div>
+                    <div style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
+                      <div>
+                        <div className="label-text">ROLE</div>
+                        <select
+                          className="control-input"
+                          value={memberRoles[memberRecord.id] || memberRecord.role}
+                          disabled={member?.id === memberRecord.id}
+                          onChange={(e) => setMemberRoles((current) => ({ ...current, [memberRecord.id]: e.target.value }))}
+                        >
+                          {roleOptionsForMember(memberRecord.role).map((candidate) => (
+                            <option key={candidate} value={candidate}>{candidate}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="mobile-data-actions">
+                        <button
+                          className="action-btn"
+                          disabled={updatingMemberId === memberRecord.id || member?.id === memberRecord.id || (memberRoles[memberRecord.id] || memberRecord.role) === memberRecord.role}
+                          onClick={() => handleUpdateMemberRole(memberRecord.id, memberRecord.role)}
+                        >
+                          {updatingMemberId === memberRecord.id ? 'SAVING...' : 'SAVE ROLE'}
+                        </button>
+                        <button
+                          className="action-btn destructive"
+                          disabled={removingMemberId === memberRecord.id || member?.id === memberRecord.id}
+                          onClick={() => handleRemoveMember(memberRecord.id)}
+                        >
+                          {removingMemberId === memberRecord.id ? 'REMOVING...' : 'REMOVE'}
+                        </button>
+                      </div>
+                      {member?.id === memberRecord.id && (
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                          You cannot change or remove your own membership from this screen.
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}

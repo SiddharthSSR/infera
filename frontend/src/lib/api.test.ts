@@ -16,6 +16,8 @@ import {
   fetchWorkspaceQuota,
   updateWorkspaceQuota,
   fetchWorkspaceMembers,
+  updateWorkspaceMember,
+  removeWorkspaceMember,
   fetchWorkspaceInvites,
   fetchWorkspaceProviderConfigs,
   createWorkspaceInvite,
@@ -210,6 +212,26 @@ describe('API Functions', () => {
       await expect(fetchWorkspaceQuota('ws_1')).resolves.toEqual(expect.objectContaining({ workspace_id: 'ws_1' }))
       await expect(fetchWorkspaceMembers('ws_1')).resolves.toHaveLength(1)
       await expect(fetchWorkspaceInvites('ws_1')).resolves.toHaveLength(1)
+    })
+
+    it('updateWorkspaceMember/removeWorkspaceMember hit expected methods', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ member: { id: 'm1', role: 'operator' } }) })
+        .mockResolvedValueOnce({ ok: true })
+
+      await updateWorkspaceMember('ws_1', 'm1', { role: 'operator' })
+      await removeWorkspaceMember('ws_1', 'm1')
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/auth/workspaces/ws_1/members/m1',
+        expect.objectContaining({ method: 'PUT', credentials: 'include' })
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/auth/workspaces/ws_1/members/m1',
+        expect.objectContaining({ method: 'DELETE', credentials: 'include' })
+      )
     })
 
     it('fetchWorkspaceProviderConfigs parses configured providers', async () => {
