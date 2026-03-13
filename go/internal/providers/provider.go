@@ -68,6 +68,19 @@ func CreateProvider(config ProviderConfig) (Provider, error) {
 	return factory(config)
 }
 
+func IsRegisteredProviderType(providerType ProviderType) bool {
+	_, exists := providerFactories[providerType]
+	return exists
+}
+
+func RegisteredProviderTypes() []ProviderType {
+	types := make([]ProviderType, 0, len(providerFactories))
+	for providerType := range providerFactories {
+		types = append(types, providerType)
+	}
+	return types
+}
+
 // ProviderError represents a provider-specific error.
 type ProviderError struct {
 	Provider   ProviderType

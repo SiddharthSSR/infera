@@ -129,6 +129,22 @@ var authMigrations = []migrate.Migration{
 		ALTER TABLE api_keys ADD COLUMN membership_id TEXT;
 		CREATE INDEX IF NOT EXISTS idx_api_keys_membership ON api_keys(membership_id);`,
 	},
+	{
+		Version:     7,
+		Description: "add workspace provider configs",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS workspace_provider_configs (
+			workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+			provider     TEXT NOT NULL,
+			api_key      TEXT NOT NULL DEFAULT '',
+			api_secret   TEXT NOT NULL DEFAULT '',
+			endpoint     TEXT NOT NULL DEFAULT '',
+			created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (workspace_id, provider)
+		);
+		CREATE INDEX IF NOT EXISTS idx_workspace_provider_configs_workspace ON workspace_provider_configs(workspace_id);`,
+	},
 }
 
 // KeyRecord represents a stored API key.
@@ -185,6 +201,15 @@ type WorkspaceInvitationRecord struct {
 	CreatedAt      time.Time `json:"created_at"`
 	ExpiresAt      time.Time `json:"expires_at"`
 	Status         string    `json:"status"`
+}
+
+type WorkspaceProviderConfigRecord struct {
+	WorkspaceID string    `json:"workspace_id"`
+	Provider    string    `json:"provider"`
+	Configured  bool      `json:"configured"`
+	Endpoint    string    `json:"endpoint,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Store is a SQLite-backed API key store.
@@ -766,6 +791,136 @@ func (s *Store) UpsertWorkspaceQuota(workspaceID string, monthlyRequestLimit, mo
 	return s.GetWorkspaceQuota(workspaceID)
 }
 
+func (s *Store) ListWorkspaceProviderConfigs(workspaceID string) ([]*WorkspaceProviderConfigRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil, fmt.Errorf("workspace id is required")
+	}
+	if _, err := s.getWorkspace(workspaceID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.Query(`
+		SELECT workspace_id, provider, api_key, endpoint, created_at, updated_at
+		FROM workspace_provider_configs
+		WHERE workspace_id = ?
+		ORDER BY provider ASC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []*WorkspaceProviderConfigRecord
+	for rows.Next() {
+		rec, err := scanWorkspaceProviderConfig(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	if records == nil {
+		records = []*WorkspaceProviderConfigRecord{}
+	}
+	return records, rows.Err()
+}
+
+func (s *Store) GetWorkspaceProviderConfig(workspaceID, provider string) (*WorkspaceProviderConfigRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	provider = strings.TrimSpace(provider)
+	if workspaceID == "" || provider == "" {
+		return nil, fmt.Errorf("workspace id and provider are required")
+	}
+	if _, err := s.getWorkspace(workspaceID); err != nil {
+		return nil, err
+	}
+
+	row := s.db.QueryRow(`
+		SELECT workspace_id, provider, api_key, endpoint, created_at, updated_at
+		FROM workspace_provider_configs
+		WHERE workspace_id = ? AND provider = ?`,
+		workspaceID, provider,
+	)
+	return scanWorkspaceProviderConfig(row)
+}
+
+func (s *Store) ResolveWorkspaceProviderConfig(workspaceID, provider string) (apiKey, apiSecret, endpoint string, err error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	provider = strings.TrimSpace(provider)
+	if workspaceID == "" || provider == "" {
+		return "", "", "", fmt.Errorf("workspace id and provider are required")
+	}
+	if _, err := s.getWorkspace(workspaceID); err != nil {
+		return "", "", "", err
+	}
+	row := s.db.QueryRow(`
+		SELECT api_key, api_secret, endpoint
+		FROM workspace_provider_configs
+		WHERE workspace_id = ? AND provider = ?`,
+		workspaceID, provider,
+	)
+	if err := row.Scan(&apiKey, &apiSecret, &endpoint); err != nil {
+		if err == sql.ErrNoRows {
+			return "", "", "", fmt.Errorf("provider %s is not configured for workspace %s", provider, workspaceID)
+		}
+		return "", "", "", err
+	}
+	if strings.TrimSpace(apiKey) == "" && strings.TrimSpace(apiSecret) == "" {
+		return "", "", "", fmt.Errorf("provider %s is not configured for workspace %s", provider, workspaceID)
+	}
+	return apiKey, apiSecret, endpoint, nil
+}
+
+func (s *Store) UpsertWorkspaceProviderConfig(workspaceID, provider, apiKey, apiSecret, endpoint string) (*WorkspaceProviderConfigRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	provider = strings.TrimSpace(provider)
+	if workspaceID == "" || provider == "" {
+		return nil, fmt.Errorf("workspace id and provider are required")
+	}
+	if _, err := s.getWorkspace(workspaceID); err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	_, err := s.db.Exec(`
+		INSERT INTO workspace_provider_configs (workspace_id, provider, api_key, api_secret, endpoint, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(workspace_id, provider) DO UPDATE SET
+			api_key = excluded.api_key,
+			api_secret = excluded.api_secret,
+			endpoint = excluded.endpoint,
+			updated_at = excluded.updated_at`,
+		workspaceID,
+		provider,
+		strings.TrimSpace(apiKey),
+		strings.TrimSpace(apiSecret),
+		strings.TrimSpace(endpoint),
+		now,
+		now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update workspace provider config: %w", err)
+	}
+	return s.GetWorkspaceProviderConfig(workspaceID, provider)
+}
+
+func (s *Store) DeleteWorkspaceProviderConfig(workspaceID, provider string) error {
+	result, err := s.db.Exec(`
+		DELETE FROM workspace_provider_configs
+		WHERE workspace_id = ? AND provider = ?`,
+		strings.TrimSpace(workspaceID), strings.TrimSpace(provider),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete workspace provider config: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("workspace provider config not found")
+	}
+	return nil
+}
+
 func (s *Store) getWorkspace(id string) (*WorkspaceRecord, error) {
 	row := s.db.QueryRow(`
 		SELECT id, slug, name, created_at, status
@@ -1084,6 +1239,21 @@ func scanWorkspaceQuota(row interface {
 	quota.MonthlyTokenLimit = nullableInt64Ptr(tokenLimit)
 	quota.EnforceHardLimits = enforce != 0
 	return &quota, nil
+}
+
+func scanWorkspaceProviderConfig(row interface {
+	Scan(dest ...any) error
+}) (*WorkspaceProviderConfigRecord, error) {
+	var rec WorkspaceProviderConfigRecord
+	var apiKey string
+	if err := row.Scan(&rec.WorkspaceID, &rec.Provider, &apiKey, &rec.Endpoint, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("workspace provider config not found")
+		}
+		return nil, err
+	}
+	rec.Configured = strings.TrimSpace(apiKey) != ""
+	return &rec, nil
 }
 
 func nullableInt64Ptr(v sql.NullInt64) *int64 {

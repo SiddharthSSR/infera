@@ -16,15 +16,16 @@ const (
 )
 
 const (
-	PermissionDashboardAccess      = "dashboard_access"
-	PermissionManageKeys           = "manage_keys"
-	PermissionManageMemberships    = "manage_memberships"
-	PermissionManageWorkspaces     = "manage_workspaces"
-	PermissionManageQuotas         = "manage_quotas"
-	PermissionViewUsage            = "view_usage"
-	PermissionViewInfrastructure   = "view_infrastructure"
-	PermissionManageInfrastructure = "manage_infrastructure"
-	PermissionManageVault          = "manage_vault"
+	PermissionDashboardAccess       = "dashboard_access"
+	PermissionManageKeys            = "manage_keys"
+	PermissionManageMemberships     = "manage_memberships"
+	PermissionManageWorkspaces      = "manage_workspaces"
+	PermissionManageProviderConfigs = "manage_provider_configs"
+	PermissionManageQuotas          = "manage_quotas"
+	PermissionViewUsage             = "view_usage"
+	PermissionViewInfrastructure    = "view_infrastructure"
+	PermissionManageInfrastructure  = "manage_infrastructure"
+	PermissionManageVault           = "manage_vault"
 )
 
 func IsValidRole(role string) bool {
@@ -58,6 +59,8 @@ func HasPermission(record *KeyRecord, permission string) bool {
 	case PermissionManageMemberships:
 		return record.Role == RoleOwner || record.Role == RoleAdmin
 	case PermissionManageWorkspaces:
+		return record.Role == RoleOwner || record.Role == RoleAdmin
+	case PermissionManageProviderConfigs:
 		return record.Role == RoleOwner || record.Role == RoleAdmin
 	case PermissionManageQuotas:
 		return record.Role == RoleOwner || record.Role == RoleAdmin || record.Role == RoleBilling

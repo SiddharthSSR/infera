@@ -59,11 +59,12 @@ const (
 
 // Instance represents a GPU instance from any provider.
 type Instance struct {
-	ID         string         `json:"id"`
-	ProviderID string         `json:"provider_id"`
-	Provider   ProviderType   `json:"provider"`
-	Name       string         `json:"name"`
-	Status     InstanceStatus `json:"status"`
+	ID          string         `json:"id"`
+	ProviderID  string         `json:"provider_id"`
+	Provider    ProviderType   `json:"provider"`
+	WorkspaceID string         `json:"workspace_id,omitempty"`
+	Name        string         `json:"name"`
+	Status      InstanceStatus `json:"status"`
 
 	// Hardware
 	GPUType   GPUType `json:"gpu_type"`
@@ -101,6 +102,7 @@ type Instance struct {
 type ProvisionRequest struct {
 	Name         string       `json:"name"`
 	Provider     ProviderType `json:"provider"`
+	WorkspaceID  string       `json:"workspace_id,omitempty"`
 	GPUType      GPUType      `json:"gpu_type"`
 	GPUCount     int          `json:"gpu_count"`
 	Region       string       `json:"region,omitempty"`

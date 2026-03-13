@@ -96,6 +96,15 @@ func authedRequest(req *http.Request, role string) *http.Request {
 	}))
 }
 
+func authedWorkspaceRequest(req *http.Request, role, workspaceID string) *http.Request {
+	return req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+		Role:          role,
+		PrincipalType: auth.PrincipalHuman,
+		Status:        "active",
+		WorkspaceID:   workspaceID,
+	}))
+}
+
 func TestHandleInstances(t *testing.T) {
 	h := setupTestHandlers(t)
 
@@ -408,6 +417,56 @@ func TestHandleProviders(t *testing.T) {
 			t.Errorf("expected 405, got %d", w.Code)
 		}
 	})
+}
+
+func TestWorkspaceScopedInstanceIsolation(t *testing.T) {
+	h := setupTestHandlers(t)
+
+	body := map[string]interface{}{
+		"name":     "team-worker",
+		"provider": "mock",
+		"gpu_type": "RTX_4090",
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	provReq := authedWorkspaceRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator, "ws_alpha")
+	provReq.Header.Set("Content-Type", "application/json")
+	provW := httptest.NewRecorder()
+	h.handleProvision(provW, provReq)
+	if provW.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", provW.Code, provW.Body.String())
+	}
+
+	var provResp map[string]interface{}
+	json.Unmarshal(provW.Body.Bytes(), &provResp)
+	instance := provResp["instance"].(map[string]interface{})
+	instanceID := instance["id"].(string)
+
+	listReq := authedWorkspaceRequest(httptest.NewRequest(http.MethodGet, "/api/instances", nil), auth.RoleOperator, "ws_beta")
+	listW := httptest.NewRecorder()
+	h.handleInstances(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", listW.Code, listW.Body.String())
+	}
+	var listResp map[string]interface{}
+	json.Unmarshal(listW.Body.Bytes(), &listResp)
+	if got := len(listResp["instances"].([]interface{})); got != 0 {
+		t.Fatalf("expected 0 instances for unrelated workspace, got %d", got)
+	}
+
+	getReq := authedWorkspaceRequest(httptest.NewRequest(http.MethodGet, "/api/instances/"+instanceID, nil), auth.RoleOperator, "ws_beta")
+	getW := httptest.NewRecorder()
+	h.handleInstanceByID(getW, getReq)
+	if getW.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for cross-workspace read, got %d: %s", getW.Code, getW.Body.String())
+	}
+
+	deleteReq := authedWorkspaceRequest(httptest.NewRequest(http.MethodDelete, "/api/instances/"+instanceID, nil), auth.RoleOperator, "ws_beta")
+	deleteW := httptest.NewRecorder()
+	h.handleInstanceByID(deleteW, deleteReq)
+	if deleteW.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for cross-workspace delete, got %d: %s", deleteW.Code, deleteW.Body.String())
+	}
 }
 
 func TestHandleProvisionMapsProviderErrors(t *testing.T) {

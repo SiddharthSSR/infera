@@ -23,6 +23,8 @@ type Manager struct {
 	defaultProvider ProviderType
 	workerImage     string
 	gatewayAddress  string
+
+	workspaceProviderConfigResolver func(workspaceID string, providerType ProviderType) (*ProviderConfig, error)
 }
 
 // ManagerConfig configures the instance manager.
@@ -68,12 +70,52 @@ func (m *Manager) RegisterProvider(provider Provider) {
 	m.providers[provider.Name()] = provider
 }
 
+func (m *Manager) SetWorkspaceProviderConfigResolver(resolver func(workspaceID string, providerType ProviderType) (*ProviderConfig, error)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workspaceProviderConfigResolver = resolver
+}
+
 // GetProvider returns a provider by type.
 func (m *Manager) GetProvider(providerType ProviderType) (Provider, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	p, exists := m.providers[providerType]
 	return p, exists
+}
+
+func (m *Manager) resolveProvider(workspaceID string, providerType ProviderType) (Provider, error) {
+	m.mu.RLock()
+	resolver := m.workspaceProviderConfigResolver
+	m.mu.RUnlock()
+
+	if workspaceID != "" && resolver != nil && providerType != ProviderMock {
+		config, err := resolver(workspaceID, providerType)
+		if err != nil {
+			return nil, &ProviderError{
+				Provider: providerType,
+				Code:     ProviderErrorInvalidConfig,
+				Message:  err.Error(),
+			}
+		}
+		if config != nil {
+			if config.Type == "" {
+				config.Type = providerType
+			}
+			return CreateProvider(*config)
+		}
+		return nil, &ProviderError{
+			Provider: providerType,
+			Code:     ProviderErrorInvalidConfig,
+			Message:  fmt.Sprintf("provider %s is not configured for workspace %s", providerType, workspaceID),
+		}
+	}
+
+	provider, exists := m.GetProvider(providerType)
+	if !exists {
+		return nil, fmt.Errorf("provider %s not registered", providerType)
+	}
+	return provider, nil
 }
 
 // ListProviders returns all registered providers.
@@ -96,9 +138,9 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 		providerType = m.defaultProvider
 	}
 
-	provider, exists := m.GetProvider(providerType)
-	if !exists {
-		return nil, fmt.Errorf("provider %s not registered", providerType)
+	provider, err := m.resolveProvider(req.WorkspaceID, providerType)
+	if err != nil {
+		return nil, err
 	}
 
 	// Set defaults
@@ -122,6 +164,9 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	if instance.ID == "" {
 		instance.ID = uuid.New().String()[:8]
 	}
+	if instance.WorkspaceID == "" {
+		instance.WorkspaceID = req.WorkspaceID
+	}
 
 	// Track instance
 	m.mu.Lock()
@@ -141,9 +186,9 @@ func (m *Manager) Terminate(ctx context.Context, instanceID string) error {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
 
-	provider, exists := m.GetProvider(instance.Provider)
-	if !exists {
-		return fmt.Errorf("provider %s not registered", instance.Provider)
+	provider, err := m.resolveProvider(instance.WorkspaceID, instance.Provider)
+	if err != nil {
+		return err
 	}
 
 	// Terminate via provider
@@ -171,9 +216,9 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
 
-	provider, exists := m.GetProvider(instance.Provider)
-	if !exists {
-		return fmt.Errorf("provider %s not registered", instance.Provider)
+	provider, err := m.resolveProvider(instance.WorkspaceID, instance.Provider)
+	if err != nil {
+		return err
 	}
 
 	if err := provider.Start(ctx, instance.ProviderID); err != nil {
@@ -193,9 +238,9 @@ func (m *Manager) Stop(ctx context.Context, instanceID string) error {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
 
-	provider, exists := m.GetProvider(instance.Provider)
-	if !exists {
-		return fmt.Errorf("provider %s not registered", instance.Provider)
+	provider, err := m.resolveProvider(instance.WorkspaceID, instance.Provider)
+	if err != nil {
+		return err
 	}
 
 	if err := provider.Stop(ctx, instance.ProviderID); err != nil {
@@ -242,31 +287,44 @@ func (m *Manager) ListInstancesByProvider(providerType ProviderType) []*Instance
 	return instances
 }
 
+func (m *Manager) ListInstancesByWorkspace(workspaceID string) []*Instance {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var instances []*Instance
+	for _, inst := range m.instances {
+		if inst.WorkspaceID == workspaceID {
+			instances = append(instances, inst)
+		}
+	}
+	return instances
+}
+
 // RefreshInstances updates instance status from providers.
 func (m *Manager) RefreshInstances(ctx context.Context) error {
 	m.mu.RLock()
-	providers := make([]Provider, 0, len(m.providers))
-	for _, p := range m.providers {
-		providers = append(providers, p)
+	instances := make([]*Instance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		instances = append(instances, inst)
 	}
 	m.mu.RUnlock()
 
-	for _, provider := range providers {
-		instances, err := provider.ListInstances(ctx)
+	for _, inst := range instances {
+		provider, err := m.resolveProvider(inst.WorkspaceID, inst.Provider)
 		if err != nil {
-			continue // Skip failed providers
+			continue
+		}
+		refreshed, err := provider.GetInstance(ctx, inst.ProviderID)
+		if err != nil {
+			continue
 		}
 
 		m.mu.Lock()
-		for _, inst := range instances {
-			// Update or add instance
-			if existing, exists := m.instances[inst.ID]; exists {
-				existing.Status = inst.Status
-				existing.PublicIP = inst.PublicIP
-				existing.ErrorMessage = inst.ErrorMessage
-			} else {
-				m.instances[inst.ID] = inst
-			}
+		if existing, exists := m.instances[inst.ID]; exists {
+			existing.Status = refreshed.Status
+			existing.PublicIP = refreshed.PublicIP
+			existing.ErrorMessage = refreshed.ErrorMessage
+			existing.WorkerID = refreshed.WorkerID
 		}
 		m.mu.Unlock()
 	}
@@ -276,19 +334,22 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 
 // ListOfferings returns available GPU configurations across all providers.
 func (m *Manager) ListOfferings(ctx context.Context) ([]*GPUOffering, error) {
-	m.mu.RLock()
-	providers := make([]Provider, 0, len(m.providers))
-	for _, p := range m.providers {
-		providers = append(providers, p)
-	}
-	m.mu.RUnlock()
+	return m.ListOfferingsForWorkspace(ctx, "")
+}
+
+func (m *Manager) ListOfferingsForWorkspace(ctx context.Context, workspaceID string) ([]*GPUOffering, error) {
+	providerTypes := RegisteredProviderTypes()
 
 	var allOfferings []*GPUOffering
-	for _, provider := range providers {
+	for _, providerType := range providerTypes {
+		provider, err := m.resolveProvider(workspaceID, providerType)
+		if err != nil {
+			continue
+		}
 		offerings, err := provider.ListOfferings(ctx)
 		if err != nil {
 			slog.Warn("providers.list_offerings_failed",
-				slog.String("provider", string(provider.Name())),
+				slog.String("provider", string(providerType)),
 				slog.String("error", err.Error()),
 			)
 			continue // Skip failed providers
@@ -301,19 +362,22 @@ func (m *Manager) ListOfferings(ctx context.Context) ([]*GPUOffering, error) {
 
 // GetProviderStatus returns status for all providers.
 func (m *Manager) GetProviderStatus(ctx context.Context) []*ProviderStatus {
-	m.mu.RLock()
-	providers := make([]Provider, 0, len(m.providers))
-	for _, p := range m.providers {
-		providers = append(providers, p)
-	}
-	m.mu.RUnlock()
+	return m.GetProviderStatusForWorkspace(ctx, "")
+}
+
+func (m *Manager) GetProviderStatusForWorkspace(ctx context.Context, workspaceID string) []*ProviderStatus {
+	providerTypes := RegisteredProviderTypes()
 
 	var statuses []*ProviderStatus
-	for _, provider := range providers {
+	for _, providerType := range providerTypes {
+		provider, err := m.resolveProvider(workspaceID, providerType)
+		if err != nil {
+			continue
+		}
 		status, err := provider.GetStatus(ctx)
 		if err != nil {
 			failed := &ProviderStatus{
-				Provider:     provider.Name(),
+				Provider:     providerType,
 				Connected:    false,
 				ErrorMessage: err.Error(),
 			}
@@ -334,6 +398,10 @@ func (m *Manager) GetProviderStatus(ctx context.Context) []*ProviderStatus {
 // GetCostSummary returns current cost information.
 func (m *Manager) GetCostSummary() *CostSummary {
 	return m.costs.GetSummary()
+}
+
+func (m *Manager) GetCostSummaryForWorkspace(workspaceID string) *CostSummary {
+	return m.costs.GetSummaryByWorkspace(workspaceID)
 }
 
 // LinkWorker associates a worker with an instance.
