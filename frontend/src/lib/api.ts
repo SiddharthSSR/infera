@@ -20,6 +20,7 @@ export interface SessionInfo {
     workspace_name?: string;
   };
   workspace?: { id: string; slug: string; name: string };
+  member?: { id: string; email?: string; display_name?: string };
 }
 
 export interface StreamChatCompletionOptions {

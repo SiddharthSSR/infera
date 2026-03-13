@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestHandlerWithRoutes(t *testing.T) (*Handler, *Store, *http.ServeMux) {
@@ -278,6 +279,114 @@ func TestHandleListKeys_WorkspaceScoped(t *testing.T) {
 	}
 }
 
+func TestHandleWorkspaceInvitesAndMembers(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Members Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	createBody := `{"email":"teammate@example.com","display_name":"Teammate","role":"developer"}`
+	createReq := httptest.NewRequest("POST", "/api/auth/workspaces/"+workspace.ID+"/invites", strings.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.Header.Set("Authorization", "Bearer "+adminKey)
+	createRec := httptest.NewRecorder()
+	mux.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	var createResp struct {
+		InvitationToken string         `json:"invitation_token"`
+		Invitation      map[string]any `json:"invitation"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if createResp.InvitationToken == "" {
+		t.Fatal("expected invitation token")
+	}
+	inviteID, _ := createResp.Invitation["id"].(string)
+	if inviteID == "" {
+		t.Fatal("expected invitation id")
+	}
+
+	listReq := httptest.NewRequest("GET", "/api/auth/workspaces/"+workspace.ID+"/invites", nil)
+	listReq.Header.Set("Authorization", "Bearer "+adminKey)
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+
+	acceptBody := `{"invitation_token":"` + createResp.InvitationToken + `","display_name":"Joined User"}`
+	acceptReq := httptest.NewRequest("POST", "/api/auth/invitations/accept", strings.NewReader(acceptBody))
+	acceptReq.Header.Set("Content-Type", "application/json")
+	acceptRec := httptest.NewRecorder()
+	mux.ServeHTTP(acceptRec, acceptReq)
+	if acceptRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", acceptRec.Code, acceptRec.Body.String())
+	}
+
+	membersReq := httptest.NewRequest("GET", "/api/auth/workspaces/"+workspace.ID+"/members", nil)
+	membersReq.Header.Set("Authorization", "Bearer "+adminKey)
+	membersRec := httptest.NewRecorder()
+	mux.ServeHTTP(membersRec, membersReq)
+	if membersRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", membersRec.Code, membersRec.Body.String())
+	}
+
+	var membersResp struct {
+		Members []map[string]any `json:"members"`
+	}
+	if err := json.Unmarshal(membersRec.Body.Bytes(), &membersResp); err != nil {
+		t.Fatalf("json.Unmarshal members: %v", err)
+	}
+	if len(membersResp.Members) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(membersResp.Members))
+	}
+	if membersResp.Members[0]["email"] != "teammate@example.com" {
+		t.Fatalf("expected teammate email, got %v", membersResp.Members[0]["email"])
+	}
+
+	deleteReq := httptest.NewRequest("DELETE", "/api/auth/workspaces/"+workspace.ID+"/invites/"+inviteID, nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+adminKey)
+	deleteRec := httptest.NewRecorder()
+	mux.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 deleting accepted invite, got %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+
+	_ = adminRec
+}
+
+func TestHandleCreateWorkspaceInvite_RoleEscalationForbidden(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	workspace, err := s.CreateWorkspace("Role Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	adminKey, _, err := s.CreateKeyInWorkspace(workspace.ID, "workspace-admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace: %v", err)
+	}
+
+	body := `{"email":"owner@example.com","display_name":"Owner","role":"owner"}`
+	req := httptest.NewRequest("POST", "/api/auth/workspaces/"+workspace.ID+"/invites", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 // ---------- Session handlers ----------
 
 func TestHandleCreateSession_AdminKey(t *testing.T) {
@@ -402,6 +511,63 @@ func TestHandleGetSession_Valid(t *testing.T) {
 	}
 }
 
+func TestHandleGetSession_WithMembership(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	_ = adminKey
+	workspace, err := s.CreateWorkspace("Session Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	token, _, err := s.CreateWorkspaceInvitation(workspace.ID, "member@example.com", "Member", RoleOperator, adminRec.ID, mustTime(t))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+	fullKey, _, _, err := func() (string, *WorkspaceMembershipRecord, *KeyRecord, error) {
+		membership, key, record, err := s.AcceptWorkspaceInvitation(token, "Joined Member")
+		return key, membership, record, err
+	}()
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation: %v", err)
+	}
+
+	createBody := `{"api_key":"` + fullKey + `"}`
+	createReq := httptest.NewRequest("POST", "/api/auth/session", strings.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	mux.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	cookies := createRec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("expected session cookie")
+	}
+	getReq := httptest.NewRequest("GET", "/api/auth/session", nil)
+	getReq.AddCookie(cookies[0])
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(getRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	member, ok := resp["member"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected member payload, got %T", resp["member"])
+	}
+	if member["email"] != "member@example.com" {
+		t.Fatalf("expected member email, got %v", member["email"])
+	}
+}
+
 func TestHandleGetSession_NoCookie(t *testing.T) {
 	_, _, mux := newTestHandlerWithRoutes(t)
 
@@ -448,4 +614,9 @@ func TestHandleDeleteSession_NoCookie(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200 for idempotent logout, got %d", rr.Code)
 	}
+}
+
+func mustTime(t *testing.T) time.Time {
+	t.Helper()
+	return time.Now().Add(24 * time.Hour)
 }

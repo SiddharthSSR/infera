@@ -96,6 +96,39 @@ var authMigrations = []migrate.Migration{
 		ALTER TABLE api_keys ADD COLUMN principal_type TEXT NOT NULL DEFAULT 'human';
 		CREATE INDEX IF NOT EXISTS idx_api_keys_principal_type ON api_keys(principal_type);`,
 	},
+	{
+		Version:     6,
+		Description: "add workspace memberships and invitations",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS workspace_memberships (
+			id           TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+			email        TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			role         TEXT NOT NULL,
+			status       TEXT NOT NULL DEFAULT 'active',
+			created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(workspace_id, email)
+		);
+		CREATE INDEX IF NOT EXISTS idx_workspace_memberships_workspace ON workspace_memberships(workspace_id);
+		CREATE INDEX IF NOT EXISTS idx_workspace_memberships_email ON workspace_memberships(email);
+		CREATE TABLE IF NOT EXISTS workspace_invitations (
+			id                TEXT PRIMARY KEY,
+			workspace_id      TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+			email             TEXT NOT NULL,
+			display_name      TEXT NOT NULL DEFAULT '',
+			role              TEXT NOT NULL,
+			invite_token_hash TEXT NOT NULL UNIQUE,
+			invited_by_key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+			created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at        DATETIME NOT NULL,
+			status            TEXT NOT NULL DEFAULT 'pending'
+		);
+		CREATE INDEX IF NOT EXISTS idx_workspace_invitations_workspace ON workspace_invitations(workspace_id);
+		CREATE INDEX IF NOT EXISTS idx_workspace_invitations_status ON workspace_invitations(status);
+		ALTER TABLE api_keys ADD COLUMN membership_id TEXT;
+		CREATE INDEX IF NOT EXISTS idx_api_keys_membership ON api_keys(membership_id);`,
+	},
 }
 
 // KeyRecord represents a stored API key.
@@ -108,6 +141,9 @@ type KeyRecord struct {
 	Name          string     `json:"name"`
 	Role          string     `json:"role"`
 	PrincipalType string     `json:"principal_type"`
+	MembershipID  *string    `json:"membership_id,omitempty"`
+	MemberEmail   *string    `json:"member_email,omitempty"`
+	MemberName    *string    `json:"member_name,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 	LastUsed      *time.Time `json:"last_used,omitempty"`
 	Status        string     `json:"status"`
@@ -127,6 +163,28 @@ type WorkspaceQuotaRecord struct {
 	MonthlyTokenLimit   *int64    `json:"monthly_token_limit,omitempty"`
 	EnforceHardLimits   bool      `json:"enforce_hard_limits"`
 	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+type WorkspaceMembershipRecord struct {
+	ID          string    `json:"id"`
+	WorkspaceID string    `json:"workspace_id"`
+	Email       string    `json:"email"`
+	DisplayName string    `json:"display_name"`
+	Role        string    `json:"role"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type WorkspaceInvitationRecord struct {
+	ID             string    `json:"id"`
+	WorkspaceID    string    `json:"workspace_id"`
+	Email          string    `json:"email"`
+	DisplayName    string    `json:"display_name"`
+	Role           string    `json:"role"`
+	InvitedByKeyID string    `json:"invited_by_key_id"`
+	CreatedAt      time.Time `json:"created_at"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	Status         string    `json:"status"`
 }
 
 // Store is a SQLite-backed API key store.
@@ -247,8 +305,8 @@ func (s *Store) CreateKeyWithPrincipalInWorkspace(workspaceID, name, role, princ
 	now := time.Now()
 
 	_, err = s.db.Exec(`
-		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, principal_type, created_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, principal_type, membership_id, created_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'active')`,
 		id, workspace.ID, hash, prefix, name, role, principalType, now,
 	)
 	if err != nil {
@@ -277,9 +335,12 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 	hash := hashKey(rawKey)
 
 	row := s.db.QueryRow(`
-		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.principal_type, k.created_at, k.last_used, k.status
+		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name,
+		       COALESCE(m.role, k.role), k.principal_type, k.membership_id, m.email, m.display_name,
+		       k.created_at, k.last_used, k.status
 		FROM api_keys k
 		JOIN workspaces w ON w.id = k.workspace_id
+		LEFT JOIN workspace_memberships m ON m.id = k.membership_id
 		WHERE k.key_hash = ? AND k.status = 'active'`,
 		hash,
 	)
@@ -287,7 +348,7 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 	record := &KeyRecord{}
 	err := row.Scan(
 		&record.ID, &record.WorkspaceID, &record.WorkspaceSlug, &record.WorkspaceName,
-		&record.KeyPrefix, &record.Name, &record.Role, &record.PrincipalType,
+		&record.KeyPrefix, &record.Name, &record.Role, &record.PrincipalType, &record.MembershipID, &record.MemberEmail, &record.MemberName,
 		&record.CreatedAt, &record.LastUsed, &record.Status,
 	)
 	if err != nil {
@@ -320,9 +381,12 @@ func (s *Store) ListKeysByWorkspace(workspaceID string) ([]*KeyRecord, error) {
 
 func (s *Store) listKeys(workspaceID string) ([]*KeyRecord, error) {
 	query := `
-		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.principal_type, k.created_at, k.last_used, k.status
+		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name,
+		       COALESCE(m.role, k.role), k.principal_type, k.membership_id, m.email, m.display_name,
+		       k.created_at, k.last_used, k.status
 		FROM api_keys k
-		JOIN workspaces w ON w.id = k.workspace_id`
+		JOIN workspaces w ON w.id = k.workspace_id
+		LEFT JOIN workspace_memberships m ON m.id = k.membership_id`
 	args := []any{}
 	if workspaceID != "" {
 		query += " WHERE k.workspace_id = ?"
@@ -348,6 +412,9 @@ func (s *Store) listKeys(workspaceID string) ([]*KeyRecord, error) {
 			&k.Name,
 			&k.Role,
 			&k.PrincipalType,
+			&k.MembershipID,
+			&k.MemberEmail,
+			&k.MemberName,
 			&k.CreatedAt,
 			&k.LastUsed,
 			&k.Status,
@@ -460,8 +527,8 @@ func (s *Store) CreateKeyFromRawWithPrincipalInWorkspace(workspaceID, fullKey, n
 	now := time.Now()
 
 	_, err = s.db.Exec(`
-		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, principal_type, created_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, principal_type, membership_id, created_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'active')`,
 		id, workspace.ID, hash, prefix, name, role, principalType, now,
 	)
 	if err != nil {
@@ -532,10 +599,13 @@ func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, er
 
 	row := s.db.QueryRow(`
 		SELECT s.id, s.key_id, s.created_at, s.expires_at, s.last_seen,
-		       k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name, k.role, k.principal_type, k.created_at, k.last_used, k.status
+		       k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name,
+		       COALESCE(m.role, k.role), k.principal_type, k.membership_id, m.email, m.display_name,
+		       k.created_at, k.last_used, k.status
 		FROM sessions s
 		JOIN api_keys k ON s.key_id = k.id
 		JOIN workspaces w ON w.id = k.workspace_id
+		LEFT JOIN workspace_memberships m ON m.id = k.membership_id
 		WHERE s.token_hash = ? AND s.expires_at > ? AND k.status = 'active'`,
 		tokenHash, time.Now(),
 	)
@@ -544,7 +614,7 @@ func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, er
 	key := &KeyRecord{}
 	err := row.Scan(
 		&session.ID, &session.KeyID, &session.CreatedAt, &session.ExpiresAt, &session.LastSeen,
-		&key.ID, &key.WorkspaceID, &key.WorkspaceSlug, &key.WorkspaceName, &key.KeyPrefix, &key.Name, &key.Role, &key.PrincipalType, &key.CreatedAt, &key.LastUsed, &key.Status,
+		&key.ID, &key.WorkspaceID, &key.WorkspaceSlug, &key.WorkspaceName, &key.KeyPrefix, &key.Name, &key.Role, &key.PrincipalType, &key.MembershipID, &key.MemberEmail, &key.MemberName, &key.CreatedAt, &key.LastUsed, &key.Status,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -711,6 +781,267 @@ func (s *Store) getWorkspace(id string) (*WorkspaceRecord, error) {
 		return nil, fmt.Errorf("failed to load workspace: %w", err)
 	}
 	return w, nil
+}
+
+func (s *Store) ListWorkspaceMemberships(workspaceID string) ([]*WorkspaceMembershipRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil, fmt.Errorf("workspace id is required")
+	}
+	rows, err := s.db.Query(`
+		SELECT id, workspace_id, email, display_name, role, status, created_at
+		FROM workspace_memberships
+		WHERE workspace_id = ?
+		ORDER BY created_at ASC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*WorkspaceMembershipRecord
+	for rows.Next() {
+		m := &WorkspaceMembershipRecord{}
+		if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.Email, &m.DisplayName, &m.Role, &m.Status, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	if out == nil {
+		out = []*WorkspaceMembershipRecord{}
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateWorkspaceInvitation(workspaceID, email, displayName, role, invitedByKeyID string, expiresAt time.Time) (string, *WorkspaceInvitationRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	email = strings.ToLower(strings.TrimSpace(email))
+	displayName = strings.TrimSpace(displayName)
+	invitedByKeyID = strings.TrimSpace(invitedByKeyID)
+	if workspaceID == "" || email == "" || invitedByKeyID == "" {
+		return "", nil, fmt.Errorf("workspace_id, email, and invited_by_key_id are required")
+	}
+	if !IsValidRole(role) || role == RoleUser {
+		return "", nil, fmt.Errorf("invalid invitation role %q", role)
+	}
+	if displayName == "" {
+		displayName = email
+	}
+	if _, err := s.getWorkspace(workspaceID); err != nil {
+		return "", nil, err
+	}
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().Add(7 * 24 * time.Hour)
+	}
+
+	var existing int
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM workspace_memberships WHERE workspace_id = ? AND email = ? AND status = 'active'`, workspaceID, email).Scan(&existing); err != nil {
+		return "", nil, fmt.Errorf("failed to check membership: %w", err)
+	}
+	if existing > 0 {
+		return "", nil, fmt.Errorf("membership for %s already exists", email)
+	}
+
+	rawBytes := make([]byte, 24)
+	if _, err := rand.Read(rawBytes); err != nil {
+		return "", nil, fmt.Errorf("failed to generate invite token: %w", err)
+	}
+	rawToken := "invite_" + hex.EncodeToString(rawBytes)
+	tokenHash := hashKey(rawToken)
+	id := "inv_" + uuid.New().String()
+	now := time.Now()
+
+	_, err := s.db.Exec(`
+		INSERT INTO workspace_invitations (id, workspace_id, email, display_name, role, invite_token_hash, invited_by_key_id, created_at, expires_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+		id, workspaceID, email, displayName, role, tokenHash, invitedByKeyID, now, expiresAt,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create workspace invitation: %w", err)
+	}
+
+	return rawToken, &WorkspaceInvitationRecord{
+		ID:             id,
+		WorkspaceID:    workspaceID,
+		Email:          email,
+		DisplayName:    displayName,
+		Role:           role,
+		InvitedByKeyID: invitedByKeyID,
+		CreatedAt:      now,
+		ExpiresAt:      expiresAt,
+		Status:         "pending",
+	}, nil
+}
+
+func (s *Store) ListWorkspaceInvitations(workspaceID string) ([]*WorkspaceInvitationRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil, fmt.Errorf("workspace id is required")
+	}
+	rows, err := s.db.Query(`
+		SELECT id, workspace_id, email, display_name, role, invited_by_key_id, created_at, expires_at, status
+		FROM workspace_invitations
+		WHERE workspace_id = ? AND status = 'pending'
+		ORDER BY created_at DESC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*WorkspaceInvitationRecord
+	for rows.Next() {
+		inv := &WorkspaceInvitationRecord{}
+		if err := rows.Scan(&inv.ID, &inv.WorkspaceID, &inv.Email, &inv.DisplayName, &inv.Role, &inv.InvitedByKeyID, &inv.CreatedAt, &inv.ExpiresAt, &inv.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, inv)
+	}
+	if out == nil {
+		out = []*WorkspaceInvitationRecord{}
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) RevokeWorkspaceInvitation(workspaceID, invitationID string) error {
+	result, err := s.db.Exec(`
+		UPDATE workspace_invitations
+		SET status = 'revoked'
+		WHERE id = ? AND workspace_id = ? AND status = 'pending'`,
+		strings.TrimSpace(invitationID), strings.TrimSpace(workspaceID),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to revoke invitation: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("invitation not found")
+	}
+	return nil
+}
+
+func (s *Store) AcceptWorkspaceInvitation(rawToken, displayName string) (*WorkspaceMembershipRecord, string, *KeyRecord, error) {
+	tokenHash := hashKey(strings.TrimSpace(rawToken))
+	displayName = strings.TrimSpace(displayName)
+	now := time.Now()
+
+	type inviteRow struct {
+		ID          string
+		WorkspaceID string
+		Email       string
+		DisplayName string
+		Role        string
+		Status      string
+		ExpiresAt   time.Time
+	}
+	var invite inviteRow
+	err := s.db.QueryRow(`
+		SELECT id, workspace_id, email, display_name, role, status, expires_at
+		FROM workspace_invitations
+		WHERE invite_token_hash = ?`,
+		tokenHash,
+	).Scan(&invite.ID, &invite.WorkspaceID, &invite.Email, &invite.DisplayName, &invite.Role, &invite.Status, &invite.ExpiresAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, "", nil, fmt.Errorf("invalid invitation")
+		}
+		return nil, "", nil, fmt.Errorf("failed to load invitation: %w", err)
+	}
+	if invite.Status != "pending" {
+		return nil, "", nil, fmt.Errorf("invitation is no longer pending")
+	}
+	if now.After(invite.ExpiresAt) {
+		return nil, "", nil, fmt.Errorf("invitation has expired")
+	}
+	if displayName == "" {
+		displayName = invite.DisplayName
+	}
+	if displayName == "" {
+		displayName = invite.Email
+	}
+	workspace, err := s.getWorkspace(invite.WorkspaceID)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("failed to begin accept invitation transaction: %w", err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var existing int
+	if err := tx.QueryRow(`SELECT COUNT(1) FROM workspace_memberships WHERE workspace_id = ? AND email = ? AND status = 'active'`, invite.WorkspaceID, invite.Email).Scan(&existing); err != nil {
+		return nil, "", nil, fmt.Errorf("failed to check existing membership: %w", err)
+	}
+	if existing > 0 {
+		return nil, "", nil, fmt.Errorf("membership for %s already exists", invite.Email)
+	}
+
+	membershipID := "mbr_" + uuid.New().String()
+	if _, err := tx.Exec(`
+		INSERT INTO workspace_memberships (id, workspace_id, email, display_name, role, status, created_at)
+		VALUES (?, ?, ?, ?, ?, 'active', ?)`,
+		membershipID, invite.WorkspaceID, invite.Email, displayName, invite.Role, now,
+	); err != nil {
+		return nil, "", nil, fmt.Errorf("failed to create membership: %w", err)
+	}
+
+	rawKeyBytes := make([]byte, 24)
+	if _, err := rand.Read(rawKeyBytes); err != nil {
+		return nil, "", nil, fmt.Errorf("failed to generate key: %w", err)
+	}
+	fullKey := "inf_" + hex.EncodeToString(rawKeyBytes)
+	prefix := fullKey[:12] + "..."
+	keyHash := hashKey(fullKey)
+	keyID := uuid.New().String()
+
+	if _, err := tx.Exec(`
+		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, principal_type, membership_id, created_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+		keyID, invite.WorkspaceID, keyHash, prefix, displayName, invite.Role, PrincipalHuman, membershipID, now,
+	); err != nil {
+		return nil, "", nil, fmt.Errorf("failed to create key for invited member: %w", err)
+	}
+
+	if _, err := tx.Exec(`UPDATE workspace_invitations SET status = 'accepted' WHERE id = ?`, invite.ID); err != nil {
+		return nil, "", nil, fmt.Errorf("failed to update invitation status: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, "", nil, fmt.Errorf("failed to commit invitation acceptance: %w", err)
+	}
+	tx = nil
+
+	membership := &WorkspaceMembershipRecord{
+		ID:          membershipID,
+		WorkspaceID: invite.WorkspaceID,
+		Email:       invite.Email,
+		DisplayName: displayName,
+		Role:        invite.Role,
+		Status:      "active",
+		CreatedAt:   now,
+	}
+	keyRecord := &KeyRecord{
+		ID:            keyID,
+		WorkspaceID:   invite.WorkspaceID,
+		WorkspaceSlug: workspace.Slug,
+		WorkspaceName: workspace.Name,
+		KeyPrefix:     prefix,
+		Name:          displayName,
+		Role:          invite.Role,
+		PrincipalType: PrincipalHuman,
+		MembershipID:  &membershipID,
+		MemberEmail:   &membership.Email,
+		MemberName:    &membership.DisplayName,
+		CreatedAt:     now,
+		Status:        "active",
+	}
+	return membership, fullKey, keyRecord, nil
 }
 
 func normalizeWorkspaceSlug(name string) string {
