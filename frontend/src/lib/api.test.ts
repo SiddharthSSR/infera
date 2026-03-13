@@ -17,7 +17,10 @@ import {
   updateWorkspaceQuota,
   fetchWorkspaceMembers,
   fetchWorkspaceInvites,
+  fetchWorkspaceProviderConfigs,
   createWorkspaceInvite,
+  upsertWorkspaceProviderConfig,
+  deleteWorkspaceProviderConfig,
   revokeWorkspaceInvite,
   fetchAuditUsage,
   provisionInstance,
@@ -209,6 +212,19 @@ describe('API Functions', () => {
       await expect(fetchWorkspaceInvites('ws_1')).resolves.toHaveLength(1)
     })
 
+    it('fetchWorkspaceProviderConfigs parses configured providers', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          providers: [{ workspace_id: 'ws_1', provider: 'runpod', configured: true, endpoint: 'https://api.runpod.io/graphql' }],
+        }),
+      })
+
+      await expect(fetchWorkspaceProviderConfigs('ws_1')).resolves.toEqual([
+        expect.objectContaining({ workspace_id: 'ws_1', provider: 'runpod', configured: true }),
+      ])
+    })
+
     it('updateWorkspaceQuota/createWorkspaceInvite/revokeWorkspaceInvite hit expected methods', async () => {
       mockFetch
         .mockResolvedValueOnce({ ok: true, json: async () => ({ quota: { workspace_id: 'ws_1', enforce_hard_limits: false } }) })
@@ -232,6 +248,33 @@ describe('API Functions', () => {
       expect(mockFetch).toHaveBeenNthCalledWith(
         3,
         '/api/auth/workspaces/ws_1/invites/inv_1',
+        expect.objectContaining({ method: 'DELETE', credentials: 'include' })
+      )
+    })
+
+    it('upsertWorkspaceProviderConfig/deleteWorkspaceProviderConfig hit expected methods', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ provider: { workspace_id: 'ws_1', provider: 'runpod', configured: true } }),
+        })
+        .mockResolvedValueOnce({ ok: true })
+
+      await upsertWorkspaceProviderConfig('ws_1', 'runpod', {
+        api_key: 'rp_key',
+        api_secret: 'rp_secret',
+        endpoint: 'https://api.runpod.io/graphql',
+      })
+      await deleteWorkspaceProviderConfig('ws_1', 'runpod')
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/auth/workspaces/ws_1/providers/runpod',
+        expect.objectContaining({ method: 'PUT', credentials: 'include' })
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/auth/workspaces/ws_1/providers/runpod',
         expect.objectContaining({ method: 'DELETE', credentials: 'include' })
       )
     })

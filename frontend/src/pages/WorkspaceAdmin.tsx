@@ -9,18 +9,26 @@ import {
   updateWorkspaceQuota,
   fetchWorkspaceMembers,
   fetchWorkspaceInvites,
+  fetchWorkspaceProviderConfigs,
   createWorkspaceInvite,
+  upsertWorkspaceProviderConfig,
+  deleteWorkspaceProviderConfig,
   revokeWorkspaceInvite,
   type ApiKeyRecord,
   type AuditUsageRow,
   type WorkspaceQuotaRecord,
   type WorkspaceMemberRecord,
   type WorkspaceInvitationRecord,
+  type WorkspaceProviderConfigRecord,
 } from '../lib/api';
 import { useAuthSession } from '../lib/auth-context';
 
 const assignableInviteRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
 const serviceAccountRoles = ['operator', 'developer', 'read_only', 'billing'] as const;
+const configurableProviders = [
+  { id: 'runpod', name: 'RunPod', endpointPlaceholder: 'https://api.runpod.io/graphql' },
+  { id: 'vastai', name: 'Vast.ai', endpointPlaceholder: 'Optional custom endpoint' },
+] as const;
 
 function formatDate(dateStr?: string | null) {
   if (!dateStr) return 'Never';
@@ -72,6 +80,7 @@ export function WorkspaceAdmin() {
 
   const canManageMemberships = role === 'owner' || role === 'admin';
   const canManageKeys = role === 'owner' || role === 'admin';
+  const canManageProviderConfigs = role === 'owner' || role === 'admin';
   const canManageQuota = role === 'owner' || role === 'admin' || role === 'billing';
   const canViewQuota = canManageQuota || role === 'read_only';
   const canViewUsage = role === 'owner' || role === 'admin' || role === 'billing' || role === 'read_only';
@@ -81,6 +90,7 @@ export function WorkspaceAdmin() {
   const [members, setMembers] = useState<WorkspaceMemberRecord[]>([]);
   const [invites, setInvites] = useState<WorkspaceInvitationRecord[]>([]);
   const [serviceAccounts, setServiceAccounts] = useState<ApiKeyRecord[]>([]);
+  const [providerConfigs, setProviderConfigs] = useState<WorkspaceProviderConfigRecord[]>([]);
   const [usageRows, setUsageRows] = useState<AuditUsageRow[]>([]);
 
   const [requestLimit, setRequestLimit] = useState('');
@@ -91,11 +101,16 @@ export function WorkspaceAdmin() {
   const [inviteRole, setInviteRole] = useState<typeof assignableInviteRoles[number]>('developer');
   const [newServiceAccountName, setNewServiceAccountName] = useState('');
   const [newServiceAccountRole, setNewServiceAccountRole] = useState<typeof serviceAccountRoles[number]>('operator');
+  const [selectedProvider, setSelectedProvider] = useState<typeof configurableProviders[number]['id']>('runpod');
+  const [providerAPIKey, setProviderAPIKey] = useState('');
+  const [providerAPISecret, setProviderAPISecret] = useState('');
+  const [providerEndpoint, setProviderEndpoint] = useState('');
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [createdInviteToken, setCreatedInviteToken] = useState<string | null>(null);
   const [savingQuota, setSavingQuota] = useState(false);
   const [creatingInvite, setCreatingInvite] = useState(false);
   const [creatingServiceAccount, setCreatingServiceAccount] = useState(false);
+  const [savingProviderConfig, setSavingProviderConfig] = useState(false);
 
   const visibleInviteRoles = useMemo(() => {
     if (role === 'owner') return assignableInviteRoles;
@@ -149,6 +164,7 @@ export function WorkspaceAdmin() {
   const quotaPressure = Math.max(requestUsageRatio, tokenUsageRatio);
   const quotaState = quotaPressure >= 1 ? 'EXCEEDED' : quotaPressure >= 0.8 ? 'NEAR LIMIT' : 'HEALTHY';
   const quotaStateClass = quotaPressure >= 1 ? 'error' : quotaPressure >= 0.8 ? 'warning' : '';
+  const selectedProviderMeta = configurableProviders.find((provider) => provider.id === selectedProvider) || configurableProviders[0];
 
   const loadWorkspaceData = async () => {
     if (!workspaceId) return;
@@ -201,13 +217,23 @@ export function WorkspaceAdmin() {
       setServiceAccounts([]);
     }
 
+    if (canManageProviderConfigs) {
+      tasks.push(
+        fetchWorkspaceProviderConfigs(workspaceId)
+          .then(setProviderConfigs)
+          .catch(() => setProviderConfigs([])),
+      );
+    } else {
+      setProviderConfigs([]);
+    }
+
     await Promise.all(tasks);
   };
 
   useEffect(() => {
     setLoading(true);
     loadWorkspaceData().finally(() => setLoading(false));
-  }, [workspaceId, canManageMemberships, canManageKeys, canViewQuota, canViewUsage]);
+  }, [workspaceId, canManageMemberships, canManageKeys, canManageProviderConfigs, canViewQuota, canViewUsage]);
 
   const handleSaveQuota = async () => {
     const parsedRequestLimit = parseNullableLimit(requestLimit);
@@ -305,6 +331,41 @@ export function WorkspaceAdmin() {
     }
   };
 
+  const handleSaveProviderConfig = async () => {
+    if (!providerAPIKey.trim()) {
+      toast.error('Provider API key is required.');
+      return;
+    }
+    setSavingProviderConfig(true);
+    try {
+      await upsertWorkspaceProviderConfig(workspaceId, selectedProvider, {
+        api_key: providerAPIKey.trim(),
+        api_secret: providerAPISecret.trim() || undefined,
+        endpoint: providerEndpoint.trim() || undefined,
+      });
+      setProviderAPIKey('');
+      setProviderAPISecret('');
+      setProviderEndpoint('');
+      setProviderConfigs(await fetchWorkspaceProviderConfigs(workspaceId));
+      toast.success(`${selectedProviderMeta.name} config saved.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to save provider config');
+    } finally {
+      setSavingProviderConfig(false);
+    }
+  };
+
+  const handleDeleteProviderConfig = async (provider: string) => {
+    if (!confirm(`Delete ${provider} provider config for this workspace?`)) return;
+    try {
+      await deleteWorkspaceProviderConfig(workspaceId, provider);
+      setProviderConfigs(await fetchWorkspaceProviderConfigs(workspaceId));
+      toast.success(`${provider} provider config deleted.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to delete provider config');
+    }
+  };
+
   if (loading) {
     return (
       <div className="animate-fade-in">
@@ -371,6 +432,7 @@ export function WorkspaceAdmin() {
           <div style={{ display: 'grid', gap: '0.8rem', fontSize: '0.9rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage memberships</span><span className="mono">{canManageMemberships ? 'YES' : 'NO'}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage service accounts</span><span className="mono">{canManageKeys ? 'YES' : 'NO'}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage provider configs</span><span className="mono">{canManageProviderConfigs ? 'YES' : 'NO'}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage quota</span><span className="mono">{canManageQuota ? 'YES' : 'NO'}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>View quota</span><span className="mono">{canViewQuota ? 'YES' : 'NO'}</span></div>
           </div>
@@ -471,6 +533,78 @@ export function WorkspaceAdmin() {
       </div>
 
       <div className="grid-row">
+        <div className="cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text" style={{ marginBottom: '1.5rem' }}>PROVIDER CONFIGS</div>
+          {canManageProviderConfigs ? (
+            <>
+              <div className="responsive-scroll-x" style={{ marginBottom: '1.5rem' }}>
+                <table className="data-table responsive-scroll-x-content">
+                  <thead>
+                    <tr>
+                      <th>PROVIDER</th>
+                      <th>STATE</th>
+                      <th>ENDPOINT</th>
+                      <th>UPDATED</th>
+                      <th style={{ textAlign: 'right' }}>ACTION</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {providerConfigs.map((config) => (
+                      <tr key={config.provider}>
+                        <td>{config.provider}</td>
+                        <td><span className="badge">{config.configured ? 'CONFIGURED' : 'INCOMPLETE'}</span></td>
+                        <td className="mono">{config.endpoint || 'default'}</td>
+                        <td>{formatDate(config.updated_at)}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          <button className="action-btn destructive" onClick={() => handleDeleteProviderConfig(config.provider)}>DELETE</button>
+                        </td>
+                      </tr>
+                    ))}
+                    {providerConfigs.length === 0 && (
+                      <tr><td colSpan={5} style={{ color: 'var(--text-secondary)', padding: '1.5rem 0' }}>No workspace provider configs yet.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ display: 'grid', gap: '1rem' }}>
+                <div>
+                  <div className="label-text">PROVIDER</div>
+                  <select className="control-input" value={selectedProvider} onChange={(e) => setSelectedProvider(e.target.value as typeof configurableProviders[number]['id'])}>
+                    {configurableProviders.map((provider) => (
+                      <option key={provider.id} value={provider.id}>{provider.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <div className="label-text">API KEY</div>
+                  <input className="control-input" type="password" value={providerAPIKey} onChange={(e) => setProviderAPIKey(e.target.value)} placeholder="Write-only" />
+                </div>
+                <div>
+                  <div className="label-text">API SECRET</div>
+                  <input className="control-input" type="password" value={providerAPISecret} onChange={(e) => setProviderAPISecret(e.target.value)} placeholder="Optional write-only secret" />
+                </div>
+                <div>
+                  <div className="label-text">ENDPOINT</div>
+                  <input className="control-input" value={providerEndpoint} onChange={(e) => setProviderEndpoint(e.target.value)} placeholder={selectedProviderMeta.endpointPlaceholder} />
+                </div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                  Stored secrets are never shown again after save. Update a provider by submitting a new key/secret for the selected provider.
+                </div>
+                <div>
+                  <button className="btn-primary" disabled={savingProviderConfig} onClick={handleSaveProviderConfig}>
+                    {savingProviderConfig ? 'SAVING...' : 'SAVE PROVIDER CONFIG'}
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Provider configuration is restricted to workspace owners and admins.
+            </div>
+          )}
+        </div>
+
         <div className="cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>WORKSPACE QUOTA</div>
           {canViewQuota && quota ? (
