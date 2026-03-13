@@ -19,8 +19,7 @@ import (
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/providers/mock"
 	_ "github.com/infera/infera/go/internal/providers/runpod"
-	// vastai is stubbed — not registered until implemented
-	// _ "github.com/infera/infera/go/internal/providers/vastai"
+	_ "github.com/infera/infera/go/internal/providers/vastai"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/internal/vault"
 )
@@ -90,9 +89,19 @@ func main() {
 		}
 	}
 
-	// Vast.ai provider is stubbed — registration disabled until implemented.
-	// When ready, uncomment the import and this block.
-	_ = vastaiKey
+	// Register Vast.ai if API key provided
+	if *vastaiKey != "" {
+		vastaiProvider, err := providers.CreateProvider(providers.ProviderConfig{
+			Type:   providers.ProviderVastAI,
+			APIKey: *vastaiKey,
+		})
+		if err != nil {
+			log.Warn("failed to create Vast.ai provider", slog.String("error", err.Error()))
+		} else {
+			instanceMgr.RegisterProvider(vastaiProvider)
+			log.Info("provider registered", slog.String("provider", "vastai"))
+		}
+	}
 
 	// Create gateway
 	gatewayConfig := gateway.DefaultConfig()
