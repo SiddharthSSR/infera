@@ -75,6 +75,20 @@ var authMigrations = []migrate.Migration{
 			DefaultWorkspaceID,
 		),
 	},
+	{
+		Version:     4,
+		Description: "add workspace quotas",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS workspace_quotas (
+			workspace_id            TEXT PRIMARY KEY,
+			monthly_request_limit   INTEGER,
+			monthly_token_limit     INTEGER,
+			enforce_hard_limits     INTEGER NOT NULL DEFAULT 1,
+			updated_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		INSERT OR IGNORE INTO workspace_quotas (workspace_id, enforce_hard_limits)
+		SELECT id, 1 FROM workspaces;`,
+	},
 }
 
 // KeyRecord represents a stored API key.
@@ -97,6 +111,14 @@ type WorkspaceRecord struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 	Status    string    `json:"status"`
+}
+
+type WorkspaceQuotaRecord struct {
+	WorkspaceID         string    `json:"workspace_id"`
+	MonthlyRequestLimit *int64    `json:"monthly_request_limit,omitempty"`
+	MonthlyTokenLimit   *int64    `json:"monthly_token_limit,omitempty"`
+	EnforceHardLimits   bool      `json:"enforce_hard_limits"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 // Store is a SQLite-backed API key store.
@@ -532,13 +554,30 @@ func (s *Store) CreateWorkspace(name string) (*WorkspaceRecord, error) {
 	id := "ws_" + uuid.New().String()
 	now := time.Now()
 
-	_, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin workspace create transaction: %w", err)
+	}
+
+	_, err = tx.Exec(`
 		INSERT INTO workspaces (id, slug, name, created_at, status)
 		VALUES (?, ?, ?, ?, 'active')`,
 		id, slug, name, now,
 	)
 	if err != nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("failed to create workspace: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT OR IGNORE INTO workspace_quotas (workspace_id, enforce_hard_limits, updated_at)
+		VALUES (?, 1, ?)`,
+		id, now,
+	); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("failed to create workspace quota: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit workspace create: %w", err)
 	}
 
 	return &WorkspaceRecord{
@@ -572,6 +611,54 @@ func (s *Store) ListWorkspaces() ([]*WorkspaceRecord, error) {
 		workspaces = []*WorkspaceRecord{}
 	}
 	return workspaces, rows.Err()
+}
+
+func (s *Store) GetWorkspaceQuota(workspaceID string) (*WorkspaceQuotaRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil, fmt.Errorf("workspace id is required")
+	}
+	if _, err := s.getWorkspace(workspaceID); err != nil {
+		return nil, err
+	}
+
+	row := s.db.QueryRow(`
+		SELECT workspace_id, monthly_request_limit, monthly_token_limit, enforce_hard_limits, updated_at
+		FROM workspace_quotas
+		WHERE workspace_id = ?`,
+		workspaceID,
+	)
+	return scanWorkspaceQuota(row)
+}
+
+func (s *Store) UpsertWorkspaceQuota(workspaceID string, monthlyRequestLimit, monthlyTokenLimit *int64, enforceHardLimits bool) (*WorkspaceQuotaRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil, fmt.Errorf("workspace id is required")
+	}
+	if _, err := s.getWorkspace(workspaceID); err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	_, err := s.db.Exec(`
+		INSERT INTO workspace_quotas (workspace_id, monthly_request_limit, monthly_token_limit, enforce_hard_limits, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(workspace_id) DO UPDATE SET
+			monthly_request_limit = excluded.monthly_request_limit,
+			monthly_token_limit = excluded.monthly_token_limit,
+			enforce_hard_limits = excluded.enforce_hard_limits,
+			updated_at = excluded.updated_at`,
+		workspaceID,
+		toNullableInt64(monthlyRequestLimit),
+		toNullableInt64(monthlyTokenLimit),
+		boolToInt(enforceHardLimits),
+		now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update workspace quota: %w", err)
+	}
+	return s.GetWorkspaceQuota(workspaceID)
 }
 
 func (s *Store) getWorkspace(id string) (*WorkspaceRecord, error) {
@@ -612,6 +699,47 @@ func normalizeWorkspaceSlug(name string) string {
 		slug = "workspace"
 	}
 	return slug
+}
+
+func scanWorkspaceQuota(row interface {
+	Scan(dest ...any) error
+}) (*WorkspaceQuotaRecord, error) {
+	var quota WorkspaceQuotaRecord
+	var requestLimit sql.NullInt64
+	var tokenLimit sql.NullInt64
+	var enforce int
+	if err := row.Scan(&quota.WorkspaceID, &requestLimit, &tokenLimit, &enforce, &quota.UpdatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("workspace quota not found")
+		}
+		return nil, err
+	}
+	quota.MonthlyRequestLimit = nullableInt64Ptr(requestLimit)
+	quota.MonthlyTokenLimit = nullableInt64Ptr(tokenLimit)
+	quota.EnforceHardLimits = enforce != 0
+	return &quota, nil
+}
+
+func nullableInt64Ptr(v sql.NullInt64) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	value := v.Int64
+	return &value
+}
+
+func toNullableInt64(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) startSessionPruner() {

@@ -512,6 +512,9 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// Convert to internal format
 	inferenceReq := g.toInferenceRequest(&req)
+	if !g.enforceWorkspaceQuota(w, r, inferenceReq) {
+		return
+	}
 
 	// Route the request
 	routed, err := g.router.Route(inferenceReq)
@@ -621,6 +624,64 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 
 	g.writeJSON(w, http.StatusOK, openAIResp)
 	return openAIResp.Usage.TotalTokens, "success"
+}
+
+func (g *Gateway) enforceWorkspaceQuota(w http.ResponseWriter, r *http.Request, req *types.InferenceRequest) bool {
+	if g.authHandler == nil || g.auditStore == nil {
+		return true
+	}
+	key := auth.KeyFromContext(r.Context())
+	if key == nil || strings.TrimSpace(key.WorkspaceID) == "" {
+		return true
+	}
+
+	quota, err := g.authHandler.Store().GetWorkspaceQuota(key.WorkspaceID)
+	if err != nil {
+		g.log.Warn("workspace.quota_lookup_failed",
+			slog.String("workspace_id", key.WorkspaceID),
+			slog.String("error", err.Error()),
+		)
+		return true
+	}
+	if quota == nil {
+		return true
+	}
+	if quota.MonthlyRequestLimit == nil && quota.MonthlyTokenLimit == nil {
+		return true
+	}
+	if !quota.EnforceHardLimits {
+		return true
+	}
+
+	now := time.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	usage, err := g.auditStore.UsageSummary(audit.UsageSummaryQuery{
+		Start:       monthStart,
+		End:         now,
+		WorkspaceID: key.WorkspaceID,
+	})
+	if err != nil {
+		g.log.Warn("workspace.quota_usage_failed",
+			slog.String("workspace_id", key.WorkspaceID),
+			slog.String("error", err.Error()),
+		)
+		return true
+	}
+
+	projectedRequests := usage.RequestCount + 1
+	projectedTokens := usage.TokenCount + int64(req.TokenEstimate()+req.Parameters.MaxTokens)
+
+	if quota.MonthlyRequestLimit != nil && projectedRequests > *quota.MonthlyRequestLimit {
+		g.writeError(w, http.StatusForbidden, "quota_exceeded",
+			fmt.Sprintf("Workspace request quota exceeded for %s. Limit: %d requests/month.", key.WorkspaceName, *quota.MonthlyRequestLimit))
+		return false
+	}
+	if quota.MonthlyTokenLimit != nil && projectedTokens > *quota.MonthlyTokenLimit {
+		g.writeError(w, http.StatusForbidden, "quota_exceeded",
+			fmt.Sprintf("Workspace token quota exceeded for %s. Limit: %d tokens/month.", key.WorkspaceName, *quota.MonthlyTokenLimit))
+		return false
+	}
+	return true
 }
 
 func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) (int, string) {

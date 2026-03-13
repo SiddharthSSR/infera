@@ -12,6 +12,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, corsWrap func(http.HandlerF
 	mux.HandleFunc("/api/auth/keys", corsWrap(h.RequireAdmin(h.handleKeys)))
 	mux.HandleFunc("/api/auth/keys/", corsWrap(h.RequireAdmin(h.handleKeyByID)))
 	mux.HandleFunc("/api/auth/workspaces", corsWrap(h.RequireAdmin(h.handleWorkspaces)))
+	mux.HandleFunc("/api/auth/workspaces/", corsWrap(h.RequireAdmin(h.handleWorkspaceByID)))
 	mux.HandleFunc("/api/auth/session", corsWrap(h.handleSession))
 }
 
@@ -54,6 +55,41 @@ func (h *Handler) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		h.handleListWorkspaces(w, r)
 	case http.MethodPost:
 		h.handleCreateWorkspace(w, r)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
+		})
+	}
+}
+
+func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/auth/workspaces/")
+	if path == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": "Workspace path required"},
+		})
+		return
+	}
+	if !strings.HasSuffix(path, "/quota") {
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{
+			"error": map[string]string{"message": "Not found"},
+		})
+		return
+	}
+	workspaceID := strings.TrimSuffix(path, "/quota")
+	workspaceID = strings.TrimSuffix(workspaceID, "/")
+	if workspaceID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": "Workspace ID required"},
+		})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		h.handleGetWorkspaceQuota(w, r, workspaceID)
+	case http.MethodPut:
+		h.handlePutWorkspaceQuota(w, r, workspaceID)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
 			"error": map[string]string{"message": "Method not allowed"},
@@ -200,6 +236,62 @@ func (h *Handler) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) 
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"workspace": workspace,
+	})
+}
+
+func (h *Handler) handleGetWorkspaceQuota(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	current := KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != current.WorkspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped admins can only view quota for their own workspace.")
+		return
+	}
+
+	quota, err := h.store.GetWorkspaceQuota(workspaceID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{
+			"error": map[string]string{"message": err.Error()},
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"quota": quota,
+	})
+}
+
+func (h *Handler) handlePutWorkspaceQuota(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	current := KeyFromContext(r.Context())
+	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != current.WorkspaceID {
+		writeAuthError(w, http.StatusForbidden, "Workspace-scoped admins can only update quota for their own workspace.")
+		return
+	}
+
+	var req struct {
+		MonthlyRequestLimit *int64 `json:"monthly_request_limit"`
+		MonthlyTokenLimit   *int64 `json:"monthly_token_limit"`
+		EnforceHardLimits   *bool  `json:"enforce_hard_limits"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": "Invalid JSON"},
+		})
+		return
+	}
+
+	enforceHardLimits := true
+	if req.EnforceHardLimits != nil {
+		enforceHardLimits = *req.EnforceHardLimits
+	}
+	quota, err := h.store.UpsertWorkspaceQuota(workspaceID, req.MonthlyRequestLimit, req.MonthlyTokenLimit, enforceHardLimits)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": err.Error()},
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"quota": quota,
 	})
 }
 

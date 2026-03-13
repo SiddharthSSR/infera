@@ -84,6 +84,19 @@ type UsageRow struct {
 	ErrorCount    int64
 }
 
+type UsageSummaryQuery struct {
+	Start       time.Time
+	End         time.Time
+	WorkspaceID string
+}
+
+type UsageSummary struct {
+	RequestCount int64 `json:"request_count"`
+	TokenCount   int64 `json:"token_count"`
+	SuccessCount int64 `json:"success_count"`
+	ErrorCount   int64 `json:"error_count"`
+}
+
 func NewStore(dbPath string) (*Store, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
@@ -238,4 +251,43 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 	}
 
 	return result, rows.Err()
+}
+
+func (s *Store) UsageSummary(q UsageSummaryQuery) (*UsageSummary, error) {
+	start := q.Start.UTC()
+	if start.IsZero() {
+		start = time.Now().UTC().Add(-24 * time.Hour)
+	}
+	end := q.End.UTC()
+	if end.IsZero() {
+		end = time.Now().UTC()
+	}
+	if !start.Before(end) {
+		return nil, fmt.Errorf("start must be before end")
+	}
+
+	query := `
+	SELECT
+		COUNT(*) AS request_count,
+		COALESCE(SUM(token_count), 0) AS token_count,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
+		COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS error_count
+	FROM inference_audit
+	WHERE ts_unix_ms >= ? AND ts_unix_ms < ?`
+	args := []any{start.UnixMilli(), end.UnixMilli()}
+	if strings.TrimSpace(q.WorkspaceID) != "" {
+		query += " AND workspace_id = ?"
+		args = append(args, strings.TrimSpace(q.WorkspaceID))
+	}
+
+	summary := &UsageSummary{}
+	if err := s.db.QueryRow(query, args...).Scan(
+		&summary.RequestCount,
+		&summary.TokenCount,
+		&summary.SuccessCount,
+		&summary.ErrorCount,
+	); err != nil {
+		return nil, err
+	}
+	return summary, nil
 }

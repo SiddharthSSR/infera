@@ -196,6 +196,42 @@ func TestCreateWorkspaceAndScopedKey(t *testing.T) {
 	}
 }
 
+func TestWorkspaceQuotaLifecycle(t *testing.T) {
+	s := newTestStore(t)
+
+	workspace, err := s.CreateWorkspace("Billing Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	quota, err := s.GetWorkspaceQuota(workspace.ID)
+	if err != nil {
+		t.Fatalf("GetWorkspaceQuota default: %v", err)
+	}
+	if quota.MonthlyRequestLimit != nil || quota.MonthlyTokenLimit != nil {
+		t.Fatalf("expected empty default quota, got %+v", quota)
+	}
+	if !quota.EnforceHardLimits {
+		t.Fatal("expected hard limit enforcement enabled by default")
+	}
+
+	requestLimit := int64(1000)
+	tokenLimit := int64(50000)
+	quota, err = s.UpsertWorkspaceQuota(workspace.ID, &requestLimit, &tokenLimit, false)
+	if err != nil {
+		t.Fatalf("UpsertWorkspaceQuota: %v", err)
+	}
+	if quota.MonthlyRequestLimit == nil || *quota.MonthlyRequestLimit != requestLimit {
+		t.Fatalf("expected request limit %d, got %+v", requestLimit, quota.MonthlyRequestLimit)
+	}
+	if quota.MonthlyTokenLimit == nil || *quota.MonthlyTokenLimit != tokenLimit {
+		t.Fatalf("expected token limit %d, got %+v", tokenLimit, quota.MonthlyTokenLimit)
+	}
+	if quota.EnforceHardLimits {
+		t.Fatal("expected hard limit enforcement to be false after update")
+	}
+}
+
 func TestCreateKeyFromRaw_InvalidFormat(t *testing.T) {
 	s := newTestStore(t)
 	_, err := s.CreateKeyFromRaw("bad_key", "test", "admin")

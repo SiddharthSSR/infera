@@ -133,6 +133,45 @@ func TestHandleCreateWorkspace_WorkspaceAdminForbidden(t *testing.T) {
 	}
 }
 
+func TestHandleWorkspaceQuota(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, _, _ := s.CreateKey("admin", "admin")
+	workspace, err := s.CreateWorkspace("Billing Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	putBody := `{"monthly_request_limit":100,"monthly_token_limit":5000,"enforce_hard_limits":true}`
+	putReq := httptest.NewRequest("PUT", "/api/auth/workspaces/"+workspace.ID+"/quota", strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("Authorization", "Bearer "+adminKey)
+	putRec := httptest.NewRecorder()
+	mux.ServeHTTP(putRec, putReq)
+
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", putRec.Code, putRec.Body.String())
+	}
+
+	getReq := httptest.NewRequest("GET", "/api/auth/workspaces/"+workspace.ID+"/quota", nil)
+	getReq.Header.Set("Authorization", "Bearer "+adminKey)
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var resp struct {
+		Quota map[string]any `json:"quota"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if resp.Quota["monthly_request_limit"] != float64(100) {
+		t.Fatalf("expected request limit 100, got %v", resp.Quota["monthly_request_limit"])
+	}
+}
+
 func TestHandleRevokeKey(t *testing.T) {
 	_, s, mux := newTestHandlerWithRoutes(t)
 	adminKey, _, _ := s.CreateKey("admin", "admin")
