@@ -122,6 +122,6 @@ describe('Dashboard', () => {
   it('navigates to provision flow from deploy button', () => {
     render(<Dashboard />)
     screen.getByRole('button', { name: 'DEPLOY NEW MODEL' }).click()
-    expect(mockNavigate).toHaveBeenCalledWith('/instances?provision=true')
+    expect(mockNavigate).toHaveBeenCalledWith('/models')
   })
 })

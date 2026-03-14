@@ -1,11 +1,81 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel } from '../hooks/useApi';
+import type { GPUOffering, Model, ProviderStatus } from '../types';
+import { useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel, useOfferings, useProviders } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
 
 const FAMILY_OPTIONS = ['mistral', 'llama', 'qwen', 'phi', 'gemma', 'deepseek', 'falcon', 'mixtral', 'yi', 'command-r'];
 const QUANT_OPTIONS = ['none', 'GPTQ', 'AWQ', 'GGUF', 'FP8', 'INT8', 'INT4'];
+const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai'] as const;
+const GPU_VRAM_GB: Record<string, number> = {
+  RTX_4090: 24,
+  RTX_4080: 16,
+  A100_40GB: 40,
+  A100_80GB: 80,
+  H100: 80,
+  L40S: 48,
+};
+
+function describeDeployReadiness(model: Model, offerings: GPUOffering[], providers: ProviderStatus[]) {
+  const connectedProviders = providers.filter((provider) => provider.connected);
+  const requiredMB = model.vram_required || 0;
+  const compatibleOfferings = offerings.filter((offering) => {
+    if (!requiredMB) return true;
+    const vramGB = GPU_VRAM_GB[offering.gpu_type] || 0;
+    return vramGB * 1024 >= requiredMB;
+  });
+  const cheapest = compatibleOfferings.reduce<GPUOffering | null>((best, offering) => {
+    if (!best || offering.cost_per_hour < best.cost_per_hour) return offering;
+    return best;
+  }, null);
+  const providerNames = [...new Set(compatibleOfferings.map((offering) => offering.provider))];
+
+  if (model.loaded !== false) {
+    return {
+      state: 'active' as const,
+      summary: 'Already loaded on active infrastructure.',
+      actionLabel: 'MANAGE',
+      actionTarget: '/instances',
+    };
+  }
+
+  if (model.vault_status === 'testing') {
+    return {
+      state: 'deploying' as const,
+      summary: 'Provisioning or model load is already in progress.',
+      actionLabel: 'VIEW CLUSTERS',
+      actionTarget: '/instances',
+    };
+  }
+
+  if (connectedProviders.length === 0) {
+    return {
+      state: 'setup' as const,
+      summary: 'No live provider is connected for this workspace yet.',
+      actionLabel: 'SETUP PROVIDER',
+      actionTarget: '/workspace',
+    };
+  }
+
+  if (compatibleOfferings.length === 0) {
+    return {
+      state: 'capacity' as const,
+      summary: requiredMB
+        ? `Needs about ${Math.ceil(requiredMB / 1024)}GB VRAM. No matching capacity is live right now.`
+        : 'Provider capacity is connected, but no compatible inventory is live right now.',
+      actionLabel: 'VIEW CAPACITY',
+      actionTarget: '/instances',
+    };
+  }
+
+  return {
+    state: 'ready' as const,
+    summary: `Ready on ${compatibleOfferings.length} GPU config${compatibleOfferings.length === 1 ? '' : 's'} via ${providerNames.join(', ')}${cheapest ? ` from $${cheapest.cost_per_hour.toFixed(2)}/hr` : ''}.`,
+    actionLabel: 'DEPLOY',
+    actionTarget: `/instances?provision=true&model=${encodeURIComponent(model.id)}`,
+  };
+}
 
 function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const registerMutation = useRegisterVaultModel();
@@ -227,6 +297,8 @@ export function Models() {
   const isMobile = useIsMobile(900);
   const { data: models } = useModels();
   const { data: vaultData } = useVaultModels({});
+  const { data: offerings } = useOfferings();
+  const { data: providers } = useProviders();
   const deleteMutation = useDeleteVaultModel();
   const [searchQuery, setSearchQuery] = useState('');
   const [showRegisterModal, setShowRegisterModal] = useState(false);
@@ -247,6 +319,7 @@ export function Models() {
     family: vm.family,
     parameters: vm.parameters,
     quantization: vm.quantization,
+    vram_required: vm.vram_required,
     max_context: vm.max_context,
     tags: vm.tags,
     vault_status: vm.status,
@@ -257,6 +330,17 @@ export function Models() {
     const q = searchQuery.toLowerCase();
     return m.id.toLowerCase().includes(q) || m.family?.toLowerCase().includes(q) || m.owned_by?.toLowerCase().includes(q);
   });
+
+  const visibleProviders = useMemo(
+    () => (providers || []).filter((provider) => CONFIGURABLE_PROVIDERS.includes(provider.provider as typeof CONFIGURABLE_PROVIDERS[number])),
+    [providers],
+  );
+  const visibleOfferings = useMemo(
+    () => (offerings || []).filter((offering) => CONFIGURABLE_PROVIDERS.includes(offering.provider as typeof CONFIGURABLE_PROVIDERS[number])),
+    [offerings],
+  );
+  const readyCount = filtered.filter((model) => describeDeployReadiness(model, visibleOfferings, visibleProviders).state === 'ready').length;
+  const activeCount = filtered.filter((model) => describeDeployReadiness(model, visibleOfferings, visibleProviders).state === 'active').length;
 
   const handleRemove = async (modelId: string) => {
     const vaultId = vaultIdByUri.get(modelId);
@@ -317,6 +401,7 @@ export function Models() {
               const isDeploying = model.vault_status === 'testing';
               const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
               const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
+              const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
               const shortName = model.id.split('/').pop() || model.id;
               const provider = model.owned_by || model.family || '';
               const hasVaultEntry = vaultIdByUri.has(model.id);
@@ -339,44 +424,25 @@ export function Models() {
                   <div className="mobile-data-meta">
                     <div><span className="label-text">QUANT</span> <span>{model.quantization || 'FP16'}</span></div>
                     <div><span className="label-text">CONTEXT</span> <span className="mono">{model.max_context ? model.max_context.toLocaleString() : 'N/A'}</span></div>
+                    <div><span className="label-text">DEPLOY</span> <span>{deployState.summary}</span></div>
                   </div>
 
                   <div className="mobile-data-actions">
-                    {isLoaded ? (
+                    <button
+                      type="button"
+                      className={`mobile-data-action${deployState.state === 'capacity' ? ' muted' : ''}`}
+                      onClick={() => navigate(deployState.actionTarget)}
+                    >
+                      {deployState.actionLabel}
+                    </button>
+                    {hasVaultEntry && !isLoaded && !isDeploying && (
                       <button
                         type="button"
-                        className="mobile-data-action"
-                        onClick={() => navigate('/instances')}
+                        className="mobile-data-action danger"
+                        onClick={() => handleRemove(model.id)}
                       >
-                        MANAGE
+                        REMOVE
                       </button>
-                    ) : isDeploying ? (
-                      <button
-                        type="button"
-                        className="mobile-data-action muted"
-                        onClick={() => toast.info('Cancellation coming soon')}
-                      >
-                        CANCEL
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="mobile-data-action"
-                          onClick={() => navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)}
-                        >
-                          DEPLOY
-                        </button>
-                        {hasVaultEntry && (
-                          <button
-                            type="button"
-                            className="mobile-data-action danger"
-                            onClick={() => handleRemove(model.id)}
-                          >
-                            REMOVE
-                          </button>
-                        )}
-                      </>
                     )}
                   </div>
                 </div>
@@ -414,6 +480,7 @@ export function Models() {
             const isDeploying = model.vault_status === 'testing';
             const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
             const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
+            const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
             const shortName = model.id.split('/').pop() || model.id;
             const provider = model.owned_by || model.family || '';
             const hasVaultEntry = vaultIdByUri.has(model.id);
@@ -434,49 +501,37 @@ export function Models() {
                     <span className={`status-dot ${statusDotClass}`} />
                     {statusLabel}
                   </div>
+                  <div style={{ marginTop: '0.45rem', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                    {deployState.summary}
+                  </div>
                 </div>
                 <div>
                   <span className="badge">{model.quantization || 'FP16'}</span>
+                  {model.vram_required ? (
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <span className="badge mono">{Math.ceil(model.vram_required / 1024)}GB VRAM</span>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="mono" style={{ color: 'var(--text-secondary)' }}>
                   {model.max_context ? model.max_context.toLocaleString() : 'N/A'}
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
-                  {isLoaded ? (
+                  <button
+                    type="button"
+                    className={`action-link${deployState.state === 'capacity' ? ' muted' : ''}`}
+                    onClick={() => navigate(deployState.actionTarget)}
+                  >
+                    {deployState.actionLabel}
+                  </button>
+                  {hasVaultEntry && !isLoaded && !isDeploying && (
                     <button
                       type="button"
-                      className="action-link"
-                      onClick={() => navigate('/instances')}
+                      className="action-link danger"
+                      onClick={() => handleRemove(model.id)}
                     >
-                      MANAGE
+                      REMOVE
                     </button>
-                  ) : isDeploying ? (
-                    <button
-                      type="button"
-                      className="action-link muted"
-                      onClick={() => toast.info('Cancellation coming soon')}
-                    >
-                      CANCEL
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="action-link"
-                        onClick={() => navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)}
-                      >
-                        DEPLOY
-                      </button>
-                      {hasVaultEntry && (
-                        <button
-                          type="button"
-                          className="action-link danger"
-                          onClick={() => handleRemove(model.id)}
-                        >
-                          REMOVE
-                        </button>
-                      )}
-                    </>
                   )}
                 </div>
               </div>
@@ -497,16 +552,24 @@ export function Models() {
           </div>
         </div>
         <div className="cell">
-          <div className="label-text">LOADED</div>
+          <div className="label-text">ACTIVE</div>
           <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-            {displayModels.filter(m => m.loaded !== false).length}
+            {activeCount}
           </div>
         </div>
-        <div className="cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text">SYSTEM STATUS</div>
+        <div className="cell">
+          <div className="label-text">READY TO DEPLOY</div>
+          <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+            {readyCount}
+          </div>
+        </div>
+        <div className="cell">
+          <div className="label-text">DEPLOYMENT SIGNAL</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span className="status-dot" />
-            All model endpoints are performing within latency targets.
+            <span className={`status-dot ${visibleProviders.some((provider) => provider.connected) ? '' : 'inactive'}`} />
+            {visibleProviders.some((provider) => provider.connected)
+              ? `${visibleProviders.filter((provider) => provider.connected).length} provider${visibleProviders.filter((provider) => provider.connected).length === 1 ? '' : 's'} live.`
+              : 'No live provider is currently connected for deployments.'}
           </div>
         </div>
       </div>

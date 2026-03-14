@@ -9,6 +9,8 @@ import { Models } from './Models';
 const mocks = vi.hoisted(() => ({
   models: { data: [], isLoading: false } as any,
   vaultModels: { data: { models: [] }, isLoading: false } as any,
+  offerings: { data: [], isLoading: false } as any,
+  providers: { data: [], isLoading: false } as any,
 }));
 
 vi.mock('../hooks/useIsMobile', () => ({
@@ -18,6 +20,8 @@ vi.mock('../hooks/useIsMobile', () => ({
 vi.mock('../hooks/useApi', () => ({
   useModels: () => mocks.models,
   useVaultModels: () => mocks.vaultModels,
+  useOfferings: () => mocks.offerings,
+  useProviders: () => mocks.providers,
   useRegisterVaultModel: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useDeleteVaultModel: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
@@ -27,6 +31,8 @@ describe('Models mobile layout', () => {
     vi.clearAllMocks();
     mocks.models = { data: [], isLoading: false };
     mocks.vaultModels = { data: { models: [] }, isLoading: false };
+    mocks.offerings = { data: [], isLoading: false };
+    mocks.providers = { data: [], isLoading: false };
   });
 
   it('renders mobile cards on Models page', () => {
@@ -49,6 +55,14 @@ describe('Models mobile layout', () => {
       data: { models: [{ id: 'vault_1', source_uri: 'org/model-a' }] },
       isLoading: false,
     };
+    mocks.offerings = {
+      data: [{ provider: 'runpod', gpu_type: 'RTX_4090', cost_per_hour: 0.4 }],
+      isLoading: false,
+    };
+    mocks.providers = {
+      data: [{ provider: 'runpod', connected: true }],
+      isLoading: false,
+    };
 
     const { container } = render(
       <MemoryRouter>
@@ -57,7 +71,8 @@ describe('Models mobile layout', () => {
     );
 
     expect(screen.getByText('model-a')).toBeInTheDocument();
-    expect(screen.getByText('DEPLOY')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'DEPLOY' })).toBeInTheDocument();
+    expect(screen.getByText(/Ready on 1 GPU config/i)).toBeInTheDocument();
     expect(container.querySelectorAll('.mobile-data-card').length).toBeGreaterThan(0);
     expect(screen.queryByText('MODEL NAME & VERSION')).not.toBeInTheDocument();
   });
