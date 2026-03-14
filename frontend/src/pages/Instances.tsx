@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { Instance, GPUOffering, GPUType, ProviderStatus, VaultModel, Worker } from '../types';
 import { fetchWorkspaceProviderConfigs } from '../lib/api';
+import { getInstanceReadiness } from '../lib/instanceReadiness';
 import { useInstances, useOfferings, useProviders, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { InstanceMobileCard } from '../components/InstanceMobileCard';
@@ -100,132 +101,6 @@ function getStatusLabel(status: string) {
       console.warn('Unknown instance status label fallback', status);
       return 'Unknown';
   }
-}
-
-type InstanceReadiness = {
-  label: string;
-  detail: string;
-  tone: '' | 'warning' | 'error' | 'inactive';
-  serving: boolean;
-};
-
-function getInstanceReadiness(instance: Instance, workers: Worker[] | undefined): InstanceReadiness {
-  const linkedWorker = workers?.find((worker) => worker.worker_id === instance.worker_id);
-  const assignedModels = instance.models || [];
-  const loadedModels = new Set(linkedWorker?.models || []);
-  const loadedAssignedModels = assignedModels.filter((model) => loadedModels.has(model));
-
-  switch (instance.status) {
-    case 'error':
-      return {
-        label: 'FAILED',
-        detail: instance.error || 'Provider reported an instance error during startup or serving.',
-        tone: 'error',
-        serving: false,
-      };
-    case 'pending':
-    case 'provisioning':
-      return {
-        label: 'PROVISIONING',
-        detail: 'Provider accepted the request. Waiting for the node to boot and join the cluster.',
-        tone: 'warning',
-        serving: false,
-      };
-    case 'stopping':
-      return {
-        label: 'STOPPING',
-        detail: 'This node is shutting down and will stop serving shortly.',
-        tone: 'warning',
-        serving: false,
-      };
-    case 'stopped':
-      return {
-        label: 'STOPPED',
-        detail: 'Infrastructure exists, but the node is not currently serving.',
-        tone: 'inactive',
-        serving: false,
-      };
-    case 'terminating':
-    case 'terminated':
-      return {
-        label: 'TERMINATED',
-        detail: 'This node is being removed or has already been removed.',
-        tone: 'inactive',
-        serving: false,
-      };
-  }
-
-  if (instance.status !== 'running') {
-    return {
-      label: getStatusLabel(instance.status).toUpperCase(),
-      detail: 'Node state has not reached a serving-ready stage yet.',
-      tone: 'warning',
-      serving: false,
-    };
-  }
-
-  if (!instance.worker_id) {
-    return {
-      label: 'WAITING FOR WORKER',
-      detail: 'Compute is live, but the worker process has not connected back to the gateway yet.',
-      tone: 'warning',
-      serving: false,
-    };
-  }
-
-  if (!linkedWorker) {
-    return {
-      label: 'WORKER CONNECTING',
-      detail: 'Worker is linked to the node, but it is not yet visible in the active worker set.',
-      tone: 'warning',
-      serving: false,
-    };
-  }
-
-  if (linkedWorker.status !== 'healthy') {
-    return {
-      label: 'WORKER DEGRADED',
-      detail: `Worker is connected but currently ${linkedWorker.status}.`,
-      tone: 'warning',
-      serving: false,
-    };
-  }
-
-  if (assignedModels.length === 0) {
-    return {
-      label: 'READY',
-      detail: 'Node is healthy and ready to accept model assignments.',
-      tone: '',
-      serving: false,
-    };
-  }
-
-  if (loadedAssignedModels.length === 0) {
-    return {
-      label: 'MODEL LOADING',
-      detail: `Worker is healthy. Waiting for ${assignedModels.length === 1 ? 'the assigned model' : `${assignedModels.length} assigned models`} to finish loading.`,
-      tone: 'warning',
-      serving: false,
-    };
-  }
-
-  if (loadedAssignedModels.length < assignedModels.length) {
-    return {
-      label: 'PARTIAL READY',
-      detail: `${loadedAssignedModels.length}/${assignedModels.length} assigned models are loaded on the worker.`,
-      tone: 'warning',
-      serving: false,
-    };
-  }
-
-  return {
-    label: 'SERVING',
-    detail: assignedModels.length === 1
-      ? `${assignedModels[0].split('/').pop()} is loaded and ready for inference.`
-      : `${assignedModels.length} assigned models are loaded and ready for inference.`,
-    tone: '',
-    serving: true,
-  };
 }
 
 function useInstanceActions(instance: Instance) {
