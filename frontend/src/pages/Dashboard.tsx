@@ -149,6 +149,12 @@ function formatCount(value: number): string {
   return new Intl.NumberFormat('en-US').format(value);
 }
 
+function formatCompactCount(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(value);
+}
+
 function buildOperationalAttentionQueue(
   deploymentSummaries: DeploymentAttemptSummary[],
   connectedProviders: number,
@@ -414,6 +420,52 @@ export function Dashboard() {
     () => [...buildOperationalAttentionQueue(deploymentSummaries, connectedProviders.length, visibleProviders.length, workers, activeInstances, servingUnverifiedCount), ...billingAttention].slice(0, 6),
     [activeInstances, billingAttention, connectedProviders.length, deploymentSummaries, servingUnverifiedCount, visibleProviders.length, workers],
   );
+  const deploymentTrend = useMemo(() => {
+    const recent = deploymentSummaries.slice(0, 6);
+    return {
+      recent,
+      failed: recent.filter((summary) => (
+        summary.attempt.outcome === 'request_failed'
+        || summary.attempt.inference_verification?.status === 'failed'
+        || summary.readiness.tone === 'error'
+      )).length,
+      pending: recent.filter((summary) => (
+        ['PROVISIONING', 'WAITING FOR WORKER', 'WORKER CONNECTING', 'MODEL LOADING', 'MODEL LOAD DELAY', 'PARTIAL READY', 'SERVING UNVERIFIED'].includes(summary.readiness.label)
+      )).length,
+      stable: recent.filter((summary) => (
+        summary.readiness.label === 'SERVING VERIFIED' || summary.attempt.inference_verification?.status === 'passed'
+      )).length,
+    };
+  }, [deploymentSummaries]);
+  const verificationTrend = useMemo(
+    () => deploymentSummaries
+      .filter((summary) => Boolean(summary.attempt.inference_verification))
+      .slice(0, 4),
+    [deploymentSummaries],
+  );
+  const usageTrend = useMemo(() => {
+    const byDay = new Map<string, { requests: number; tokens: number }>();
+    for (const row of usageRows) {
+      const day = row.bucket_start.slice(0, 10);
+      const totals = byDay.get(day) || { requests: 0, tokens: 0 };
+      totals.requests += row.requests;
+      totals.tokens += row.tokens;
+      byDay.set(day, totals);
+    }
+
+    return Array.from(byDay.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(-7)
+      .map(([day, totals]) => ({
+        day,
+        requests: totals.requests,
+        tokens: totals.tokens,
+      }));
+  }, [usageRows]);
+  const usageTrendMaxRequests = useMemo(
+    () => usageTrend.reduce((max, entry) => Math.max(max, entry.requests), 0),
+    [usageTrend],
+  );
 
   if (isLoading) {
     return (
@@ -580,6 +632,101 @@ export function Dashboard() {
           ) : (
             <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
               No urgent operational issues are currently queued. The serving, quota, and spend loop look stable right now.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="grid-row dashboard-trends-row">
+        <div className="cell dashboard-trend-cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text" style={{ marginBottom: '1rem' }}>DEPLOYMENT HISTORY</div>
+          <div className="dashboard-trend-summary">
+            <span>{deploymentTrend.stable} stable</span>
+            <span>{deploymentTrend.pending} pending</span>
+            <span>{deploymentTrend.failed} failed</span>
+          </div>
+          {deploymentTrend.recent.length > 0 ? (
+            <div className="dashboard-trend-list">
+              {deploymentTrend.recent.map((summary) => (
+                <div key={summary.attempt.id} className="dashboard-trend-item">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                    <div style={{ fontSize: '0.88rem', fontWeight: 500 }}>
+                      {summary.attempt.selected_model_name || summary.attempt.request.models?.[0]?.split('/').pop() || summary.instance?.name || 'Deployment attempt'}
+                    </div>
+                    <span className={`badge ${getSummaryToneClass(getAttemptTone(summary))}`}>{summary.readiness.label}</span>
+                  </div>
+                  <div className="dashboard-summary-text" style={{ marginTop: '0.35rem' }}>{summary.readiness.detail}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              No deployment attempts recorded yet.
+            </div>
+          )}
+        </div>
+
+        <div className="cell dashboard-trend-cell">
+          <div className="label-text" style={{ marginBottom: '1rem' }}>VERIFICATION HISTORY</div>
+          {verificationTrend.length > 0 ? (
+            <div className="dashboard-trend-list">
+              {verificationTrend.map((summary) => (
+                <div key={summary.attempt.id} className="dashboard-trend-item">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                    <span className={`badge ${summary.attempt.inference_verification?.status === 'failed' ? 'status-error' : ''}`}>
+                      {summary.attempt.inference_verification?.status === 'failed' ? 'FAILED' : 'PASSED'}
+                    </span>
+                    <span style={{ fontSize: '0.72rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
+                      {formatAttemptTime(summary.attempt.inference_verification?.verified_at)}
+                    </span>
+                  </div>
+                  <div style={{ marginTop: '0.5rem', fontSize: '0.84rem' }}>
+                    {summary.attempt.selected_model_name || summary.attempt.inference_verification?.model?.split('/').pop() || 'Deployment'}
+                  </div>
+                  <div className="dashboard-summary-text" style={{ marginTop: '0.3rem' }}>
+                    {summary.attempt.inference_verification?.status === 'failed'
+                      ? (summary.attempt.inference_verification.error || 'Inference verification failed.')
+                      : summary.attempt.inference_verification?.latency_ms != null
+                        ? `Latency ${summary.attempt.inference_verification.latency_ms}ms`
+                        : 'Live verification completed successfully.'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              No inference verification history yet.
+            </div>
+          )}
+        </div>
+
+        <div className="cell dashboard-trend-cell">
+          <div className="label-text" style={{ marginBottom: '1rem' }}>USAGE TRAJECTORY</div>
+          {usageTrend.length > 0 ? (
+            <div className="dashboard-trend-list">
+              {usageTrend.map((entry) => (
+                <div key={entry.day} className="dashboard-usage-trend-row">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      {new Date(`${entry.day}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    </span>
+                    <span className="mono" style={{ fontSize: '0.78rem' }}>{formatCompactCount(entry.requests)} req</span>
+                  </div>
+                  <div className="dashboard-usage-bar-track">
+                    <div
+                      className="dashboard-usage-bar-fill"
+                      style={{ width: `${usageTrendMaxRequests > 0 ? Math.max((entry.requests / usageTrendMaxRequests) * 100, 6) : 0}%` }}
+                    />
+                  </div>
+                  <div style={{ marginTop: '0.28rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                    {formatCompactCount(entry.tokens)} tokens
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              No workspace usage recorded yet this month.
             </div>
           )}
         </div>
