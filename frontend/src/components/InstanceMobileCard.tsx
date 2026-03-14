@@ -2,12 +2,14 @@ import type { ReactNode } from 'react';
 import type { Instance } from '../types';
 
 export function InstanceMobileCard({
+  anchorId,
   instance,
   statusClass,
   statusLabel,
   readiness,
   actions,
 }: {
+  anchorId?: string;
   instance: Instance;
   statusClass: string;
   statusLabel: string;
@@ -15,7 +17,7 @@ export function InstanceMobileCard({
   actions?: ReactNode;
 }) {
   return (
-    <div className="mobile-data-card">
+    <div id={anchorId} className="mobile-data-card">
       <div className="mobile-data-card-header">
         <div>
           <div className="mobile-data-title mono" style={{ fontSize: '0.9rem' }}>

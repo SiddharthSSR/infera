@@ -2,6 +2,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Instance, Worker } from '../types';
 import {
+  getDeploymentRemediation,
+  getDeploymentTimeline,
   readDeploymentAttempts,
   recordFailedAttempt,
   recordProvisionedAttempt,
@@ -104,5 +106,39 @@ describe('deploymentHistory', () => {
     expect(summary.readiness.label).toBe('SERVING VERIFIED');
     expect(summary.instance?.id).toBe('inst_1');
     expect(summary.retryable).toBe(false);
+  });
+
+  it('builds a serving timeline for verified deployments', () => {
+    const [attempt] = recordProvisionedAttempt(
+      workspaceID,
+      { name: 'worker-1', provider: 'runpod', gpu_type: 'A100_80GB', gpu_count: 1, models: ['org/model-a'] },
+      baseInstance,
+      'Model A',
+    );
+
+    const summary = summarizeDeploymentAttempt(
+      attempt,
+      [baseInstance],
+      [healthyWorker],
+      new Date('2026-03-14T10:12:00.000Z'),
+    );
+
+    const timeline = getDeploymentTimeline(summary);
+    expect(timeline.map((step) => step.state)).toEqual(['done', 'done', 'done', 'done', 'done', 'done']);
+    expect(getDeploymentRemediation(summary)).toBeNull();
+  });
+
+  it('routes auth-like request failures to workspace remediation', () => {
+    const [attempt] = recordFailedAttempt(
+      workspaceID,
+      { provider: 'runpod', gpu_type: 'RTX_4090' },
+      'provider auth failed',
+    );
+    const summary = summarizeDeploymentAttempt(attempt, [], []);
+    const remediation = getDeploymentRemediation(summary);
+
+    expect(remediation?.action).toBe('open_workspace');
+    expect(remediation?.label).toBe('FIX PROVIDER SETUP');
+    expect(getDeploymentTimeline(summary)[1].state).toBe('failed');
   });
 });
