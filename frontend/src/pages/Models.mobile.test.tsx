@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   vaultModels: { data: { models: [] }, isLoading: false } as any,
   offerings: { data: [], isLoading: false } as any,
   providers: { data: [], isLoading: false } as any,
+  instances: { data: [], isLoading: false } as any,
+  workers: { data: [], isLoading: false } as any,
 }));
 
 vi.mock('../hooks/useIsMobile', () => ({
@@ -22,8 +24,14 @@ vi.mock('../hooks/useApi', () => ({
   useVaultModels: () => mocks.vaultModels,
   useOfferings: () => mocks.offerings,
   useProviders: () => mocks.providers,
+  useInstances: () => mocks.instances,
+  useWorkers: () => mocks.workers,
   useRegisterVaultModel: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useDeleteVaultModel: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock('../lib/auth-context', () => ({
+  useAuthSession: () => ({ session: { workspace: { id: 'ws_test' } } }),
 }));
 
 describe('Models mobile layout', () => {
@@ -33,6 +41,8 @@ describe('Models mobile layout', () => {
     mocks.vaultModels = { data: { models: [] }, isLoading: false };
     mocks.offerings = { data: [], isLoading: false };
     mocks.providers = { data: [], isLoading: false };
+    mocks.instances = { data: [], isLoading: false };
+    mocks.workers = { data: [], isLoading: false };
   });
 
   it('renders mobile cards on Models page', () => {
