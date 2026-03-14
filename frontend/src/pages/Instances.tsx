@@ -1,8 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import type { Instance, GPUOffering, GPUType, ProviderStatus, VaultModel, Worker } from '../types';
+import type { Instance, GPUOffering, GPUType, ProviderStatus, ProviderType, VaultModel, Worker, ProvisionRequest } from '../types';
 import { fetchWorkspaceProviderConfigs } from '../lib/api';
+import {
+  readDeploymentAttempts,
+  recordFailedAttempt,
+  recordProvisionedAttempt,
+  summarizeDeploymentAttempt,
+  type DeploymentAttemptRecord,
+} from '../lib/deploymentHistory';
 import { getInstanceReadiness } from '../lib/instanceReadiness';
 import { useInstances, useOfferings, useProviders, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -19,6 +26,15 @@ const GPU_VRAM_GB: Record<GPUType, number> = {
 };
 
 const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai'] as const;
+
+type ProvisionDraft = {
+  name?: string;
+  provider?: ProviderType;
+  gpu_type?: GPUType;
+  gpu_count?: number;
+  spot_instance?: boolean;
+  models?: string[];
+};
 
 function describeProvisioningState(configuredProviders: string[], providerStatuses: ProviderStatus[], offeringsCount: number) {
   const visibleStatuses = providerStatuses.filter((status) => CONFIGURABLE_PROVIDERS.includes(status.provider as typeof CONFIGURABLE_PROVIDERS[number]));
@@ -101,6 +117,17 @@ function getStatusLabel(status: string) {
       console.warn('Unknown instance status label fallback', status);
       return 'Unknown';
   }
+}
+
+function formatAttemptTime(value: string) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  return new Date(timestamp).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 function useInstanceActions(instance: Instance) {
@@ -214,12 +241,21 @@ function InstanceRow({ instance, workers, highlighted }: { instance: Instance; w
   );
 }
 
-function ProvisionModal({ isOpen, onClose, onProvisioned, offerings, preselectedModel, providerStatuses, configuredProviders }: {
+function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, offerings, preselectedModel, initialDraft, providerStatuses, configuredProviders }: {
   isOpen: boolean;
   onClose: () => void;
-  onProvisioned: (instance: Instance, selectedModelName?: string) => void;
+  onProvisioned: (
+    instance: Instance,
+    request: ProvisionRequest & { name?: string },
+    selectedModelName?: string,
+  ) => void;
+  onProvisionFailed: (
+    request: ProvisionRequest & { name?: string },
+    failureReason: string,
+  ) => void;
   offerings: GPUOffering[] | undefined;
   preselectedModel?: string | null;
+  initialDraft?: ProvisionDraft | null;
   providerStatuses: ProviderStatus[];
   configuredProviders: string[];
 }) {
@@ -278,6 +314,27 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, offerings, preselected
   useEffect(() => {
     if (!isOpen) return;
 
+    setName(initialDraft?.name || '');
+    setSpotInstance(Boolean(initialDraft?.spot_instance));
+    setSelectedModels(initialDraft?.models || (preselectedModel ? [preselectedModel] : []));
+
+    if (!dedupedOfferings || !initialDraft?.gpu_type) {
+      setSelectedGPU('');
+      return;
+    }
+
+    const matchingOffering = dedupedOfferings.find((offering) =>
+      (!initialDraft.provider || offering.provider === initialDraft.provider) &&
+      offering.gpu_type === initialDraft.gpu_type &&
+      offering.gpu_count === (initialDraft.gpu_count || 1),
+    );
+
+    setSelectedGPU(matchingOffering ? getOfferingKey(matchingOffering) : '');
+  }, [dedupedOfferings, initialDraft, isOpen, preselectedModel]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
     const compatibleSources = new Set((compatibleModels || []).map((model) => model.source_uri));
     setSelectedModels((prev) => {
       const next = prev.filter((model) => compatibleSources.has(model));
@@ -309,16 +366,22 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, offerings, preselected
 
   const handleProvision = async () => {
     if (!selectedOffering) return;
+    const request = {
+      name: name || 'infera-worker',
+      provider: selectedOffering.provider,
+      gpu_type: selectedOffering.gpu_type,
+      gpu_count: selectedOffering.gpu_count,
+      spot_instance: spotInstance,
+      models: selectedModels.length > 0 ? selectedModels : undefined,
+    } as const;
+
     try {
-      const provisionedInstance = await provisionMutation.mutateAsync({
-        name: name || 'infera-worker',
-        provider: selectedOffering.provider,
-        gpu_type: selectedOffering.gpu_type,
-        gpu_count: selectedOffering.gpu_count,
-        spot_instance: spotInstance,
-        models: selectedModels.length > 0 ? selectedModels : undefined,
-      });
-      onProvisioned(provisionedInstance, selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : undefined);
+      const provisionedInstance = await provisionMutation.mutateAsync(request);
+      onProvisioned(
+        provisionedInstance,
+        request,
+        selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : undefined,
+      );
       toast.success(
         selectedModels.length > 0
           ? `Provisioning ${selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : `${selectedModels.length} models`} on ${selectedOffering.gpu_type.replace('_', ' ')}`
@@ -329,7 +392,11 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, offerings, preselected
       setSelectedGPU('');
       setSelectedModels([]);
       setSpotInstance(false);
-    } catch { toast.error('Failed to provision'); }
+    } catch (error) {
+      const failureReason = error instanceof Error ? error.message : 'Provider request failed before an instance was created.';
+      onProvisionFailed(request, failureReason);
+      toast.error('Failed to provision');
+    }
   };
 
   if (!isOpen) return null;
@@ -489,10 +556,11 @@ export function Instances() {
   const [showProvisionModal, setShowProvisionModal] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('active');
   const [configuredProviders, setConfiguredProviders] = useState<string[]>([]);
-  const [lastProvisionedInstanceID, setLastProvisionedInstanceID] = useState<string | null>(null);
-  const [lastProvisionedModelName, setLastProvisionedModelName] = useState<string | null>(null);
+  const [provisionDraft, setProvisionDraft] = useState<ProvisionDraft | null>(null);
+  const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
   const isMobile = useIsMobile(900);
   const { session } = useAuthSession();
+  const workspaceID = session?.workspace?.id;
   const role = session?.key?.role ?? 'user';
   const { data: instances, isLoading } = useInstances();
   const { data: offerings } = useOfferings();
@@ -522,14 +590,18 @@ export function Instances() {
   const providerSummary = filteredInstances.length > 0
     ? [...new Set(filteredInstances.map((instance) => instance.provider))]
     : visibleProviderStatuses.filter((status) => configuredProviders.includes(status.provider)).map((status) => status.provider);
-  const lastProvisionedInstance = instances?.find((instance) => instance.id === lastProvisionedInstanceID) || null;
-  const lastProvisionedReadiness = lastProvisionedInstance ? getInstanceReadiness(lastProvisionedInstance, workers) : null;
+  const deploymentHistory = useMemo(
+    () => deploymentAttempts.map((attempt) => summarizeDeploymentAttempt(attempt, instances, workers)),
+    [deploymentAttempts, instances, workers],
+  );
+  const latestDeployment = deploymentHistory[0] || null;
 
   // Auto-open provision modal if redirected from dashboard or registry.
   useEffect(() => {
     if (searchParams.get('provision') === 'true') {
       const model = searchParams.get('model');
       if (model) setPreselectedModel(model);
+      setProvisionDraft(null);
       setShowProvisionModal(true);
       setSearchParams({}, { replace: true });
     }
@@ -554,23 +626,52 @@ export function Instances() {
       .catch(() => setConfiguredProviders(visibleProviderStatuses.map((status) => status.provider)));
   }, [role, session?.workspace?.id, visibleProviderStatuses]);
 
+  useEffect(() => {
+    setDeploymentAttempts(readDeploymentAttempts(workspaceID));
+  }, [workspaceID]);
+
+  const openFreshProvisionModal = () => {
+    setProvisionDraft(null);
+    setShowProvisionModal(true);
+  };
+
+  const openRetryModal = (attempt: DeploymentAttemptRecord) => {
+    setProvisionDraft(attempt.request);
+    setPreselectedModel(attempt.request.models?.length === 1 ? attempt.request.models[0] : null);
+    setShowProvisionModal(true);
+  };
+
   return (
     <div className="instances-page animate-fade-in">
-      {lastProvisionedInstance && lastProvisionedReadiness && (
+      {latestDeployment && (
         <div style={{ padding: '1.25rem 2rem', borderBottom: 'var(--grid-line)', background: 'rgba(255, 255, 255, 0.82)' }}>
           <div className="label-text" style={{ marginBottom: '0.5rem' }}>LATEST DEPLOYMENT</div>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: '1rem', fontWeight: 600 }}>
-                {lastProvisionedModelName || lastProvisionedInstance.name || lastProvisionedInstance.id.slice(0, 16)}
+                {latestDeployment.attempt.selected_model_name
+                  || latestDeployment.attempt.instance_name
+                  || latestDeployment.attempt.request.name
+                  || latestDeployment.attempt.instance_id?.slice(0, 16)
+                  || 'Recent deployment'}
               </div>
               <div style={{ marginTop: '0.4rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '44rem' }}>
-                {lastProvisionedReadiness.detail}
+                {latestDeployment.readiness.detail}
+              </div>
+              <div style={{ marginTop: '0.6rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {formatAttemptTime(latestDeployment.attempt.updated_at)}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              <span className={`badge ${lastProvisionedReadiness.tone ? `status-${lastProvisionedReadiness.tone}` : ''}`}>{lastProvisionedReadiness.label}</span>
-              <span className="badge">{getStatusLabel(lastProvisionedInstance.status).toUpperCase()}</span>
+              <span className={`badge ${latestDeployment.readiness.tone ? `status-${latestDeployment.readiness.tone}` : ''}`}>{latestDeployment.readiness.label}</span>
+              {latestDeployment.instance && (
+                <span className="badge">{getStatusLabel(latestDeployment.instance.status).toUpperCase()}</span>
+              )}
+              {latestDeployment.retryable && (
+                <button className="action-btn" onClick={() => openRetryModal(latestDeployment.attempt)}>
+                  RETRY CONFIG
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -671,7 +772,7 @@ export function Instances() {
                     navigate('/workspace');
                     return;
                   }
-                  setShowProvisionModal(true);
+                  openFreshProvisionModal();
                 }}
               >
                 {provisioningState?.action || 'PROVISION NEW NODE'}
@@ -708,7 +809,7 @@ export function Instances() {
                       key={instance.id}
                       instance={instance}
                       workers={workers}
-                      highlighted={instance.id === lastProvisionedInstanceID}
+                      highlighted={instance.id === latestDeployment?.attempt.instance_id}
                     />
                   ))}
                 </tbody>
@@ -716,7 +817,7 @@ export function Instances() {
             </div>
           )}
 
-          <button className="action-btn" style={{ marginTop: '2rem' }} onClick={() => setShowProvisionModal(true)}>
+          <button className="action-btn" style={{ marginTop: '2rem' }} onClick={openFreshProvisionModal}>
             PROVISION NEW NODE
           </button>
         </div>
@@ -792,6 +893,75 @@ export function Instances() {
         </div>
       </div>
 
+      {deploymentHistory.length > 0 && (
+        <div className="grid-row">
+          <div className="cell" style={{ gridColumn: 'span 4' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+              <div>
+                <div className="label-text" style={{ marginBottom: '0.35rem' }}>DEPLOYMENT HISTORY</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  Recent provisioning attempts persist per workspace so you can recover the flow after refresh.
+                </div>
+              </div>
+              <button className="action-btn" onClick={openFreshProvisionModal}>NEW ATTEMPT</button>
+            </div>
+
+            <div style={{ display: 'grid', gap: '0.85rem' }}>
+              {deploymentHistory.slice(0, 5).map(({ attempt, readiness, instance, retryable }) => (
+                <div
+                  key={attempt.id}
+                  style={{
+                    border: 'var(--grid-line)',
+                    padding: '1rem 1.1rem',
+                    background: latestDeployment?.attempt.id === attempt.id ? 'rgba(244, 242, 238, 0.7)' : 'transparent',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0, flex: '1 1 28rem' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: '0.95rem', fontWeight: 600 }}>
+                          {attempt.selected_model_name
+                            || attempt.instance_name
+                            || attempt.request.name
+                            || attempt.request.models?.[0]?.split('/').pop()
+                            || 'Provisioning attempt'}
+                        </div>
+                        <span className={`badge ${readiness.tone ? `status-${readiness.tone}` : ''}`}>{readiness.label}</span>
+                        {instance && <span className="badge">{getStatusLabel(instance.status).toUpperCase()}</span>}
+                      </div>
+                      <div style={{ marginTop: '0.45rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
+                        {readiness.detail}
+                      </div>
+                      <div style={{ marginTop: '0.65rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                        <span className="badge">{formatAttemptTime(attempt.updated_at)}</span>
+                        {attempt.request.provider && <span className="badge">{attempt.request.provider.toUpperCase()}</span>}
+                        <span className="badge">{attempt.request.gpu_count || 1}x {attempt.request.gpu_type.replace('_', ' ')}</span>
+                        {attempt.request.spot_instance ? <span className="badge">SPOT</span> : null}
+                        {attempt.request.models?.length ? <span className="badge">{attempt.request.models.length} MODEL{attempt.request.models.length === 1 ? '' : 'S'}</span> : null}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      {instance && <InstanceActions instance={instance} compact />}
+                      {retryable && (
+                        <button className="action-btn" onClick={() => openRetryModal(attempt)}>
+                          RETRY CONFIG
+                        </button>
+                      )}
+                      {provisioningState && (
+                        <button className="action-btn" onClick={() => navigate('/workspace')}>
+                          OPEN WORKSPACE
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Footer */}
       <div className="grid-row instances-footer-row">
         <div className="cell">
@@ -818,14 +988,17 @@ export function Instances() {
 
       <ProvisionModal
         isOpen={showProvisionModal}
-        onClose={() => { setShowProvisionModal(false); setPreselectedModel(null); }}
-        onProvisioned={(instance, modelName) => {
-          setLastProvisionedInstanceID(instance.id);
-          setLastProvisionedModelName(modelName || null);
+        onClose={() => { setShowProvisionModal(false); setPreselectedModel(null); setProvisionDraft(null); }}
+        onProvisioned={(instance, request, modelName) => {
+          setDeploymentAttempts(recordProvisionedAttempt(workspaceID, request, instance, modelName));
           setStatusFilter('active');
+        }}
+        onProvisionFailed={(request, failureReason) => {
+          setDeploymentAttempts(recordFailedAttempt(workspaceID, request, failureReason));
         }}
         offerings={offerings}
         preselectedModel={preselectedModel}
+        initialDraft={provisionDraft}
         providerStatuses={visibleProviderStatuses}
         configuredProviders={configuredProviders}
       />
