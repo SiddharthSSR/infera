@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, createContext, useContext, Suspense } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
@@ -6,57 +6,21 @@ import { cn } from './lib/utils';
 import { getSession, destroySession, type SessionInfo } from './lib/api';
 import { AuthContext, useAuthSession } from './lib/auth-context';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ChatContext, type ChatContextType, type Message, type PlaygroundHistoryEntry } from './lib/chat-context';
 import { lazyWithRetry } from './lib/lazyWithRetry';
-import type { ChatMessage } from './types';
 
-const Dashboard = lazyWithRetry(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })), 'dashboard');
-const Playground = lazyWithRetry(() => import('./pages/Playground').then((module) => ({ default: module.Playground })), 'playground');
-const Instances = lazyWithRetry(() => import('./pages/Instances').then((module) => ({ default: module.Instances })), 'instances');
-const Logs = lazyWithRetry(() => import('./pages/Logs').then((module) => ({ default: module.Logs })), 'logs');
-const Models = lazyWithRetry(() => import('./pages/Models').then((module) => ({ default: module.Models })), 'models');
-const ApiKeys = lazyWithRetry(() => import('./pages/ApiKeys').then((module) => ({ default: module.ApiKeys })), 'api-keys');
-const WorkspaceAdmin = lazyWithRetry(() => import('./pages/WorkspaceAdmin').then((module) => ({ default: module.WorkspaceAdmin })), 'workspace');
+import { Dashboard } from './pages/Dashboard';
+import { Playground } from './pages/Playground';
+import { Instances } from './pages/Instances';
+import { Logs } from './pages/Logs';
+import { Models } from './pages/Models';
+import { ApiKeys } from './pages/ApiKeys';
+import { WorkspaceAdmin } from './pages/WorkspaceAdmin';
+
 const Login = lazyWithRetry(() => import('./pages/Login').then((module) => ({ default: module.Login })), 'login');
 const PublicApiDocs = lazyWithRetry(() => import('./pages/PublicApiDocs').then((module) => ({ default: module.PublicApiDocs })), 'docs');
 const GettingStarted = lazyWithRetry(() => import('./pages/GettingStarted').then((module) => ({ default: module.GettingStarted })), 'getting-started');
 const AcceptInvitation = lazyWithRetry(() => import('./pages/AcceptInvitation').then((module) => ({ default: module.AcceptInvitation })), 'accept-invite');
-
-// Chat message with metadata
-interface Message extends ChatMessage {
-  id: string;
-  timestamp: Date;
-}
-
-interface PlaygroundHistoryEntry {
-  id: string;
-  time: string;
-  latencyMs: number;
-  preview: string;
-  promptTokens?: number;
-  completionTokens?: number;
-}
-
-// Chat Context - to persist chat state across page switches
-interface ChatContextType {
-  messages: Message[];
-  setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
-  history: PlaygroundHistoryEntry[];
-  setHistory: React.Dispatch<React.SetStateAction<PlaygroundHistoryEntry[]>>;
-  selectedModel: string;
-  setSelectedModel: (model: string) => void;
-  temperature: number;
-  setTemperature: (temp: number) => void;
-  maxTokens: number;
-  setMaxTokens: (tokens: number) => void;
-}
-
-const ChatContext = createContext<ChatContextType | null>(null);
-
-export const useChat = () => {
-  const context = useContext(ChatContext);
-  if (!context) throw new Error('useChat must be used within ChatProvider');
-  return context;
-};
 
 // Query Client
 const queryClient = new QueryClient({
@@ -266,21 +230,19 @@ function AppContent() {
         {location.pathname !== '/playground' && (
           <header className="display-text">{pageTitle}</header>
         )}
-        <Suspense fallback={<RouteLoader />}>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/playground" element={<Playground />} />
-            <Route path="/models" element={<Models />} />
-            <Route path="/instances" element={<Instances />} />
-            <Route path="/logs" element={<Logs />} />
-            <Route path="/api-keys" element={<ApiKeys />} />
-            <Route path="/workspace" element={<WorkspaceAdmin />} />
-            <Route path="/docs" element={<PublicApiDocs />} />
-            <Route path="/getting-started" element={<GettingStarted />} />
-            <Route path="/accept-invite" element={<Navigate to="/workspace" replace />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/playground" element={<Playground />} />
+          <Route path="/models" element={<Models />} />
+          <Route path="/instances" element={<Instances />} />
+          <Route path="/logs" element={<Logs />} />
+          <Route path="/api-keys" element={<ApiKeys />} />
+          <Route path="/workspace" element={<WorkspaceAdmin />} />
+          <Route path="/docs" element={<PublicApiDocs />} />
+          <Route path="/getting-started" element={<GettingStarted />} />
+          <Route path="/accept-invite" element={<Navigate to="/workspace" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </div>
     </ChatContext.Provider>
     </AuthContext.Provider>
