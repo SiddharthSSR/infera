@@ -228,7 +228,7 @@ export function Dashboard() {
       </div>
 
       {/* Footer Row */}
-      <div className="grid-row dashboard-footer-row" style={{ borderBottom: 'none' }}>
+      <div className="grid-row dashboard-footer-row">
         <div className="cell">
           <div className="label-text">VERSION</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>v1.0.0</div>

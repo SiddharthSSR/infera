@@ -578,7 +578,7 @@ export function Instances() {
       </div>
 
       {/* Footer */}
-      <div className="grid-row instances-footer-row" style={{ borderBottom: 'none' }}>
+      <div className="grid-row instances-footer-row">
         <div className="cell">
           <div className="label-text">PROVIDER</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>

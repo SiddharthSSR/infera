@@ -270,7 +270,7 @@ export function ApiKeys() {
       </div>
 
       {/* Footer */}
-      <div className="grid-row" style={{ borderBottom: 'none' }}>
+      <div className="grid-row">
         <div className="cell">
           <div className="label-text">ACTIVE KEYS</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>

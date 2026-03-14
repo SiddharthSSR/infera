@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { CodeExample } from '../components/CodeExample';
 
 const prepCards = [
   {
@@ -169,14 +170,14 @@ export function GettingStarted() {
                     <div className="label-text">1. LIST MODELS</div>
                     <span className="badge">DISCOVERY</span>
                   </div>
-                  <pre className="code-block">{modelsRequest}</pre>
+                  <CodeExample code={modelsRequest} language="shell" />
                 </div>
                 <div className="docs-code-panel">
                   <div className="docs-code-toolbar">
                     <div className="label-text">2. SEND CHAT</div>
                     <span className="badge">UNARY</span>
                   </div>
-                  <pre className="code-block">{chatRequest}</pre>
+                  <CodeExample code={chatRequest} language="shell" />
                 </div>
               </div>
             </section>
@@ -194,7 +195,7 @@ export function GettingStarted() {
               <div className="docs-card-grid">
                 <div className="docs-code-panel">
                   <div className="label-text">STREAM REQUEST</div>
-                  <pre className="code-block">{streamRequest}</pre>
+                  <CodeExample code={streamRequest} language="shell" />
                 </div>
                 <div className="docs-card">
                   <div className="label-text">EXPECT</div>

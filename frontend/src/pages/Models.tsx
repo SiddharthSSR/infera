@@ -491,7 +491,7 @@ export function Models() {
       )}
 
       {/* Footer */}
-      <div className="grid-row" style={{ borderBottom: 'none', backgroundColor: 'var(--bg-accent)' }}>
+      <div className="grid-row" style={{ backgroundColor: 'var(--bg-accent)' }}>
         <div className="cell">
           <div className="label-text">REGISTRY MODELS</div>
           <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>

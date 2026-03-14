@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { CodeExample } from '../components/CodeExample';
 
 const summaryCards = [
   {
@@ -252,7 +253,7 @@ export function PublicApiDocs() {
               <div className="docs-card-grid">
                 <div className="docs-card">
                   <div className="label-text">HEADER</div>
-                  <pre className="code-block" style={{ marginTop: '1rem' }}>Authorization: Bearer inf_...</pre>
+                  <CodeExample code={'Authorization: Bearer inf_...'} language="text" style={{ marginTop: '1rem' }} />
                 </div>
                 <div className="docs-card">
                   <div className="label-text">IMPORTANT</div>
@@ -301,21 +302,21 @@ export function PublicApiDocs() {
                     <div className="label-text">CURL</div>
                     <span className="badge">UNARY</span>
                   </div>
-                  <pre className="code-block">{curlExample}</pre>
+                  <CodeExample code={curlExample} language="shell" />
                 </div>
                 <div className="docs-code-panel">
                   <div className="docs-code-toolbar">
                     <div className="label-text">PYTHON SDK</div>
                     <span className="badge">OPENAI CLIENT</span>
                   </div>
-                  <pre className="code-block">{pythonExample}</pre>
+                  <CodeExample code={pythonExample} language="python" />
                 </div>
                 <div className="docs-code-panel" style={{ gridColumn: '1 / -1' }}>
                   <div className="docs-code-toolbar">
                     <div className="label-text">TYPESCRIPT SDK</div>
                     <span className="badge">STREAMING</span>
                   </div>
-                  <pre className="code-block">{typescriptExample}</pre>
+                  <CodeExample code={typescriptExample} language="typescript" />
                 </div>
               </div>
               <div className="docs-callout" style={{ marginTop: '1rem' }}>

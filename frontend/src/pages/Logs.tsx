@@ -203,7 +203,7 @@ export function Logs() {
       )}
 
       {/* Footer */}
-      <div className="grid-row" style={{ borderTop: 'var(--grid-line)', borderBottom: 'none' }}>
+      <div className="grid-row" style={{ borderTop: 'var(--grid-line)' }}>
         <div className="cell">
           <div className="label-text">LIVE STATUS</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 8 }}>

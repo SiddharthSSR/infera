@@ -519,7 +519,7 @@ export function WorkspaceAdmin() {
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>CURRENT MONTH USAGE</div>
           {canViewUsage ? (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '1rem' }}>
+              <div className="workspace-usage-summary" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '1rem' }}>
                 <div style={{ padding: '1rem', backgroundColor: 'var(--bg-accent)' }}>
                   <div className="label-text">REQUESTS</div>
                   <div style={{ fontSize: '2rem', marginTop: '0.5rem' }}>{formatCount(usageSummary.requests)}</div>
@@ -684,7 +684,7 @@ export function WorkspaceAdmin() {
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>WORKSPACE QUOTA</div>
           {canViewQuota && quota ? (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+              <div className="workspace-quota-inputs" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                 <div>
                   <div className="label-text">MONTHLY REQUEST LIMIT</div>
                   <input className="control-input" value={requestLimit} disabled={!canManageQuota} onChange={(e) => setRequestLimit(e.target.value)} placeholder="Unlimited" />
@@ -748,7 +748,7 @@ export function WorkspaceAdmin() {
                 </table>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr auto', gap: '1rem', alignItems: 'end' }}>
+              <div className="workspace-service-create-row" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr auto', gap: '1rem', alignItems: 'end' }}>
                 <div>
                   <div className="label-text">NAME</div>
                   <input className="control-input" value={newServiceAccountName} onChange={(e) => setNewServiceAccountName(e.target.value)} placeholder="ci-bot" />

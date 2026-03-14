@@ -82,14 +82,10 @@ export function Login({ onAuthenticated }: LoginProps) {
   };
 
   return (
-    <div className="animate-fade-in" style={{
-      display: 'flex',
-      minHeight: '100vh',
-      width: '100%',
-    }}>
+    <div className="login-page">
+      <div className="login-shell animate-fade-in">
       {/* Left Panel — Branding */}
       <div className="login-brand-panel" style={{
-        width: '55%',
         backgroundColor: 'var(--bg-accent)',
         borderRight: 'var(--grid-line)',
         display: 'flex',
@@ -134,7 +130,6 @@ export function Login({ onAuthenticated }: LoginProps) {
 
       {/* Right Panel — Connect Form */}
       <div className="login-form-panel" style={{
-        width: '45%',
         backgroundColor: 'var(--bg-paper)',
         display: 'flex',
         flexDirection: 'column',
@@ -238,7 +233,6 @@ export function Login({ onAuthenticated }: LoginProps) {
       <style>{`
         @media (max-width: 768px) {
           .login-brand-panel {
-            width: 100% !important;
             padding: 2rem !important;
             min-height: auto !important;
           }
@@ -246,7 +240,6 @@ export function Login({ onAuthenticated }: LoginProps) {
             font-size: 3.5rem !important;
           }
           .login-form-panel {
-            width: 100% !important;
             padding: 2rem !important;
           }
           .animate-fade-in {
@@ -258,6 +251,7 @@ export function Login({ onAuthenticated }: LoginProps) {
           }
         }
       `}</style>
+      </div>
     </div>
   );
 }
