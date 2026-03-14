@@ -1,28 +1,47 @@
 import { Link } from 'react-router-dom';
 
-const steps = [
+const prepCards = [
   {
-    label: '1. Get an API key',
-    detail: 'Use an existing Infera key or ask your gateway admin to create one.',
+    label: 'You need',
+    value: 'An Infera API key with access to at least one workspace model.',
   },
   {
-    label: '2. Discover models',
-    detail: 'Call GET /v1/models to see the currently available model IDs.',
+    label: 'Best workflow',
+    value: 'Call /v1/models first, then copy the exact id into /v1/chat/completions.',
   },
   {
-    label: '3. Send a chat request',
-    detail: 'Use POST /v1/chat/completions with a Bearer token and a standard OpenAI-style payload.',
-  },
-  {
-    label: '4. Switch to streaming',
-    detail: 'Set stream=true to receive OpenAI-style SSE chunks and a final [DONE] marker.',
+    label: 'Success signal',
+    value: 'One non-streaming response first. Add stream=true only after that passes.',
   },
 ];
 
-const firstRequest = `curl https://inferai.co.in/v1/models \\
-  -H "Authorization: Bearer inf_..."
+const steps = [
+  {
+    number: '01',
+    title: 'Confirm auth',
+    copy: 'Use the key as Authorization: Bearer inf_... and treat it like a service credential, not a browser login.',
+  },
+  {
+    number: '02',
+    title: 'Inspect live models',
+    copy: 'The model id in your request should come from the current /v1/models response, not from memory or docs screenshots.',
+  },
+  {
+    number: '03',
+    title: 'Send a chat request',
+    copy: 'Keep the first prompt small and deterministic so auth, routing, and model availability are easy to validate.',
+  },
+  {
+    number: '04',
+    title: 'Promote to streaming',
+    copy: 'Switch to stream=true after the unary path works. Streaming issues are easier to isolate that way.',
+  },
+];
 
-curl https://inferai.co.in/v1/chat/completions \\
+const modelsRequest = `curl https://inferai.co.in/v1/models \\
+  -H "Authorization: Bearer inf_..."`;
+
+const chatRequest = `curl https://inferai.co.in/v1/chat/completions \\
   -H "Authorization: Bearer inf_..." \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -32,72 +51,196 @@ curl https://inferai.co.in/v1/chat/completions \\
     ]
   }'`;
 
+const streamRequest = `curl https://inferai.co.in/v1/chat/completions \\
+  -H "Authorization: Bearer inf_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "stream": true,
+    "messages": [
+      {"role": "user", "content": "Say hello in one short line."}
+    ]
+  }'`;
+
+const failureChecks = [
+  'The key is valid and sent as Authorization: Bearer ...',
+  'The model id exactly matches a value from /v1/models',
+  'At least one healthy worker has that model available',
+  'Your client keeps reading the stream until data: [DONE]',
+];
+
 export function GettingStarted() {
   return (
-    <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, var(--bg-paper) 0%, #f1ede7 100%)' }}>
-      <div className="app-shell" style={{ maxWidth: 1200 }}>
-        <header className="top-nav" style={{ flexWrap: 'wrap', gap: '1rem' }}>
+    <div className="docs-page">
+      <div className="app-shell docs-shell">
+        <header className="top-nav docs-header">
           <div>
             <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
             <div className="label-text" style={{ marginTop: '0.5rem' }}>GETTING STARTED</div>
           </div>
           <div className="nav-group" style={{ gap: '1rem' }}>
             <Link className="nav-link" to="/docs">API DOCS</Link>
+            <Link className="nav-link" to="/accept-invite">ACCEPT INVITE</Link>
             <Link className="nav-link" to="/">LOGIN</Link>
           </div>
         </header>
 
-        <section className="grid-row" style={{ gridTemplateColumns: '1fr 1fr' }}>
-          <div className="cell" style={{ padding: '3rem 2rem' }}>
-            <div className="display-text" style={{ textAlign: 'left', border: 'none', padding: 0, fontSize: '4.8rem' }}>
-              FIRST REQUEST
+        <section className="docs-hero">
+          <div className="docs-kicker">First successful request</div>
+          <div className="docs-hero-grid">
+            <div>
+              <div className="docs-title">From API key to first model response.</div>
+              <p className="docs-subtitle">
+                This page is the shortest production path into Infera. Keep the first call boring: validate auth, read the live model list, ship one unary request, then move to streaming once the basics are proven.
+              </p>
+              <div className="docs-hero-strip">
+                <span className="docs-pill">Model list first</span>
+                <span className="docs-pill">Unary before stream</span>
+                <span className="docs-pill">Production-safe flow</span>
+              </div>
+              <div className="docs-actions">
+                <a className="btn-primary" href="#runbook" style={{ textDecoration: 'none' }}>RUN THE FLOW</a>
+                <Link className="btn-quiet" to="/docs">OPEN FULL API DOCS</Link>
+              </div>
             </div>
-            <p style={{ marginTop: '1rem', color: 'var(--text-secondary)', maxWidth: 620, fontSize: '1rem', lineHeight: 1.6 }}>
-              This is the shortest path from API key to successful inference. The examples below assume you already have a running Infera deployment and at least one model exposed through the gateway.
-            </p>
-          </div>
-          <div className="cell" style={{ padding: '3rem 2rem', background: 'rgba(0,0,0,0.02)' }}>
-            <div className="label-text">FOUR-STEP FLOW</div>
-            <div style={{ marginTop: '1.25rem', display: 'grid', gap: '1rem' }}>
-              {steps.map((step) => (
-                <div key={step.label} style={{ paddingBottom: '1rem', borderBottom: 'var(--grid-line)' }}>
-                  <div className="label-text">{step.label}</div>
-                  <div className="value-text" style={{ fontSize: '1rem', marginTop: '0.45rem', lineHeight: 1.5 }}>{step.detail}</div>
+            <div className="docs-summary">
+              {prepCards.map((card) => (
+                <div key={card.label} className="docs-summary-card">
+                  <div className="label-text">{card.label}</div>
+                  <div className="docs-summary-value">{card.value}</div>
                 </div>
               ))}
             </div>
           </div>
         </section>
 
-        <section className="grid-row" style={{ gridTemplateColumns: '1fr' }}>
-          <div className="cell">
-            <div className="label-text">COPY / RUN</div>
-            <pre className="code-block" style={{ marginTop: '1rem' }}>{firstRequest}</pre>
-          </div>
-        </section>
-
-        <section className="grid-row" style={{ gridTemplateColumns: '1fr 1fr' }}>
-          <div className="cell">
-            <div className="label-text">WHAT TO CHECK IF IT FAILS</div>
-            <ul style={{ marginTop: '1rem', paddingLeft: '1rem', color: 'var(--text-secondary)', lineHeight: 1.8 }}>
-              <li>Key is valid and sent as `Authorization: Bearer ...`</li>
-              <li>Model ID matches an entry from `/v1/models`</li>
-              <li>At least one healthy worker has the model loaded</li>
-              <li>Streaming clients read SSE events until `data: [DONE]`</li>
-            </ul>
-          </div>
-          <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-            <div>
-              <div className="label-text">NEXT</div>
-              <div className="value-text" style={{ fontSize: '1rem', marginTop: '1rem', lineHeight: 1.6 }}>
-                Once the first request works, move to the full API docs for request fields, streaming behavior, and compatibility notes.
+        <div className="docs-layout">
+          <aside className="docs-sidebar">
+            <div className="label-text">QUICK NAV</div>
+            <nav className="docs-sidebar-nav">
+              <a className="docs-sidebar-link" href="#runbook">Runbook</a>
+              <a className="docs-sidebar-link" href="#copy-run">Copy and run</a>
+              <a className="docs-sidebar-link" href="#streaming">Streaming</a>
+              <a className="docs-sidebar-link" href="#failures">Failure checks</a>
+            </nav>
+            <div className="docs-sidebar-card">
+              <div className="label-text">RULE</div>
+              <div style={{ marginTop: '0.7rem', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.65 }}>
+                Always promote complexity in order: auth, live model lookup, unary request, then streaming.
               </div>
             </div>
-            <Link className="btn-primary" to="/docs" style={{ textDecoration: 'none', width: 'fit-content' }}>
-              OPEN API DOCS
-            </Link>
-          </div>
-        </section>
+          </aside>
+
+          <main className="docs-main">
+            <section className="docs-section" id="runbook">
+              <div className="docs-section-head">
+                <div>
+                  <div className="label-text">RUNBOOK</div>
+                  <h2 className="docs-section-title">Use this order. It reduces debugging time.</h2>
+                </div>
+                <div className="docs-section-copy">
+                  The sequence matters. If you skip straight to a large streaming request, you make auth, routing, and worker issues much harder to isolate.
+                </div>
+              </div>
+              <div className="docs-step-grid">
+                {steps.map((step) => (
+                  <div key={step.number} className="docs-step-card">
+                    <div className="docs-step-number">Step {step.number}</div>
+                    <div className="docs-step-title">{step.title}</div>
+                    <div className="docs-step-copy">{step.copy}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="docs-section tone" id="copy-run">
+              <div className="docs-section-head">
+                <div>
+                  <div className="label-text">COPY AND RUN</div>
+                  <h2 className="docs-section-title">Two commands before you do anything clever.</h2>
+                </div>
+                <div className="docs-section-copy">
+                  First confirm the live model list. Then send one small chat request. If both pass, your auth path and routing path are in good shape.
+                </div>
+              </div>
+              <div className="docs-code-grid">
+                <div className="docs-code-panel">
+                  <div className="docs-code-toolbar">
+                    <div className="label-text">1. LIST MODELS</div>
+                    <span className="badge">DISCOVERY</span>
+                  </div>
+                  <pre className="code-block">{modelsRequest}</pre>
+                </div>
+                <div className="docs-code-panel">
+                  <div className="docs-code-toolbar">
+                    <div className="label-text">2. SEND CHAT</div>
+                    <span className="badge">UNARY</span>
+                  </div>
+                  <pre className="code-block">{chatRequest}</pre>
+                </div>
+              </div>
+            </section>
+
+            <section className="docs-section" id="streaming">
+              <div className="docs-section-head">
+                <div>
+                  <div className="label-text">STREAMING</div>
+                  <h2 className="docs-section-title">Only after the unary path is green.</h2>
+                </div>
+                <div className="docs-section-copy">
+                  Streaming should be a second check, not the first. That keeps transport problems separate from auth or model-routing problems.
+                </div>
+              </div>
+              <div className="docs-card-grid">
+                <div className="docs-code-panel">
+                  <div className="label-text">STREAM REQUEST</div>
+                  <pre className="code-block">{streamRequest}</pre>
+                </div>
+                <div className="docs-card">
+                  <div className="label-text">EXPECT</div>
+                  <div className="docs-list">
+                    <div>Content arrives in SSE chunks, not one JSON body.</div>
+                    <div>The stream ends with <span className="docs-inline-code">data: [DONE]</span>.</div>
+                    <div>Clients should keep reading until that final marker appears.</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="docs-section tone" id="failures">
+              <div className="docs-section-head">
+                <div>
+                  <div className="label-text">FAILURE CHECKS</div>
+                  <h2 className="docs-section-title">What to verify first when a request fails.</h2>
+                </div>
+                <div className="docs-section-copy">
+                  Keep the diagnosis tight. Most first-request failures are not exotic. They are almost always auth, a bad model id, or no healthy worker for the requested model.
+                </div>
+              </div>
+              <div className="docs-card-grid">
+                <div className="docs-card">
+                  <div className="label-text">CHECKLIST</div>
+                  <div className="docs-list">
+                    {failureChecks.map((item) => (
+                      <div key={item}>{item}</div>
+                    ))}
+                  </div>
+                </div>
+                <div className="docs-card">
+                  <div className="label-text">NEXT STEP</div>
+                  <div style={{ marginTop: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+                    If the first request works, move to the full docs for supported fields, compatibility boundaries, and SDK examples.
+                  </div>
+                  <div className="docs-actions" style={{ marginTop: '1rem' }}>
+                    <Link className="btn-primary" to="/docs" style={{ textDecoration: 'none' }}>
+                      OPEN API DOCS
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </main>
+        </div>
       </div>
     </div>
   );
