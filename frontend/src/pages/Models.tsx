@@ -1,9 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import type { GPUOffering, Model, ProviderStatus } from '../types';
-import { useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel, useOfferings, useProviders } from '../hooks/useApi';
+import type { GPUOffering, Model, ProviderStatus, Instance, Worker } from '../types';
+import { sendChatCompletion } from '../lib/api';
+import {
+  readDeploymentAttempts,
+  recordInferenceVerification,
+  summarizeDeploymentAttempt,
+  type DeploymentAttemptRecord,
+  type DeploymentAttemptSummary,
+} from '../lib/deploymentHistory';
+import { getInstanceReadiness } from '../lib/instanceReadiness';
+import { useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel, useOfferings, useProviders, useInstances, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useAuthSession } from '../lib/auth-context';
 
 const FAMILY_OPTIONS = ['mistral', 'llama', 'qwen', 'phi', 'gemma', 'deepseek', 'falcon', 'mixtral', 'yi', 'command-r'];
 const QUANT_OPTIONS = ['none', 'GPTQ', 'AWQ', 'GGUF', 'FP8', 'INT8', 'INT4'];
@@ -15,6 +25,18 @@ const GPU_VRAM_GB: Record<string, number> = {
   A100_80GB: 80,
   H100: 80,
   L40S: 48,
+};
+
+type ModelServingOverview = {
+  state: 'not_deployed' | 'runtime_pending' | 'serving_unverified' | 'serving_verified' | 'serving_failed' | 'degraded';
+  summary: string;
+  badgeLabel: string;
+  badgeTone: '' | 'warning' | 'error' | 'inactive';
+  activeInstances: number;
+  verifiedAt?: string;
+  latestVerificationError?: string;
+  latestVerificationLatencyMs?: number;
+  latestAttempt?: DeploymentAttemptSummary | null;
 };
 
 function describeDeployReadiness(model: Model, offerings: GPUOffering[], providers: ProviderStatus[]) {
@@ -74,6 +96,111 @@ function describeDeployReadiness(model: Model, offerings: GPUOffering[], provide
     summary: `Ready on ${compatibleOfferings.length} GPU config${compatibleOfferings.length === 1 ? '' : 's'} via ${providerNames.join(', ')}${cheapest ? ` from $${cheapest.cost_per_hour.toFixed(2)}/hr` : ''}.`,
     actionLabel: 'DEPLOY',
     actionTarget: `/instances?provision=true&model=${encodeURIComponent(model.id)}`,
+  };
+}
+
+function formatVerificationMeta(verifiedAt?: string, latencyMs?: number) {
+  if (!verifiedAt) return null;
+  const label = new Date(verifiedAt).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  if (latencyMs == null) return label;
+  return `${label} in ${latencyMs < 1000 ? `${latencyMs}ms` : `${(latencyMs / 1000).toFixed(2)}s`}`;
+}
+
+function deriveModelServingOverview(
+  model: Model,
+  instances: Instance[],
+  workers: Worker[] | undefined,
+  deploymentAttempts: DeploymentAttemptRecord[],
+): ModelServingOverview {
+  const relatedInstances = instances.filter((instance) => (instance.models || []).includes(model.id));
+  const relatedAttempts = deploymentAttempts
+    .filter((attempt) =>
+      (attempt.request.models || []).includes(model.id)
+      || attempt.inference_verification?.model === model.id,
+    )
+    .map((attempt) => summarizeDeploymentAttempt(attempt, instances, workers));
+  const latestAttempt = relatedAttempts[0] || null;
+  const readinessList = relatedInstances.map((instance) => getInstanceReadiness(instance, workers));
+  const anyServing = readinessList.some((readiness) => readiness.serving);
+  const allServingVerified = readinessList.length > 0 && readinessList.every((readiness) => readiness.verified && readiness.serving);
+  const latestVerification = latestAttempt?.attempt.inference_verification;
+
+  if (relatedInstances.length === 0) {
+    return {
+      state: 'not_deployed',
+      summary: latestAttempt?.readiness.label === 'REQUEST FAILED'
+        ? latestAttempt.readiness.detail
+        : 'No live deployment is currently serving this model.',
+      badgeLabel: latestAttempt?.readiness.label === 'REQUEST FAILED' ? 'DEPLOY FAILED' : 'NOT DEPLOYED',
+      badgeTone: latestAttempt?.readiness.label === 'REQUEST FAILED' ? 'error' : 'inactive',
+      activeInstances: 0,
+      latestAttempt,
+      latestVerificationError: latestVerification?.error,
+      verifiedAt: latestVerification?.verified_at,
+      latestVerificationLatencyMs: latestVerification?.latency_ms,
+    };
+  }
+
+  if (latestVerification?.status === 'passed' && anyServing) {
+    return {
+      state: 'serving_verified',
+      summary: `${relatedInstances.length} instance${relatedInstances.length === 1 ? '' : 's'} currently host this model and the latest live inference check passed.`,
+      badgeLabel: 'SERVING VERIFIED',
+      badgeTone: '',
+      activeInstances: relatedInstances.length,
+      latestAttempt,
+      verifiedAt: latestVerification.verified_at,
+      latestVerificationLatencyMs: latestVerification.latency_ms,
+    };
+  }
+
+  if (latestVerification?.status === 'failed' && anyServing) {
+    return {
+      state: 'serving_failed',
+      summary: latestVerification.error || 'Runtime looks healthy, but the latest live inference check failed.',
+      badgeLabel: 'INFERENCE FAILED',
+      badgeTone: 'error',
+      activeInstances: relatedInstances.length,
+      latestAttempt,
+      verifiedAt: latestVerification.verified_at,
+      latestVerificationError: latestVerification.error,
+    };
+  }
+
+  if (allServingVerified) {
+    return {
+      state: 'serving_unverified',
+      summary: `${relatedInstances.length} instance${relatedInstances.length === 1 ? '' : 's'} are runtime-ready for this model. Run or wait for inference verification.`,
+      badgeLabel: 'SERVING UNVERIFIED',
+      badgeTone: 'warning',
+      activeInstances: relatedInstances.length,
+      latestAttempt,
+    };
+  }
+
+  if (anyServing || readinessList.some((readiness) => readiness.label === 'MODEL LOADING' || readiness.label === 'PARTIAL READY')) {
+    return {
+      state: 'runtime_pending',
+      summary: latestAttempt?.readiness.detail || 'Runtime is still converging for this model.',
+      badgeLabel: 'RUNTIME PENDING',
+      badgeTone: 'warning',
+      activeInstances: relatedInstances.length,
+      latestAttempt,
+    };
+  }
+
+  return {
+    state: 'degraded',
+    summary: latestAttempt?.readiness.detail || 'This model is assigned to infrastructure, but it is not currently healthy enough to serve.',
+    badgeLabel: 'DEGRADED',
+    badgeTone: 'error',
+    activeInstances: relatedInstances.length,
+    latestAttempt,
   };
 }
 
@@ -295,16 +422,27 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 export function Models() {
   const navigate = useNavigate();
   const isMobile = useIsMobile(900);
+  const { session } = useAuthSession();
+  const workspaceID = session?.workspace?.id;
   const { data: models } = useModels();
   const { data: vaultData } = useVaultModels({});
   const { data: offerings } = useOfferings();
   const { data: providers } = useProviders();
+  const { data: instances } = useInstances();
+  const { data: workers } = useWorkers();
   const deleteMutation = useDeleteVaultModel();
   const [searchQuery, setSearchQuery] = useState('');
   const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
+  const [verifyingModelID, setVerifyingModelID] = useState<string | null>(null);
 
   const allModels = models || [];
   const vaultModels = vaultData?.models || [];
+  const liveInstances = instances || [];
+
+  useEffect(() => {
+    setDeploymentAttempts(readDeploymentAttempts(workspaceID));
+  }, [workspaceID]);
 
   // Build a lookup of vault model IDs by source_uri for delete actions
   const vaultIdByUri = new Map(vaultModels.map(vm => [vm.source_uri, vm.id]));
@@ -339,8 +477,16 @@ export function Models() {
     () => (offerings || []).filter((offering) => CONFIGURABLE_PROVIDERS.includes(offering.provider as typeof CONFIGURABLE_PROVIDERS[number])),
     [offerings],
   );
+  const modelOverviewByID = useMemo(() => {
+    const map = new Map<string, ModelServingOverview>();
+    for (const model of displayModels) {
+      map.set(model.id, deriveModelServingOverview(model, liveInstances, workers, deploymentAttempts));
+    }
+    return map;
+  }, [deploymentAttempts, displayModels, liveInstances, workers]);
   const readyCount = filtered.filter((model) => describeDeployReadiness(model, visibleOfferings, visibleProviders).state === 'ready').length;
-  const activeCount = filtered.filter((model) => describeDeployReadiness(model, visibleOfferings, visibleProviders).state === 'active').length;
+  const activeCount = filtered.filter((model) => (modelOverviewByID.get(model.id)?.activeInstances || 0) > 0).length;
+  const servingVerifiedCount = filtered.filter((model) => modelOverviewByID.get(model.id)?.state === 'serving_verified').length;
 
   const handleRemove = async (modelId: string) => {
     const vaultId = vaultIdByUri.get(modelId);
@@ -354,6 +500,56 @@ export function Models() {
       toast.success('Model removed from registry');
     } catch {
       toast.error('Failed to remove model');
+    }
+  };
+
+  const handleVerifyServing = async (model: Model) => {
+    const overview = modelOverviewByID.get(model.id);
+    const attempt = overview?.latestAttempt?.attempt;
+
+    setVerifyingModelID(model.id);
+    const startedAt = Date.now();
+
+    try {
+      const response = await sendChatCompletion({
+        model: model.id,
+        messages: [
+          { role: 'system', content: 'Reply with a short readiness confirmation.' },
+          { role: 'user', content: 'Return a short response confirming that inference is working.' },
+        ],
+        temperature: 0,
+        max_tokens: 16,
+      });
+
+      const latencyMs = Date.now() - startedAt;
+      const content = response.choices?.[0]?.message?.content?.trim() || '';
+      if (attempt) {
+        setDeploymentAttempts(
+          recordInferenceVerification(workspaceID, attempt.id, {
+            status: 'passed',
+            verified_at: new Date().toISOString(),
+            latency_ms: latencyMs,
+            model: model.id,
+            response_preview: content.slice(0, 120),
+          }),
+        );
+      }
+      toast.success(`Serving verified for ${model.id.split('/').pop()} in ${latencyMs < 1000 ? `${latencyMs}ms` : `${(latencyMs / 1000).toFixed(2)}s`}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Verification request failed';
+      if (attempt) {
+        setDeploymentAttempts(
+          recordInferenceVerification(workspaceID, attempt.id, {
+            status: 'failed',
+            verified_at: new Date().toISOString(),
+            model: model.id,
+            error: message,
+          }),
+        );
+      }
+      toast.error(message);
+    } finally {
+      setVerifyingModelID(null);
     }
   };
 
@@ -402,6 +598,7 @@ export function Models() {
               const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
               const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
               const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
+              const overview = modelOverviewByID.get(model.id)!;
               const shortName = model.id.split('/').pop() || model.id;
               const provider = model.owned_by || model.family || '';
               const hasVaultEntry = vaultIdByUri.has(model.id);
@@ -424,17 +621,35 @@ export function Models() {
                   <div className="mobile-data-meta">
                     <div><span className="label-text">QUANT</span> <span>{model.quantization || 'FP16'}</span></div>
                     <div><span className="label-text">CONTEXT</span> <span className="mono">{model.max_context ? model.max_context.toLocaleString() : 'N/A'}</span></div>
+                    <div><span className="label-text">SERVING</span> <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span></div>
+                    <div><span className="label-text">DEPLOYMENTS</span> <span className="mono">{overview.activeInstances}</span></div>
                     <div><span className="label-text">DEPLOY</span> <span>{deployState.summary}</span></div>
+                    <div><span className="label-text">STATUS</span> <span>{overview.summary}</span></div>
+                    {overview.verifiedAt && (
+                      <div><span className="label-text">LAST VERIFY</span> <span>{formatVerificationMeta(overview.verifiedAt, overview.latestVerificationLatencyMs)}</span></div>
+                    )}
                   </div>
 
                   <div className="mobile-data-actions">
                     <button
                       type="button"
-                      className={`mobile-data-action${deployState.state === 'capacity' ? ' muted' : ''}`}
-                      onClick={() => navigate(deployState.actionTarget)}
+                      className="mobile-data-action"
+                      onClick={() => navigate(overview.activeInstances > 0 ? '/instances' : deployState.actionTarget)}
                     >
-                      {deployState.actionLabel}
+                      {overview.activeInstances > 0 ? 'VIEW DEPLOYMENTS' : deployState.actionLabel}
                     </button>
+                    {overview.activeInstances > 0 ? (
+                      <button
+                        type="button"
+                        className={`mobile-data-action${overview.state === 'serving_verified' ? ' muted' : ''}`}
+                        disabled={verifyingModelID === model.id}
+                        onClick={() => overview.state === 'serving_verified'
+                          ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)
+                          : handleVerifyServing(model)}
+                      >
+                        {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' ? 'DEPLOY MORE' : 'VERIFY SERVING'}
+                      </button>
+                    ) : null}
                     {hasVaultEntry && !isLoaded && !isDeploying && (
                       <button
                         type="button"
@@ -481,6 +696,7 @@ export function Models() {
             const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
             const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
             const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
+            const overview = modelOverviewByID.get(model.id)!;
             const shortName = model.id.split('/').pop() || model.id;
             const provider = model.owned_by || model.family || '';
             const hasVaultEntry = vaultIdByUri.has(model.id);
@@ -501,9 +717,18 @@ export function Models() {
                     <span className={`status-dot ${statusDotClass}`} />
                     {statusLabel}
                   </div>
-                  <div style={{ marginTop: '0.45rem', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                    {deployState.summary}
+                  <div style={{ marginTop: '0.45rem', display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                    <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
+                    {overview.activeInstances > 0 && <span className="badge">{overview.activeInstances} DEPLOYMENT{overview.activeInstances === 1 ? '' : 'S'}</span>}
                   </div>
+                  <div style={{ marginTop: '0.45rem', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                    {overview.summary}
+                  </div>
+                  {overview.verifiedAt && (
+                    <div style={{ marginTop: '0.45rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Last verify: {formatVerificationMeta(overview.verifiedAt, overview.latestVerificationLatencyMs)}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <span className="badge">{model.quantization || 'FP16'}</span>
@@ -519,11 +744,32 @@ export function Models() {
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
                   <button
                     type="button"
-                    className={`action-link${deployState.state === 'capacity' ? ' muted' : ''}`}
-                    onClick={() => navigate(deployState.actionTarget)}
+                    className="action-link"
+                    onClick={() => navigate(overview.activeInstances > 0 ? '/instances' : deployState.actionTarget)}
                   >
-                    {deployState.actionLabel}
+                    {overview.activeInstances > 0 ? 'VIEW DEPLOYMENTS' : deployState.actionLabel}
                   </button>
+                  {overview.activeInstances > 0 && (
+                    <button
+                      type="button"
+                      className={`action-link${overview.state === 'serving_verified' ? ' muted' : ''}`}
+                      disabled={verifyingModelID === model.id}
+                      onClick={() => overview.state === 'serving_verified'
+                        ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)
+                        : handleVerifyServing(model)}
+                    >
+                      {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' ? 'DEPLOY MORE' : 'VERIFY SERVING'}
+                    </button>
+                  )}
+                  {overview.activeInstances === 0 && (
+                    <button
+                      type="button"
+                      className={`action-link${deployState.state === 'capacity' ? ' muted' : ''}`}
+                      onClick={() => navigate('/instances')}
+                    >
+                      OPEN CLUSTERS
+                    </button>
+                  )}
                   {hasVaultEntry && !isLoaded && !isDeploying && (
                     <button
                       type="button"
@@ -561,6 +807,12 @@ export function Models() {
           <div className="label-text">READY TO DEPLOY</div>
           <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
             {readyCount}
+          </div>
+        </div>
+        <div className="cell">
+          <div className="label-text">SERVING VERIFIED</div>
+          <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+            {servingVerifiedCount}
           </div>
         </div>
         <div className="cell">
