@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useWorkers, useStats, useInstances, useCosts, useModels } from '../hooks/useApi';
+import { useWorkers, useStats, useInstances, useCosts, useModels, useProviders } from '../hooks/useApi';
 import { SkeletonCell } from '../components/Skeleton';
 import { useAuthSession } from '../lib/auth-context';
 import {
@@ -28,6 +28,18 @@ function ChartBars({ heights, activeIndex }: { heights: number[]; activeIndex?: 
 }
 
 type ModelServingState = 'not_deployed' | 'runtime_pending' | 'serving_unverified' | 'serving_verified' | 'serving_failed' | 'degraded';
+type AttentionSeverity = 'critical' | 'warning' | 'info';
+type AttentionAction = 'open_clusters' | 'open_models' | 'open_workspace' | 'verify_now';
+
+type AttentionItem = {
+  id: string;
+  severity: AttentionSeverity;
+  title: string;
+  detail: string;
+  actionLabel: string;
+  action: AttentionAction;
+  timestamp?: string;
+};
 
 function deriveModelServingState(
   model: Model,
@@ -93,6 +105,116 @@ function formatAttemptTime(timestamp?: string) {
   });
 }
 
+function getAttentionSeverityClass(severity: AttentionSeverity) {
+  switch (severity) {
+    case 'critical':
+      return 'dashboard-alert-critical';
+    case 'warning':
+      return 'dashboard-alert-warning';
+    default:
+      return 'dashboard-alert-info';
+  }
+}
+
+function mapRemediationAction(action: 'open_workspace' | 'view_capacity' | 'retry_config' | 'focus_instance' | 'verify_inference' | undefined): AttentionAction {
+  switch (action) {
+    case 'open_workspace':
+      return 'open_workspace';
+    case 'verify_inference':
+      return 'verify_now';
+    default:
+      return 'open_clusters';
+  }
+}
+
+function buildAttentionQueue(
+  deploymentSummaries: DeploymentAttemptSummary[],
+  connectedProviders: number,
+  visibleProviders: number,
+  workers: Worker[] | undefined,
+  activeInstances: Instance[],
+  servingUnverifiedCount: number,
+): AttentionItem[] {
+  const items: AttentionItem[] = [];
+
+  if (visibleProviders > 0 && connectedProviders === 0) {
+    items.push({
+      id: 'provider-disconnected',
+      severity: 'critical',
+      title: 'No live provider connection',
+      detail: 'Workspace providers are configured but none are currently connected. New deployments will fail until provider access is restored.',
+      actionLabel: 'OPEN WORKSPACE',
+      action: 'open_workspace',
+    });
+  }
+
+  if ((workers?.length || 0) === 0 && activeInstances.length > 0) {
+    items.push({
+      id: 'workers-offline',
+      severity: 'critical',
+      title: 'Workers are not connected',
+      detail: 'Compute nodes exist, but no worker is currently reporting healthy runtime state back to the gateway.',
+      actionLabel: 'OPEN CLUSTERS',
+      action: 'open_clusters',
+    });
+  }
+
+  const latestFailure = deploymentSummaries.find((summary) => (
+    summary.attempt.outcome === 'request_failed'
+    || summary.attempt.inference_verification?.status === 'failed'
+    || summary.readiness.tone === 'error'
+  ));
+  if (latestFailure) {
+    const remediation = getDeploymentRemediation(latestFailure);
+    items.push({
+      id: `failure-${latestFailure.attempt.id}`,
+      severity: 'critical',
+      title: latestFailure.attempt.inference_verification?.status === 'failed'
+        ? 'Inference verification failed'
+        : latestFailure.attempt.outcome === 'request_failed'
+          ? 'Latest deployment request failed'
+          : 'Deployment needs intervention',
+      detail: latestFailure.attempt.inference_verification?.error || latestFailure.readiness.detail,
+      actionLabel: remediation?.label || 'OPEN CLUSTERS',
+      action: mapRemediationAction(remediation?.action),
+      timestamp: latestFailure.attempt.updated_at || latestFailure.attempt.created_at,
+    });
+  }
+
+  const now = Date.now();
+  const stuckPending = deploymentSummaries.find((summary) => {
+    if (!['PROVISIONING', 'WAITING FOR WORKER', 'WORKER CONNECTING', 'MODEL LOADING', 'MODEL LOAD DELAY', 'PARTIAL READY', 'SERVING UNVERIFIED'].includes(summary.readiness.label)) {
+      return false;
+    }
+    const age = now - Date.parse(summary.attempt.updated_at || summary.attempt.created_at);
+    return age > 15 * 60 * 1000;
+  });
+  if (stuckPending) {
+    items.push({
+      id: `stuck-${stuckPending.attempt.id}`,
+      severity: 'warning',
+      title: 'Deployment appears stuck',
+      detail: `${stuckPending.readiness.detail} This attempt has been pending longer than expected.`,
+      actionLabel: 'OPEN CLUSTERS',
+      action: 'open_clusters',
+      timestamp: stuckPending.attempt.updated_at || stuckPending.attempt.created_at,
+    });
+  }
+
+  if (servingUnverifiedCount > 0) {
+    items.push({
+      id: 'verify-pending',
+      severity: 'info',
+      title: 'Serving verification still pending',
+      detail: `${servingUnverifiedCount} model${servingUnverifiedCount === 1 ? '' : 's'} look runtime-ready but still need a clean inference verification result.`,
+      actionLabel: 'VERIFY NOW',
+      action: 'verify_now',
+    });
+  }
+
+  return items.slice(0, 4);
+}
+
 export function Dashboard() {
   const navigate = useNavigate();
   const { session } = useAuthSession();
@@ -102,8 +224,9 @@ export function Dashboard() {
   const { data: instances, isLoading: loadingInstances } = useInstances();
   const { data: costs, isLoading: loadingCosts } = useCosts();
   const { data: models, isLoading: loadingModels } = useModels();
+  const { data: providers, isLoading: loadingProviders } = useProviders();
   const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
-  const isLoading = loadingWorkers || loadingStats || loadingInstances || loadingCosts || loadingModels;
+  const isLoading = loadingWorkers || loadingStats || loadingInstances || loadingCosts || loadingModels || loadingProviders;
 
   useEffect(() => {
     setDeploymentAttempts(readDeploymentAttempts(workspaceID));
@@ -114,6 +237,11 @@ export function Dashboard() {
   const activeInstances = instances?.filter(i => i.status === 'running') || [];
   const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];
   const loadedModels = models?.filter(m => m.loaded !== false) || [];
+  const visibleProviders = useMemo(
+    () => (providers || []).filter((provider) => provider.provider !== 'mock' && provider.provider !== 'lambda'),
+    [providers],
+  );
+  const connectedProviders = visibleProviders.filter((provider) => provider.connected);
   const deploymentSummaries = useMemo(
     () => deploymentAttempts.map((attempt) => summarizeDeploymentAttempt(attempt, instances || [], workers)).slice(0, 5),
     [deploymentAttempts, instances, workers],
@@ -137,6 +265,10 @@ export function Dashboard() {
     || summary.readiness.tone === 'error'
   ));
   const latestVerification = deploymentSummaries.find((summary) => Boolean(summary.attempt.inference_verification));
+  const attentionQueue = useMemo(
+    () => buildAttentionQueue(deploymentSummaries, connectedProviders.length, visibleProviders.length, workers, activeInstances, servingUnverifiedCount),
+    [activeInstances, connectedProviders.length, deploymentSummaries, servingUnverifiedCount, visibleProviders.length, workers],
+  );
 
   if (isLoading) {
     return (
@@ -175,7 +307,6 @@ export function Dashboard() {
 
   return (
     <div className="dashboard-page animate-fade-in">
-      {/* Metrics Row */}
       <div className="grid-row dashboard-metrics-row">
         <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
           <div className="label-text">
@@ -255,9 +386,61 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Main Content Row */}
+      <div className="grid-row dashboard-alerts-row">
+        <div className="cell dashboard-alerts-cell" style={{ gridColumn: 'span 4' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.4rem' }}>
+            <div>
+              <div className="label-text">ATTENTION QUEUE</div>
+              <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>
+                The next operational issues that need action now.
+              </div>
+            </div>
+            <div className="badge status-inactive">{attentionQueue.length} OPEN</div>
+          </div>
+
+          {attentionQueue.length > 0 ? (
+            <div className="dashboard-alert-list">
+              {attentionQueue.map((item) => (
+                <div key={item.id} className={`dashboard-alert-item ${getAttentionSeverityClass(item.severity)}`}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+                    <div>
+                      <div className="dashboard-alert-title-row">
+                        <span className={`badge ${item.severity === 'critical' ? 'status-error' : item.severity === 'warning' ? 'status-warning' : 'status-inactive'}`}>
+                          {item.severity.toUpperCase()}
+                        </span>
+                        <span style={{ fontSize: '0.95rem', fontWeight: 500 }}>{item.title}</span>
+                      </div>
+                      <div className="dashboard-summary-text">{item.detail}</div>
+                    </div>
+                    {item.timestamp && (
+                      <div style={{ fontSize: '0.74rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
+                        {formatAttemptTime(item.timestamp)}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    className="action-btn"
+                    style={{ marginTop: '0.95rem' }}
+                    onClick={() => {
+                      if (item.action === 'open_workspace') navigate('/workspace');
+                      else if (item.action === 'open_models' || item.action === 'verify_now') navigate('/models');
+                      else navigate('/instances');
+                    }}
+                  >
+                    {item.actionLabel}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+              No urgent operational issues are currently queued. The serving and deployment loop looks stable right now.
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="grid-row dashboard-main-row" style={{ flexGrow: 1 }}>
-        {/* Deployed Models */}
         <div className="cell dashboard-models-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '2rem' }}>DEPLOYED MODELS</div>
 
@@ -293,7 +476,6 @@ export function Dashboard() {
           <button className="action-btn" style={{ marginTop: '1.5rem' }} onClick={() => navigate('/models')}>DEPLOY NEW MODEL</button>
         </div>
 
-        {/* Right Panel */}
         <div className="cell dashboard-overview-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
           <div style={{ marginBottom: '3rem' }}>
             <div className="label-text">CLUSTER OVERVIEW</div>
@@ -401,7 +583,6 @@ export function Dashboard() {
             )}
           </div>
 
-          {/* Recent Workers */}
           <div style={{ marginTop: '2.25rem' }}>
             <div className="label-text" style={{ marginBottom: '1.5rem' }}>WORKER STATUS</div>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
@@ -426,7 +607,6 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Footer Row */}
       <div className="grid-row dashboard-footer-row">
         <div className="cell">
           <div className="label-text">VERSION</div>
