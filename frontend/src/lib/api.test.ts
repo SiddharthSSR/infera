@@ -9,6 +9,7 @@ import {
   fetchStats,
   fetchInstances,
   fetchOfferings,
+  fetchProviders,
   fetchCosts,
   fetchApiKeys,
   createApiKey,
@@ -116,18 +117,20 @@ describe('API Functions', () => {
       window.removeEventListener('auth-expired', handler)
     })
 
-    it('fetchModels/fetchStats/fetchInstances/fetchOfferings/fetchCosts should parse payloads', async () => {
+    it('fetchModels/fetchStats/fetchInstances/fetchOfferings/fetchProviders/fetchCosts should parse payloads', async () => {
       mockFetch
         .mockResolvedValueOnce({ ok: true, json: async () => ({ data: [{ id: 'llama-3-8b', object: 'model' }] }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ workers: { total: 1, healthy: 1 } }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ instances: [{ id: 'i1', status: 'running' }] }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ offerings: [{ gpu_type: 'RTX_4090' }] }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ providers: [{ provider: 'runpod', connected: true }] }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ current_hourly: 1.5 }) })
 
       await expect(fetchModels()).resolves.toHaveLength(1)
       await expect(fetchStats()).resolves.toEqual(expect.objectContaining({ workers: { total: 1, healthy: 1 } }))
       await expect(fetchInstances()).resolves.toHaveLength(1)
       await expect(fetchOfferings()).resolves.toHaveLength(1)
+      await expect(fetchProviders()).resolves.toHaveLength(1)
       await expect(fetchCosts()).resolves.toEqual(expect.objectContaining({ current_hourly: 1.5 }))
     })
 

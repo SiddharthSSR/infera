@@ -139,6 +139,19 @@ export interface ProviderStatus {
   active_instances: number;
   quota_limit?: number;
   error?: string;
+  error_code?: string;
+  capabilities?: ProviderCapabilities;
+}
+
+export interface ProviderCapabilities {
+  supports_spot: boolean;
+  supports_custom_images: boolean;
+  supports_region_selection: boolean;
+  supports_public_ip: boolean;
+  supports_ssh_keys: boolean;
+  supports_start_stop: boolean;
+  startup_script_limit?: number;
+  known_regions?: string[];
 }
 
 export interface CostSummary {

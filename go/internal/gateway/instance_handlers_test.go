@@ -563,7 +563,7 @@ func TestHandleCosts(t *testing.T) {
 	h := setupTestHandlers(t)
 
 	t.Run("GET costs - empty", func(t *testing.T) {
-		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/costs", nil), auth.RoleOperator)
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/costs", nil), auth.RoleBilling)
 		w := httptest.NewRecorder()
 
 		h.handleCosts(w, req)
@@ -595,7 +595,7 @@ func TestHandleCosts(t *testing.T) {
 		h.handleProvision(provW, provReq)
 
 		// Now check costs
-		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/costs", nil), auth.RoleOperator)
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/costs", nil), auth.RoleBilling)
 		w := httptest.NewRecorder()
 
 		h.handleCosts(w, req)
@@ -609,6 +609,17 @@ func TestHandleCosts(t *testing.T) {
 
 		if resp["current_hourly"].(float64) <= 0 {
 			t.Error("expected positive hourly cost with running instance")
+		}
+	})
+
+	t.Run("GET costs - operators are forbidden", func(t *testing.T) {
+		req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/costs", nil), auth.RoleOperator)
+		w := httptest.NewRecorder()
+
+		h.handleCosts(w, req)
+
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d body=%s", w.Code, w.Body.String())
 		}
 	})
 }

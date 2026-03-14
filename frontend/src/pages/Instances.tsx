@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import type { Instance, GPUOffering, GPUType, VaultModel } from '../types';
-import { useInstances, useOfferings, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
+import type { Instance, GPUOffering, GPUType, ProviderStatus, VaultModel } from '../types';
+import { fetchWorkspaceProviderConfigs } from '../lib/api';
+import { useInstances, useOfferings, useProviders, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { InstanceMobileCard } from '../components/InstanceMobileCard';
+import { useAuthSession } from '../lib/auth-context';
 
 const GPU_VRAM_GB: Record<GPUType, number> = {
   RTX_4090: 24,
@@ -14,6 +16,47 @@ const GPU_VRAM_GB: Record<GPUType, number> = {
   H100: 80,
   L40S: 48,
 };
+
+const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai'] as const;
+
+function describeProvisioningState(configuredProviders: string[], providerStatuses: ProviderStatus[], offeringsCount: number) {
+  const visibleStatuses = providerStatuses.filter((status) => CONFIGURABLE_PROVIDERS.includes(status.provider as typeof CONFIGURABLE_PROVIDERS[number]));
+  const connectedProviders = visibleStatuses.filter((status) => status.connected);
+
+  if (configuredProviders.length === 0) {
+    return {
+      title: 'No workspace provider is configured',
+      detail: 'Add RunPod or Vast.ai credentials in Workspace settings before provisioning nodes from this workspace.',
+      action: 'OPEN WORKSPACE',
+    };
+  }
+
+  if (connectedProviders.length === 0) {
+    return {
+      title: 'Configured providers are not currently reachable',
+      detail: 'At least one provider config exists, but none are returning healthy live status right now. Check credentials and provider status in Workspace settings.',
+      action: 'OPEN WORKSPACE',
+    };
+  }
+
+  if (offeringsCount === 0) {
+    return {
+      title: 'No GPU offerings are currently available',
+      detail: 'Providers are connected, but no matching inventory is being returned for this workspace right now.',
+      action: 'VIEW PROVIDERS',
+    };
+  }
+
+  return null;
+}
+
+function providerStateBadge(status?: ProviderStatus, configured?: boolean) {
+  if (!configured) return { label: 'NOT CONFIGURED', tone: 'inactive' };
+  if (!status) return { label: 'UNAVAILABLE', tone: 'warning' };
+  if (status.connected) return { label: 'CONNECTED', tone: '' };
+  if (status.error_code === 'auth_failed') return { label: 'AUTH FAILED', tone: 'error' };
+  return { label: 'DEGRADED', tone: 'warning' };
+}
 
 function getStatusClass(status: string) {
   switch (status) {
@@ -163,11 +206,13 @@ function InstanceRow({ instance }: { instance: Instance }) {
   );
 }
 
-function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
+function ProvisionModal({ isOpen, onClose, offerings, preselectedModel, providerStatuses, configuredProviders }: {
   isOpen: boolean;
   onClose: () => void;
   offerings: GPUOffering[] | undefined;
   preselectedModel?: string | null;
+  providerStatuses: ProviderStatus[];
+  configuredProviders: string[];
 }) {
   const [selectedGPU, setSelectedGPU] = useState<string>('');
   const [name, setName] = useState('');
@@ -188,6 +233,7 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
       return map;
     }, new Map<string, GPUOffering>()).values()
   ) : undefined;
+  const provisioningState = describeProvisioningState(configuredProviders, providerStatuses, dedupedOfferings?.length ?? 0);
 
   const selectedOffering = dedupedOfferings?.find(o => getOfferingKey(o) === selectedGPU);
   const selectedGPUVram = selectedOffering ? GPU_VRAM_GB[selectedOffering.gpu_type] : undefined;
@@ -277,35 +323,48 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
           <div className="provision-modal-grid">
             <div>
               <div className="label-text" style={{ marginBottom: '1rem' }}>GPU CONFIGURATION</div>
-              <div className="provision-options-grid" style={{ marginBottom: '2rem' }}>
-                {dedupedOfferings?.map(o => {
-                  const key = getOfferingKey(o);
-                  const isSelected = selectedGPU === key;
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => setSelectedGPU(prev => prev === key ? '' : key)}
-                      style={{
-                        padding: '1.25rem', textAlign: 'left', cursor: 'pointer',
-                        border: isSelected ? '2px solid var(--text-primary)' : 'var(--grid-line)',
-                        background: isSelected ? 'var(--bg-accent)' : 'transparent',
-                        fontFamily: 'var(--font-main)',
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.5rem' }}>
-                        {o.gpu_count}x {o.gpu_type.replace('_', ' ')}
-                      </div>
-                      <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                        <span>{o.vcpu} vCPU</span>
-                        <span>{o.memory_gb}GB</span>
-                      </div>
-                      <div className="mono" style={{ marginTop: '0.75rem', fontSize: '1rem' }}>
-                        ${o.cost_per_hour.toFixed(2)}<span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/hr</span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+              {dedupedOfferings && dedupedOfferings.length > 0 ? (
+                <div className="provision-options-grid" style={{ marginBottom: '2rem' }}>
+                  {dedupedOfferings.map(o => {
+                    const key = getOfferingKey(o);
+                    const isSelected = selectedGPU === key;
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => setSelectedGPU(prev => prev === key ? '' : key)}
+                        style={{
+                          padding: '1.25rem', textAlign: 'left', cursor: 'pointer',
+                          border: isSelected ? '2px solid var(--text-primary)' : 'var(--grid-line)',
+                          background: isSelected ? 'var(--bg-accent)' : 'transparent',
+                          fontFamily: 'var(--font-main)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
+                          <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.5rem' }}>
+                            {o.gpu_count}x {o.gpu_type.replace('_', ' ')}
+                          </div>
+                          <span className="badge">{o.provider.toUpperCase()}</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                          <span>{o.vcpu} vCPU</span>
+                          <span>{o.memory_gb}GB</span>
+                          <span>{o.region || 'default'}</span>
+                        </div>
+                        <div className="mono" style={{ marginTop: '0.75rem', fontSize: '1rem' }}>
+                          ${o.cost_per_hour.toFixed(2)}<span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/hr</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="workspace-provider-card" style={{ marginBottom: '2rem' }}>
+                  <div className="label-text" style={{ marginBottom: '0.6rem' }}>{provisioningState?.title || 'NO OFFERINGS AVAILABLE'}</div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.6 }}>
+                    {provisioningState?.detail || 'No GPU inventory is currently available for this workspace.'}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div>
@@ -341,10 +400,10 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
               )}
 
               {/* Spot toggle */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                 <input type="checkbox" checked={spotInstance} onChange={e => setSpotInstance(e.target.checked)} />
                 <span style={{ fontSize: '0.9rem' }}>Spot Instance (up to 70% cheaper, may be interrupted)</span>
-              </div>
+              </label>
             </div>
           </div>
         </div>
@@ -352,7 +411,7 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
         {/* Footer */}
         <div className="provision-modal-footer" style={{ padding: '1.5rem 2rem', borderTop: 'var(--grid-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <button className="action-btn" onClick={onClose}>CANCEL</button>
-          <button className="btn-primary" onClick={handleProvision} disabled={!selectedGPU || provisionMutation.isPending}>
+          <button className="btn-primary" onClick={handleProvision} disabled={!selectedGPU || provisionMutation.isPending || !dedupedOfferings?.length}>
             {provisionMutation.isPending ? 'PROVISIONING...' : 'PROVISION NODE'}
           </button>
         </div>
@@ -363,11 +422,16 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
 
 export function Instances() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [showProvisionModal, setShowProvisionModal] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('active');
+  const [configuredProviders, setConfiguredProviders] = useState<string[]>([]);
   const isMobile = useIsMobile(900);
+  const { session } = useAuthSession();
+  const role = session?.key?.role ?? 'user';
   const { data: instances, isLoading } = useInstances();
   const { data: offerings } = useOfferings();
+  const { data: providers } = useProviders();
   const { data: workers } = useWorkers();
 
   const [preselectedModel, setPreselectedModel] = useState<string | null>(null);
@@ -384,6 +448,15 @@ export function Instances() {
     : 0;
   const totalMemUsed = healthyWorkers.reduce((sum, w) => sum + w.memory_used, 0);
   const totalMemTotal = healthyWorkers.reduce((sum, w) => sum + w.memory_total, 0);
+  const visibleProviderStatuses = useMemo(
+    () => (providers || []).filter((status) => CONFIGURABLE_PROVIDERS.includes(status.provider as typeof CONFIGURABLE_PROVIDERS[number])),
+    [providers],
+  );
+  const connectedProviders = visibleProviderStatuses.filter((status) => status.connected);
+  const provisioningState = describeProvisioningState(configuredProviders, visibleProviderStatuses, offerings?.length ?? 0);
+  const providerSummary = filteredInstances.length > 0
+    ? [...new Set(filteredInstances.map((instance) => instance.provider))]
+    : visibleProviderStatuses.filter((status) => configuredProviders.includes(status.provider)).map((status) => status.provider);
 
   // Auto-open provision modal if redirected from dashboard or registry.
   useEffect(() => {
@@ -394,6 +467,25 @@ export function Instances() {
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    const workspaceId = session?.workspace?.id;
+    if (!workspaceId) {
+      setConfiguredProviders([]);
+      return;
+    }
+
+    if (role !== 'owner' && role !== 'admin') {
+      setConfiguredProviders(visibleProviderStatuses.map((status) => status.provider));
+      return;
+    }
+
+    fetchWorkspaceProviderConfigs(workspaceId)
+      .then((configs) => {
+        setConfiguredProviders(configs.filter((config) => config.configured).map((config) => config.provider));
+      })
+      .catch(() => setConfiguredProviders(visibleProviderStatuses.map((status) => status.provider)));
+  }, [role, session?.workspace?.id, visibleProviderStatuses]);
 
   return (
     <div className="instances-page animate-fade-in">
@@ -481,8 +573,22 @@ export function Instances() {
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading...</div>
           ) : filteredInstances.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '4rem 0', color: 'var(--text-secondary)' }}>
-              <div style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>No instances found</div>
-              <button className="action-btn" onClick={() => setShowProvisionModal(true)}>PROVISION NEW NODE</button>
+              <div style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>{provisioningState?.title || 'No instances found'}</div>
+              <div style={{ maxWidth: '34rem', margin: '0 auto 1.25rem', lineHeight: 1.6 }}>
+                {provisioningState?.detail || 'Provision your first node to start serving models from this workspace.'}
+              </div>
+              <button
+                className="action-btn"
+                onClick={() => {
+                  if (provisioningState) {
+                    navigate('/workspace');
+                    return;
+                  }
+                  setShowProvisionModal(true);
+                }}
+              >
+                {provisioningState?.action || 'PROVISION NEW NODE'}
+              </button>
             </div>
           ) : isMobile ? (
             <div className="mobile-data-list">
@@ -527,6 +633,23 @@ export function Instances() {
           <div className="label-text" style={{ marginBottom: '2rem' }}>CLUSTER INFO</div>
 
           <div style={{ marginBottom: '2.5rem' }}>
+            <div className="label-text">PROVIDERS</div>
+            <div style={{ marginTop: '0.9rem', display: 'grid', gap: '0.65rem' }}>
+              {CONFIGURABLE_PROVIDERS.map((providerName) => {
+                const status = visibleProviderStatuses.find((provider) => provider.provider === providerName);
+                const configured = configuredProviders.includes(providerName);
+                const badge = providerStateBadge(status, configured);
+                return (
+                  <div key={providerName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                    <span style={{ fontSize: '0.85rem' }}>{providerName}</span>
+                    <span className={`badge ${badge.tone ? `status-${badge.tone}` : ''}`}>{badge.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '2.5rem' }}>
             <div className="label-text">TOTAL WORKERS</div>
             <div className="mono" style={{ fontSize: '1.25rem', marginTop: '0.5rem' }}>
               {healthyWorkers.length}
@@ -565,6 +688,12 @@ export function Instances() {
                   {healthyWorkers.length > 0 ? 'OK' : 'NONE'}
                 </span>
               </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                <span>Providers</span>
+                <span style={{ color: connectedProviders.length > 0 ? 'var(--color-success)' : 'var(--color-warning)' }}>
+                  {connectedProviders.length > 0 ? `${connectedProviders.length} live` : 'CHECK'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -575,7 +704,7 @@ export function Instances() {
         <div className="cell">
           <div className="label-text">PROVIDER</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-            {filteredInstances[0]?.provider || '—'}
+            {providerSummary.length > 0 ? providerSummary.join(', ') : '—'}
           </div>
         </div>
         <div className="cell">
@@ -599,6 +728,8 @@ export function Instances() {
         onClose={() => { setShowProvisionModal(false); setPreselectedModel(null); }}
         offerings={offerings}
         preselectedModel={preselectedModel}
+        providerStatuses={visibleProviderStatuses}
+        configuredProviders={configuredProviders}
       />
     </div>
   );
