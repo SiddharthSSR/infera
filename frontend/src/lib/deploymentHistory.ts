@@ -14,6 +14,7 @@ export type DeploymentAttemptRecord = {
   instance_id?: string;
   instance_name?: string;
   failure_reason?: string;
+  auto_verification_requested_at?: string;
   inference_verification?: {
     status: 'passed' | 'failed';
     verified_at: string;
@@ -30,6 +31,7 @@ export type DeploymentAttemptSummary = {
   instance: Instance | null;
   retryable: boolean;
   inferenceVerified: boolean;
+  autoVerificationRequested: boolean;
 };
 
 export type DeploymentTimelineStep = {
@@ -157,6 +159,28 @@ export function recordInferenceVerification(
   return attempts;
 }
 
+export function markAutoVerificationRequested(
+  workspaceID: string | undefined,
+  attemptID: string,
+  requestedAt = new Date().toISOString(),
+): DeploymentAttemptRecord[] {
+  if (!workspaceID) return [];
+
+  const attempts = normalizeAttempts(
+    readDeploymentAttempts(workspaceID).map((attempt) => (
+      attempt.id === attemptID
+        ? {
+            ...attempt,
+            auto_verification_requested_at: attempt.auto_verification_requested_at || requestedAt,
+          }
+        : attempt
+    )),
+  );
+
+  writeDeploymentAttempts(workspaceID, attempts);
+  return attempts;
+}
+
 export function summarizeDeploymentAttempt(
   attempt: DeploymentAttemptRecord,
   instances: Instance[] | undefined,
@@ -180,6 +204,7 @@ export function summarizeDeploymentAttempt(
         verified: false,
       },
       inferenceVerified: false,
+      autoVerificationRequested: false,
     };
   }
 
@@ -196,6 +221,7 @@ export function summarizeDeploymentAttempt(
         verified: false,
       },
       inferenceVerified: false,
+      autoVerificationRequested: Boolean(attempt.auto_verification_requested_at),
     };
   }
 
@@ -206,6 +232,7 @@ export function summarizeDeploymentAttempt(
     retryable: ['error', 'stopped', 'terminated', 'terminating'].includes(liveInstance.status),
     readiness,
     inferenceVerified: attempt.inference_verification?.status === 'passed',
+    autoVerificationRequested: Boolean(attempt.auto_verification_requested_at),
   };
 }
 
@@ -354,8 +381,10 @@ export function getDeploymentRemediation(summary: DeploymentAttemptSummary): Dep
     }
 
     return {
-      label: 'VERIFY SERVING',
-      detail: 'The runtime is healthy. Run one small inference request to confirm the model is actually answering traffic.',
+      label: summary.autoVerificationRequested ? 'VERIFY NOW' : 'VERIFY SERVING',
+      detail: summary.autoVerificationRequested
+        ? 'Automatic first-inference verification has already been queued for this deployment. You can still run it manually if needed.'
+        : 'The runtime is healthy. Run one small inference request to confirm the model is actually answering traffic.',
       action: 'verify_inference',
     };
   }
