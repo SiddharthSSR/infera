@@ -92,6 +92,10 @@ const pageTitles: Record<string, string> = {
 // Top Navigation
 function TopNav({ onLogout }: { onLogout: () => void }) {
   const { session } = useAuthSession();
+  const workspaceNavLabel = session?.workspace?.slug
+    ? session.workspace.slug.replace(/[-_]+/g, ' ').toUpperCase()
+    : session?.workspace?.name?.toUpperCase();
+
   return (
     <nav className="top-nav">
       <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
@@ -112,13 +116,23 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
         ))}
       </div>
       <div className="nav-group nav-auth-group" style={{ gap: '1rem' }}>
-        {session?.workspace?.name && (
-          <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-            {session.workspace.name}
+        {session?.workspace?.name && workspaceNavLabel && (
+          <span
+            className="nav-workspace-chip"
+            title={session.workspace.name}
+            aria-label={`Current workspace: ${session.workspace.name}`}
+          >
+            {workspaceNavLabel}
           </span>
         )}
-        <button className="nav-link" onClick={onLogout} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
-          DISCONNECT
+        <button
+          className="nav-icon-button"
+          onClick={onLogout}
+          type="button"
+          title="Log out"
+          aria-label="Log out"
+        >
+          ⏻
         </button>
       </div>
     </nav>

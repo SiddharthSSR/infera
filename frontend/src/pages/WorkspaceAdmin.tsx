@@ -460,6 +460,9 @@ export function WorkspaceAdmin() {
         }}>
           <div className="label-text" style={{ marginBottom: '0.6rem' }}>INVITATION TOKEN — COPY NOW</div>
           <div className="code-block" style={{ marginTop: 0 }}>{createdInviteToken}</div>
+          <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.5 }}>
+            This does not send an email yet. Share the token or the <code style={{ fontFamily: 'var(--font-mono)' }}>/accept-invite</code> link manually with the person you invited.
+          </div>
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             <button className="btn-primary" onClick={() => navigator.clipboard.writeText(createdInviteToken).then(() => toast.success('Invitation token copied.'))}>COPY TOKEN</button>
             <button className="btn-secondary" onClick={() => setCreatedInviteToken(null)}>DISMISS</button>
@@ -859,6 +862,9 @@ export function WorkspaceAdmin() {
                       <option key={candidate} value={candidate}>{candidate}</option>
                     ))}
                   </select>
+                </div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.5 }}>
+                  Entering an email here does not send mail automatically. It creates an invite token for manual sharing.
                 </div>
                 <button className="btn-primary" disabled={creatingInvite} onClick={handleCreateInvite}>
                   {creatingInvite ? 'CREATING...' : 'CREATE INVITE'}
