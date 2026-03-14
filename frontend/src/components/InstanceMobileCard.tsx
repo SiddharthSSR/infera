@@ -5,11 +5,13 @@ export function InstanceMobileCard({
   instance,
   statusClass,
   statusLabel,
+  readiness,
   actions,
 }: {
   instance: Instance;
   statusClass: string;
   statusLabel: string;
+  readiness?: { label: string; detail: string; tone?: string };
   actions?: ReactNode;
 }) {
   return (
@@ -34,6 +36,13 @@ export function InstanceMobileCard({
           <span className="label-text">COST</span>{' '}
           <span className="mono">${instance.cost_per_hour.toFixed(2)}/hr</span>
         </div>
+        {readiness && (
+          <div>
+            <span className="label-text">READINESS</span>{' '}
+            <span className={`badge ${readiness.tone ? `status-${readiness.tone}` : ''}`}>{readiness.label}</span>
+            <div style={{ marginTop: '0.35rem', lineHeight: 1.5 }}>{readiness.detail}</div>
+          </div>
+        )}
         <div>
           <span className="label-text">ENDPOINT</span>{' '}
           <span className="mono">{instance.public_ip || '-'}</span>

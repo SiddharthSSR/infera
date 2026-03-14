@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import type { Instance, GPUOffering, GPUType, ProviderStatus, VaultModel } from '../types';
+import type { Instance, GPUOffering, GPUType, ProviderStatus, VaultModel, Worker } from '../types';
 import { fetchWorkspaceProviderConfigs } from '../lib/api';
 import { useInstances, useOfferings, useProviders, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -102,6 +102,132 @@ function getStatusLabel(status: string) {
   }
 }
 
+type InstanceReadiness = {
+  label: string;
+  detail: string;
+  tone: '' | 'warning' | 'error' | 'inactive';
+  serving: boolean;
+};
+
+function getInstanceReadiness(instance: Instance, workers: Worker[] | undefined): InstanceReadiness {
+  const linkedWorker = workers?.find((worker) => worker.worker_id === instance.worker_id);
+  const assignedModels = instance.models || [];
+  const loadedModels = new Set(linkedWorker?.models || []);
+  const loadedAssignedModels = assignedModels.filter((model) => loadedModels.has(model));
+
+  switch (instance.status) {
+    case 'error':
+      return {
+        label: 'FAILED',
+        detail: instance.error || 'Provider reported an instance error during startup or serving.',
+        tone: 'error',
+        serving: false,
+      };
+    case 'pending':
+    case 'provisioning':
+      return {
+        label: 'PROVISIONING',
+        detail: 'Provider accepted the request. Waiting for the node to boot and join the cluster.',
+        tone: 'warning',
+        serving: false,
+      };
+    case 'stopping':
+      return {
+        label: 'STOPPING',
+        detail: 'This node is shutting down and will stop serving shortly.',
+        tone: 'warning',
+        serving: false,
+      };
+    case 'stopped':
+      return {
+        label: 'STOPPED',
+        detail: 'Infrastructure exists, but the node is not currently serving.',
+        tone: 'inactive',
+        serving: false,
+      };
+    case 'terminating':
+    case 'terminated':
+      return {
+        label: 'TERMINATED',
+        detail: 'This node is being removed or has already been removed.',
+        tone: 'inactive',
+        serving: false,
+      };
+  }
+
+  if (instance.status !== 'running') {
+    return {
+      label: getStatusLabel(instance.status).toUpperCase(),
+      detail: 'Node state has not reached a serving-ready stage yet.',
+      tone: 'warning',
+      serving: false,
+    };
+  }
+
+  if (!instance.worker_id) {
+    return {
+      label: 'WAITING FOR WORKER',
+      detail: 'Compute is live, but the worker process has not connected back to the gateway yet.',
+      tone: 'warning',
+      serving: false,
+    };
+  }
+
+  if (!linkedWorker) {
+    return {
+      label: 'WORKER CONNECTING',
+      detail: 'Worker is linked to the node, but it is not yet visible in the active worker set.',
+      tone: 'warning',
+      serving: false,
+    };
+  }
+
+  if (linkedWorker.status !== 'healthy') {
+    return {
+      label: 'WORKER DEGRADED',
+      detail: `Worker is connected but currently ${linkedWorker.status}.`,
+      tone: 'warning',
+      serving: false,
+    };
+  }
+
+  if (assignedModels.length === 0) {
+    return {
+      label: 'READY',
+      detail: 'Node is healthy and ready to accept model assignments.',
+      tone: '',
+      serving: false,
+    };
+  }
+
+  if (loadedAssignedModels.length === 0) {
+    return {
+      label: 'MODEL LOADING',
+      detail: `Worker is healthy. Waiting for ${assignedModels.length === 1 ? 'the assigned model' : `${assignedModels.length} assigned models`} to finish loading.`,
+      tone: 'warning',
+      serving: false,
+    };
+  }
+
+  if (loadedAssignedModels.length < assignedModels.length) {
+    return {
+      label: 'PARTIAL READY',
+      detail: `${loadedAssignedModels.length}/${assignedModels.length} assigned models are loaded on the worker.`,
+      tone: 'warning',
+      serving: false,
+    };
+  }
+
+  return {
+    label: 'SERVING',
+    detail: assignedModels.length === 1
+      ? `${assignedModels[0].split('/').pop()} is loaded and ready for inference.`
+      : `${assignedModels.length} assigned models are loaded and ready for inference.`,
+    tone: '',
+    serving: true,
+  };
+}
+
 function useInstanceActions(instance: Instance) {
   const terminateMutation = useTerminateInstance();
   const startMutation = useStartInstance();
@@ -168,12 +294,13 @@ function InstanceActions({ instance, compact = false }: { instance: Instance; co
   );
 }
 
-function InstanceRow({ instance }: { instance: Instance }) {
+function InstanceRow({ instance, workers, highlighted }: { instance: Instance; workers: Worker[] | undefined; highlighted?: boolean }) {
   const statusClass = getStatusClass(instance.status);
   const statusLabel = getStatusLabel(instance.status);
+  const readiness = getInstanceReadiness(instance, workers);
 
   return (
-    <tr style={{ borderBottom: '1px solid #EEEEEC' }}>
+    <tr style={{ borderBottom: '1px solid #EEEEEC', background: highlighted ? 'rgba(244, 242, 238, 0.7)' : 'transparent' }}>
       <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
         <div className="mono">{instance.name || instance.id.slice(0, 16)}</div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
@@ -187,6 +314,12 @@ function InstanceRow({ instance }: { instance: Instance }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
           <span className={`status-dot ${statusClass}`} />
           {statusLabel}
+        </div>
+        <div style={{ marginTop: '0.45rem', display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+          <span className={`badge ${readiness.tone ? `status-${readiness.tone}` : ''}`}>{readiness.label}</span>
+        </div>
+        <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5, maxWidth: '22rem' }}>
+          {readiness.detail}
         </div>
       </td>
       <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
@@ -206,9 +339,10 @@ function InstanceRow({ instance }: { instance: Instance }) {
   );
 }
 
-function ProvisionModal({ isOpen, onClose, offerings, preselectedModel, providerStatuses, configuredProviders }: {
+function ProvisionModal({ isOpen, onClose, onProvisioned, offerings, preselectedModel, providerStatuses, configuredProviders }: {
   isOpen: boolean;
   onClose: () => void;
+  onProvisioned: (instance: Instance, selectedModelName?: string) => void;
   offerings: GPUOffering[] | undefined;
   preselectedModel?: string | null;
   providerStatuses: ProviderStatus[];
@@ -301,7 +435,7 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel, provider
   const handleProvision = async () => {
     if (!selectedOffering) return;
     try {
-      await provisionMutation.mutateAsync({
+      const provisionedInstance = await provisionMutation.mutateAsync({
         name: name || 'infera-worker',
         provider: selectedOffering.provider,
         gpu_type: selectedOffering.gpu_type,
@@ -309,6 +443,7 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel, provider
         spot_instance: spotInstance,
         models: selectedModels.length > 0 ? selectedModels : undefined,
       });
+      onProvisioned(provisionedInstance, selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : undefined);
       toast.success(
         selectedModels.length > 0
           ? `Provisioning ${selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : `${selectedModels.length} models`} on ${selectedOffering.gpu_type.replace('_', ' ')}`
@@ -479,6 +614,8 @@ export function Instances() {
   const [showProvisionModal, setShowProvisionModal] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('active');
   const [configuredProviders, setConfiguredProviders] = useState<string[]>([]);
+  const [lastProvisionedInstanceID, setLastProvisionedInstanceID] = useState<string | null>(null);
+  const [lastProvisionedModelName, setLastProvisionedModelName] = useState<string | null>(null);
   const isMobile = useIsMobile(900);
   const { session } = useAuthSession();
   const role = session?.key?.role ?? 'user';
@@ -510,6 +647,8 @@ export function Instances() {
   const providerSummary = filteredInstances.length > 0
     ? [...new Set(filteredInstances.map((instance) => instance.provider))]
     : visibleProviderStatuses.filter((status) => configuredProviders.includes(status.provider)).map((status) => status.provider);
+  const lastProvisionedInstance = instances?.find((instance) => instance.id === lastProvisionedInstanceID) || null;
+  const lastProvisionedReadiness = lastProvisionedInstance ? getInstanceReadiness(lastProvisionedInstance, workers) : null;
 
   // Auto-open provision modal if redirected from dashboard or registry.
   useEffect(() => {
@@ -542,6 +681,26 @@ export function Instances() {
 
   return (
     <div className="instances-page animate-fade-in">
+      {lastProvisionedInstance && lastProvisionedReadiness && (
+        <div style={{ padding: '1.25rem 2rem', borderBottom: 'var(--grid-line)', background: 'rgba(255, 255, 255, 0.82)' }}>
+          <div className="label-text" style={{ marginBottom: '0.5rem' }}>LATEST DEPLOYMENT</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '1rem', fontWeight: 600 }}>
+                {lastProvisionedModelName || lastProvisionedInstance.name || lastProvisionedInstance.id.slice(0, 16)}
+              </div>
+              <div style={{ marginTop: '0.4rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '44rem' }}>
+                {lastProvisionedReadiness.detail}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <span className={`badge ${lastProvisionedReadiness.tone ? `status-${lastProvisionedReadiness.tone}` : ''}`}>{lastProvisionedReadiness.label}</span>
+              <span className="badge">{getStatusLabel(lastProvisionedInstance.status).toUpperCase()}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Metrics Row */}
       <div className="grid-row instances-metrics-row">
         <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
@@ -651,6 +810,7 @@ export function Instances() {
                   instance={instance}
                   statusClass={getStatusClass(instance.status)}
                   statusLabel={getStatusLabel(instance.status)}
+                  readiness={getInstanceReadiness(instance, workers)}
                   actions={<InstanceActions instance={instance} compact />}
                 />
               ))}
@@ -669,7 +829,12 @@ export function Instances() {
                 </thead>
                 <tbody>
                   {filteredInstances.map(instance => (
-                    <InstanceRow key={instance.id} instance={instance} />
+                    <InstanceRow
+                      key={instance.id}
+                      instance={instance}
+                      workers={workers}
+                      highlighted={instance.id === lastProvisionedInstanceID}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -779,6 +944,11 @@ export function Instances() {
       <ProvisionModal
         isOpen={showProvisionModal}
         onClose={() => { setShowProvisionModal(false); setPreselectedModel(null); }}
+        onProvisioned={(instance, modelName) => {
+          setLastProvisionedInstanceID(instance.id);
+          setLastProvisionedModelName(modelName || null);
+          setStatusFilter('active');
+        }}
         offerings={offerings}
         preselectedModel={preselectedModel}
         providerStatuses={visibleProviderStatuses}
