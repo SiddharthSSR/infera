@@ -19,8 +19,7 @@ import (
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/providers/mock"
 	_ "github.com/infera/infera/go/internal/providers/runpod"
-	// vastai is stubbed — not registered until implemented
-	// _ "github.com/infera/infera/go/internal/providers/vastai"
+	_ "github.com/infera/infera/go/internal/providers/vastai"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/internal/vault"
 )
@@ -33,7 +32,6 @@ func main() {
 	// Parse flags
 	httpPort := flag.Int("port", 8080, "HTTP port")
 	runpodKey := flag.String("runpod-key", os.Getenv("RUNPOD_API_KEY"), "RunPod API key")
-	vastaiKey := flag.String("vastai-key", os.Getenv("VASTAI_API_KEY"), "Vast.ai API key")
 	flag.Parse()
 
 	log.Info("Starting Infera Gateway...")
@@ -90,9 +88,19 @@ func main() {
 		}
 	}
 
-	// Vast.ai provider is stubbed — registration disabled until implemented.
-	// When ready, uncomment the import and this block.
-	_ = vastaiKey
+	// Register Vast.ai if API key provided
+	if vastaiKey := strings.TrimSpace(os.Getenv("VASTAI_API_KEY")); vastaiKey != "" {
+		vastaiProvider, err := providers.CreateProvider(providers.ProviderConfig{
+			Type:   providers.ProviderVastAI,
+			APIKey: vastaiKey,
+		})
+		if err != nil {
+			log.Warn("failed to create Vast.ai provider", slog.String("error", err.Error()))
+		} else {
+			instanceMgr.RegisterProvider(vastaiProvider)
+			log.Info("provider registered", slog.String("provider", "vastai"))
+		}
+	}
 
 	// Create gateway
 	gatewayConfig := gateway.DefaultConfig()
@@ -166,6 +174,18 @@ func main() {
 	authHandler := auth.NewHandler(authStore)
 	authHandler.SetSecure(os.Getenv("INFERA_DEV_MODE") != "1")
 	gw.SetAuthHandler(authHandler)
+	instanceMgr.SetWorkspaceProviderConfigResolver(func(workspaceID string, providerType providers.ProviderType) (*providers.ProviderConfig, error) {
+		apiKey, apiSecret, endpoint, err := authStore.ResolveWorkspaceProviderConfig(workspaceID, string(providerType))
+		if err != nil {
+			return nil, err
+		}
+		return &providers.ProviderConfig{
+			Type:      providerType,
+			APIKey:    apiKey,
+			APISecret: apiSecret,
+			Endpoint:  endpoint,
+		}, nil
+	})
 
 	// Initialize inference audit store (best-effort, non-fatal)
 	auditStore, err := audit.NewStore("data/audit.db")

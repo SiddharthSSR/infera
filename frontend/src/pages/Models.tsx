@@ -343,34 +343,38 @@ export function Models() {
 
                   <div className="mobile-data-actions">
                     {isLoaded ? (
-                      <span
+                      <button
+                        type="button"
                         className="mobile-data-action"
                         onClick={() => navigate('/instances')}
                       >
                         MANAGE
-                      </span>
+                      </button>
                     ) : isDeploying ? (
-                      <span
+                      <button
+                        type="button"
                         className="mobile-data-action muted"
                         onClick={() => toast.info('Cancellation coming soon')}
                       >
                         CANCEL
-                      </span>
+                      </button>
                     ) : (
                       <>
-                        <span
+                        <button
+                          type="button"
                           className="mobile-data-action"
                           onClick={() => navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)}
                         >
                           DEPLOY
-                        </span>
+                        </button>
                         {hasVaultEntry && (
-                          <span
+                          <button
+                            type="button"
                             className="mobile-data-action danger"
                             onClick={() => handleRemove(model.id)}
                           >
                             REMOVE
-                          </span>
+                          </button>
                         )}
                       </>
                     )}
@@ -417,17 +421,7 @@ export function Models() {
             return (
               <div
                 key={model.id}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '2fr 1fr 1fr 1fr 120px',
-                  padding: '1.5rem 2rem',
-                  borderBottom: 'var(--grid-line)',
-                  alignItems: 'center',
-                  transition: 'background-color 0.2s',
-                  backgroundColor: isLoaded ? '#fff' : 'transparent',
-                }}
-                onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#F9F8F6')}
-                onMouseLeave={e => (e.currentTarget.style.backgroundColor = isLoaded ? '#fff' : 'transparent')}
+                className={`model-row${isLoaded ? ' model-row-active' : ''}`}
               >
                 <div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 500 }}>{shortName}</div>
@@ -449,34 +443,38 @@ export function Models() {
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
                   {isLoaded ? (
-                    <span
-                      style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, textDecoration: 'underline', cursor: 'pointer' }}
+                    <button
+                      type="button"
+                      className="action-link"
                       onClick={() => navigate('/instances')}
                     >
                       MANAGE
-                    </span>
+                    </button>
                   ) : isDeploying ? (
-                    <span
-                      style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, color: 'var(--text-secondary)', cursor: 'pointer' }}
+                    <button
+                      type="button"
+                      className="action-link muted"
                       onClick={() => toast.info('Cancellation coming soon')}
                     >
                       CANCEL
-                    </span>
+                    </button>
                   ) : (
                     <>
-                      <span
-                        style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, textDecoration: 'underline', cursor: 'pointer' }}
+                      <button
+                        type="button"
+                        className="action-link"
                         onClick={() => navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)}
                       >
                         DEPLOY
-                      </span>
+                      </button>
                       {hasVaultEntry && (
-                        <span
-                          style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, color: 'var(--color-error)', cursor: 'pointer' }}
+                        <button
+                          type="button"
+                          className="action-link danger"
                           onClick={() => handleRemove(model.id)}
                         >
                           REMOVE
-                        </span>
+                        </button>
                       )}
                     </>
                   )}
@@ -491,7 +489,7 @@ export function Models() {
       )}
 
       {/* Footer */}
-      <div className="grid-row" style={{ borderBottom: 'none', backgroundColor: 'var(--bg-accent)' }}>
+      <div className="grid-row" style={{ backgroundColor: 'var(--bg-accent)' }}>
         <div className="cell">
           <div className="label-text">REGISTRY MODELS</div>
           <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>

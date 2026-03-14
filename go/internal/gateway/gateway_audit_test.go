@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/infera/infera/go/internal/audit"
+	"github.com/infera/infera/go/internal/auth"
 )
 
 func TestHandleGetAuditUsage_Success(t *testing.T) {
@@ -20,22 +21,24 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 
 	now := time.Now().UTC()
 	if err := store.AppendInference(audit.InferenceAuditRecord{
-		Timestamp:  now.Add(-30 * time.Minute),
-		RequestID:  "req-1",
-		KeyID:      "inf_key_a",
-		Model:      "m1",
-		Status:     "success",
-		TokenCount: 120,
+		Timestamp:   now.Add(-30 * time.Minute),
+		RequestID:   "req-1",
+		KeyID:       "inf_key_a",
+		WorkspaceID: "ws_alpha",
+		Model:       "m1",
+		Status:      "success",
+		TokenCount:  120,
 	}); err != nil {
 		t.Fatalf("AppendInference req-1: %v", err)
 	}
 	if err := store.AppendInference(audit.InferenceAuditRecord{
-		Timestamp:  now.Add(-20 * time.Minute),
-		RequestID:  "req-2",
-		KeyID:      "inf_key_a",
-		Model:      "m1",
-		Status:     "inference_error",
-		TokenCount: 0,
+		Timestamp:   now.Add(-20 * time.Minute),
+		RequestID:   "req-2",
+		KeyID:       "inf_key_a",
+		WorkspaceID: "ws_alpha",
+		Model:       "m1",
+		Status:      "inference_error",
+		TokenCount:  0,
 	}); err != nil {
 		t.Fatalf("AppendInference req-2: %v", err)
 	}
@@ -46,6 +49,12 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 	start := now.Add(-2 * time.Hour).Format(time.RFC3339)
 	end := now.Add(time.Hour).Format(time.RFC3339)
 	req := httptest.NewRequest(http.MethodGet, "/api/audit/usage?bucket=day&start="+start+"&end="+end, nil)
+	req = req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+		Role:          auth.RoleBilling,
+		PrincipalType: auth.PrincipalHuman,
+		Status:        "active",
+		WorkspaceID:   "ws_alpha",
+	}))
 	rec := httptest.NewRecorder()
 	g.handleGetAuditUsage(rec, req)
 
@@ -55,11 +64,12 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 
 	var payload struct {
 		Rows []struct {
-			KeyID     string `json:"key_id"`
-			Requests  int64  `json:"requests"`
-			Tokens    int64  `json:"tokens"`
-			Successes int64  `json:"successes"`
-			Errors    int64  `json:"errors"`
+			WorkspaceID string `json:"workspace_id"`
+			KeyID       string `json:"key_id"`
+			Requests    int64  `json:"requests"`
+			Tokens      int64  `json:"tokens"`
+			Successes   int64  `json:"successes"`
+			Errors      int64  `json:"errors"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
@@ -70,6 +80,9 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 	}
 
 	row := payload.Rows[0]
+	if row.WorkspaceID != "ws_alpha" {
+		t.Fatalf("expected workspace ws_alpha, got %q", row.WorkspaceID)
+	}
 	if row.KeyID != "inf_key_a" {
 		t.Fatalf("expected key inf_key_a, got %q", row.KeyID)
 	}
@@ -89,6 +102,12 @@ func TestHandleGetAuditUsage_InvalidBucket(t *testing.T) {
 	g.SetAuditStore(store)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/audit/usage?bucket=week", nil)
+	req = req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+		Role:          auth.RoleBilling,
+		PrincipalType: auth.PrincipalHuman,
+		Status:        "active",
+		WorkspaceID:   auth.DefaultWorkspaceID,
+	}))
 	rec := httptest.NewRecorder()
 	g.handleGetAuditUsage(rec, req)
 

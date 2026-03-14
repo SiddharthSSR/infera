@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import type { Instance, GPUOffering, GPUType, VaultModel } from '../types';
 import { useInstances, useOfferings, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { InstanceMobileCard } from '../components/InstanceMobileCard';
 
 const GPU_VRAM_GB: Record<GPUType, number> = {
   RTX_4090: 24,
@@ -175,13 +176,6 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
   const provisionMutation = useProvisionInstance();
   const { data: vaultModels } = useVaultModels({ status: 'available' });
 
-  // Pre-select model when opening from registry DEPLOY
-  useEffect(() => {
-    if (preselectedModel && isOpen) {
-      setSelectedModels(prev => prev.includes(preselectedModel) ? prev : [preselectedModel, ...prev]);
-    }
-  }, [preselectedModel, isOpen]);
-
   const getOfferingKey = (o: GPUOffering) =>
     `${o.provider}-${o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}`;
 
@@ -203,6 +197,17 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
     if (!selectedGPUVram) return true;
     return m.vram_required <= selectedGPUVram * 1024;
   });
+
+  useEffect(() => {
+    const compatibleSources = new Set((compatibleModels || []).map((model) => model.source_uri));
+    setSelectedModels((prev) => {
+      const next = prev.filter((model) => compatibleSources.has(model));
+      if (preselectedModel && isOpen && compatibleSources.has(preselectedModel) && !next.includes(preselectedModel)) {
+        return [preselectedModel, ...next];
+      }
+      return next;
+    });
+  }, [compatibleModels, preselectedModel, isOpen]);
 
   const toggleModel = (sourceUri: string) => {
     setSelectedModels(prev => prev.includes(sourceUri) ? prev.filter(id => id !== sourceUri) : [...prev, sourceUri]);
@@ -237,7 +242,8 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
         onClick={onClose}
       />
       <div style={{
-        position: 'fixed', inset: '1rem', maxWidth: 900, margin: '0 auto',
+        position: 'fixed', top: '1.5rem', bottom: '1.5rem', left: '50%', transform: 'translateX(-50%)',
+        width: 'min(1180px, calc(100vw - 3rem))', maxWidth: 'none',
         background: 'var(--bg-paper)', border: 'var(--grid-line)', zIndex: 50,
         display: 'flex', flexDirection: 'column', overflow: 'hidden'
       }}>
@@ -248,78 +254,84 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
         </div>
 
         {/* Content */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '2rem' }}>
+        <div className="provision-modal-body" style={{ flex: 1, overflowY: 'auto', padding: '2rem' }}>
           <div style={{ marginBottom: '2rem' }}>
             <div className="label-text">INSTANCE NAME</div>
             <input type="text" className="control-input" value={name} onChange={e => setName(e.target.value)} placeholder="infera-worker" style={{ marginTop: '0.5rem' }} />
           </div>
 
-          <div className="label-text" style={{ marginBottom: '1rem' }}>GPU CONFIGURATION</div>
-          <div className="provision-options-grid" style={{ marginBottom: '2rem' }}>
-            {dedupedOfferings?.map(o => {
-              const key = getOfferingKey(o);
-              const isSelected = selectedGPU === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => setSelectedGPU(prev => prev === key ? '' : key)}
-                  style={{
-                    padding: '1.25rem', textAlign: 'left', cursor: 'pointer',
-                    border: isSelected ? '2px solid var(--text-primary)' : 'var(--grid-line)',
-                    background: isSelected ? 'var(--bg-accent)' : 'transparent',
-                    fontFamily: 'var(--font-main)',
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.5rem' }}>
-                    {o.gpu_count}x {o.gpu_type.replace('_', ' ')}
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    <span>{o.vcpu} vCPU</span>
-                    <span>{o.memory_gb}GB</span>
-                  </div>
-                  <div className="mono" style={{ marginTop: '0.75rem', fontSize: '1rem' }}>
-                    ${o.cost_per_hour.toFixed(2)}<span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/hr</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Models */}
-          {allVaultModels && allVaultModels.length > 0 && (
-            <div style={{ marginBottom: '2rem' }}>
-              <div className="label-text" style={{ marginBottom: '0.5rem' }}>MODELS TO DEPLOY</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                {selectedGPUVram ? `Showing models that fit within ${selectedGPUVram}GB VRAM` : 'Select a GPU to filter compatible models'}
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                {(compatibleModels || []).map(model => {
-                  const isSelected = selectedModels.includes(model.source_uri);
+          <div className="provision-modal-grid">
+            <div>
+              <div className="label-text" style={{ marginBottom: '1rem' }}>GPU CONFIGURATION</div>
+              <div className="provision-options-grid" style={{ marginBottom: '2rem' }}>
+                {dedupedOfferings?.map(o => {
+                  const key = getOfferingKey(o);
+                  const isSelected = selectedGPU === key;
                   return (
                     <button
-                      key={model.id}
-                      onClick={() => toggleModel(model.source_uri)}
+                      key={key}
+                      onClick={() => setSelectedGPU(prev => prev === key ? '' : key)}
                       style={{
-                        padding: '0.5rem 1rem', cursor: 'pointer',
-                        border: isSelected ? '1px solid var(--text-primary)' : 'var(--grid-line)',
+                        padding: '1.25rem', textAlign: 'left', cursor: 'pointer',
+                        border: isSelected ? '2px solid var(--text-primary)' : 'var(--grid-line)',
                         background: isSelected ? 'var(--bg-accent)' : 'transparent',
-                        fontFamily: 'var(--font-main)', fontSize: '0.85rem',
-                        display: 'flex', alignItems: 'center', gap: '0.5rem',
+                        fontFamily: 'var(--font-main)',
                       }}
                     >
-                      {model.name}
-                      {model.parameters && <span className="badge">{model.parameters}</span>}
+                      <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.5rem' }}>
+                        {o.gpu_count}x {o.gpu_type.replace('_', ' ')}
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        <span>{o.vcpu} vCPU</span>
+                        <span>{o.memory_gb}GB</span>
+                      </div>
+                      <div className="mono" style={{ marginTop: '0.75rem', fontSize: '1rem' }}>
+                        ${o.cost_per_hour.toFixed(2)}<span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/hr</span>
+                      </div>
                     </button>
                   );
                 })}
               </div>
             </div>
-          )}
 
-          {/* Spot toggle */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <input type="checkbox" checked={spotInstance} onChange={e => setSpotInstance(e.target.checked)} />
-            <span style={{ fontSize: '0.9rem' }}>Spot Instance (up to 70% cheaper, may be interrupted)</span>
+            <div>
+              {/* Models */}
+              {allVaultModels && allVaultModels.length > 0 && (
+                <div style={{ marginBottom: '2rem' }}>
+                  <div className="label-text" style={{ marginBottom: '0.5rem' }}>MODELS TO DEPLOY</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                    {selectedGPUVram ? `Showing models that fit within ${selectedGPUVram}GB VRAM` : 'Select a GPU to filter compatible models'}
+                  </div>
+                  <div className="provision-model-grid">
+                    {(compatibleModels || []).map(model => {
+                      const isSelected = selectedModels.includes(model.source_uri);
+                      return (
+                        <button
+                          key={model.id}
+                          onClick={() => toggleModel(model.source_uri)}
+                          style={{
+                            padding: '0.5rem 1rem', cursor: 'pointer',
+                            border: isSelected ? '1px solid var(--text-primary)' : 'var(--grid-line)',
+                            background: isSelected ? 'var(--bg-accent)' : 'transparent',
+                            fontFamily: 'var(--font-main)', fontSize: '0.85rem',
+                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                          }}
+                        >
+                          {model.name}
+                          {model.parameters && <span className="badge">{model.parameters}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Spot toggle */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <input type="checkbox" checked={spotInstance} onChange={e => setSpotInstance(e.target.checked)} />
+                <span style={{ fontSize: '0.9rem' }}>Spot Instance (up to 70% cheaper, may be interrupted)</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -332,38 +344,6 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
         </div>
       </div>
     </>
-  );
-}
-
-function InstanceCard({ instance }: { instance: Instance }) {
-  const statusClass = getStatusClass(instance.status);
-  const statusLabel = getStatusLabel(instance.status);
-
-  return (
-    <div className="mobile-data-card">
-      <div className="mobile-data-card-header">
-        <div>
-          <div className="mobile-data-title mono" style={{ fontSize: '0.9rem' }}>{instance.name || instance.id.slice(0, 16)}</div>
-          <div className="mobile-data-subtitle">
-            {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
-            {instance.models && instance.models.length > 0 && (
-              <> &middot; {instance.models[0].split('/').pop()}</>
-            )}
-          </div>
-        </div>
-        <div className="mobile-status-inline">
-          <span className={`status-dot ${statusClass}`} />
-          {statusLabel}
-        </div>
-      </div>
-      <div className="mobile-data-meta">
-        <div><span className="label-text">COST</span> <span className="mono">${instance.cost_per_hour.toFixed(2)}/hr</span></div>
-        <div><span className="label-text">ENDPOINT</span> <span className="mono">{instance.public_ip || '-'}</span></div>
-      </div>
-      <div className="mobile-data-actions">
-        <InstanceActions instance={instance} compact />
-      </div>
-    </div>
   );
 }
 
@@ -402,9 +382,9 @@ export function Instances() {
   const totalMemTotal = healthyWorkers.reduce((sum, w) => sum + w.memory_total, 0);
 
   return (
-    <div className="animate-fade-in">
+    <div className="instances-page animate-fade-in">
       {/* Metrics Row */}
-      <div className="grid-row">
+      <div className="grid-row instances-metrics-row">
         <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
           <div className="label-text">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -464,9 +444,9 @@ export function Instances() {
       </div>
 
       {/* Main Content Row */}
-      <div className="grid-row" style={{ flexGrow: 1 }}>
+      <div className="grid-row instances-main-row" style={{ flexGrow: 1 }}>
         {/* Node Table */}
-        <div className="cell" style={{ gridColumn: 'span 3' }}>
+        <div className="cell instances-list-cell" style={{ gridColumn: 'span 3' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
             <div className="label-text">NODE OVERVIEW</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -493,7 +473,13 @@ export function Instances() {
           ) : isMobile ? (
             <div className="mobile-data-list">
               {filteredInstances.map(instance => (
-                <InstanceCard key={instance.id} instance={instance} />
+                <InstanceMobileCard
+                  key={instance.id}
+                  instance={instance}
+                  statusClass={getStatusClass(instance.status)}
+                  statusLabel={getStatusLabel(instance.status)}
+                  actions={<InstanceActions instance={instance} compact />}
+                />
               ))}
             </div>
           ) : (
@@ -523,7 +509,7 @@ export function Instances() {
         </div>
 
         {/* Sidebar */}
-        <div className="cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
+        <div className="cell instances-sidebar-cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
           <div className="label-text" style={{ marginBottom: '2rem' }}>CLUSTER INFO</div>
 
           <div style={{ marginBottom: '2.5rem' }}>
@@ -571,7 +557,7 @@ export function Instances() {
       </div>
 
       {/* Footer */}
-      <div className="grid-row" style={{ borderBottom: 'none' }}>
+      <div className="grid-row instances-footer-row">
         <div className="cell">
           <div className="label-text">PROVIDER</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>

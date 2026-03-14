@@ -196,6 +196,15 @@ func (p *Provider) GetStatus(ctx context.Context) (*providers.ProviderStatus, er
 		Balance:     1000.00,
 		ActiveCount: activeCount,
 		QuotaLimit:  100,
+		Capabilities: providers.ProviderCapabilities{
+			SupportsSpot:            true,
+			SupportsCustomImages:    false,
+			SupportsRegionSelection: true,
+			SupportsPublicIP:        true,
+			SupportsSSHKeys:         false,
+			SupportsStartStop:       true,
+			KnownRegions:            []string{"mock"},
+		},
 	}, nil
 }
 

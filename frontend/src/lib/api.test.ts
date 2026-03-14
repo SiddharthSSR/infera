@@ -13,6 +13,20 @@ import {
   fetchApiKeys,
   createApiKey,
   revokeApiKey,
+  fetchWorkspaceQuota,
+  updateWorkspaceQuota,
+  fetchWorkspaceMembers,
+  updateWorkspaceMember,
+  removeWorkspaceMember,
+  fetchWorkspaceInvites,
+  fetchInvitationPreview,
+  acceptWorkspaceInvitation,
+  fetchWorkspaceProviderConfigs,
+  createWorkspaceInvite,
+  upsertWorkspaceProviderConfig,
+  deleteWorkspaceProviderConfig,
+  revokeWorkspaceInvite,
+  fetchAuditUsage,
   provisionInstance,
   terminateInstance,
   startInstance,
@@ -187,6 +201,173 @@ describe('API Functions', () => {
       })
 
       await expect(fetchApiKeys()).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('workspace admin endpoints', () => {
+    it('fetchWorkspaceQuota/fetchWorkspaceMembers/fetchWorkspaceInvites parse payloads', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ quota: { workspace_id: 'ws_1', enforce_hard_limits: true } }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ members: [{ id: 'm1', email: 'member@example.com' }] }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ invitations: [{ id: 'inv_1', email: 'invite@example.com' }] }) })
+
+      await expect(fetchWorkspaceQuota('ws_1')).resolves.toEqual(expect.objectContaining({ workspace_id: 'ws_1' }))
+      await expect(fetchWorkspaceMembers('ws_1')).resolves.toHaveLength(1)
+      await expect(fetchWorkspaceInvites('ws_1')).resolves.toHaveLength(1)
+    })
+
+    it('fetchInvitationPreview/acceptWorkspaceInvitation hit expected methods', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            invitation: {
+              workspace_id: 'ws_1',
+              workspace_slug: 'workspace',
+              workspace_name: 'Workspace',
+              role: 'developer',
+              email: 'invite@example.com',
+              display_name: 'Invite User',
+              expires_at: '2026-03-20T00:00:00Z',
+              status: 'pending',
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            membership: { id: 'm1', workspace_id: 'ws_1', email: 'invite@example.com', display_name: 'Invite User', role: 'developer', status: 'active', created_at: '2026-03-14T00:00:00Z' },
+            key: 'inf_secret',
+            record: { id: 'k1', key_prefix: 'inf_abcd...', name: 'Invite User', role: 'developer', created_at: '2026-03-14T00:00:00Z', status: 'active' },
+          }),
+        })
+
+      await expect(fetchInvitationPreview('invite_token')).resolves.toEqual(
+        expect.objectContaining({ workspace_id: 'ws_1', role: 'developer' })
+      )
+      await expect(acceptWorkspaceInvitation('invite_token', 'Invite User')).resolves.toEqual(
+        expect.objectContaining({ key: 'inf_secret' })
+      )
+
+      expect(mockFetch).toHaveBeenNthCalledWith(1, '/api/auth/invitations/preview?token=invite_token')
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/auth/invitations/accept',
+        expect.objectContaining({ method: 'POST' })
+      )
+    })
+
+    it('updateWorkspaceMember/removeWorkspaceMember hit expected methods', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ member: { id: 'm1', role: 'operator' } }) })
+        .mockResolvedValueOnce({ ok: true })
+
+      await updateWorkspaceMember('ws_1', 'm1', { role: 'operator' })
+      await removeWorkspaceMember('ws_1', 'm1')
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/auth/workspaces/ws_1/members/m1',
+        expect.objectContaining({ method: 'PUT', credentials: 'include' })
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/auth/workspaces/ws_1/members/m1',
+        expect.objectContaining({ method: 'DELETE', credentials: 'include' })
+      )
+    })
+
+    it('fetchWorkspaceProviderConfigs parses configured providers', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          providers: [{ workspace_id: 'ws_1', provider: 'runpod', configured: true, endpoint: 'https://api.runpod.io/graphql' }],
+        }),
+      })
+
+      await expect(fetchWorkspaceProviderConfigs('ws_1')).resolves.toEqual([
+        expect.objectContaining({ workspace_id: 'ws_1', provider: 'runpod', configured: true }),
+      ])
+    })
+
+    it('updateWorkspaceQuota/createWorkspaceInvite/revokeWorkspaceInvite hit expected methods', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ quota: { workspace_id: 'ws_1', enforce_hard_limits: false } }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ invitation_token: 'invite_token', invitation: { id: 'inv_1' } }) })
+        .mockResolvedValueOnce({ ok: true })
+
+      await updateWorkspaceQuota('ws_1', { monthly_request_limit: 100, monthly_token_limit: 1000, enforce_hard_limits: false })
+      await createWorkspaceInvite('ws_1', { email: 'new@example.com', role: 'developer' })
+      await revokeWorkspaceInvite('ws_1', 'inv_1')
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/auth/workspaces/ws_1/quota',
+        expect.objectContaining({ method: 'PUT', credentials: 'include' })
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/auth/workspaces/ws_1/invites',
+        expect.objectContaining({ method: 'POST', credentials: 'include' })
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        3,
+        '/api/auth/workspaces/ws_1/invites/inv_1',
+        expect.objectContaining({ method: 'DELETE', credentials: 'include' })
+      )
+    })
+
+    it('upsertWorkspaceProviderConfig/deleteWorkspaceProviderConfig hit expected methods', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ provider: { workspace_id: 'ws_1', provider: 'runpod', configured: true } }),
+        })
+        .mockResolvedValueOnce({ ok: true })
+
+      await upsertWorkspaceProviderConfig('ws_1', 'runpod', {
+        api_key: 'rp_key',
+        api_secret: 'rp_secret',
+        endpoint: 'https://api.runpod.io/graphql',
+      })
+      await deleteWorkspaceProviderConfig('ws_1', 'runpod')
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/auth/workspaces/ws_1/providers/runpod',
+        expect.objectContaining({ method: 'PUT', credentials: 'include' })
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/auth/workspaces/ws_1/providers/runpod',
+        expect.objectContaining({ method: 'DELETE', credentials: 'include' })
+      )
+    })
+
+    it('fetchAuditUsage builds query parameters and parses rows', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          bucket: 'day',
+          start: '2026-03-01T00:00:00Z',
+          end: '2026-03-31T23:59:59Z',
+          rows: [{ bucket_start: '2026-03-10T00:00:00Z', workspace_id: 'ws_1', key_id: 'key_1', requests: 12, tokens: 3456, successes: 11, errors: 1 }],
+        }),
+      })
+
+      const result = await fetchAuditUsage({
+        start: '2026-03-01T00:00:00Z',
+        end: '2026-03-31T23:59:59Z',
+        bucket: 'day',
+        workspace_id: 'ws_1',
+      })
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/audit/usage?start=2026-03-01T00%3A00%3A00Z&end=2026-03-31T23%3A59%3A59Z&bucket=day&workspace_id=ws_1',
+        expect.objectContaining({ credentials: 'include' })
+      )
+      expect(result.rows).toHaveLength(1)
+      expect(result.rows[0]).toEqual(expect.objectContaining({ requests: 12, tokens: 3456 }))
     })
   })
 })

@@ -24,6 +24,7 @@ func TestAppendInference(t *testing.T) {
 		Timestamp:    time.Now().UTC(),
 		RequestID:    "req_1",
 		KeyID:        "inf_abcd1234",
+		WorkspaceID:  "ws_default",
 		Model:        "meta-llama/Llama-3.1-8B-Instruct",
 		WorkerID:     "w1",
 		Stream:       false,
@@ -44,28 +45,31 @@ func TestUsageByKey(t *testing.T) {
 	base := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
 	records := []InferenceAuditRecord{
 		{
-			Timestamp:  base.Add(-2 * time.Hour),
-			RequestID:  "req_1",
-			KeyID:      "inf_key_a",
-			Model:      "m1",
-			Status:     "success",
-			TokenCount: 100,
+			Timestamp:   base.Add(-2 * time.Hour),
+			RequestID:   "req_1",
+			KeyID:       "inf_key_a",
+			WorkspaceID: "ws_alpha",
+			Model:       "m1",
+			Status:      "success",
+			TokenCount:  100,
 		},
 		{
-			Timestamp:  base.Add(-1 * time.Hour),
-			RequestID:  "req_2",
-			KeyID:      "inf_key_a",
-			Model:      "m1",
-			Status:     "success",
-			TokenCount: 50,
+			Timestamp:   base.Add(-1 * time.Hour),
+			RequestID:   "req_2",
+			KeyID:       "inf_key_a",
+			WorkspaceID: "ws_alpha",
+			Model:       "m1",
+			Status:      "success",
+			TokenCount:  50,
 		},
 		{
-			Timestamp:  base.Add(-30 * time.Minute),
-			RequestID:  "req_3",
-			KeyID:      "inf_key_b",
-			Model:      "m1",
-			Status:     "inference_error",
-			TokenCount: 10,
+			Timestamp:   base.Add(-30 * time.Minute),
+			RequestID:   "req_3",
+			KeyID:       "inf_key_b",
+			WorkspaceID: "ws_beta",
+			Model:       "m1",
+			Status:      "inference_error",
+			TokenCount:  10,
 		},
 	}
 	for _, rec := range records {
@@ -90,6 +94,9 @@ func TestUsageByKey(t *testing.T) {
 	for _, row := range rows {
 		switch row.KeyID {
 		case "inf_key_a":
+			if row.WorkspaceID != "ws_alpha" {
+				t.Fatalf("expected ws_alpha, got %q", row.WorkspaceID)
+			}
 			if row.RequestCount != 2 {
 				t.Fatalf("expected 2 requests for key a, got %d", row.RequestCount)
 			}
@@ -100,6 +107,9 @@ func TestUsageByKey(t *testing.T) {
 				t.Fatalf("expected success=2 error=0 for key a, got success=%d error=%d", row.SuccessCount, row.ErrorCount)
 			}
 		case "inf_key_b":
+			if row.WorkspaceID != "ws_beta" {
+				t.Fatalf("expected ws_beta, got %q", row.WorkspaceID)
+			}
 			if row.RequestCount != 1 {
 				t.Fatalf("expected 1 request for key b, got %d", row.RequestCount)
 			}
@@ -112,5 +122,57 @@ func TestUsageByKey(t *testing.T) {
 		default:
 			t.Fatalf("unexpected key id %q", row.KeyID)
 		}
+	}
+}
+
+func TestUsageSummary(t *testing.T) {
+	s := newTestStore(t)
+
+	base := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+	records := []InferenceAuditRecord{
+		{
+			Timestamp:   base.Add(-2 * time.Hour),
+			RequestID:   "req_1",
+			KeyID:       "inf_key_a",
+			WorkspaceID: "ws_alpha",
+			Model:       "m1",
+			Status:      "success",
+			TokenCount:  100,
+		},
+		{
+			Timestamp:   base.Add(-1 * time.Hour),
+			RequestID:   "req_2",
+			KeyID:       "inf_key_a",
+			WorkspaceID: "ws_alpha",
+			Model:       "m1",
+			Status:      "inference_error",
+			TokenCount:  10,
+		},
+		{
+			Timestamp:   base.Add(-30 * time.Minute),
+			RequestID:   "req_3",
+			KeyID:       "inf_key_b",
+			WorkspaceID: "ws_beta",
+			Model:       "m1",
+			Status:      "success",
+			TokenCount:  50,
+		},
+	}
+	for _, rec := range records {
+		if err := s.AppendInference(rec); err != nil {
+			t.Fatalf("AppendInference: %v", err)
+		}
+	}
+
+	summary, err := s.UsageSummary(UsageSummaryQuery{
+		Start:       base.Add(-3 * time.Hour),
+		End:         base.Add(time.Hour),
+		WorkspaceID: "ws_alpha",
+	})
+	if err != nil {
+		t.Fatalf("UsageSummary: %v", err)
+	}
+	if summary.RequestCount != 2 || summary.TokenCount != 110 || summary.SuccessCount != 1 || summary.ErrorCount != 1 {
+		t.Fatalf("unexpected summary: %+v", summary)
 	}
 }

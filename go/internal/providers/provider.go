@@ -29,6 +29,24 @@ type ProviderConfig struct {
 // ProviderFactory creates provider instances.
 type ProviderFactory func(config ProviderConfig) (Provider, error)
 
+const (
+	ProviderErrorUnknownProvider    = "unknown_provider"
+	ProviderErrorMissingAPIKey      = "missing_api_key"
+	ProviderErrorAuthFailed         = "auth_failed"
+	ProviderErrorInvalidConfig      = "invalid_config"
+	ProviderErrorInvalidRequest     = "invalid_request"
+	ProviderErrorNotFound           = "not_found"
+	ProviderErrorRateLimited        = "rate_limited"
+	ProviderErrorServiceUnavailable = "service_unavailable"
+	ProviderErrorTimeout            = "timeout"
+	ProviderErrorRequestFailed      = "request_failed"
+	ProviderErrorAPIError           = "api_error"
+	ProviderErrorGraphQLError       = "graphql_error"
+	ProviderErrorInstanceError      = "instance_error"
+	ProviderErrorTerminated         = "terminated"
+	ProviderErrorNotImplemented     = "not_implemented"
+)
+
 // Global registry of provider factories
 var providerFactories = make(map[ProviderType]ProviderFactory)
 
@@ -43,11 +61,24 @@ func CreateProvider(config ProviderConfig) (Provider, error) {
 	if !exists {
 		return nil, &ProviderError{
 			Provider: config.Type,
-			Code:     "unknown_provider",
+			Code:     ProviderErrorUnknownProvider,
 			Message:  "provider type not registered",
 		}
 	}
 	return factory(config)
+}
+
+func IsRegisteredProviderType(providerType ProviderType) bool {
+	_, exists := providerFactories[providerType]
+	return exists
+}
+
+func RegisteredProviderTypes() []ProviderType {
+	types := make([]ProviderType, 0, len(providerFactories))
+	for providerType := range providerFactories {
+		types = append(types, providerType)
+	}
+	return types
 }
 
 // ProviderError represents a provider-specific error.
@@ -65,9 +96,51 @@ func (e *ProviderError) Error() string {
 
 func (e *ProviderError) IsRetryable() bool {
 	switch e.Code {
-	case "rate_limited", "service_unavailable", "timeout":
+	case ProviderErrorRateLimited, ProviderErrorServiceUnavailable, ProviderErrorTimeout, ProviderErrorRequestFailed:
 		return true
 	default:
 		return false
+	}
+}
+
+func (e *ProviderError) HTTPStatus(defaultStatus int) int {
+	if e.StatusCode > 0 {
+		return e.StatusCode
+	}
+
+	switch e.Code {
+	case ProviderErrorNotFound:
+		return 404
+	case ProviderErrorRateLimited:
+		return 429
+	case ProviderErrorMissingAPIKey, ProviderErrorAuthFailed, ProviderErrorInvalidConfig, ProviderErrorInvalidRequest:
+		return 400
+	case ProviderErrorServiceUnavailable, ProviderErrorRequestFailed, ProviderErrorTimeout, ProviderErrorAPIError, ProviderErrorGraphQLError, ProviderErrorInstanceError:
+		return 503
+	case ProviderErrorNotImplemented:
+		return 501
+	default:
+		return defaultStatus
+	}
+}
+
+func (e *ProviderError) APIErrorType() string {
+	switch e.Code {
+	case ProviderErrorNotFound:
+		return "not_found"
+	case ProviderErrorRateLimited:
+		return "provider_rate_limited"
+	case ProviderErrorMissingAPIKey, ProviderErrorAuthFailed:
+		return "provider_auth_failed"
+	case ProviderErrorInvalidConfig, ProviderErrorInvalidRequest:
+		return "provider_invalid_config"
+	case ProviderErrorServiceUnavailable, ProviderErrorRequestFailed:
+		return "provider_unavailable"
+	case ProviderErrorTimeout:
+		return "provider_timeout"
+	case ProviderErrorNotImplemented:
+		return "not_implemented"
+	default:
+		return "provider_error"
 	}
 }

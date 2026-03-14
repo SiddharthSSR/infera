@@ -136,13 +136,6 @@ func (g *Gateway) Start() error {
 		}
 		return g.handleCORS(h)
 	}
-	withAdmin := func(h http.HandlerFunc) http.HandlerFunc {
-		if g.authHandler != nil {
-			return g.handleCORS(g.authHandler.RequireAdmin(h))
-		}
-		return g.handleCORS(h)
-	}
-
 	// Rate limit wrapper for inference endpoints
 	withRateLimit := RateLimitMiddleware(g.rateLimiter)
 
@@ -161,20 +154,20 @@ func (g *Gateway) Start() error {
 	mux.HandleFunc("/internal/prometheus/worker-targets", g.internalOnlyHandler(g.handlePrometheusWorkerTargets))
 
 	// Protected internal API endpoints (require auth)
-	mux.HandleFunc("/api/workers", withAdmin(g.handleGetWorkers))
-	mux.HandleFunc("/api/stats", withAdmin(g.handleGetStats))
+	mux.HandleFunc("/api/workers", withAuth(g.handleGetWorkers))
+	mux.HandleFunc("/api/stats", withAuth(g.handleGetStats))
 	if g.auditStore != nil {
-		mux.HandleFunc("/api/audit/usage", withAdmin(g.handleGetAuditUsage))
+		mux.HandleFunc("/api/audit/usage", withAuth(g.handleGetAuditUsage))
 	}
 
-	// Instance management endpoints (require admin)
+	// Instance management endpoints (route-level auth, handler-level authorization)
 	if g.instanceHandlers != nil {
 		g.instanceHandlers.RegisterRoutes(mux, func(h http.HandlerFunc) http.HandlerFunc {
-			return withAdmin(h)
+			return withAuth(h)
 		})
 	}
 
-	// Vault (model registry) endpoints (require auth)
+	// Vault (model registry) endpoints (route-level auth, handler-level authorization)
 	if g.vaultHandler != nil {
 		g.vaultHandler.RegisterRoutes(mux, func(h http.HandlerFunc) http.HandlerFunc {
 			return withAuth(h)
@@ -306,11 +299,35 @@ type ChatCompletionRequest struct {
 	Temperature      *float64      `json:"temperature,omitempty"`
 	TopP             *float64      `json:"top_p,omitempty"`
 	MaxTokens        *int          `json:"max_tokens,omitempty"`
-	Stop             []string      `json:"stop,omitempty"`
+	Stop             StopSequences `json:"stop,omitempty"`
 	Stream           bool          `json:"stream,omitempty"`
 	Seed             *int64        `json:"seed,omitempty"`
 	PresencePenalty  *float64      `json:"presence_penalty,omitempty"`
 	FrequencyPenalty *float64      `json:"frequency_penalty,omitempty"`
+}
+
+// StopSequences accepts either a single stop string or a list of stop strings.
+type StopSequences []string
+
+func (s *StopSequences) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*s = nil
+		return nil
+	}
+
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*s = StopSequences{single}
+		return nil
+	}
+
+	var many []string
+	if err := json.Unmarshal(data, &many); err == nil {
+		*s = StopSequences(many)
+		return nil
+	}
+
+	return fmt.Errorf("stop must be a string or array of strings")
 }
 
 // ChatMessage is a single message.
@@ -423,8 +440,10 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	requestStart := time.Now()
 	requestID := r.Header.Get(HeaderRequestID)
 	keyID := ""
+	workspaceID := ""
 	if record := auth.KeyFromContext(r.Context()); record != nil {
 		keyID = record.KeyPrefix
+		workspaceID = record.WorkspaceID
 	}
 	promptHash := hashPrompt(req.Messages)
 	auditStatus := "unknown_error"
@@ -455,6 +474,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				Timestamp:    requestStart.UTC(),
 				RequestID:    requestID,
 				KeyID:        keyID,
+				WorkspaceID:  workspaceID,
 				Model:        req.Model,
 				WorkerID:     auditWorkerID,
 				Stream:       req.Stream,
@@ -485,6 +505,9 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// Convert to internal format
 	inferenceReq := g.toInferenceRequest(&req)
+	if !g.enforceWorkspaceQuota(w, r, inferenceReq) {
+		return
+	}
 
 	// Route the request
 	routed, err := g.router.Route(inferenceReq)
@@ -594,6 +617,64 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 
 	g.writeJSON(w, http.StatusOK, openAIResp)
 	return openAIResp.Usage.TotalTokens, "success"
+}
+
+func (g *Gateway) enforceWorkspaceQuota(w http.ResponseWriter, r *http.Request, req *types.InferenceRequest) bool {
+	if g.authHandler == nil || g.auditStore == nil {
+		return true
+	}
+	key := auth.KeyFromContext(r.Context())
+	if key == nil || strings.TrimSpace(key.WorkspaceID) == "" {
+		return true
+	}
+
+	quota, err := g.authHandler.Store().GetWorkspaceQuota(key.WorkspaceID)
+	if err != nil {
+		g.log.Warn("workspace.quota_lookup_failed",
+			slog.String("workspace_id", key.WorkspaceID),
+			slog.String("error", err.Error()),
+		)
+		return true
+	}
+	if quota == nil {
+		return true
+	}
+	if quota.MonthlyRequestLimit == nil && quota.MonthlyTokenLimit == nil {
+		return true
+	}
+	if !quota.EnforceHardLimits {
+		return true
+	}
+
+	now := time.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	usage, err := g.auditStore.UsageSummary(audit.UsageSummaryQuery{
+		Start:       monthStart,
+		End:         now,
+		WorkspaceID: key.WorkspaceID,
+	})
+	if err != nil {
+		g.log.Warn("workspace.quota_usage_failed",
+			slog.String("workspace_id", key.WorkspaceID),
+			slog.String("error", err.Error()),
+		)
+		return true
+	}
+
+	projectedRequests := usage.RequestCount + 1
+	projectedTokens := usage.TokenCount + int64(req.TokenEstimate()+req.Parameters.MaxTokens)
+
+	if quota.MonthlyRequestLimit != nil && projectedRequests > *quota.MonthlyRequestLimit {
+		g.writeError(w, http.StatusForbidden, "quota_exceeded",
+			fmt.Sprintf("Workspace request quota exceeded for %s. Limit: %d requests/month.", key.WorkspaceName, *quota.MonthlyRequestLimit))
+		return false
+	}
+	if quota.MonthlyTokenLimit != nil && projectedTokens > *quota.MonthlyTokenLimit {
+		g.writeError(w, http.StatusForbidden, "quota_exceeded",
+			fmt.Sprintf("Workspace token quota exceeded for %s. Limit: %d tokens/month.", key.WorkspaceName, *quota.MonthlyTokenLimit))
+		return false
+	}
+	return true
 }
 
 func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) (int, string) {
@@ -909,6 +990,15 @@ func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (g *Gateway) requirePermission(w http.ResponseWriter, r *http.Request, permission, message string) bool {
+	record := auth.KeyFromContext(r.Context())
+	if !auth.HasPermission(record, permission) {
+		g.writeError(w, http.StatusForbidden, "forbidden", message)
+		return false
+	}
+	return true
+}
+
 // ============================================================================
 // Internal API Endpoints
 // ============================================================================
@@ -916,6 +1006,9 @@ func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) handleGetWorkers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+	if !g.requirePermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
 		return
 	}
 
@@ -1113,6 +1206,9 @@ func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
 		return
 	}
+	if !g.requirePermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
+		return
+	}
 
 	stats := g.router.GetStats()
 	workers := g.router.GetWorkers("", false)
@@ -1186,6 +1282,9 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
 		return
 	}
+	if !g.requirePermission(w, r, auth.PermissionViewUsage, "Usage access required") {
+		return
+	}
 	if g.auditStore == nil {
 		g.writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "Audit store is not configured")
 		return
@@ -1224,13 +1323,25 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "bucket must be 'day' or 'hour'")
 		return
 	}
+	currentKey := auth.KeyFromContext(r.Context())
+	workspaceID := strings.TrimSpace(r.URL.Query().Get("workspace_id"))
+	if workspaceID == "" {
+		if currentKey != nil {
+			workspaceID = currentKey.WorkspaceID
+		}
+	}
+	if currentKey != nil && currentKey.WorkspaceID != auth.DefaultWorkspaceID && workspaceID != "" && workspaceID != currentKey.WorkspaceID {
+		g.writeError(w, http.StatusForbidden, "forbidden", "Workspace-scoped identities can only query audit usage in their own workspace")
+		return
+	}
 
 	rows, err := g.auditStore.UsageByKey(audit.UsageQuery{
-		Start:  start,
-		End:    end,
-		Bucket: bucket,
-		KeyID:  strings.TrimSpace(r.URL.Query().Get("key_id")),
-		Model:  strings.TrimSpace(r.URL.Query().Get("model")),
+		Start:       start,
+		End:         end,
+		Bucket:      bucket,
+		KeyID:       strings.TrimSpace(r.URL.Query().Get("key_id")),
+		WorkspaceID: workspaceID,
+		Model:       strings.TrimSpace(r.URL.Query().Get("model")),
 	})
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "audit_query_failed", err.Error())
@@ -1239,6 +1350,7 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 
 	type usageRow struct {
 		BucketStart string `json:"bucket_start"`
+		WorkspaceID string `json:"workspace_id"`
 		KeyID       string `json:"key_id"`
 		Requests    int64  `json:"requests"`
 		Tokens      int64  `json:"tokens"`
@@ -1250,6 +1362,7 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		out = append(out, usageRow{
 			BucketStart: time.UnixMilli(row.BucketStartMS).UTC().Format(time.RFC3339),
+			WorkspaceID: row.WorkspaceID,
 			KeyID:       row.KeyID,
 			Requests:    row.RequestCount,
 			Tokens:      row.TokenCount,
@@ -1308,7 +1421,7 @@ func (g *Gateway) toInferenceRequest(req *ChatCompletionRequest) *types.Inferenc
 		params.MaxTokens = *req.MaxTokens
 	}
 	if req.Stop != nil {
-		params.StopSequences = req.Stop
+		params.StopSequences = []string(req.Stop)
 	}
 	if req.Seed != nil {
 		params.Seed = req.Seed

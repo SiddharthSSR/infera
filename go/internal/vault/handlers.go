@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/infera/infera/go/internal/auth"
 )
 
 // Handler provides HTTP endpoints for the vault model registry.
@@ -78,6 +80,9 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) createModel(w http.ResponseWriter, r *http.Request) {
+	if !h.requireManageVault(w, r) {
+		return
+	}
 	var m Model
 	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 		h.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON: "+err.Error())
@@ -127,6 +132,9 @@ func (h *Handler) handleModelByID(w http.ResponseWriter, r *http.Request) {
 		h.writeJSON(w, http.StatusOK, m)
 
 	case http.MethodPut:
+		if !h.requireManageVault(w, r) {
+			return
+		}
 		var m Model
 		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 			h.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON: "+err.Error())
@@ -154,6 +162,9 @@ func (h *Handler) handleModelByID(w http.ResponseWriter, r *http.Request) {
 		h.writeJSON(w, http.StatusOK, updated)
 
 	case http.MethodDelete:
+		if !h.requireManageVault(w, r) {
+			return
+		}
 		if err := h.store.Delete(id); err != nil {
 			if strings.Contains(err.Error(), "not found") {
 				h.writeError(w, http.StatusNotFound, "not_found", "Model not found")
@@ -218,4 +229,12 @@ func (h *Handler) writeError(w http.ResponseWriter, status int, errType, message
 			"message": message,
 		},
 	})
+}
+
+func (h *Handler) requireManageVault(w http.ResponseWriter, r *http.Request) bool {
+	if !auth.HasPermission(auth.KeyFromContext(r.Context()), auth.PermissionManageVault) {
+		h.writeError(w, http.StatusForbidden, "forbidden", "Vault management access required")
+		return false
+	}
+	return true
 }

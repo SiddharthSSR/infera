@@ -24,6 +24,10 @@ type mockTestProvider struct {
 	lastReq   *ProvisionRequest
 }
 
+type workspaceConfiguredProvider struct {
+	apiKey string
+}
+
 func newMockTestProvider() *mockTestProvider {
 	return &mockTestProvider{
 		instances: make(map[string]*Instance),
@@ -123,6 +127,44 @@ func (p *mockTestProvider) GetStatus(ctx context.Context) (*ProviderStatus, erro
 }
 
 func (p *mockTestProvider) WaitForReady(ctx context.Context, instanceID string) error {
+	return nil
+}
+
+func (p *workspaceConfiguredProvider) Name() ProviderType { return ProviderRunPod }
+func (p *workspaceConfiguredProvider) Provision(ctx context.Context, req *ProvisionRequest) (*Instance, error) {
+	now := time.Now()
+	return &Instance{
+		ID:          "workspace-inst",
+		ProviderID:  "workspace-provider-inst",
+		Provider:    ProviderRunPod,
+		WorkspaceID: req.WorkspaceID,
+		Name:        req.Name,
+		Status:      InstanceStatusRunning,
+		GPUType:     req.GPUType,
+		GPUCount:    req.GPUCount,
+		CostPerHour: 2.0,
+		CreatedAt:   now,
+		StartedAt:   &now,
+	}, nil
+}
+func (p *workspaceConfiguredProvider) Terminate(ctx context.Context, instanceID string) error {
+	return nil
+}
+func (p *workspaceConfiguredProvider) Start(ctx context.Context, instanceID string) error { return nil }
+func (p *workspaceConfiguredProvider) Stop(ctx context.Context, instanceID string) error  { return nil }
+func (p *workspaceConfiguredProvider) GetInstance(ctx context.Context, instanceID string) (*Instance, error) {
+	return &Instance{ID: "workspace-inst", ProviderID: instanceID, Provider: ProviderRunPod, Status: InstanceStatusRunning}, nil
+}
+func (p *workspaceConfiguredProvider) ListInstances(ctx context.Context) ([]*Instance, error) {
+	return nil, nil
+}
+func (p *workspaceConfiguredProvider) ListOfferings(ctx context.Context) ([]*GPUOffering, error) {
+	return []*GPUOffering{{Provider: ProviderRunPod, GPUType: GPUL40S, CostPerHour: 2.0}}, nil
+}
+func (p *workspaceConfiguredProvider) GetStatus(ctx context.Context) (*ProviderStatus, error) {
+	return &ProviderStatus{Provider: ProviderRunPod, Connected: p.apiKey != "", ActiveCount: 1}, nil
+}
+func (p *workspaceConfiguredProvider) WaitForReady(ctx context.Context, instanceID string) error {
 	return nil
 }
 
@@ -250,6 +292,43 @@ func TestManagerProvisionWithDefaults(t *testing.T) {
 
 	if instance.Provider != ProviderMock {
 		t.Errorf("expected default provider mock, got %s", instance.Provider)
+	}
+}
+
+func TestManagerWorkspaceScopedProviderResolution(t *testing.T) {
+	RegisterProvider(ProviderRunPod, func(config ProviderConfig) (Provider, error) {
+		return &workspaceConfiguredProvider{apiKey: config.APIKey}, nil
+	})
+
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(newMockTestProvider())
+	mgr.SetWorkspaceProviderConfigResolver(func(workspaceID string, providerType ProviderType) (*ProviderConfig, error) {
+		if workspaceID == "ws_alpha" && providerType == ProviderRunPod {
+			return &ProviderConfig{Type: providerType, APIKey: "workspace-key"}, nil
+		}
+		return nil, context.Canceled
+	})
+
+	offerings, err := mgr.ListOfferingsForWorkspace(context.Background(), "ws_alpha")
+	if err != nil {
+		t.Fatalf("ListOfferingsForWorkspace: %v", err)
+	}
+	if len(offerings) == 0 {
+		t.Fatal("expected workspace offerings")
+	}
+
+	statuses := mgr.GetProviderStatusForWorkspace(context.Background(), "ws_alpha")
+	found := false
+	for _, status := range statuses {
+		if status.Provider == ProviderRunPod {
+			found = true
+			if !status.Connected {
+				t.Fatalf("expected workspace-scoped provider to be connected: %+v", status)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected runpod status for configured workspace")
 	}
 }
 

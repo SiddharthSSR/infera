@@ -35,6 +35,14 @@ var auditMigrations = []migrate.Migration{
 		CREATE INDEX IF NOT EXISTS idx_inference_audit_key_ts ON inference_audit(key_id, ts_unix_ms);
 		CREATE INDEX IF NOT EXISTS idx_inference_audit_model_ts ON inference_audit(model, ts_unix_ms);`,
 	},
+	{
+		Version:     2,
+		Description: "add workspace scope to inference_audit",
+		SQL: `
+		ALTER TABLE inference_audit ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'ws_default';
+		UPDATE inference_audit SET workspace_id = 'ws_default' WHERE workspace_id IS NULL OR workspace_id = '';
+		CREATE INDEX IF NOT EXISTS idx_inference_audit_workspace_ts ON inference_audit(workspace_id, ts_unix_ms);`,
+	},
 }
 
 type Store struct {
@@ -45,6 +53,7 @@ type InferenceAuditRecord struct {
 	Timestamp    time.Time
 	RequestID    string
 	KeyID        string
+	WorkspaceID  string
 	Model        string
 	WorkerID     string
 	Stream       bool
@@ -57,20 +66,35 @@ type InferenceAuditRecord struct {
 }
 
 type UsageQuery struct {
-	Start  time.Time
-	End    time.Time
-	Bucket string // "hour" or "day"
-	KeyID  string
-	Model  string
+	Start       time.Time
+	End         time.Time
+	Bucket      string // "hour" or "day"
+	KeyID       string
+	WorkspaceID string
+	Model       string
 }
 
 type UsageRow struct {
 	BucketStartMS int64
+	WorkspaceID   string
 	KeyID         string
 	RequestCount  int64
 	TokenCount    int64
 	SuccessCount  int64
 	ErrorCount    int64
+}
+
+type UsageSummaryQuery struct {
+	Start       time.Time
+	End         time.Time
+	WorkspaceID string
+}
+
+type UsageSummary struct {
+	RequestCount int64 `json:"request_count"`
+	TokenCount   int64 `json:"token_count"`
+	SuccessCount int64 `json:"success_count"`
+	ErrorCount   int64 `json:"error_count"`
 }
 
 func NewStore(dbPath string) (*Store, error) {
@@ -111,6 +135,10 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 	if keyID == "" {
 		keyID = "anonymous"
 	}
+	workspaceID := strings.TrimSpace(rec.WorkspaceID)
+	if workspaceID == "" {
+		workspaceID = "ws_default"
+	}
 
 	ts := rec.Timestamp
 	if ts.IsZero() {
@@ -124,11 +152,12 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 
 	_, err := s.db.Exec(
 		`INSERT INTO inference_audit
-		 (ts_unix_ms, request_id, key_id, model, worker_id, stream, message_count, token_count, prompt_hash, status, error_code, latency_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (ts_unix_ms, request_id, key_id, workspace_id, model, worker_id, stream, message_count, token_count, prompt_hash, status, error_code, latency_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ts.UnixMilli(),
 		rec.RequestID,
 		keyID,
+		workspaceID,
 		rec.Model,
 		rec.WorkerID,
 		stream,
@@ -173,6 +202,7 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 	sqlQuery := `
 	SELECT
 		(ts_unix_ms / ?) * ? AS bucket_start_ms,
+		workspace_id,
 		key_id,
 		COUNT(*) AS request_count,
 		COALESCE(SUM(token_count), 0) AS token_count,
@@ -186,12 +216,16 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 		sqlQuery += " AND key_id = ?"
 		args = append(args, strings.TrimSpace(q.KeyID))
 	}
+	if strings.TrimSpace(q.WorkspaceID) != "" {
+		sqlQuery += " AND workspace_id = ?"
+		args = append(args, strings.TrimSpace(q.WorkspaceID))
+	}
 	if strings.TrimSpace(q.Model) != "" {
 		sqlQuery += " AND model = ?"
 		args = append(args, strings.TrimSpace(q.Model))
 	}
 
-	sqlQuery += " GROUP BY bucket_start_ms, key_id ORDER BY bucket_start_ms ASC, key_id ASC"
+	sqlQuery += " GROUP BY bucket_start_ms, workspace_id, key_id ORDER BY bucket_start_ms ASC, workspace_id ASC, key_id ASC"
 
 	rows, err := s.db.Query(sqlQuery, args...)
 	if err != nil {
@@ -204,6 +238,7 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 		var row UsageRow
 		if err := rows.Scan(
 			&row.BucketStartMS,
+			&row.WorkspaceID,
 			&row.KeyID,
 			&row.RequestCount,
 			&row.TokenCount,
@@ -216,4 +251,43 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 	}
 
 	return result, rows.Err()
+}
+
+func (s *Store) UsageSummary(q UsageSummaryQuery) (*UsageSummary, error) {
+	start := q.Start.UTC()
+	if start.IsZero() {
+		start = time.Now().UTC().Add(-24 * time.Hour)
+	}
+	end := q.End.UTC()
+	if end.IsZero() {
+		end = time.Now().UTC()
+	}
+	if !start.Before(end) {
+		return nil, fmt.Errorf("start must be before end")
+	}
+
+	query := `
+	SELECT
+		COUNT(*) AS request_count,
+		COALESCE(SUM(token_count), 0) AS token_count,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
+		COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS error_count
+	FROM inference_audit
+	WHERE ts_unix_ms >= ? AND ts_unix_ms < ?`
+	args := []any{start.UnixMilli(), end.UnixMilli()}
+	if strings.TrimSpace(q.WorkspaceID) != "" {
+		query += " AND workspace_id = ?"
+		args = append(args, strings.TrimSpace(q.WorkspaceID))
+	}
+
+	summary := &UsageSummary{}
+	if err := s.db.QueryRow(query, args...).Scan(
+		&summary.RequestCount,
+		&summary.TokenCount,
+		&summary.SuccessCount,
+		&summary.ErrorCount,
+	); err != nil {
+		return nil, err
+	}
+	return summary, nil
 }

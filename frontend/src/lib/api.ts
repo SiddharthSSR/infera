@@ -9,7 +9,93 @@ const API_BASE = '';
 // Session info returned by session endpoints
 export interface SessionInfo {
   session: { id: string; expires_at: string };
-  key: { id: string; key_prefix: string; name: string; role: string };
+  key: {
+    id: string;
+    key_prefix: string;
+    name: string;
+    role: string;
+    principal_type?: string;
+    workspace_id?: string;
+    workspace_slug?: string;
+    workspace_name?: string;
+  };
+  workspace?: { id: string; slug: string; name: string };
+  member?: { id: string; email?: string; display_name?: string };
+}
+
+export interface WorkspaceRecord {
+  id: string;
+  slug: string;
+  name: string;
+  created_at: string;
+  status: string;
+}
+
+export interface WorkspaceQuotaRecord {
+  workspace_id: string;
+  monthly_request_limit?: number | null;
+  monthly_token_limit?: number | null;
+  enforce_hard_limits: boolean;
+  updated_at: string;
+}
+
+export interface WorkspaceMemberRecord {
+  id: string;
+  workspace_id: string;
+  email: string;
+  display_name: string;
+  role: string;
+  status: string;
+  created_at: string;
+}
+
+export interface WorkspaceInvitationRecord {
+  id: string;
+  workspace_id: string;
+  email: string;
+  display_name: string;
+  role: string;
+  invited_by_key_id: string;
+  created_at: string;
+  expires_at: string;
+  status: string;
+}
+
+export interface WorkspaceInvitationPreview {
+  workspace_id: string;
+  workspace_slug: string;
+  workspace_name: string;
+  email: string;
+  display_name: string;
+  role: string;
+  expires_at: string;
+  status: string;
+}
+
+export interface WorkspaceProviderConfigRecord {
+  workspace_id: string;
+  provider: string;
+  configured: boolean;
+  endpoint?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuditUsageRow {
+  bucket_start: string;
+  workspace_id: string;
+  key_id: string;
+  requests: number;
+  tokens: number;
+  successes: number;
+  errors: number;
+}
+
+export interface AuditUsageResponse {
+  bucket: 'day' | 'hour';
+  start: string;
+  end: string;
+  rows: AuditUsageRow[];
 }
 
 export interface StreamChatCompletionOptions {
@@ -323,9 +409,14 @@ export async function deleteVaultModel(id: string): Promise<void> {
 
 export interface ApiKeyRecord {
   id: string;
+  workspace_id?: string;
+  workspace_slug?: string;
+  workspace_name?: string;
   key_prefix: string;
   name: string;
   role: string;
+  principal_type?: string;
+  membership_id?: string;
   created_at: string;
   last_used: string | null;
   status: string;
@@ -338,11 +429,15 @@ export async function fetchApiKeys(): Promise<ApiKeyRecord[]> {
   return data.keys;
 }
 
-export async function createApiKey(name: string, role: string = 'user'): Promise<{ key: string; record: ApiKeyRecord }> {
+export async function createApiKey(
+  name: string,
+  role: string = 'user',
+  principalType: string = 'human',
+): Promise<{ key: string; record: ApiKeyRecord }> {
   const response = await authFetch(`${API_BASE}/api/auth/keys`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, role }),
+    body: JSON.stringify({ name, role, principal_type: principalType }),
   });
   if (!response.ok) {
     throw new Error(await readResponseError(response, 'Failed to create key'));
@@ -357,4 +452,166 @@ export async function revokeApiKey(id: string): Promise<void> {
   if (!response.ok) {
     throw new Error(await readResponseError(response, 'Failed to revoke key'));
   }
+}
+
+export async function fetchWorkspaces(): Promise<WorkspaceRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspaces'));
+  const data = await response.json();
+  return data.workspaces;
+}
+
+export async function fetchWorkspaceQuota(workspaceId: string): Promise<WorkspaceQuotaRecord> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/quota`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace quota'));
+  const data = await response.json();
+  return data.quota;
+}
+
+export async function updateWorkspaceQuota(
+  workspaceId: string,
+  payload: {
+    monthly_request_limit?: number | null;
+    monthly_token_limit?: number | null;
+    enforce_hard_limits: boolean;
+  },
+): Promise<WorkspaceQuotaRecord> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/quota`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to update workspace quota'));
+  const data = await response.json();
+  return data.quota;
+}
+
+export async function fetchWorkspaceMembers(workspaceId: string): Promise<WorkspaceMemberRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/members`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace members'));
+  const data = await response.json();
+  return data.members;
+}
+
+export async function updateWorkspaceMember(
+  workspaceId: string,
+  memberId: string,
+  payload: { role: string },
+): Promise<WorkspaceMemberRecord> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/members/${memberId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to update workspace member'));
+  const data = await response.json();
+  return data.member;
+}
+
+export async function removeWorkspaceMember(workspaceId: string, memberId: string): Promise<void> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/members/${memberId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to remove workspace member'));
+}
+
+export async function fetchWorkspaceInvites(workspaceId: string): Promise<WorkspaceInvitationRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/invites`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace invites'));
+  const data = await response.json();
+  return data.invitations;
+}
+
+export async function fetchInvitationPreview(token: string): Promise<WorkspaceInvitationPreview> {
+  const response = await fetch(`${API_BASE}/api/auth/invitations/preview?token=${encodeURIComponent(token)}`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to load invitation'));
+  const data = await response.json();
+  return data.invitation;
+}
+
+export async function acceptWorkspaceInvitation(
+  invitationToken: string,
+  displayName?: string,
+): Promise<{ membership: WorkspaceMemberRecord; key: string; record: ApiKeyRecord }> {
+  const response = await fetch(`${API_BASE}/api/auth/invitations/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      invitation_token: invitationToken,
+      display_name: displayName,
+    }),
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to accept invitation'));
+  return response.json();
+}
+
+export async function fetchWorkspaceProviderConfigs(workspaceId: string): Promise<WorkspaceProviderConfigRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/providers`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch workspace provider configs'));
+  const data = await response.json();
+  return data.providers;
+}
+
+export async function upsertWorkspaceProviderConfig(
+  workspaceId: string,
+  provider: string,
+  payload: { api_key: string; api_secret?: string; endpoint?: string },
+): Promise<WorkspaceProviderConfigRecord> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/providers/${provider}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to save workspace provider config'));
+  const data = await response.json();
+  return data.provider;
+}
+
+export async function deleteWorkspaceProviderConfig(workspaceId: string, provider: string): Promise<void> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/providers/${provider}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to delete workspace provider config'));
+}
+
+export async function createWorkspaceInvite(
+  workspaceId: string,
+  payload: { email: string; display_name?: string; role?: string },
+): Promise<{ invitation_token: string; invitation: WorkspaceInvitationRecord }> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/invites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to create workspace invite'));
+  return response.json();
+}
+
+export async function revokeWorkspaceInvite(workspaceId: string, inviteId: string): Promise<void> {
+  const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/invites/${inviteId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to revoke workspace invite'));
+}
+
+export async function fetchAuditUsage(params: {
+  start?: string;
+  end?: string;
+  bucket?: 'day' | 'hour';
+  workspace_id?: string;
+  key_id?: string;
+  model?: string;
+} = {}): Promise<AuditUsageResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.start) searchParams.set('start', params.start);
+  if (params.end) searchParams.set('end', params.end);
+  if (params.bucket) searchParams.set('bucket', params.bucket);
+  if (params.workspace_id) searchParams.set('workspace_id', params.workspace_id);
+  if (params.key_id) searchParams.set('key_id', params.key_id);
+  if (params.model) searchParams.set('model', params.model);
+
+  const query = searchParams.toString();
+  const response = await authFetch(`${API_BASE}/api/audit/usage${query ? `?${query}` : ''}`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch usage'));
+  return response.json();
 }

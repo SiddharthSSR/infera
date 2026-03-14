@@ -138,6 +138,42 @@ func TestProviderError(t *testing.T) {
 			t.Error("not_found should not be retryable")
 		}
 	})
+
+	t.Run("HTTPStatus - rate limited", func(t *testing.T) {
+		retryableErr := &ProviderError{Code: ProviderErrorRateLimited}
+		if got := retryableErr.HTTPStatus(500); got != 429 {
+			t.Fatalf("expected 429, got %d", got)
+		}
+	})
+
+	t.Run("APIErrorType - missing api key", func(t *testing.T) {
+		authErr := &ProviderError{Code: ProviderErrorMissingAPIKey}
+		if got := authErr.APIErrorType(); got != "provider_auth_failed" {
+			t.Fatalf("expected provider_auth_failed, got %q", got)
+		}
+	})
+}
+
+func TestProviderCapabilities(t *testing.T) {
+	status := &ProviderStatus{
+		Provider:  ProviderMock,
+		Connected: true,
+		Capabilities: ProviderCapabilities{
+			SupportsSpot:         true,
+			SupportsCustomImages: false,
+			SupportsStartStop:    true,
+		},
+	}
+
+	if !status.Capabilities.SupportsSpot {
+		t.Fatal("expected supports spot")
+	}
+	if status.Capabilities.SupportsCustomImages {
+		t.Fatal("expected custom image support to be false")
+	}
+	if !status.Capabilities.SupportsStartStop {
+		t.Fatal("expected start/stop support")
+	}
 }
 
 func TestInstance(t *testing.T) {

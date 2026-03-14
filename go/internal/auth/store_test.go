@@ -33,6 +33,12 @@ func TestCreateKey(t *testing.T) {
 	if rec.Name != "test-key" || rec.Role != "user" || rec.Status != "active" {
 		t.Errorf("unexpected record: %+v", rec)
 	}
+	if rec.PrincipalType != PrincipalHuman {
+		t.Fatalf("expected human principal, got %q", rec.PrincipalType)
+	}
+	if rec.WorkspaceID != DefaultWorkspaceID {
+		t.Fatalf("expected default workspace, got %q", rec.WorkspaceID)
+	}
 }
 
 func TestCreateKey_MissingName(t *testing.T) {
@@ -51,6 +57,14 @@ func TestCreateKey_InvalidRole(t *testing.T) {
 	}
 }
 
+func TestCreateKey_InvalidPrincipalType(t *testing.T) {
+	s := newTestStore(t)
+	_, _, err := s.CreateKeyWithPrincipal("svc", RoleAdmin, "robot")
+	if err == nil {
+		t.Fatal("expected error for invalid principal type")
+	}
+}
+
 func TestValidateKey(t *testing.T) {
 	s := newTestStore(t)
 	fullKey, _, err := s.CreateKey("k", "admin")
@@ -64,6 +78,9 @@ func TestValidateKey(t *testing.T) {
 	}
 	if rec.Role != "admin" {
 		t.Errorf("expected admin, got %s", rec.Role)
+	}
+	if rec.PrincipalType != PrincipalHuman {
+		t.Fatalf("expected human principal, got %q", rec.PrincipalType)
 	}
 }
 
@@ -97,6 +114,11 @@ func TestListKeys(t *testing.T) {
 	}
 	if len(keys) != 2 {
 		t.Fatalf("expected 2 keys, got %d", len(keys))
+	}
+	for _, key := range keys {
+		if key.WorkspaceID == "" {
+			t.Fatalf("expected workspace data on listed key: %+v", key)
+		}
 	}
 }
 
@@ -154,6 +176,137 @@ func TestCreateKeyFromRaw(t *testing.T) {
 	if validated.ID != rec.ID {
 		t.Errorf("ID mismatch")
 	}
+	if validated.WorkspaceID != DefaultWorkspaceID {
+		t.Fatalf("expected default workspace, got %q", validated.WorkspaceID)
+	}
+}
+
+func TestCreateWorkspaceAndScopedKey(t *testing.T) {
+	s := newTestStore(t)
+
+	workspace, err := s.CreateWorkspace("Acme Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	_, rec, err := s.CreateKeyInWorkspace(workspace.ID, "acme-admin", "admin")
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace: %v", err)
+	}
+
+	if rec.WorkspaceID != workspace.ID {
+		t.Fatalf("expected workspace %q, got %q", workspace.ID, rec.WorkspaceID)
+	}
+	if rec.WorkspaceSlug != "acme-team" {
+		t.Fatalf("expected slug acme-team, got %q", rec.WorkspaceSlug)
+	}
+
+	keys, err := s.ListKeysByWorkspace(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListKeysByWorkspace: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key in workspace, got %d", len(keys))
+	}
+}
+
+func TestCreateServiceAccountKey(t *testing.T) {
+	s := newTestStore(t)
+
+	key, rec, err := s.CreateKeyWithPrincipal("ci-bot", RoleOperator, PrincipalServiceAccount)
+	if err != nil {
+		t.Fatalf("CreateKeyWithPrincipal: %v", err)
+	}
+	if rec.PrincipalType != PrincipalServiceAccount {
+		t.Fatalf("expected service_account principal, got %q", rec.PrincipalType)
+	}
+
+	validated, err := s.ValidateKey(key)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	if validated.PrincipalType != PrincipalServiceAccount {
+		t.Fatalf("expected service_account principal after validate, got %q", validated.PrincipalType)
+	}
+}
+
+func TestWorkspaceQuotaLifecycle(t *testing.T) {
+	s := newTestStore(t)
+
+	workspace, err := s.CreateWorkspace("Billing Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	quota, err := s.GetWorkspaceQuota(workspace.ID)
+	if err != nil {
+		t.Fatalf("GetWorkspaceQuota default: %v", err)
+	}
+	if quota.MonthlyRequestLimit != nil || quota.MonthlyTokenLimit != nil {
+		t.Fatalf("expected empty default quota, got %+v", quota)
+	}
+	if !quota.EnforceHardLimits {
+		t.Fatal("expected hard limit enforcement enabled by default")
+	}
+
+	requestLimit := int64(1000)
+	tokenLimit := int64(50000)
+	quota, err = s.UpsertWorkspaceQuota(workspace.ID, &requestLimit, &tokenLimit, false)
+	if err != nil {
+		t.Fatalf("UpsertWorkspaceQuota: %v", err)
+	}
+	if quota.MonthlyRequestLimit == nil || *quota.MonthlyRequestLimit != requestLimit {
+		t.Fatalf("expected request limit %d, got %+v", requestLimit, quota.MonthlyRequestLimit)
+	}
+	if quota.MonthlyTokenLimit == nil || *quota.MonthlyTokenLimit != tokenLimit {
+		t.Fatalf("expected token limit %d, got %+v", tokenLimit, quota.MonthlyTokenLimit)
+	}
+	if quota.EnforceHardLimits {
+		t.Fatal("expected hard limit enforcement to be false after update")
+	}
+}
+
+func TestWorkspaceProviderConfigLifecycle(t *testing.T) {
+	s := newTestStore(t)
+
+	workspace, err := s.CreateWorkspace("Infra Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	config, err := s.UpsertWorkspaceProviderConfig(workspace.ID, "runpod", "rp_key", "", "https://api.runpod.io/graphql")
+	if err != nil {
+		t.Fatalf("UpsertWorkspaceProviderConfig: %v", err)
+	}
+	if !config.Configured {
+		t.Fatal("expected configured=true")
+	}
+	if config.Endpoint != "https://api.runpod.io/graphql" {
+		t.Fatalf("expected endpoint to round-trip, got %q", config.Endpoint)
+	}
+
+	listed, err := s.ListWorkspaceProviderConfigs(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceProviderConfigs: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Provider != "runpod" {
+		t.Fatalf("expected one runpod config, got %+v", listed)
+	}
+
+	apiKey, apiSecret, endpoint, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod")
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceProviderConfig: %v", err)
+	}
+	if apiKey != "rp_key" || apiSecret != "" || endpoint != "https://api.runpod.io/graphql" {
+		t.Fatalf("unexpected resolved provider config: %q %q %q", apiKey, apiSecret, endpoint)
+	}
+
+	if err := s.DeleteWorkspaceProviderConfig(workspace.ID, "runpod"); err != nil {
+		t.Fatalf("DeleteWorkspaceProviderConfig: %v", err)
+	}
+	if _, _, _, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod"); err == nil {
+		t.Fatal("expected resolve to fail after delete")
+	}
 }
 
 func TestCreateKeyFromRaw_InvalidFormat(t *testing.T) {
@@ -161,6 +314,220 @@ func TestCreateKeyFromRaw_InvalidFormat(t *testing.T) {
 	_, err := s.CreateKeyFromRaw("bad_key", "test", "admin")
 	if err == nil {
 		t.Fatal("expected error for invalid key format")
+	}
+}
+
+func TestWorkspaceInvitationLifecycle(t *testing.T) {
+	s := newTestStore(t)
+
+	adminKey, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	_ = adminKey
+
+	workspace, err := s.CreateWorkspace("Acme Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	token, invitation, err := s.CreateWorkspaceInvitation(workspace.ID, "teammate@example.com", "Teammate", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+	if token == "" {
+		t.Fatal("expected invitation token")
+	}
+	if invitation.Status != "pending" {
+		t.Fatalf("expected pending invitation, got %q", invitation.Status)
+	}
+
+	invitations, err := s.ListWorkspaceInvitations(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceInvitations: %v", err)
+	}
+	if len(invitations) != 1 {
+		t.Fatalf("expected 1 invitation, got %d", len(invitations))
+	}
+
+	membership, fullKey, record, err := s.AcceptWorkspaceInvitation(token, "Teammate Override")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation: %v", err)
+	}
+	if membership.WorkspaceID != workspace.ID {
+		t.Fatalf("expected membership workspace %q, got %q", workspace.ID, membership.WorkspaceID)
+	}
+	if membership.DisplayName != "Teammate Override" {
+		t.Fatalf("expected overridden display name, got %q", membership.DisplayName)
+	}
+	if record.MembershipID == nil || *record.MembershipID != membership.ID {
+		t.Fatalf("expected key linked to membership, got %+v", record.MembershipID)
+	}
+	if record.MemberEmail == nil || *record.MemberEmail != "teammate@example.com" {
+		t.Fatalf("expected member email on key record, got %+v", record.MemberEmail)
+	}
+	validated, err := s.ValidateKey(fullKey)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	if validated.Role != RoleDeveloper {
+		t.Fatalf("expected developer role from membership, got %q", validated.Role)
+	}
+
+	invitations, err = s.ListWorkspaceInvitations(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceInvitations after accept: %v", err)
+	}
+	if len(invitations) != 0 {
+		t.Fatalf("expected no pending invitations after accept, got %d", len(invitations))
+	}
+
+	members, err := s.ListWorkspaceMemberships(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceMemberships: %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("expected 1 membership, got %d", len(members))
+	}
+}
+
+func TestWorkspaceInvitationPreview(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Preview Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	token, _, err := s.CreateWorkspaceInvitation(workspace.ID, "preview@example.com", "Preview User", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+
+	preview, err := s.GetWorkspaceInvitationPreview(token)
+	if err != nil {
+		t.Fatalf("GetWorkspaceInvitationPreview: %v", err)
+	}
+	if preview.WorkspaceID != workspace.ID {
+		t.Fatalf("expected workspace %s, got %s", workspace.ID, preview.WorkspaceID)
+	}
+	if preview.WorkspaceName != workspace.Name {
+		t.Fatalf("expected workspace name %q, got %q", workspace.Name, preview.WorkspaceName)
+	}
+	if preview.Role != RoleDeveloper {
+		t.Fatalf("expected role %q, got %q", RoleDeveloper, preview.Role)
+	}
+}
+
+func TestRevokeWorkspaceInvitation(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Revocation Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	token, invitation, err := s.CreateWorkspaceInvitation(workspace.ID, "revoke@example.com", "Revoke Me", RoleReadOnly, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+	if err := s.RevokeWorkspaceInvitation(workspace.ID, invitation.ID); err != nil {
+		t.Fatalf("RevokeWorkspaceInvitation: %v", err)
+	}
+	if _, _, _, err := s.AcceptWorkspaceInvitation(token, "Should Fail"); err == nil {
+		t.Fatal("expected revoked invitation acceptance to fail")
+	}
+}
+
+func TestValidateSession_WithMembership(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Session Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	token, _, err := s.CreateWorkspaceInvitation(workspace.ID, "member@example.com", "Member", RoleOperator, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+	membership, fullKey, _, err := s.AcceptWorkspaceInvitation(token, "Member")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation: %v", err)
+	}
+
+	validatedKey, err := s.ValidateKey(fullKey)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	sessionToken, _, err := s.CreateSession(validatedKey.ID)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	_, sessionKey, err := s.ValidateSession(sessionToken)
+	if err != nil {
+		t.Fatalf("ValidateSession: %v", err)
+	}
+	if sessionKey.MembershipID == nil || *sessionKey.MembershipID != membership.ID {
+		t.Fatalf("expected membership on session key, got %+v", sessionKey.MembershipID)
+	}
+	if sessionKey.MemberName == nil || *sessionKey.MemberName != "Member" {
+		t.Fatalf("expected member display name, got %+v", sessionKey.MemberName)
+	}
+}
+
+func TestWorkspaceMembershipRoleUpdateAndRemoval(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Membership Ops")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	token, _, err := s.CreateWorkspaceInvitation(workspace.ID, "member@example.com", "Member", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+	membership, fullKey, _, err := s.AcceptWorkspaceInvitation(token, "Member")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation: %v", err)
+	}
+
+	updated, err := s.UpdateWorkspaceMembershipRole(workspace.ID, membership.ID, RoleOperator)
+	if err != nil {
+		t.Fatalf("UpdateWorkspaceMembershipRole: %v", err)
+	}
+	if updated.Role != RoleOperator {
+		t.Fatalf("expected operator role, got %q", updated.Role)
+	}
+
+	validated, err := s.ValidateKey(fullKey)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	if validated.Role != RoleOperator {
+		t.Fatalf("expected operator role from membership, got %q", validated.Role)
+	}
+
+	if err := s.RemoveWorkspaceMembership(workspace.ID, membership.ID); err != nil {
+		t.Fatalf("RemoveWorkspaceMembership: %v", err)
+	}
+	if _, err := s.ValidateKey(fullKey); err == nil {
+		t.Fatal("expected membership-linked key to be revoked")
 	}
 }
 
@@ -199,6 +566,9 @@ func TestValidateSession(t *testing.T) {
 	}
 	if key.ID != rec.ID {
 		t.Errorf("key ID mismatch")
+	}
+	if key.WorkspaceID != rec.WorkspaceID {
+		t.Fatalf("expected session key workspace %q, got %q", rec.WorkspaceID, key.WorkspaceID)
 	}
 }
 

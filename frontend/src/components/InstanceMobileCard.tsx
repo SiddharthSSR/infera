@@ -1,0 +1,45 @@
+import type { ReactNode } from 'react';
+import type { Instance } from '../types';
+
+export function InstanceMobileCard({
+  instance,
+  statusClass,
+  statusLabel,
+  actions,
+}: {
+  instance: Instance;
+  statusClass: string;
+  statusLabel: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="mobile-data-card">
+      <div className="mobile-data-card-header">
+        <div>
+          <div className="mobile-data-title mono" style={{ fontSize: '0.9rem' }}>
+            {instance.name || instance.id.slice(0, 16)}
+          </div>
+          <div className="mobile-data-subtitle">
+            {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
+            {instance.models && instance.models.length > 0 && <> &middot; {instance.models[0].split('/').pop()}</>}
+          </div>
+        </div>
+        <div className="mobile-status-inline">
+          <span className={`status-dot ${statusClass}`} />
+          {statusLabel}
+        </div>
+      </div>
+      <div className="mobile-data-meta">
+        <div>
+          <span className="label-text">COST</span>{' '}
+          <span className="mono">${instance.cost_per_hour.toFixed(2)}/hr</span>
+        </div>
+        <div>
+          <span className="label-text">ENDPOINT</span>{' '}
+          <span className="mono">{instance.public_ip || '-'}</span>
+        </div>
+      </div>
+      {actions && <div className="mobile-data-actions">{actions}</div>}
+    </div>
+  );
+}
