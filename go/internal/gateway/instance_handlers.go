@@ -212,7 +212,7 @@ func (h *InstanceHandlers) handleOfferings(w http.ResponseWriter, r *http.Reques
 
 	offerings, err := h.manager.ListOfferingsForWorkspace(r.Context(), currentWorkspaceID(r))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "offerings_unavailable", err.Error())
+		writeProviderActionError(w, "offerings_unavailable", err)
 		return
 	}
 
@@ -258,7 +258,7 @@ func (h *InstanceHandlers) handleCosts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
 		return
 	}
-	if !requireGatewayPermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
+	if !requireGatewayPermission(w, r, auth.PermissionViewUsage, "Usage access required") {
 		return
 	}
 	summary := h.manager.GetCostSummary()

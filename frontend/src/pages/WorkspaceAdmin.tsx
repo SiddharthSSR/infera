@@ -5,6 +5,7 @@ import {
   createApiKey,
   revokeApiKey,
   fetchAuditUsage,
+  fetchProviders,
   fetchWorkspaceQuota,
   updateWorkspaceQuota,
   fetchWorkspaceMembers,
@@ -23,6 +24,7 @@ import {
   type WorkspaceInvitationRecord,
   type WorkspaceProviderConfigRecord,
 } from '../lib/api';
+import type { ProviderCapabilities, ProviderStatus } from '../types';
 import { useAuthSession } from '../lib/auth-context';
 
 const assignableInviteRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
@@ -61,12 +63,85 @@ function formatCount(value: number): string {
 }
 
 function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return '100%+';
   return `${Math.round(value * 100)}%`;
 }
 
 function clampPercent(value: number): number {
-  if (!Number.isFinite(value) || value < 0) return 0;
+  if (!Number.isFinite(value)) return 100;
+  if (value < 0) return 0;
   return Math.min(value * 100, 100);
+}
+
+function usageRatio(used: number, limit?: number | null): number {
+  if (limit == null) return 0;
+  if (limit <= 0) return used > 0 ? Number.POSITIVE_INFINITY : 1;
+  return used / limit;
+}
+
+function capabilityLabels(capabilities?: ProviderCapabilities): string[] {
+  if (!capabilities) return [];
+
+  const labels: string[] = [];
+  if (capabilities.supports_spot) labels.push('SPOT');
+  if (capabilities.supports_start_stop) labels.push('START/STOP');
+  if (capabilities.supports_custom_images) labels.push('CUSTOM IMAGES');
+  if (capabilities.supports_region_selection) labels.push('REGIONS');
+  if (capabilities.supports_public_ip) labels.push('PUBLIC IP');
+  if (capabilities.supports_ssh_keys) labels.push('SSH KEYS');
+  return labels;
+}
+
+function providerLiveState(status?: ProviderStatus, configured?: boolean): {
+  label: string;
+  tone: string;
+  detail: string;
+} {
+  if (!configured) {
+    return {
+      label: 'NOT CONFIGURED',
+      tone: 'inactive',
+      detail: 'No workspace-specific provider credential has been saved yet.',
+    };
+  }
+
+  if (!status) {
+    return {
+      label: 'UNAVAILABLE',
+      tone: 'warning',
+      detail: 'Configuration exists, but the provider is not returning live status for this workspace.',
+    };
+  }
+
+  if (status.connected) {
+    return {
+      label: 'CONNECTED',
+      tone: '',
+      detail: 'Provider is reachable and can return live account status.',
+    };
+  }
+
+  if (status.error_code === 'auth_failed') {
+    return {
+      label: 'AUTH FAILED',
+      tone: 'error',
+      detail: 'Saved credentials were rejected by the provider.',
+    };
+  }
+
+  if (status.error_code === 'rate_limited') {
+    return {
+      label: 'RATE LIMITED',
+      tone: 'warning',
+      detail: 'Provider is reachable but temporarily rate limiting status or offering requests.',
+    };
+  }
+
+  return {
+    label: 'DEGRADED',
+    tone: 'warning',
+    detail: status.error || 'Provider is configured but currently unreachable or unhealthy.',
+  };
 }
 
 function monthRange() {
@@ -94,6 +169,7 @@ export function WorkspaceAdmin() {
   const [invites, setInvites] = useState<WorkspaceInvitationRecord[]>([]);
   const [serviceAccounts, setServiceAccounts] = useState<ApiKeyRecord[]>([]);
   const [providerConfigs, setProviderConfigs] = useState<WorkspaceProviderConfigRecord[]>([]);
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
   const [usageRows, setUsageRows] = useState<AuditUsageRow[]>([]);
 
   const [requestLimit, setRequestLimit] = useState('');
@@ -170,12 +246,31 @@ export function WorkspaceAdmin() {
     return { requests, tokens, successes, errors, dailyTrend, topKeys };
   }, [usageRows]);
 
-  const requestUsageRatio = quota?.monthly_request_limit ? usageSummary.requests / quota.monthly_request_limit : 0;
-  const tokenUsageRatio = quota?.monthly_token_limit ? usageSummary.tokens / quota.monthly_token_limit : 0;
+  const requestUsageRatio = usageRatio(usageSummary.requests, quota?.monthly_request_limit);
+  const tokenUsageRatio = usageRatio(usageSummary.tokens, quota?.monthly_token_limit);
   const quotaPressure = Math.max(requestUsageRatio, tokenUsageRatio);
   const quotaState = quotaPressure >= 1 ? 'EXCEEDED' : quotaPressure >= 0.8 ? 'NEAR LIMIT' : 'HEALTHY';
   const quotaStateClass = quotaPressure >= 1 ? 'error' : quotaPressure >= 0.8 ? 'warning' : '';
   const selectedProviderMeta = configurableProviders.find((provider) => provider.id === selectedProvider) || configurableProviders[0];
+  const providerHealthRows = useMemo(() => {
+    const configsByProvider = new Map(providerConfigs.map((config) => [config.provider, config]));
+    const statusesByProvider = new Map(providerStatuses.map((status) => [status.provider, status]));
+
+    return configurableProviders.map((provider) => {
+      const config = configsByProvider.get(provider.id);
+      const status = statusesByProvider.get(provider.id);
+      const liveState = providerLiveState(status, config?.configured);
+
+      return {
+        id: provider.id,
+        name: provider.name,
+        config,
+        status,
+        liveState,
+        capabilities: capabilityLabels(status?.capabilities),
+      };
+    });
+  }, [providerConfigs, providerStatuses]);
 
   const loadWorkspaceData = async () => {
     if (!workspaceId) return;
@@ -245,8 +340,14 @@ export function WorkspaceAdmin() {
           .then(setProviderConfigs)
           .catch(() => setProviderConfigs([])),
       );
+      tasks.push(
+        fetchProviders()
+          .then((statuses) => setProviderStatuses(statuses.filter((status) => status.provider !== 'mock' && status.provider !== 'lambda')))
+          .catch(() => setProviderStatuses([])),
+      );
     } else {
       setProviderConfigs([]);
+      setProviderStatuses([]);
     }
 
     await Promise.all(tasks);
@@ -617,29 +718,92 @@ export function WorkspaceAdmin() {
                   <thead>
                     <tr>
                       <th>PROVIDER</th>
-                      <th>STATE</th>
+                      <th>CONFIG</th>
+                      <th>LIVE STATE</th>
                       <th>ENDPOINT</th>
+                      <th>ACTIVE</th>
                       <th>UPDATED</th>
                       <th style={{ textAlign: 'right' }}>ACTION</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {providerConfigs.map((config) => (
-                      <tr key={config.provider}>
-                        <td>{config.provider}</td>
-                        <td><span className="badge">{config.configured ? 'CONFIGURED' : 'INCOMPLETE'}</span></td>
-                        <td className="mono">{config.endpoint || 'default'}</td>
-                        <td>{formatDate(config.updated_at)}</td>
+                    {providerHealthRows.map((provider) => (
+                      <tr key={provider.id}>
+                        <td>{provider.name}</td>
+                        <td><span className="badge">{provider.config?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}</span></td>
+                        <td>
+                          <span className={`badge ${provider.liveState.tone ? `status-${provider.liveState.tone}` : ''}`}>
+                            {provider.liveState.label}
+                          </span>
+                        </td>
+                        <td className="mono">{provider.config ? (provider.config.endpoint || 'default') : '—'}</td>
+                        <td>{provider.status?.active_instances ?? 0}</td>
+                        <td>{provider.config ? formatDate(provider.config.updated_at) : '—'}</td>
                         <td style={{ textAlign: 'right' }}>
-                          <button className="action-btn destructive" onClick={() => handleDeleteProviderConfig(config.provider)}>DELETE</button>
+                          {provider.config ? (
+                            <button className="action-btn destructive" onClick={() => handleDeleteProviderConfig(provider.id)}>DELETE</button>
+                          ) : (
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>—</span>
+                          )}
                         </td>
                       </tr>
                     ))}
-                    {providerConfigs.length === 0 && (
-                      <tr><td colSpan={5} style={{ color: 'var(--text-secondary)', padding: '1.5rem 0' }}>No workspace provider configs yet.</td></tr>
-                    )}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="workspace-provider-health-grid" style={{ display: 'grid', gap: '1rem', marginBottom: '1.5rem' }}>
+                {providerHealthRows.map((provider) => (
+                  <div key={`${provider.id}-health`} className="workspace-provider-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                      <div>
+                        <div className="label-text" style={{ marginBottom: '0.5rem' }}>{provider.name.toUpperCase()}</div>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <span className="badge">{provider.config?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}</span>
+                          <span className={`badge ${provider.liveState.tone ? `status-${provider.liveState.tone}` : ''}`}>{provider.liveState.label}</span>
+                        </div>
+                      </div>
+                      <div className="mono" style={{ color: 'var(--text-secondary)' }}>
+                        {provider.status?.account_id || provider.config?.endpoint || (provider.config ? 'default endpoint' : 'not configured')}
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: 1.6 }}>
+                      {provider.liveState.detail}
+                    </div>
+
+                    <div className="workspace-provider-meta" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.9rem', marginTop: '1rem' }}>
+                      <div>
+                        <div className="label-text">ACTIVE INSTANCES</div>
+                        <div className="mono" style={{ marginTop: '0.4rem' }}>{provider.status?.active_instances ?? 0}</div>
+                      </div>
+                      <div>
+                        <div className="label-text">REGIONS</div>
+                        <div style={{ marginTop: '0.4rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+                          {provider.status?.capabilities?.known_regions?.length
+                            ? provider.status.capabilities.known_regions.join(', ')
+                            : 'Default'}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="label-text">BILLING SIGNAL</div>
+                        <div className="mono" style={{ marginTop: '0.4rem' }}>
+                          {provider.status?.balance != null ? `$${provider.status.balance.toFixed(2)}` : '—'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      {provider.capabilities.length > 0 ? (
+                        provider.capabilities.map((capability) => (
+                          <span key={`${provider.id}-${capability}`} className="badge">{capability}</span>
+                        ))
+                      ) : (
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Capabilities will appear when live provider status is available.</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
 
               <div style={{ display: 'grid', gap: '1rem' }}>

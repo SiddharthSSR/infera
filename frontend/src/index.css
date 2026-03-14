@@ -731,6 +731,37 @@ h1, h2, h3, h4 {
     #fff;
 }
 
+.badge.status-warning {
+  border-color: rgba(173, 109, 27, 0.22);
+  background: rgba(223, 181, 103, 0.16);
+  color: #8f5b12;
+}
+
+.badge.status-error {
+  border-color: rgba(162, 36, 36, 0.2);
+  background: rgba(201, 73, 73, 0.14);
+  color: #a22b2b;
+}
+
+.badge.status-inactive {
+  border-color: rgba(5, 5, 5, 0.08);
+  background: rgba(5, 5, 5, 0.04);
+  color: var(--text-secondary);
+}
+
+.workspace-provider-health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.workspace-provider-card {
+  padding: 1.1rem 1.15rem;
+  border: 1px solid rgba(5, 5, 5, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.68)),
+    #fff;
+}
+
 .provision-modal-body {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent 18%),
@@ -1423,6 +1454,10 @@ input[type="range"]::-webkit-slider-thumb {
 
   .workspace-page .workspace-trend-cell .mobile-data-list {
     grid-template-columns: 1fr;
+  }
+
+  .workspace-provider-health-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .workspace-quota-inputs {
