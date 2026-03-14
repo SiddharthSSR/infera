@@ -674,6 +674,48 @@ h1, h2, h3, h4 {
   gap: 0.5rem;
 }
 
+.dashboard-serving-row .dashboard-serving-cell {
+  min-height: 12.75rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.dashboard-summary-text {
+  margin-top: 0.75rem;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.dashboard-activity-list {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.dashboard-activity-item {
+  padding: 1rem 1.05rem;
+  border: 1px solid rgba(5, 5, 5, 0.08);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.dashboard-activity-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.55rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.dashboard-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 .dashboard-page .dashboard-metrics-row .cell,
 .instances-page .instances-metrics-row .cell {
   background:
