@@ -4,6 +4,7 @@ import type { Instance, Worker } from '../types';
 import {
   getDeploymentRemediation,
   getDeploymentTimeline,
+  recordInferenceVerification,
   readDeploymentAttempts,
   recordFailedAttempt,
   recordProvisionedAttempt,
@@ -124,8 +125,8 @@ describe('deploymentHistory', () => {
     );
 
     const timeline = getDeploymentTimeline(summary);
-    expect(timeline.map((step) => step.state)).toEqual(['done', 'done', 'done', 'done', 'done', 'done']);
-    expect(getDeploymentRemediation(summary)).toBeNull();
+    expect(timeline.map((step) => step.state)).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'active']);
+    expect(getDeploymentRemediation(summary)?.action).toBe('verify_inference');
   });
 
   it('routes auth-like request failures to workspace remediation', () => {
@@ -140,5 +141,33 @@ describe('deploymentHistory', () => {
     expect(remediation?.action).toBe('open_workspace');
     expect(remediation?.label).toBe('FIX PROVIDER SETUP');
     expect(getDeploymentTimeline(summary)[1].state).toBe('failed');
+  });
+
+  it('marks inference verification as complete after a successful live check', () => {
+    const [attempt] = recordProvisionedAttempt(
+      workspaceID,
+      { name: 'worker-1', provider: 'runpod', gpu_type: 'A100_80GB', gpu_count: 1, models: ['org/model-a'] },
+      baseInstance,
+      'Model A',
+    );
+
+    const [updatedAttempt] = recordInferenceVerification(workspaceID, attempt.id, {
+      status: 'passed',
+      verified_at: '2026-03-14T10:13:00.000Z',
+      latency_ms: 420,
+      model: 'org/model-a',
+      response_preview: 'READY',
+    });
+
+    const summary = summarizeDeploymentAttempt(
+      updatedAttempt,
+      [baseInstance],
+      [healthyWorker],
+      new Date('2026-03-14T10:12:20.000Z'),
+    );
+
+    expect(summary.inferenceVerified).toBe(true);
+    expect(getDeploymentTimeline(summary)[6].state).toBe('done');
+    expect(getDeploymentRemediation(summary)).toBeNull();
   });
 });
