@@ -19,6 +19,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, corsWrap func(http.HandlerF
 	mux.HandleFunc("/api/auth/invitations/preview", corsWrap(h.handlePreviewInvitation))
 	mux.HandleFunc("/api/auth/invitations/accept", corsWrap(h.handleAcceptInvitation))
 	mux.HandleFunc("/api/auth/session", corsWrap(h.handleSession))
+	mux.HandleFunc("/api/auth/session/workspace", corsWrap(h.RequireAuth(h.handleSwitchSessionWorkspace)))
 }
 
 func (h *Handler) handleKeys(w http.ResponseWriter, r *http.Request) {
@@ -321,27 +322,16 @@ func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request, id str
 
 func (h *Handler) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	current := KeyFromContext(r.Context())
-	if current == nil || current.Role == RoleUser {
+	if !HasPermission(current, PermissionDashboardAccess) {
 		writeAuthorizationError(w, "Workspace access required.")
 		return
 	}
-	workspaces, err := h.store.ListWorkspaces()
+	workspaces, err := h.store.ListAccessibleWorkspaces(current)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
 			"error": map[string]string{"message": "Failed to list workspaces: " + err.Error()},
 		})
 		return
-	}
-
-	if current != nil && current.WorkspaceID != DefaultWorkspaceID {
-		filtered := make([]*WorkspaceRecord, 0, 1)
-		for _, workspace := range workspaces {
-			if workspace.ID == current.WorkspaceID {
-				filtered = append(filtered, workspace)
-				break
-			}
-		}
-		workspaces = filtered
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -752,28 +742,7 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.SetCookie(w, h.sessionCookie(rawToken))
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"session": map[string]interface{}{
-			"id":         session.ID,
-			"expires_at": session.ExpiresAt,
-		},
-		"key": map[string]interface{}{
-			"id":             keyRecord.ID,
-			"key_prefix":     keyRecord.KeyPrefix,
-			"name":           keyRecord.Name,
-			"role":           keyRecord.Role,
-			"principal_type": keyRecord.PrincipalType,
-			"workspace_id":   keyRecord.WorkspaceID,
-			"workspace_slug": keyRecord.WorkspaceSlug,
-			"workspace_name": keyRecord.WorkspaceName,
-		},
-		"workspace": map[string]interface{}{
-			"id":   keyRecord.WorkspaceID,
-			"slug": keyRecord.WorkspaceSlug,
-			"name": keyRecord.WorkspaceName,
-		},
-		"member": membershipPayload(keyRecord),
-	})
+	writeSessionResponse(w, session, keyRecord)
 }
 
 func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -790,6 +759,76 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeSessionResponse(w, session, keyRecord)
+}
+
+func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err == nil && cookie.Value != "" {
+		_ = h.store.DeleteSessionByToken(cookie.Value)
+	}
+	http.SetCookie(w, h.expiredSessionCookie())
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "Session destroyed",
+	})
+}
+
+func (h *Handler) handleSwitchSessionWorkspace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"error": map[string]string{"message": "Method not allowed"},
+		})
+		return
+	}
+
+	session := SessionFromContext(r.Context())
+	if session == nil {
+		writeAuthError(w, http.StatusUnauthorized, "Active session required.")
+		return
+	}
+
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil || cookie.Value == "" {
+		writeAuthError(w, http.StatusUnauthorized, "No session cookie.")
+		return
+	}
+
+	var req struct {
+		WorkspaceID string `json:"workspace_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.WorkspaceID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]string{"message": "workspace_id is required"},
+		})
+		return
+	}
+
+	nextSession, keyRecord, err := h.store.SwitchSessionWorkspace(cookie.Value, req.WorkspaceID)
+	if err != nil {
+		writeAuthorizationError(w, err.Error())
+		return
+	}
+
+	writeSessionResponse(w, nextSession, keyRecord)
+}
+
+func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+func (h *Handler) requirePermission(w http.ResponseWriter, r *http.Request, permission, message string) bool {
+	record := KeyFromContext(r.Context())
+	if !HasPermission(record, permission) {
+		writeAuthorizationError(w, message)
+		return false
+	}
+	return true
+}
+
+func writeSessionResponse(w http.ResponseWriter, session *SessionRecord, keyRecord *KeyRecord) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"session": map[string]interface{}{
 			"id":         session.ID,
@@ -812,33 +851,6 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		},
 		"member": membershipPayload(keyRecord),
 	})
-}
-
-func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie(sessionCookieName)
-	if err == nil && cookie.Value != "" {
-		_ = h.store.DeleteSessionByToken(cookie.Value)
-	}
-	http.SetCookie(w, h.expiredSessionCookie())
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success": true,
-		"message": "Session destroyed",
-	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
-}
-
-func (h *Handler) requirePermission(w http.ResponseWriter, r *http.Request, permission, message string) bool {
-	record := KeyFromContext(r.Context())
-	if !HasPermission(record, permission) {
-		writeAuthorizationError(w, message)
-		return false
-	}
-	return true
 }
 
 func membershipPayload(keyRecord *KeyRecord) map[string]interface{} {

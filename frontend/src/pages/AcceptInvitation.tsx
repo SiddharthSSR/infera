@@ -198,8 +198,11 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
                   COPY KEY
                 </button>
                 <button className="btn-secondary" disabled={sessionStarting} onClick={handleContinue}>
-                  {sessionStarting ? 'STARTING SESSION...' : 'CONTINUE TO WORKSPACE'}
+                  {sessionStarting ? 'STARTING SESSION...' : 'CONTINUE AND SWITCH WORKSPACE'}
                 </button>
+              </div>
+              <div style={{ marginTop: '0.9rem', color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.6 }}>
+                Continuing will start a dashboard session for <strong>{preview?.workspace_name || 'this workspace'}</strong> and make it your active workspace.
               </div>
             </div>
           </section>

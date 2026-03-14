@@ -4,6 +4,7 @@ import {
   createSession,
   getSession,
   destroySession,
+  fetchWorkspaces,
   fetchWorkers,
   fetchModels,
   fetchStats,
@@ -32,6 +33,7 @@ import {
   terminateInstance,
   startInstance,
   stopInstance,
+  switchSessionWorkspace,
 } from './api'
 
 const mockFetch = vi.fn()
@@ -86,6 +88,32 @@ describe('API Functions', () => {
     it('destroySession should not throw on network errors', async () => {
       mockFetch.mockRejectedValueOnce(new Error('network down'))
       await expect(destroySession()).resolves.toBeUndefined()
+    })
+
+    it('switchSessionWorkspace should update session workspace', async () => {
+      const payload = {
+        session: { id: 'sess-1', expires_at: '2099-01-01T00:00:00Z' },
+        key: { id: 'k2', key_prefix: 'inf_qwer', name: 'member', role: 'operator', workspace_id: 'ws_2' },
+        workspace: { id: 'ws_2', slug: 'beta-team', name: 'Beta Team' },
+      }
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => payload,
+      })
+
+      const result = await switchSessionWorkspace('ws_2')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/auth/session/workspace',
+        expect.objectContaining({
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspace_id: 'ws_2' }),
+        }),
+      )
+      expect(result).toEqual(payload)
     })
   })
 
@@ -208,6 +236,26 @@ describe('API Functions', () => {
   })
 
   describe('workspace admin endpoints', () => {
+    it('fetchWorkspaces parses workspace list', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          workspaces: [
+            { id: 'ws_1', slug: 'alpha', name: 'Alpha', created_at: '2026-03-15T00:00:00Z', status: 'active' },
+            { id: 'ws_2', slug: 'beta', name: 'Beta', created_at: '2026-03-15T00:00:00Z', status: 'active' },
+          ],
+        }),
+      })
+
+      const workspaces = await fetchWorkspaces()
+
+      expect(workspaces).toHaveLength(2)
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/auth/workspaces',
+        expect.objectContaining({ credentials: 'include' }),
+      )
+    })
+
     it('fetchWorkspaceQuota/fetchWorkspaceMembers/fetchWorkspaceInvites parse payloads', async () => {
       mockFetch
         .mockResolvedValueOnce({ ok: true, json: async () => ({ quota: { workspace_id: 'ws_1', enforce_hard_limits: true } }) })

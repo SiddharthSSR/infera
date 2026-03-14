@@ -720,6 +720,135 @@ func TestHandleGetSession_WithMembership(t *testing.T) {
 	}
 }
 
+func TestHandleListWorkspaces_WithMembershipListsAccessibleWorkspaces(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+
+	workspaceA, err := s.CreateWorkspace("Alpha Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace alpha: %v", err)
+	}
+	workspaceB, err := s.CreateWorkspace("Beta Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace beta: %v", err)
+	}
+
+	tokenA, _, err := s.CreateWorkspaceInvitation(workspaceA.ID, "member@example.com", "Member", RoleOperator, adminRec.ID, mustTime(t))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation alpha: %v", err)
+	}
+	tokenB, _, err := s.CreateWorkspaceInvitation(workspaceB.ID, "member@example.com", "Member", RoleDeveloper, adminRec.ID, mustTime(t))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation beta: %v", err)
+	}
+
+	fullKey, _, _, err := func() (string, *WorkspaceMembershipRecord, *KeyRecord, error) {
+		membership, key, record, err := s.AcceptWorkspaceInvitation(tokenA, "Joined Member")
+		return key, membership, record, err
+	}()
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation alpha: %v", err)
+	}
+	if _, _, _, err := s.AcceptWorkspaceInvitation(tokenB, "Joined Member"); err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation beta: %v", err)
+	}
+
+	createReq := httptest.NewRequest("POST", "/api/auth/session", strings.NewReader(`{"api_key":"`+fullKey+`"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	mux.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	req := httptest.NewRequest("GET", "/api/auth/workspaces", nil)
+	req.AddCookie(createRec.Result().Cookies()[0])
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Workspaces []WorkspaceRecord `json:"workspaces"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if len(resp.Workspaces) != 2 {
+		t.Fatalf("expected 2 accessible workspaces, got %d", len(resp.Workspaces))
+	}
+}
+
+func TestHandleSwitchSessionWorkspace(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+
+	workspaceA, err := s.CreateWorkspace("Alpha Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace alpha: %v", err)
+	}
+	workspaceB, err := s.CreateWorkspace("Beta Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace beta: %v", err)
+	}
+
+	tokenA, _, err := s.CreateWorkspaceInvitation(workspaceA.ID, "member@example.com", "Member", RoleOperator, adminRec.ID, mustTime(t))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation alpha: %v", err)
+	}
+	tokenB, _, err := s.CreateWorkspaceInvitation(workspaceB.ID, "member@example.com", "Member", RoleDeveloper, adminRec.ID, mustTime(t))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation beta: %v", err)
+	}
+
+	fullKey, _, _, err := func() (string, *WorkspaceMembershipRecord, *KeyRecord, error) {
+		membership, key, record, err := s.AcceptWorkspaceInvitation(tokenA, "Joined Member")
+		return key, membership, record, err
+	}()
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation alpha: %v", err)
+	}
+	if _, _, _, err := s.AcceptWorkspaceInvitation(tokenB, "Joined Member"); err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation beta: %v", err)
+	}
+
+	createReq := httptest.NewRequest("POST", "/api/auth/session", strings.NewReader(`{"api_key":"`+fullKey+`"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	mux.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	switchReq := httptest.NewRequest("PUT", "/api/auth/session/workspace", strings.NewReader(`{"workspace_id":"`+workspaceB.ID+`"}`))
+	switchReq.Header.Set("Content-Type", "application/json")
+	switchReq.AddCookie(createRec.Result().Cookies()[0])
+	switchRec := httptest.NewRecorder()
+	mux.ServeHTTP(switchRec, switchReq)
+	if switchRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", switchRec.Code, switchRec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(switchRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	workspace, ok := resp["workspace"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected workspace payload, got %T", resp["workspace"])
+	}
+	if workspace["id"] != workspaceB.ID {
+		t.Fatalf("expected switched workspace %q, got %v", workspaceB.ID, workspace["id"])
+	}
+}
+
 func TestHandleGetSession_NoCookie(t *testing.T) {
 	_, _, mux := newTestHandlerWithRoutes(t)
 
