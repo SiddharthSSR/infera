@@ -23,6 +23,17 @@ export type DeploymentAttemptSummary = {
   retryable: boolean;
 };
 
+export type DeploymentTimelineStep = {
+  label: string;
+  state: 'done' | 'active' | 'pending' | 'failed';
+};
+
+export type DeploymentRemediation = {
+  label: string;
+  detail: string;
+  action: 'open_workspace' | 'view_capacity' | 'retry_config' | 'focus_instance';
+};
+
 function storageKey(workspaceID: string) {
   return `${STORAGE_PREFIX}${workspaceID}`;
 }
@@ -161,6 +172,167 @@ export function summarizeDeploymentAttempt(
     retryable: ['error', 'stopped', 'terminated', 'terminating'].includes(liveInstance.status),
     readiness,
   };
+}
+
+function hasReason(reason: string | undefined, ...patterns: string[]) {
+  const normalized = (reason || '').toLowerCase();
+  return patterns.some((pattern) => normalized.includes(pattern));
+}
+
+export function getDeploymentTimeline(summary: DeploymentAttemptSummary): DeploymentTimelineStep[] {
+  const steps: DeploymentTimelineStep[] = [
+    { label: 'Requested', state: 'done' },
+    { label: 'Provider accepted', state: 'pending' },
+    { label: 'Node running', state: 'pending' },
+    { label: 'Worker connected', state: 'pending' },
+    { label: 'Models ready', state: 'pending' },
+    { label: 'Serving verified', state: 'pending' },
+  ];
+
+  if (summary.attempt.outcome === 'request_failed') {
+    steps[1].state = 'failed';
+    return steps;
+  }
+
+  steps[1].state = 'done';
+
+  if (!summary.instance) {
+    steps[2].state = 'failed';
+    return steps;
+  }
+
+  switch (summary.instance.status) {
+    case 'pending':
+    case 'provisioning':
+      steps[2].state = 'active';
+      return steps;
+    case 'error':
+      steps[2].state = 'failed';
+      return steps;
+    case 'stopped':
+    case 'terminating':
+    case 'terminated':
+      steps[2].state = 'failed';
+      return steps;
+    case 'running':
+      steps[2].state = 'done';
+      break;
+  }
+
+  switch (summary.readiness.label) {
+    case 'WAITING FOR WORKER':
+    case 'WORKER CONNECTING':
+      steps[3].state = 'active';
+      return steps;
+    case 'WORKER NOT CONNECTED':
+    case 'WORKER MISSING':
+    case 'WORKER UNHEALTHY':
+    case 'WORKER DEGRADED':
+      steps[3].state = 'failed';
+      return steps;
+    default:
+      steps[3].state = 'done';
+  }
+
+  switch (summary.readiness.label) {
+    case 'READY VERIFIED':
+      steps[4].state = 'done';
+      return steps;
+    case 'MODEL LOADING':
+    case 'MODEL LOAD DELAY':
+      steps[4].state = 'active';
+      return steps;
+    case 'PARTIAL READY':
+      steps[4].state = 'active';
+      steps[5].state = 'pending';
+      return steps;
+    case 'HEARTBEAT STALE':
+      steps[4].state = 'done';
+      steps[5].state = 'active';
+      return steps;
+    case 'SERVING UNVERIFIED':
+      steps[4].state = 'done';
+      steps[5].state = 'active';
+      return steps;
+    case 'SERVING VERIFIED':
+      steps[4].state = 'done';
+      steps[5].state = 'done';
+      return steps;
+    case 'FAILED':
+      steps[4].state = 'failed';
+      return steps;
+    default:
+      return steps;
+  }
+}
+
+export function getDeploymentRemediation(summary: DeploymentAttemptSummary): DeploymentRemediation | null {
+  if (summary.attempt.outcome === 'request_failed') {
+    const reason = summary.attempt.failure_reason;
+
+    if (hasReason(reason, 'auth', 'credential', 'api key', 'forbidden', 'unauthor', 'provider config')) {
+      return {
+        label: 'FIX PROVIDER SETUP',
+        detail: 'This failure points to provider credentials or workspace configuration. Review provider setup before retrying.',
+        action: 'open_workspace',
+      };
+    }
+
+    if (hasReason(reason, 'offering', 'inventory', 'capacity', 'unavailable', 'no gpu', 'no live')) {
+      return {
+        label: 'VIEW CAPACITY',
+        detail: 'This request failed because matching capacity was unavailable. Reopen provisioning and inspect live offerings.',
+        action: 'view_capacity',
+      };
+    }
+
+    return {
+      label: 'RETRY CONFIG',
+      detail: 'The provider request failed before creating a node. Retry the same configuration after reviewing the request.',
+      action: 'retry_config',
+    };
+  }
+
+  if (!summary.instance) {
+    return {
+      label: 'RETRY CONFIG',
+      detail: 'The original node is no longer present. Reopen the previous configuration to reprovision it.',
+      action: 'retry_config',
+    };
+  }
+
+  switch (summary.readiness.label) {
+    case 'FAILED':
+      return {
+        label: 'FOCUS NODE',
+        detail: 'Inspect the node entry and provider error, then retry or terminate it from the main cluster list.',
+        action: 'focus_instance',
+      };
+    case 'WORKER NOT CONNECTED':
+    case 'WORKER MISSING':
+    case 'WORKER UNHEALTHY':
+    case 'WORKER DEGRADED':
+    case 'HEARTBEAT STALE':
+    case 'MODEL LOAD DELAY':
+    case 'PARTIAL READY':
+    case 'SERVING UNVERIFIED':
+      return {
+        label: 'FOCUS NODE',
+        detail: 'Jump to the live node row to inspect current runtime state before retrying or restarting it.',
+        action: 'focus_instance',
+      };
+    case 'WAITING FOR WORKER':
+    case 'WORKER CONNECTING':
+    case 'MODEL LOADING':
+    case 'PROVISIONING':
+      return {
+        label: 'TRACK NODE',
+        detail: 'The deployment is still progressing. Jump to the live node row and monitor the next transition.',
+        action: 'focus_instance',
+      };
+    default:
+      return null;
+  }
 }
 
 export function clearDeploymentAttempts(workspaceID: string | undefined) {

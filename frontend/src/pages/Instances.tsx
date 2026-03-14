@@ -4,11 +4,16 @@ import { toast } from 'sonner';
 import type { Instance, GPUOffering, GPUType, ProviderStatus, ProviderType, VaultModel, Worker, ProvisionRequest } from '../types';
 import { fetchWorkspaceProviderConfigs } from '../lib/api';
 import {
+  getDeploymentRemediation,
+  getDeploymentTimeline,
   readDeploymentAttempts,
   recordFailedAttempt,
   recordProvisionedAttempt,
   summarizeDeploymentAttempt,
   type DeploymentAttemptRecord,
+  type DeploymentAttemptSummary,
+  type DeploymentRemediation,
+  type DeploymentTimelineStep,
 } from '../lib/deploymentHistory';
 import { getInstanceReadiness } from '../lib/instanceReadiness';
 import { useInstances, useOfferings, useProviders, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
@@ -130,6 +135,33 @@ function formatAttemptTime(value: string) {
   });
 }
 
+function timelineTone(state: DeploymentTimelineStep['state']) {
+  switch (state) {
+    case 'done':
+      return '';
+    case 'active':
+      return 'warning';
+    case 'failed':
+      return 'error';
+    default:
+      return 'inactive';
+  }
+}
+
+function DeploymentTimeline({ steps }: { steps: DeploymentTimelineStep[] }) {
+  return (
+    <div style={{ display: 'grid', gap: '0.55rem', marginTop: '0.9rem' }}>
+      {steps.map((step) => (
+        <div key={step.label} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <span className={`status-dot ${timelineTone(step.state)}`} />
+          <span style={{ fontSize: '0.8rem', minWidth: '8.5rem' }}>{step.label}</span>
+          <span className={`badge ${timelineTone(step.state) ? `status-${timelineTone(step.state)}` : ''}`}>{step.state.toUpperCase()}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function useInstanceActions(instance: Instance) {
   const terminateMutation = useTerminateInstance();
   const startMutation = useStartInstance();
@@ -202,7 +234,7 @@ function InstanceRow({ instance, workers, highlighted }: { instance: Instance; w
   const readiness = getInstanceReadiness(instance, workers);
 
   return (
-    <tr style={{ borderBottom: '1px solid #EEEEEC', background: highlighted ? 'rgba(244, 242, 238, 0.7)' : 'transparent' }}>
+    <tr id={`instance-row-${instance.id}`} style={{ borderBottom: '1px solid #EEEEEC', background: highlighted ? 'rgba(244, 242, 238, 0.7)' : 'transparent' }}>
       <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
         <div className="mono">{instance.name || instance.id.slice(0, 16)}</div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
@@ -595,6 +627,8 @@ export function Instances() {
     [deploymentAttempts, instances, workers],
   );
   const latestDeployment = deploymentHistory[0] || null;
+  const latestTimeline = latestDeployment ? getDeploymentTimeline(latestDeployment) : [];
+  const latestRemediation = latestDeployment ? getDeploymentRemediation(latestDeployment) : null;
 
   // Auto-open provision modal if redirected from dashboard or registry.
   useEffect(() => {
@@ -630,6 +664,12 @@ export function Instances() {
     setDeploymentAttempts(readDeploymentAttempts(workspaceID));
   }, [workspaceID]);
 
+  const focusInstance = (instanceID: string) => {
+    const target = document.getElementById(`instance-row-${instanceID}`);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   const openFreshProvisionModal = () => {
     setProvisionDraft(null);
     setShowProvisionModal(true);
@@ -639,6 +679,23 @@ export function Instances() {
     setProvisionDraft(attempt.request);
     setPreselectedModel(attempt.request.models?.length === 1 ? attempt.request.models[0] : null);
     setShowProvisionModal(true);
+  };
+
+  const handleRemediation = (summary: DeploymentAttemptSummary, remediation: DeploymentRemediation | null) => {
+    if (!remediation) return;
+
+    switch (remediation.action) {
+      case 'open_workspace':
+        navigate('/workspace');
+        return;
+      case 'view_capacity':
+      case 'retry_config':
+        openRetryModal(summary.attempt);
+        return;
+      case 'focus_instance':
+        if (summary.instance?.id) focusInstance(summary.instance.id);
+        return;
+    }
   };
 
   return (
@@ -661,13 +718,24 @@ export function Instances() {
               <div style={{ marginTop: '0.6rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                 {formatAttemptTime(latestDeployment.attempt.updated_at)}
               </div>
+              <DeploymentTimeline steps={latestTimeline} />
+              {latestRemediation && (
+                <div style={{ marginTop: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '44rem' }}>
+                  {latestRemediation.detail}
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
               <span className={`badge ${latestDeployment.readiness.tone ? `status-${latestDeployment.readiness.tone}` : ''}`}>{latestDeployment.readiness.label}</span>
               {latestDeployment.instance && (
                 <span className="badge">{getStatusLabel(latestDeployment.instance.status).toUpperCase()}</span>
               )}
-              {latestDeployment.retryable && (
+              {latestRemediation && (
+                <button className="action-btn" onClick={() => handleRemediation(latestDeployment, latestRemediation)}>
+                  {latestRemediation.label}
+                </button>
+              )}
+              {latestDeployment.retryable && latestRemediation?.action !== 'retry_config' && (
                 <button className="action-btn" onClick={() => openRetryModal(latestDeployment.attempt)}>
                   RETRY CONFIG
                 </button>
@@ -783,6 +851,7 @@ export function Instances() {
               {filteredInstances.map(instance => (
                 <InstanceMobileCard
                   key={instance.id}
+                  anchorId={`instance-row-${instance.id}`}
                   instance={instance}
                   statusClass={getStatusClass(instance.status)}
                   statusLabel={getStatusLabel(instance.status)}
@@ -907,56 +976,68 @@ export function Instances() {
             </div>
 
             <div style={{ display: 'grid', gap: '0.85rem' }}>
-              {deploymentHistory.slice(0, 5).map(({ attempt, readiness, instance, retryable }) => (
-                <div
-                  key={attempt.id}
-                  style={{
-                    border: 'var(--grid-line)',
-                    padding: '1rem 1.1rem',
-                    background: latestDeployment?.attempt.id === attempt.id ? 'rgba(244, 242, 238, 0.7)' : 'transparent',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                    <div style={{ minWidth: 0, flex: '1 1 28rem' }}>
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <div style={{ fontSize: '0.95rem', fontWeight: 600 }}>
-                          {attempt.selected_model_name
-                            || attempt.instance_name
-                            || attempt.request.name
-                            || attempt.request.models?.[0]?.split('/').pop()
-                            || 'Provisioning attempt'}
-                        </div>
-                        <span className={`badge ${readiness.tone ? `status-${readiness.tone}` : ''}`}>{readiness.label}</span>
-                        {instance && <span className="badge">{getStatusLabel(instance.status).toUpperCase()}</span>}
-                      </div>
-                      <div style={{ marginTop: '0.45rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
-                        {readiness.detail}
-                      </div>
-                      <div style={{ marginTop: '0.65rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                        <span className="badge">{formatAttemptTime(attempt.updated_at)}</span>
-                        {attempt.request.provider && <span className="badge">{attempt.request.provider.toUpperCase()}</span>}
-                        <span className="badge">{attempt.request.gpu_count || 1}x {attempt.request.gpu_type.replace('_', ' ')}</span>
-                        {attempt.request.spot_instance ? <span className="badge">SPOT</span> : null}
-                        {attempt.request.models?.length ? <span className="badge">{attempt.request.models.length} MODEL{attempt.request.models.length === 1 ? '' : 'S'}</span> : null}
-                      </div>
-                    </div>
+              {deploymentHistory.slice(0, 5).map((summary) => {
+                const { attempt, readiness, instance, retryable } = summary;
+                const timeline = getDeploymentTimeline(summary);
+                const remediation = getDeploymentRemediation(summary);
 
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                      {instance && <InstanceActions instance={instance} compact />}
-                      {retryable && (
-                        <button className="action-btn" onClick={() => openRetryModal(attempt)}>
-                          RETRY CONFIG
-                        </button>
-                      )}
-                      {provisioningState && (
-                        <button className="action-btn" onClick={() => navigate('/workspace')}>
-                          OPEN WORKSPACE
-                        </button>
-                      )}
+                return (
+                  <div
+                    key={attempt.id}
+                    style={{
+                      border: 'var(--grid-line)',
+                      padding: '1rem 1.1rem',
+                      background: latestDeployment?.attempt.id === attempt.id ? 'rgba(244, 242, 238, 0.7)' : 'transparent',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                      <div style={{ minWidth: 0, flex: '1 1 28rem' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <div style={{ fontSize: '0.95rem', fontWeight: 600 }}>
+                            {attempt.selected_model_name
+                              || attempt.instance_name
+                              || attempt.request.name
+                              || attempt.request.models?.[0]?.split('/').pop()
+                              || 'Provisioning attempt'}
+                          </div>
+                          <span className={`badge ${readiness.tone ? `status-${readiness.tone}` : ''}`}>{readiness.label}</span>
+                          {instance && <span className="badge">{getStatusLabel(instance.status).toUpperCase()}</span>}
+                        </div>
+                        <div style={{ marginTop: '0.45rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
+                          {readiness.detail}
+                        </div>
+                        <div style={{ marginTop: '0.65rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                          <span className="badge">{formatAttemptTime(attempt.updated_at)}</span>
+                          {attempt.request.provider && <span className="badge">{attempt.request.provider.toUpperCase()}</span>}
+                          <span className="badge">{attempt.request.gpu_count || 1}x {attempt.request.gpu_type.replace('_', ' ')}</span>
+                          {attempt.request.spot_instance ? <span className="badge">SPOT</span> : null}
+                          {attempt.request.models?.length ? <span className="badge">{attempt.request.models.length} MODEL{attempt.request.models.length === 1 ? '' : 'S'}</span> : null}
+                        </div>
+                        <DeploymentTimeline steps={timeline} />
+                        {remediation && (
+                          <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
+                            {remediation.detail}
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        {instance && <InstanceActions instance={instance} compact />}
+                        {remediation && (
+                          <button className="action-btn" onClick={() => handleRemediation(summary, remediation)}>
+                            {remediation.label}
+                          </button>
+                        )}
+                        {retryable && remediation?.action !== 'retry_config' && (
+                          <button className="action-btn" onClick={() => openRetryModal(attempt)}>
+                            RETRY CONFIG
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
