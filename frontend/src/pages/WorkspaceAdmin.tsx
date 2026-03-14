@@ -451,7 +451,7 @@ export function WorkspaceAdmin() {
   }
 
   return (
-    <div className="animate-fade-in">
+    <div className="workspace-page animate-fade-in">
       {createdInviteToken && (
         <div style={{
           padding: '1.25rem 2rem',
@@ -485,8 +485,8 @@ export function WorkspaceAdmin() {
         </div>
       )}
 
-      <div className="grid-row">
-        <div className="cell" style={{ gridColumn: 'span 2' }}>
+      <div className="grid-row workspace-hero-row">
+        <div className="cell workspace-profile-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1rem' }}>WORKSPACE PROFILE</div>
           <h2 style={{ fontSize: '2rem', lineHeight: 1.1 }}>{session?.workspace?.name || 'Workspace'}</h2>
           <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -502,7 +502,7 @@ export function WorkspaceAdmin() {
             Workspace administration is gated by the backend role model already enforced on auth, quota, infrastructure, and audit routes.
           </div>
         </div>
-        <div className="cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
+        <div className="cell workspace-access-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
           <div className="label-text" style={{ marginBottom: '1rem' }}>ACCESS SURFACE</div>
           <div style={{ display: 'grid', gap: '0.8rem', fontSize: '0.9rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage memberships</span><span className="mono">{canManageMemberships ? 'YES' : 'NO'}</span></div>
@@ -514,8 +514,8 @@ export function WorkspaceAdmin() {
         </div>
       </div>
 
-      <div className="grid-row">
-        <div className="cell" style={{ gridColumn: 'span 2' }}>
+      <div className="grid-row workspace-usage-row">
+        <div className="cell workspace-usage-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>CURRENT MONTH USAGE</div>
           {canViewUsage ? (
             <>
@@ -577,7 +577,7 @@ export function WorkspaceAdmin() {
           )}
         </div>
 
-        <div className="cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
+        <div className="cell workspace-trend-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>RECENT DAILY TREND</div>
           {canViewUsage ? (
             usageSummary.dailyTrend.length > 0 ? (
@@ -607,8 +607,8 @@ export function WorkspaceAdmin() {
         </div>
       </div>
 
-      <div className="grid-row">
-        <div className="cell" style={{ gridColumn: 'span 2' }}>
+      <div className="grid-row workspace-ops-row">
+        <div className="cell workspace-provider-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>PROVIDER CONFIGS</div>
           {canManageProviderConfigs ? (
             <>
@@ -680,7 +680,7 @@ export function WorkspaceAdmin() {
           )}
         </div>
 
-        <div className="cell" style={{ gridColumn: 'span 2' }}>
+        <div className="cell workspace-quota-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>WORKSPACE QUOTA</div>
           {canViewQuota && quota ? (
             <>
@@ -714,7 +714,7 @@ export function WorkspaceAdmin() {
           )}
         </div>
 
-        <div className="cell" style={{ gridColumn: 'span 2' }}>
+        <div className="cell workspace-service-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>SERVICE ACCOUNTS</div>
           {canManageKeys ? (
             <>
@@ -774,8 +774,8 @@ export function WorkspaceAdmin() {
         </div>
       </div>
 
-      <div className="grid-row" style={{ alignItems: 'start' }}>
-        <div className="cell" style={{ gridColumn: 'span 2' }}>
+      <div className="grid-row workspace-members-row" style={{ alignItems: 'start' }}>
+        <div className="cell workspace-members-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>MEMBERS</div>
           {canManageMemberships ? (
             members.length > 0 ? (
@@ -842,7 +842,7 @@ export function WorkspaceAdmin() {
           )}
         </div>
 
-        <div className="cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
+        <div className="cell workspace-invites-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>INVITATIONS</div>
           {canManageMemberships ? (
             <>

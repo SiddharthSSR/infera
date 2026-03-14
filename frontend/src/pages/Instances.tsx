@@ -237,7 +237,8 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
         onClick={onClose}
       />
       <div style={{
-        position: 'fixed', inset: '1rem', maxWidth: 900, margin: '0 auto',
+        position: 'fixed', top: '1.5rem', bottom: '1.5rem', left: '50%', transform: 'translateX(-50%)',
+        width: 'min(1180px, calc(100vw - 3rem))', maxWidth: 'none',
         background: 'var(--bg-paper)', border: 'var(--grid-line)', zIndex: 50,
         display: 'flex', flexDirection: 'column', overflow: 'hidden'
       }}>
@@ -248,78 +249,84 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
         </div>
 
         {/* Content */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '2rem' }}>
+        <div className="provision-modal-body" style={{ flex: 1, overflowY: 'auto', padding: '2rem' }}>
           <div style={{ marginBottom: '2rem' }}>
             <div className="label-text">INSTANCE NAME</div>
             <input type="text" className="control-input" value={name} onChange={e => setName(e.target.value)} placeholder="infera-worker" style={{ marginTop: '0.5rem' }} />
           </div>
 
-          <div className="label-text" style={{ marginBottom: '1rem' }}>GPU CONFIGURATION</div>
-          <div className="provision-options-grid" style={{ marginBottom: '2rem' }}>
-            {dedupedOfferings?.map(o => {
-              const key = getOfferingKey(o);
-              const isSelected = selectedGPU === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => setSelectedGPU(prev => prev === key ? '' : key)}
-                  style={{
-                    padding: '1.25rem', textAlign: 'left', cursor: 'pointer',
-                    border: isSelected ? '2px solid var(--text-primary)' : 'var(--grid-line)',
-                    background: isSelected ? 'var(--bg-accent)' : 'transparent',
-                    fontFamily: 'var(--font-main)',
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.5rem' }}>
-                    {o.gpu_count}x {o.gpu_type.replace('_', ' ')}
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    <span>{o.vcpu} vCPU</span>
-                    <span>{o.memory_gb}GB</span>
-                  </div>
-                  <div className="mono" style={{ marginTop: '0.75rem', fontSize: '1rem' }}>
-                    ${o.cost_per_hour.toFixed(2)}<span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/hr</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Models */}
-          {allVaultModels && allVaultModels.length > 0 && (
-            <div style={{ marginBottom: '2rem' }}>
-              <div className="label-text" style={{ marginBottom: '0.5rem' }}>MODELS TO DEPLOY</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                {selectedGPUVram ? `Showing models that fit within ${selectedGPUVram}GB VRAM` : 'Select a GPU to filter compatible models'}
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                {(compatibleModels || []).map(model => {
-                  const isSelected = selectedModels.includes(model.source_uri);
+          <div className="provision-modal-grid">
+            <div>
+              <div className="label-text" style={{ marginBottom: '1rem' }}>GPU CONFIGURATION</div>
+              <div className="provision-options-grid" style={{ marginBottom: '2rem' }}>
+                {dedupedOfferings?.map(o => {
+                  const key = getOfferingKey(o);
+                  const isSelected = selectedGPU === key;
                   return (
                     <button
-                      key={model.id}
-                      onClick={() => toggleModel(model.source_uri)}
+                      key={key}
+                      onClick={() => setSelectedGPU(prev => prev === key ? '' : key)}
                       style={{
-                        padding: '0.5rem 1rem', cursor: 'pointer',
-                        border: isSelected ? '1px solid var(--text-primary)' : 'var(--grid-line)',
+                        padding: '1.25rem', textAlign: 'left', cursor: 'pointer',
+                        border: isSelected ? '2px solid var(--text-primary)' : 'var(--grid-line)',
                         background: isSelected ? 'var(--bg-accent)' : 'transparent',
-                        fontFamily: 'var(--font-main)', fontSize: '0.85rem',
-                        display: 'flex', alignItems: 'center', gap: '0.5rem',
+                        fontFamily: 'var(--font-main)',
                       }}
                     >
-                      {model.name}
-                      {model.parameters && <span className="badge">{model.parameters}</span>}
+                      <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.5rem' }}>
+                        {o.gpu_count}x {o.gpu_type.replace('_', ' ')}
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        <span>{o.vcpu} vCPU</span>
+                        <span>{o.memory_gb}GB</span>
+                      </div>
+                      <div className="mono" style={{ marginTop: '0.75rem', fontSize: '1rem' }}>
+                        ${o.cost_per_hour.toFixed(2)}<span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/hr</span>
+                      </div>
                     </button>
                   );
                 })}
               </div>
             </div>
-          )}
 
-          {/* Spot toggle */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <input type="checkbox" checked={spotInstance} onChange={e => setSpotInstance(e.target.checked)} />
-            <span style={{ fontSize: '0.9rem' }}>Spot Instance (up to 70% cheaper, may be interrupted)</span>
+            <div>
+              {/* Models */}
+              {allVaultModels && allVaultModels.length > 0 && (
+                <div style={{ marginBottom: '2rem' }}>
+                  <div className="label-text" style={{ marginBottom: '0.5rem' }}>MODELS TO DEPLOY</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                    {selectedGPUVram ? `Showing models that fit within ${selectedGPUVram}GB VRAM` : 'Select a GPU to filter compatible models'}
+                  </div>
+                  <div className="provision-model-grid">
+                    {(compatibleModels || []).map(model => {
+                      const isSelected = selectedModels.includes(model.source_uri);
+                      return (
+                        <button
+                          key={model.id}
+                          onClick={() => toggleModel(model.source_uri)}
+                          style={{
+                            padding: '0.5rem 1rem', cursor: 'pointer',
+                            border: isSelected ? '1px solid var(--text-primary)' : 'var(--grid-line)',
+                            background: isSelected ? 'var(--bg-accent)' : 'transparent',
+                            fontFamily: 'var(--font-main)', fontSize: '0.85rem',
+                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                          }}
+                        >
+                          {model.name}
+                          {model.parameters && <span className="badge">{model.parameters}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Spot toggle */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <input type="checkbox" checked={spotInstance} onChange={e => setSpotInstance(e.target.checked)} />
+                <span style={{ fontSize: '0.9rem' }}>Spot Instance (up to 70% cheaper, may be interrupted)</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -402,9 +409,9 @@ export function Instances() {
   const totalMemTotal = healthyWorkers.reduce((sum, w) => sum + w.memory_total, 0);
 
   return (
-    <div className="animate-fade-in">
+    <div className="instances-page animate-fade-in">
       {/* Metrics Row */}
-      <div className="grid-row">
+      <div className="grid-row instances-metrics-row">
         <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
           <div className="label-text">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -464,9 +471,9 @@ export function Instances() {
       </div>
 
       {/* Main Content Row */}
-      <div className="grid-row" style={{ flexGrow: 1 }}>
+      <div className="grid-row instances-main-row" style={{ flexGrow: 1 }}>
         {/* Node Table */}
-        <div className="cell" style={{ gridColumn: 'span 3' }}>
+        <div className="cell instances-list-cell" style={{ gridColumn: 'span 3' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
             <div className="label-text">NODE OVERVIEW</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -523,7 +530,7 @@ export function Instances() {
         </div>
 
         {/* Sidebar */}
-        <div className="cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
+        <div className="cell instances-sidebar-cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
           <div className="label-text" style={{ marginBottom: '2rem' }}>CLUSTER INFO</div>
 
           <div style={{ marginBottom: '2.5rem' }}>
@@ -571,7 +578,7 @@ export function Instances() {
       </div>
 
       {/* Footer */}
-      <div className="grid-row" style={{ borderBottom: 'none' }}>
+      <div className="grid-row instances-footer-row" style={{ borderBottom: 'none' }}>
         <div className="cell">
           <div className="label-text">PROVIDER</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
