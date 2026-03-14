@@ -1306,7 +1306,7 @@ func (s *Store) ListWorkspaceInvitations(workspaceID string) ([]*WorkspaceInvita
 	rows, err := s.db.Query(`
 		SELECT id, workspace_id, email, display_name, role, invited_by_key_id, created_at, expires_at, status
 		FROM workspace_invitations
-		WHERE workspace_id = ? AND status = 'pending'
+		WHERE workspace_id = ?
 		ORDER BY created_at DESC`, workspaceID)
 	if err != nil {
 		return nil, err
@@ -1318,6 +1318,9 @@ func (s *Store) ListWorkspaceInvitations(workspaceID string) ([]*WorkspaceInvita
 		inv := &WorkspaceInvitationRecord{}
 		if err := rows.Scan(&inv.ID, &inv.WorkspaceID, &inv.Email, &inv.DisplayName, &inv.Role, &inv.InvitedByKeyID, &inv.CreatedAt, &inv.ExpiresAt, &inv.Status); err != nil {
 			return nil, err
+		}
+		if inv.Status == "pending" && time.Now().After(inv.ExpiresAt) {
+			inv.Status = "expired"
 		}
 		out = append(out, inv)
 	}

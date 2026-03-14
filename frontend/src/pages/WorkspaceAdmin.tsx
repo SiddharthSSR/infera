@@ -26,6 +26,7 @@ import {
 } from '../lib/api';
 import type { ProviderCapabilities, ProviderStatus } from '../types';
 import { useAuthSession } from '../lib/auth-context';
+import { inviteStatusMeta, memberStatusMeta, normalizeInviteStatus } from '../lib/workspaceLifecycle';
 
 const assignableInviteRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
 const serviceAccountRoles = ['operator', 'developer', 'read_only', 'billing'] as const;
@@ -193,6 +194,9 @@ export function WorkspaceAdmin() {
   const [savingProviderConfig, setSavingProviderConfig] = useState(false);
   const [updatingMemberId, setUpdatingMemberId] = useState<string | null>(null);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
+  const createdInviteLink = createdInviteToken && typeof window !== 'undefined'
+    ? `${window.location.origin}/accept-invite?token=${encodeURIComponent(createdInviteToken)}`
+    : null;
 
   const visibleInviteRoles = useMemo(() => {
     if (role === 'owner') return assignableInviteRoles;
@@ -271,6 +275,25 @@ export function WorkspaceAdmin() {
       };
     });
   }, [providerConfigs, providerStatuses]);
+  const memberCounts = useMemo(() => ({
+    total: members.length,
+    admins: members.filter((record) => record.role === 'admin' || record.role === 'owner').length,
+    operators: members.filter((record) => record.role === 'operator').length,
+  }), [members]);
+  const pendingInvites = useMemo(
+    () => invites.filter((invite) => normalizeInviteStatus(invite) === 'pending'),
+    [invites],
+  );
+  const inviteHistory = useMemo(
+    () => invites.filter((invite) => normalizeInviteStatus(invite) !== 'pending'),
+    [invites],
+  );
+  const inviteCounts = useMemo(() => ({
+    pending: pendingInvites.length,
+    accepted: invites.filter((invite) => normalizeInviteStatus(invite) === 'accepted').length,
+    expired: invites.filter((invite) => normalizeInviteStatus(invite) === 'expired').length,
+    revoked: invites.filter((invite) => normalizeInviteStatus(invite) === 'revoked').length,
+  }), [invites, pendingInvites.length]);
 
   const loadWorkspaceData = async () => {
     if (!workspaceId) return;
@@ -564,8 +587,14 @@ export function WorkspaceAdmin() {
           <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.5 }}>
             This does not send an email yet. Share the token or the <code style={{ fontFamily: 'var(--font-mono)' }}>/accept-invite</code> link manually with the person you invited.
           </div>
+          {createdInviteLink && (
+            <div className="code-block" style={{ marginTop: '0.75rem' }}>{createdInviteLink}</div>
+          )}
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             <button className="btn-primary" onClick={() => navigator.clipboard.writeText(createdInviteToken).then(() => toast.success('Invitation token copied.'))}>COPY TOKEN</button>
+            {createdInviteLink && (
+              <button className="btn-secondary" onClick={() => navigator.clipboard.writeText(createdInviteLink).then(() => toast.success('Invitation link copied.'))}>COPY LINK</button>
+            )}
             <button className="btn-secondary" onClick={() => setCreatedInviteToken(null)}>DISMISS</button>
           </div>
         </div>
@@ -941,60 +970,71 @@ export function WorkspaceAdmin() {
       <div className="grid-row workspace-members-row" style={{ alignItems: 'start' }}>
         <div className="cell workspace-members-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>MEMBERS</div>
+          <div className="workspace-lifecycle-summary">
+            <span className="badge">TOTAL {memberCounts.total}</span>
+            <span className="badge">ADMINS {memberCounts.admins}</span>
+            <span className="badge">OPERATORS {memberCounts.operators}</span>
+          </div>
           {canManageMemberships ? (
             members.length > 0 ? (
               <div className="mobile-data-list">
-                {members.map((memberRecord) => (
-                  <div key={memberRecord.id} className="mobile-data-card">
-                    <div className="mobile-data-card-header">
-                      <div>
-                        <div className="mobile-data-title">{memberRecord.display_name}</div>
-                        <div className="mobile-data-subtitle">{memberRecord.email}</div>
-                      </div>
-                      <span className="badge">{(memberRoles[memberRecord.id] || memberRecord.role).toUpperCase()}</span>
-                    </div>
-                    <div className="mobile-data-meta">
-                      <div><span className="label-text">STATUS</span> <span>{memberRecord.status}</span></div>
-                      <div><span className="label-text">JOINED</span> <span>{formatDate(memberRecord.created_at)}</span></div>
-                    </div>
-                    <div style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
-                      <div>
-                        <div className="label-text">ROLE</div>
-                        <select
-                          className="control-input"
-                          value={memberRoles[memberRecord.id] || memberRecord.role}
-                          disabled={member?.id === memberRecord.id}
-                          onChange={(e) => setMemberRoles((current) => ({ ...current, [memberRecord.id]: e.target.value }))}
-                        >
-                          {roleOptionsForMember(memberRecord.role).map((candidate) => (
-                            <option key={candidate} value={candidate}>{candidate}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="mobile-data-actions">
-                        <button
-                          className="action-btn"
-                          disabled={updatingMemberId === memberRecord.id || member?.id === memberRecord.id || (memberRoles[memberRecord.id] || memberRecord.role) === memberRecord.role}
-                          onClick={() => handleUpdateMemberRole(memberRecord.id, memberRecord.role)}
-                        >
-                          {updatingMemberId === memberRecord.id ? 'SAVING...' : 'SAVE ROLE'}
-                        </button>
-                        <button
-                          className="action-btn destructive"
-                          disabled={removingMemberId === memberRecord.id || member?.id === memberRecord.id}
-                          onClick={() => handleRemoveMember(memberRecord.id)}
-                        >
-                          {removingMemberId === memberRecord.id ? 'REMOVING...' : 'REMOVE'}
-                        </button>
-                      </div>
-                      {member?.id === memberRecord.id && (
-                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                          You cannot change or remove your own membership from this screen.
+                {members.map((memberRecord) => {
+                  const status = memberStatusMeta(memberRecord, member?.id);
+                  return (
+                    <div key={memberRecord.id} className="mobile-data-card">
+                      <div className="mobile-data-card-header">
+                        <div>
+                          <div className="mobile-data-title">{memberRecord.display_name}</div>
+                          <div className="mobile-data-subtitle">{memberRecord.email}</div>
                         </div>
-                      )}
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          <span className="badge">{(memberRoles[memberRecord.id] || memberRecord.role).toUpperCase()}</span>
+                          <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
+                        </div>
+                      </div>
+                      <div className="mobile-data-meta">
+                        <div><span className="label-text">ACCESS</span> <span>{status.detail}</span></div>
+                        <div><span className="label-text">JOINED</span> <span>{formatDate(memberRecord.created_at)}</span></div>
+                      </div>
+                      <div style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
+                        <div>
+                          <div className="label-text">ROLE</div>
+                          <select
+                            className="control-input"
+                            value={memberRoles[memberRecord.id] || memberRecord.role}
+                            disabled={member?.id === memberRecord.id}
+                            onChange={(e) => setMemberRoles((current) => ({ ...current, [memberRecord.id]: e.target.value }))}
+                          >
+                            {roleOptionsForMember(memberRecord.role).map((candidate) => (
+                              <option key={candidate} value={candidate}>{candidate}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="mobile-data-actions">
+                          <button
+                            className="action-btn"
+                            disabled={updatingMemberId === memberRecord.id || member?.id === memberRecord.id || (memberRoles[memberRecord.id] || memberRecord.role) === memberRecord.role}
+                            onClick={() => handleUpdateMemberRole(memberRecord.id, memberRecord.role)}
+                          >
+                            {updatingMemberId === memberRecord.id ? 'SAVING...' : 'SAVE ROLE'}
+                          </button>
+                          <button
+                            className="action-btn destructive"
+                            disabled={removingMemberId === memberRecord.id || member?.id === memberRecord.id}
+                            onClick={() => handleRemoveMember(memberRecord.id)}
+                          >
+                            {removingMemberId === memberRecord.id ? 'REMOVING...' : 'REMOVE'}
+                          </button>
+                        </div>
+                        {member?.id === memberRecord.id && (
+                          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                            You cannot change or remove your own membership from this screen.
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No members yet.</div>
@@ -1008,6 +1048,12 @@ export function WorkspaceAdmin() {
 
         <div className="cell workspace-invites-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>INVITATIONS</div>
+          <div className="workspace-lifecycle-summary">
+            <span className="badge">PENDING {inviteCounts.pending}</span>
+            <span className="badge">ACCEPTED {inviteCounts.accepted}</span>
+            <span className="badge">EXPIRED {inviteCounts.expired}</span>
+            <span className="badge">REVOKED {inviteCounts.revoked}</span>
+          </div>
           {canManageMemberships ? (
             <>
               <div style={{ display: 'grid', gap: '1rem' }}>
@@ -1036,30 +1082,69 @@ export function WorkspaceAdmin() {
               </div>
 
               <div style={{ marginTop: '2rem' }}>
-                {invites.length > 0 ? (
+                {pendingInvites.length > 0 ? (
                   <div className="mobile-data-list">
-                    {invites.map((invite) => (
+                    {pendingInvites.map((invite) => {
+                      const status = inviteStatusMeta(invite);
+                      return (
                       <div key={invite.id} className="mobile-data-card">
                         <div className="mobile-data-card-header">
                           <div>
                             <div className="mobile-data-title">{invite.display_name || invite.email}</div>
                             <div className="mobile-data-subtitle">{invite.email}</div>
                           </div>
-                          <span className="badge">{invite.role.toUpperCase()}</span>
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            <span className="badge">{invite.role.toUpperCase()}</span>
+                            <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
+                          </div>
                         </div>
                         <div className="mobile-data-meta">
                           <div><span className="label-text">EXPIRES</span> <span>{formatDate(invite.expires_at)}</span></div>
-                          <div><span className="label-text">STATUS</span> <span>{invite.status}</span></div>
+                          <div><span className="label-text">STATE</span> <span>{status.detail}</span></div>
                         </div>
                         <div className="mobile-data-actions">
                           <button className="action-btn destructive" onClick={() => handleRevokeInvite(invite.id)}>REVOKE</button>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                    No pending invitations.
+                    No pending invitations. Accepted, expired, and revoked invites appear in history below.
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginTop: '2rem' }}>
+                <div className="label-text" style={{ marginBottom: '1rem' }}>INVITE HISTORY</div>
+                {inviteHistory.length > 0 ? (
+                  <div className="mobile-data-list">
+                    {inviteHistory.map((invite) => {
+                      const status = inviteStatusMeta(invite);
+                      return (
+                        <div key={invite.id} className="mobile-data-card">
+                          <div className="mobile-data-card-header">
+                            <div>
+                              <div className="mobile-data-title">{invite.display_name || invite.email}</div>
+                              <div className="mobile-data-subtitle">{invite.email}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                              <span className="badge">{invite.role.toUpperCase()}</span>
+                              <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
+                            </div>
+                          </div>
+                          <div className="mobile-data-meta">
+                            <div><span className="label-text">CREATED</span> <span>{formatDate(invite.created_at)}</span></div>
+                            <div><span className="label-text">FINAL STATE</span> <span>{status.detail}</span></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    Invite history will appear once invites are accepted, revoked, or expire.
                   </div>
                 )}
               </div>

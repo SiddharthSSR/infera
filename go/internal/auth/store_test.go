@@ -490,8 +490,11 @@ func TestWorkspaceInvitationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkspaceInvitations after accept: %v", err)
 	}
-	if len(invitations) != 0 {
-		t.Fatalf("expected no pending invitations after accept, got %d", len(invitations))
+	if len(invitations) != 1 {
+		t.Fatalf("expected accepted invitation to remain in history, got %d", len(invitations))
+	}
+	if invitations[0].Status != "accepted" {
+		t.Fatalf("expected accepted invitation status, got %q", invitations[0].Status)
 	}
 
 	members, err := s.ListWorkspaceMemberships(workspace.ID)
@@ -553,8 +556,46 @@ func TestRevokeWorkspaceInvitation(t *testing.T) {
 	if err := s.RevokeWorkspaceInvitation(workspace.ID, invitation.ID); err != nil {
 		t.Fatalf("RevokeWorkspaceInvitation: %v", err)
 	}
+	invitations, err := s.ListWorkspaceInvitations(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceInvitations after revoke: %v", err)
+	}
+	if len(invitations) != 1 {
+		t.Fatalf("expected revoked invitation to remain in history, got %d", len(invitations))
+	}
+	if invitations[0].Status != "revoked" {
+		t.Fatalf("expected revoked invitation status, got %q", invitations[0].Status)
+	}
 	if _, _, _, err := s.AcceptWorkspaceInvitation(token, "Should Fail"); err == nil {
 		t.Fatal("expected revoked invitation acceptance to fail")
+	}
+}
+
+func TestListWorkspaceInvitations_ExpiredLifecycle(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspace, err := s.CreateWorkspace("Expired Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	if _, _, err := s.CreateWorkspaceInvitation(workspace.ID, "expired@example.com", "Expired User", RoleDeveloper, adminRec.ID, time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatalf("CreateWorkspaceInvitation: %v", err)
+	}
+
+	invitations, err := s.ListWorkspaceInvitations(workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceInvitations: %v", err)
+	}
+	if len(invitations) != 1 {
+		t.Fatalf("expected 1 invitation, got %d", len(invitations))
+	}
+	if invitations[0].Status != "expired" {
+		t.Fatalf("expected expired invitation status, got %q", invitations[0].Status)
 	}
 }
 
