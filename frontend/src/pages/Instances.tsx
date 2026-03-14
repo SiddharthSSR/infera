@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import type { Instance, GPUOffering, GPUType, VaultModel } from '../types';
 import { useInstances, useOfferings, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { InstanceMobileCard } from '../components/InstanceMobileCard';
 
 const GPU_VRAM_GB: Record<GPUType, number> = {
   RTX_4090: 24,
@@ -346,38 +347,6 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
   );
 }
 
-function InstanceCard({ instance }: { instance: Instance }) {
-  const statusClass = getStatusClass(instance.status);
-  const statusLabel = getStatusLabel(instance.status);
-
-  return (
-    <div className="mobile-data-card">
-      <div className="mobile-data-card-header">
-        <div>
-          <div className="mobile-data-title mono" style={{ fontSize: '0.9rem' }}>{instance.name || instance.id.slice(0, 16)}</div>
-          <div className="mobile-data-subtitle">
-            {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
-            {instance.models && instance.models.length > 0 && (
-              <> &middot; {instance.models[0].split('/').pop()}</>
-            )}
-          </div>
-        </div>
-        <div className="mobile-status-inline">
-          <span className={`status-dot ${statusClass}`} />
-          {statusLabel}
-        </div>
-      </div>
-      <div className="mobile-data-meta">
-        <div><span className="label-text">COST</span> <span className="mono">${instance.cost_per_hour.toFixed(2)}/hr</span></div>
-        <div><span className="label-text">ENDPOINT</span> <span className="mono">{instance.public_ip || '-'}</span></div>
-      </div>
-      <div className="mobile-data-actions">
-        <InstanceActions instance={instance} compact />
-      </div>
-    </div>
-  );
-}
-
 export function Instances() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [showProvisionModal, setShowProvisionModal] = useState(false);
@@ -504,7 +473,13 @@ export function Instances() {
           ) : isMobile ? (
             <div className="mobile-data-list">
               {filteredInstances.map(instance => (
-                <InstanceCard key={instance.id} instance={instance} />
+                <InstanceMobileCard
+                  key={instance.id}
+                  instance={instance}
+                  statusClass={getStatusClass(instance.status)}
+                  statusLabel={getStatusLabel(instance.status)}
+                  actions={<InstanceActions instance={instance} compact />}
+                />
               ))}
             </div>
           ) : (
