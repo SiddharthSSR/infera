@@ -79,10 +79,10 @@ export function Logs() {
     const rows = filteredLogs
       .map(log => `${log.timestamp.toISOString()}\t${log.level.toUpperCase()}\t${log.source}\t${log.message}`);
     const content = [header, ...rows].join('\n');
-    const blob = new Blob([content], { type: 'text/csv' });
+    const blob = new Blob([content], { type: 'text/tab-separated-values' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `infera-logs-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `infera-logs-${new Date().toISOString().slice(0, 10)}.tsv`;
     a.click();
   };
 
@@ -136,7 +136,7 @@ export function Logs() {
           </select>
         </div>
         <div style={{ marginLeft: isMobile ? 0 : 'auto' }}>
-          <button className="action-btn" onClick={handleExport}>EXPORT .CSV</button>
+          <button className="action-btn" onClick={handleExport}>EXPORT .TSV</button>
         </div>
       </div>
 
@@ -225,7 +225,7 @@ export function Logs() {
               {isStreaming ? 'PAUSE STREAM' : 'RESUME STREAM'}
             </button>
             <button className="action-btn" onClick={() => setLogs([])}>CLEAR SCREEN</button>
-            <button className="action-btn" onClick={handleExport}>ARCHIVE LOGS</button>
+            <button className="action-btn" onClick={handleExport}>EXPORT .TSV</button>
           </div>
         </div>
       </div>

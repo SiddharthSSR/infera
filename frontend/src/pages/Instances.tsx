@@ -175,13 +175,6 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
   const provisionMutation = useProvisionInstance();
   const { data: vaultModels } = useVaultModels({ status: 'available' });
 
-  // Pre-select model when opening from registry DEPLOY
-  useEffect(() => {
-    if (preselectedModel && isOpen) {
-      setSelectedModels(prev => prev.includes(preselectedModel) ? prev : [preselectedModel, ...prev]);
-    }
-  }, [preselectedModel, isOpen]);
-
   const getOfferingKey = (o: GPUOffering) =>
     `${o.provider}-${o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}`;
 
@@ -203,6 +196,17 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
     if (!selectedGPUVram) return true;
     return m.vram_required <= selectedGPUVram * 1024;
   });
+
+  useEffect(() => {
+    const compatibleSources = new Set((compatibleModels || []).map((model) => model.source_uri));
+    setSelectedModels((prev) => {
+      const next = prev.filter((model) => compatibleSources.has(model));
+      if (preselectedModel && isOpen && compatibleSources.has(preselectedModel) && !next.includes(preselectedModel)) {
+        return [preselectedModel, ...next];
+      }
+      return next;
+    });
+  }, [compatibleModels, preselectedModel, isOpen]);
 
   const toggleModel = (sourceUri: string) => {
     setSelectedModels(prev => prev.includes(sourceUri) ? prev.filter(id => id !== sourceUri) : [...prev, sourceUri]);

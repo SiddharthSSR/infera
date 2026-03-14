@@ -97,7 +97,7 @@ func (h *Handler) RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return h.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		record := KeyFromContext(r.Context())
 		if record == nil || (record.Role != RoleAdmin && record.Role != RoleOwner) {
-			writeAuthError(w, http.StatusForbidden, "Admin access required.")
+			writeAuthorizationError(w, "Admin access required.")
 			return
 		}
 		next(w, r)
@@ -108,7 +108,7 @@ func (h *Handler) RequirePermission(permission, message string, next http.Handle
 	return h.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		record := KeyFromContext(r.Context())
 		if !HasPermission(record, permission) {
-			writeAuthError(w, http.StatusForbidden, message)
+			writeAuthorizationError(w, message)
 			return
 		}
 		next(w, r)
@@ -156,11 +156,19 @@ func (h *Handler) expiredSessionCookie() *http.Cookie {
 }
 
 func writeAuthError(w http.ResponseWriter, status int, message string) {
+	writeTypedError(w, status, "authentication_error", message)
+}
+
+func writeAuthorizationError(w http.ResponseWriter, message string) {
+	writeTypedError(w, http.StatusForbidden, "authorization_error", message)
+}
+
+func writeTypedError(w http.ResponseWriter, status int, errType, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	payload := map[string]any{
 		"error": map[string]string{
-			"type":    "authentication_error",
+			"type":    errType,
 			"message": message,
 		},
 	}

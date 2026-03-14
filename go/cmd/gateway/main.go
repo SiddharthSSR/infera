@@ -32,7 +32,6 @@ func main() {
 	// Parse flags
 	httpPort := flag.Int("port", 8080, "HTTP port")
 	runpodKey := flag.String("runpod-key", os.Getenv("RUNPOD_API_KEY"), "RunPod API key")
-	vastaiKey := flag.String("vastai-key", os.Getenv("VASTAI_API_KEY"), "Vast.ai API key")
 	flag.Parse()
 
 	log.Info("Starting Infera Gateway...")
@@ -90,10 +89,10 @@ func main() {
 	}
 
 	// Register Vast.ai if API key provided
-	if *vastaiKey != "" {
+	if vastaiKey := strings.TrimSpace(os.Getenv("VASTAI_API_KEY")); vastaiKey != "" {
 		vastaiProvider, err := providers.CreateProvider(providers.ProviderConfig{
 			Type:   providers.ProviderVastAI,
-			APIKey: *vastaiKey,
+			APIKey: vastaiKey,
 		})
 		if err != nil {
 			log.Warn("failed to create Vast.ai provider", slog.String("error", err.Error()))

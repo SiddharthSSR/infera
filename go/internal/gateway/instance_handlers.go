@@ -210,7 +210,11 @@ func (h *InstanceHandlers) handleOfferings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	offerings, _ := h.manager.ListOfferingsForWorkspace(r.Context(), currentWorkspaceID(r))
+	offerings, err := h.manager.ListOfferingsForWorkspace(r.Context(), currentWorkspaceID(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "offerings_unavailable", err.Error())
+		return
+	}
 
 	response := make([]map[string]interface{}, 0, len(offerings))
 	for _, o := range offerings {

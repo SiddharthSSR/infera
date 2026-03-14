@@ -139,7 +139,7 @@ func (h *Handler) handleWorkspaceProviders(w http.ResponseWriter, r *http.Reques
 	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only view provider configs in their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only view provider configs in their own workspace.")
 		return
 	}
 	configs, err := h.store.ListWorkspaceProviderConfigs(workspaceID)
@@ -167,7 +167,7 @@ func (h *Handler) handleWorkspaceProviderByID(w http.ResponseWriter, r *http.Req
 	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only manage provider configs in their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only manage provider configs in their own workspace.")
 		return
 	}
 
@@ -226,7 +226,7 @@ func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 		workspaceID = current.WorkspaceID
 	}
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != "" && workspaceID != current.WorkspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only list keys in their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only list keys in their own workspace.")
 		return
 	}
 
@@ -275,11 +275,11 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		workspaceID = current.WorkspaceID
 	}
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != "" && workspaceID != current.WorkspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only create keys in their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only create keys in their own workspace.")
 		return
 	}
 	if current != nil && !CanAssignRole(current, req.Role) {
-		writeAuthError(w, http.StatusForbidden, "You cannot assign that role.")
+		writeAuthorizationError(w, "You cannot assign that role.")
 		return
 	}
 
@@ -322,7 +322,7 @@ func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request, id str
 func (h *Handler) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	current := KeyFromContext(r.Context())
 	if current == nil || current.Role == RoleUser {
-		writeAuthError(w, http.StatusForbidden, "Workspace access required.")
+		writeAuthorizationError(w, "Workspace access required.")
 		return
 	}
 	workspaces, err := h.store.ListWorkspaces()
@@ -356,7 +356,7 @@ func (h *Handler) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID {
-		writeAuthError(w, http.StatusForbidden, "Only platform admins can create workspaces.")
+		writeAuthorizationError(w, "Only platform admins can create workspaces.")
 		return
 	}
 
@@ -389,7 +389,7 @@ func (h *Handler) handleGetWorkspaceQuota(w http.ResponseWriter, r *http.Request
 	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != current.WorkspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only view quota for their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only view quota for their own workspace.")
 		return
 	}
 
@@ -412,7 +412,7 @@ func (h *Handler) handlePutWorkspaceQuota(w http.ResponseWriter, r *http.Request
 	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && workspaceID != current.WorkspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only update quota for their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only update quota for their own workspace.")
 		return
 	}
 
@@ -457,7 +457,7 @@ func (h *Handler) handleWorkspaceMembers(w http.ResponseWriter, r *http.Request,
 	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only view members in their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only view members in their own workspace.")
 		return
 	}
 	members, err := h.store.ListWorkspaceMemberships(workspaceID)
@@ -479,7 +479,7 @@ func (h *Handler) handleWorkspaceMemberByID(w http.ResponseWriter, r *http.Reque
 	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only manage members in their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only manage members in their own workspace.")
 		return
 	}
 
@@ -501,11 +501,11 @@ func (h *Handler) handleWorkspaceMemberByID(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if current != nil && !CanAssignRole(current, req.Role) {
-			writeAuthError(w, http.StatusForbidden, "You cannot assign that role.")
+			writeAuthorizationError(w, "You cannot assign that role.")
 			return
 		}
 		if current != nil && current.MembershipID != nil && *current.MembershipID == membershipID && current.Role != req.Role {
-			writeAuthError(w, http.StatusForbidden, "You cannot change your own membership role.")
+			writeAuthorizationError(w, "You cannot change your own membership role.")
 			return
 		}
 		member, err := h.store.UpdateWorkspaceMembershipRole(workspaceID, membershipID, req.Role)
@@ -518,7 +518,7 @@ func (h *Handler) handleWorkspaceMemberByID(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusOK, map[string]interface{}{"member": member})
 	case http.MethodDelete:
 		if current != nil && current.MembershipID != nil && *current.MembershipID == membershipID {
-			writeAuthError(w, http.StatusForbidden, "You cannot remove your own membership.")
+			writeAuthorizationError(w, "You cannot remove your own membership.")
 			return
 		}
 		if err := h.store.RemoveWorkspaceMembership(workspaceID, membershipID); err != nil {
@@ -560,7 +560,7 @@ func (h *Handler) handleWorkspaceInviteByID(w http.ResponseWriter, r *http.Reque
 	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only manage invites in their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only manage invites in their own workspace.")
 		return
 	}
 	if err := h.store.RevokeWorkspaceInvitation(workspaceID, inviteID); err != nil {
@@ -578,7 +578,7 @@ func (h *Handler) handleListWorkspaceInvites(w http.ResponseWriter, r *http.Requ
 	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only view invites in their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only view invites in their own workspace.")
 		return
 	}
 	invitations, err := h.store.ListWorkspaceInvitations(workspaceID)
@@ -600,7 +600,7 @@ func (h *Handler) handleCreateWorkspaceInvite(w http.ResponseWriter, r *http.Req
 	}
 	current := KeyFromContext(r.Context())
 	if current != nil && current.WorkspaceID != DefaultWorkspaceID && current.WorkspaceID != workspaceID {
-		writeAuthError(w, http.StatusForbidden, "Workspace-scoped identities can only manage invites in their own workspace.")
+		writeAuthorizationError(w, "Workspace-scoped identities can only manage invites in their own workspace.")
 		return
 	}
 
@@ -619,7 +619,7 @@ func (h *Handler) handleCreateWorkspaceInvite(w http.ResponseWriter, r *http.Req
 		req.Role = RoleDeveloper
 	}
 	if !CanAssignRole(current, req.Role) {
-		writeAuthError(w, http.StatusForbidden, "You cannot assign that role.")
+		writeAuthorizationError(w, "You cannot assign that role.")
 		return
 	}
 
@@ -734,11 +734,11 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	// Only human principals with dashboard access can create sessions.
 	if keyRecord.PrincipalType == PrincipalServiceAccount {
-		writeAuthError(w, http.StatusForbidden, "Service accounts cannot create dashboard sessions.")
+		writeAuthorizationError(w, "Service accounts cannot create dashboard sessions.")
 		return
 	}
 	if !CanCreateSession(keyRecord) {
-		writeAuthError(w, http.StatusForbidden, "Dashboard access required.")
+		writeAuthorizationError(w, "Dashboard access required.")
 		return
 	}
 
@@ -835,7 +835,7 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 func (h *Handler) requirePermission(w http.ResponseWriter, r *http.Request, permission, message string) bool {
 	record := KeyFromContext(r.Context())
 	if !HasPermission(record, permission) {
-		writeAuthError(w, http.StatusForbidden, message)
+		writeAuthorizationError(w, message)
 		return false
 	}
 	return true

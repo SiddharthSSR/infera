@@ -343,34 +343,38 @@ export function Models() {
 
                   <div className="mobile-data-actions">
                     {isLoaded ? (
-                      <span
+                      <button
+                        type="button"
                         className="mobile-data-action"
                         onClick={() => navigate('/instances')}
                       >
                         MANAGE
-                      </span>
+                      </button>
                     ) : isDeploying ? (
-                      <span
+                      <button
+                        type="button"
                         className="mobile-data-action muted"
                         onClick={() => toast.info('Cancellation coming soon')}
                       >
                         CANCEL
-                      </span>
+                      </button>
                     ) : (
                       <>
-                        <span
+                        <button
+                          type="button"
                           className="mobile-data-action"
                           onClick={() => navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)}
                         >
                           DEPLOY
-                        </span>
+                        </button>
                         {hasVaultEntry && (
-                          <span
+                          <button
+                            type="button"
                             className="mobile-data-action danger"
                             onClick={() => handleRemove(model.id)}
                           >
                             REMOVE
-                          </span>
+                          </button>
                         )}
                       </>
                     )}
