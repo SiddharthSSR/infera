@@ -1,6 +1,17 @@
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWorkers, useStats, useInstances, useCosts, useModels } from '../hooks/useApi';
 import { SkeletonCell } from '../components/Skeleton';
+import { useAuthSession } from '../lib/auth-context';
+import {
+  getDeploymentRemediation,
+  readDeploymentAttempts,
+  summarizeDeploymentAttempt,
+  type DeploymentAttemptRecord,
+  type DeploymentAttemptSummary,
+} from '../lib/deploymentHistory';
+import { getInstanceReadiness } from '../lib/instanceReadiness';
+import type { Instance, Model, Worker } from '../types';
 
 function ChartBars({ heights, activeIndex }: { heights: number[]; activeIndex?: number }) {
   return (
@@ -16,20 +27,116 @@ function ChartBars({ heights, activeIndex }: { heights: number[]; activeIndex?: 
   );
 }
 
+type ModelServingState = 'not_deployed' | 'runtime_pending' | 'serving_unverified' | 'serving_verified' | 'serving_failed' | 'degraded';
+
+function deriveModelServingState(
+  model: Model,
+  instances: Instance[],
+  workers: Worker[] | undefined,
+  deploymentAttempts: DeploymentAttemptRecord[],
+): ModelServingState {
+  const relatedInstances = instances.filter((instance) => (instance.models || []).includes(model.id));
+  const relatedAttempts = deploymentAttempts
+    .filter((attempt) =>
+      (attempt.request.models || []).includes(model.id)
+      || attempt.inference_verification?.model === model.id,
+    )
+    .map((attempt) => summarizeDeploymentAttempt(attempt, instances, workers));
+  const latestAttempt = relatedAttempts[0] || null;
+  const readinessList = relatedInstances.map((instance) => getInstanceReadiness(instance, workers));
+  const anyServing = readinessList.some((readiness) => readiness.serving);
+  const allServingVerified = readinessList.length > 0 && readinessList.every((readiness) => readiness.serving && readiness.verified);
+  const latestVerification = latestAttempt?.attempt.inference_verification;
+
+  if (relatedInstances.length === 0) {
+    return latestAttempt?.readiness.label === 'REQUEST FAILED' ? 'serving_failed' : 'not_deployed';
+  }
+
+  if (latestVerification?.status === 'passed' && anyServing) {
+    return 'serving_verified';
+  }
+
+  if (latestVerification?.status === 'failed' && anyServing) {
+    return 'serving_failed';
+  }
+
+  if (allServingVerified) {
+    return 'serving_unverified';
+  }
+
+  if (anyServing || readinessList.some((readiness) => readiness.label === 'MODEL LOADING' || readiness.label === 'PARTIAL READY')) {
+    return 'runtime_pending';
+  }
+
+  return 'degraded';
+}
+
+function getSummaryToneClass(tone: '' | 'warning' | 'error' | 'inactive') {
+  return tone ? `status-${tone}` : '';
+}
+
+function getAttemptTone(summary: DeploymentAttemptSummary): '' | 'warning' | 'error' | 'inactive' {
+  if (summary.attempt.inference_verification?.status === 'failed') return 'error';
+  if (summary.readiness.tone === 'error') return 'error';
+  if (summary.readiness.tone === 'warning') return 'warning';
+  if (summary.readiness.tone === 'inactive') return 'inactive';
+  return '';
+}
+
+function formatAttemptTime(timestamp?: string) {
+  if (!timestamp) return null;
+  return new Date(timestamp).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 export function Dashboard() {
   const navigate = useNavigate();
+  const { session } = useAuthSession();
+  const workspaceID = session?.workspace?.id;
   const { data: workers, isLoading: loadingWorkers, isError: errorWorkers } = useWorkers();
   const { data: stats, isLoading: loadingStats, isError: errorStats } = useStats();
   const { data: instances, isLoading: loadingInstances } = useInstances();
   const { data: costs, isLoading: loadingCosts } = useCosts();
   const { data: models, isLoading: loadingModels } = useModels();
+  const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
   const isLoading = loadingWorkers || loadingStats || loadingInstances || loadingCosts || loadingModels;
+
+  useEffect(() => {
+    setDeploymentAttempts(readDeploymentAttempts(workspaceID));
+  }, [workspaceID]);
 
   const gatewayDown = !isLoading && (errorWorkers && !workers) && (errorStats && !stats);
 
   const activeInstances = instances?.filter(i => i.status === 'running') || [];
   const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];
   const loadedModels = models?.filter(m => m.loaded !== false) || [];
+  const deploymentSummaries = useMemo(
+    () => deploymentAttempts.map((attempt) => summarizeDeploymentAttempt(attempt, instances || [], workers)).slice(0, 5),
+    [deploymentAttempts, instances, workers],
+  );
+  const modelServingStates = useMemo(
+    () => (models || []).map((model) => deriveModelServingState(model, instances || [], workers, deploymentAttempts)),
+    [deploymentAttempts, instances, models, workers],
+  );
+  const servingVerifiedCount = modelServingStates.filter((state) => state === 'serving_verified').length;
+  const servingUnverifiedCount = modelServingStates.filter((state) => state === 'serving_unverified').length;
+  const degradedDeploymentCount = deploymentSummaries.filter((summary) => (
+    summary.attempt.inference_verification?.status === 'failed'
+    || ['REQUEST FAILED', 'INSTANCE NOT FOUND', 'FAILED', 'WORKER NOT CONNECTED', 'WORKER MISSING', 'WORKER UNHEALTHY', 'WORKER DEGRADED', 'HEARTBEAT STALE'].includes(summary.readiness.label)
+  )).length;
+  const pendingDeploymentCount = deploymentSummaries.filter((summary) => (
+    ['PROVISIONING', 'WAITING FOR WORKER', 'WORKER CONNECTING', 'MODEL LOADING', 'MODEL LOAD DELAY', 'PARTIAL READY', 'SERVING UNVERIFIED'].includes(summary.readiness.label)
+  )).length;
+  const latestFailure = deploymentSummaries.find((summary) => (
+    summary.attempt.outcome === 'request_failed'
+    || summary.attempt.inference_verification?.status === 'failed'
+    || summary.readiness.tone === 'error'
+  ));
+  const latestVerification = deploymentSummaries.find((summary) => Boolean(summary.attempt.inference_verification));
 
   if (isLoading) {
     return (
@@ -121,6 +228,33 @@ export function Dashboard() {
         </div>
       </div>
 
+      <div className="grid-row dashboard-serving-row">
+        <div className="cell dashboard-serving-cell">
+          <div className="label-text">SERVING VERIFIED</div>
+          <div className="value-text" style={{ marginTop: '0.85rem' }}>{servingVerifiedCount}</div>
+          <div className="dashboard-summary-text">Models that answered a real verification request successfully.</div>
+          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/models')}>OPEN MODELS</button>
+        </div>
+        <div className="cell dashboard-serving-cell">
+          <div className="label-text">VERIFY PENDING</div>
+          <div className="value-text" style={{ marginTop: '0.85rem' }}>{servingUnverifiedCount}</div>
+          <div className="dashboard-summary-text">Models that look runtime-ready but still need or are awaiting inference verification.</div>
+          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/models')}>VERIFY SERVING</button>
+        </div>
+        <div className="cell dashboard-serving-cell">
+          <div className="label-text">DEGRADED DEPLOYMENTS</div>
+          <div className="value-text" style={{ marginTop: '0.85rem' }}>{degradedDeploymentCount}</div>
+          <div className="dashboard-summary-text">Recent attempts that failed, lost their node, or are serving with an explicit error signal.</div>
+          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/instances')}>VIEW FAILED DEPLOYMENTS</button>
+        </div>
+        <div className="cell dashboard-serving-cell">
+          <div className="label-text">PENDING DEPLOYMENTS</div>
+          <div className="value-text" style={{ marginTop: '0.85rem' }}>{pendingDeploymentCount}</div>
+          <div className="dashboard-summary-text">Nodes still provisioning, connecting a worker, or loading assigned models.</div>
+          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+        </div>
+      </div>
+
       {/* Main Content Row */}
       <div className="grid-row dashboard-main-row" style={{ flexGrow: 1 }}>
         {/* Deployed Models */}
@@ -202,8 +336,73 @@ export function Dashboard() {
             </div>
           </div>
 
+          <div style={{ marginBottom: '2.25rem' }}>
+            <div className="label-text" style={{ marginBottom: '1rem' }}>RECENT DEPLOYMENT ACTIVITY</div>
+            {deploymentSummaries.length > 0 ? (
+              <div className="dashboard-activity-list">
+                {deploymentSummaries.slice(0, 4).map((summary) => {
+                  const remediation = getDeploymentRemediation(summary);
+                  const toneClass = getSummaryToneClass(getAttemptTone(summary));
+                  return (
+                    <div key={summary.attempt.id} className="dashboard-activity-item">
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+                        <div>
+                          <div style={{ fontSize: '0.88rem', fontWeight: 500 }}>
+                            {summary.attempt.selected_model_name || summary.attempt.request.models?.[0]?.split('/').pop() || summary.instance?.name || 'Deployment attempt'}
+                          </div>
+                          <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                            {summary.readiness.detail}
+                          </div>
+                        </div>
+                        <span className={`badge ${toneClass}`}>{summary.readiness.label}</span>
+                      </div>
+                      <div className="dashboard-activity-meta">
+                        <span>{summary.instance?.provider?.toUpperCase() || 'REQUEST'}</span>
+                        <span>{formatAttemptTime(summary.attempt.updated_at || summary.attempt.created_at)}</span>
+                        {summary.attempt.inference_verification?.status === 'passed' && (
+                          <span>{summary.attempt.inference_verification.latency_ms != null ? `${summary.attempt.inference_verification.latency_ms}ms` : 'verified'}</span>
+                        )}
+                        {summary.attempt.inference_verification?.status === 'failed' && (
+                          <span>verification failed</span>
+                        )}
+                      </div>
+                      {remediation && (
+                        <button
+                          className="action-btn"
+                          style={{ marginTop: '0.85rem' }}
+                          onClick={() => {
+                            if (remediation.action === 'open_workspace') navigate('/workspace');
+                            else if (remediation.action === 'verify_inference') navigate('/models');
+                            else navigate('/instances');
+                          }}
+                        >
+                          {remediation.label}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                No recent deployment activity yet. Provision capacity from Clusters to start tracking deployment health here.
+              </div>
+            )}
+          </div>
+
+          <div className="dashboard-quick-actions">
+            <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+            <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
+            {latestFailure && (
+              <button className="action-btn" onClick={() => navigate('/instances')}>VIEW FAILED DEPLOYMENTS</button>
+            )}
+            {latestVerification && (
+              <button className="action-btn" onClick={() => navigate('/models')}>VERIFY SERVING</button>
+            )}
+          </div>
+
           {/* Recent Workers */}
-          <div>
+          <div style={{ marginTop: '2.25rem' }}>
             <div className="label-text" style={{ marginBottom: '1.5rem' }}>WORKER STATUS</div>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
               {healthyWorkers.length > 0 ? (
