@@ -156,7 +156,7 @@ export function Dashboard() {
             </div>
           )}
 
-          <button className="action-btn" style={{ marginTop: '1.5rem' }} onClick={() => navigate('/instances?provision=true')}>DEPLOY NEW MODEL</button>
+          <button className="action-btn" style={{ marginTop: '1.5rem' }} onClick={() => navigate('/models')}>DEPLOY NEW MODEL</button>
         </div>
 
         {/* Right Panel */}

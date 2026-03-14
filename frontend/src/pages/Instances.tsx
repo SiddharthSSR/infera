@@ -239,12 +239,32 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel, provider
   const selectedGPUVram = selectedOffering ? GPU_VRAM_GB[selectedOffering.gpu_type] : undefined;
 
   const allVaultModels = vaultModels?.models;
+  const selectedModelRecord = useMemo(
+    () => allVaultModels?.find((model) => model.source_uri === preselectedModel),
+    [allVaultModels, preselectedModel],
+  );
   const compatibleModels = useMemo(() => {
     return allVaultModels?.filter((m: VaultModel) => {
       if (!selectedGPUVram) return true;
       return m.vram_required <= selectedGPUVram * 1024;
     });
   }, [allVaultModels, selectedGPUVram]);
+  const pinnedModelCompatibleOfferings = useMemo(() => {
+    if (!dedupedOfferings) return [];
+    if (!selectedModelRecord?.vram_required) return dedupedOfferings;
+
+    return dedupedOfferings.filter((offering) => {
+      const vramGB = GPU_VRAM_GB[offering.gpu_type] || 0;
+      return vramGB * 1024 >= selectedModelRecord.vram_required;
+    });
+  }, [dedupedOfferings, selectedModelRecord]);
+  const recommendedOffering = useMemo(
+    () => pinnedModelCompatibleOfferings.reduce<GPUOffering | null>((best, offering) => {
+      if (!best || offering.cost_per_hour < best.cost_per_hour) return offering;
+      return best;
+    }, null),
+    [pinnedModelCompatibleOfferings],
+  );
 
   useEffect(() => {
     if (!isOpen) return;
@@ -269,6 +289,11 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel, provider
     });
   }, [compatibleModels, preselectedModel, isOpen]);
 
+  useEffect(() => {
+    if (!isOpen || !preselectedModel || selectedGPU || !recommendedOffering) return;
+    setSelectedGPU(getOfferingKey(recommendedOffering));
+  }, [isOpen, preselectedModel, recommendedOffering, selectedGPU]);
+
   const toggleModel = (sourceUri: string) => {
     setSelectedModels(prev => prev.includes(sourceUri) ? prev.filter(id => id !== sourceUri) : [...prev, sourceUri]);
   };
@@ -284,7 +309,11 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel, provider
         spot_instance: spotInstance,
         models: selectedModels.length > 0 ? selectedModels : undefined,
       });
-      toast.success('Instance provisioned');
+      toast.success(
+        selectedModels.length > 0
+          ? `Provisioning ${selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : `${selectedModels.length} models`} on ${selectedOffering.gpu_type.replace('_', ' ')}`
+          : `Provisioning node on ${selectedOffering.gpu_type.replace('_', ' ')}`,
+      );
       onClose();
       setName('');
       setSelectedGPU('');
@@ -315,6 +344,30 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel, provider
 
         {/* Content */}
         <div className="provision-modal-body" style={{ flex: 1, overflowY: 'auto', padding: '2rem' }}>
+          {selectedModelRecord && (
+            <div className="workspace-provider-card" style={{ marginBottom: '2rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                <div>
+                  <div className="label-text" style={{ marginBottom: '0.45rem' }}>SELECTED MODEL</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{selectedModelRecord.name}</div>
+                  <div className="mono" style={{ marginTop: '0.3rem', color: 'var(--text-secondary)' }}>
+                    {selectedModelRecord.source_uri}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  {selectedModelRecord.parameters && <span className="badge">{selectedModelRecord.parameters}</span>}
+                  {selectedModelRecord.quantization && <span className="badge">{selectedModelRecord.quantization}</span>}
+                  {selectedModelRecord.vram_required ? <span className="badge mono">{Math.ceil(selectedModelRecord.vram_required / 1024)}GB VRAM</span> : null}
+                </div>
+              </div>
+              <div style={{ marginTop: '0.85rem', fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                {pinnedModelCompatibleOfferings.length > 0
+                  ? `This model fits ${pinnedModelCompatibleOfferings.length} live GPU option${pinnedModelCompatibleOfferings.length === 1 ? '' : 's'}${recommendedOffering ? `, starting from $${recommendedOffering.cost_per_hour.toFixed(2)}/hr on ${recommendedOffering.provider}.` : '.'}`
+                  : 'No live GPU option currently satisfies the recorded VRAM requirement for this model.'}
+              </div>
+            </div>
+          )}
+
           <div style={{ marginBottom: '2rem' }}>
             <div className="label-text">INSTANCE NAME</div>
             <input type="text" className="control-input" value={name} onChange={e => setName(e.target.value)} placeholder="infera-worker" style={{ marginTop: '0.5rem' }} />
