@@ -415,13 +415,18 @@ export function Playground() {
             </div>
           ) : (
             history.map((entry, i) => (
-              <div
+              <button
+                type="button"
                 key={entry.id}
                 style={{
                   padding: '1rem 0',
-                  borderBottom: '1px solid #E5E2DE',
                   cursor: 'pointer',
-                  opacity: i === 0 ? 1 : 0.6,
+                  opacity: i === 0 ? 1 : 0.7,
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: '1px solid #E5E2DE',
+                  width: '100%',
+                  textAlign: 'left',
                 }}
                 onClick={() => {
                   // Could restore the prompt from history
@@ -441,7 +446,7 @@ export function Playground() {
                     {entry.promptTokens} + {entry.completionTokens} tokens
                   </span>
                 )}
-              </div>
+              </button>
             ))
           )}
 

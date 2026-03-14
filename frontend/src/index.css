@@ -326,6 +326,73 @@ h1, h2, h3, h4 {
   opacity: 0.85;
 }
 
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Action links — semantic buttons styled as uppercase text links */
+.action-link {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-main);
+  color: var(--text-primary);
+  transition: opacity 0.2s;
+}
+
+.action-link:hover {
+  opacity: 0.6;
+}
+
+.action-link.muted {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.action-link.danger {
+  color: var(--color-error);
+  text-decoration: none;
+}
+
+/* Model table rows */
+.model-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 120px;
+  padding: 1.5rem 2rem;
+  border-bottom: var(--grid-line);
+  align-items: center;
+  transition: background-color 0.2s;
+}
+
+.model-row:hover {
+  background-color: #F9F8F6;
+}
+
+.model-row-active {
+  background-color: #fff;
+}
+
+/* Focus-visible */
+:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+.control-input:focus-visible {
+  outline: none;
+  border-bottom-width: 2px;
+}
+
 .code-block {
   margin-top: 0.75rem;
   padding: 1rem 1.25rem;
@@ -396,7 +463,6 @@ h1, h2, h3, h4 {
   padding: 0.5rem 0;
   font-family: var(--font-main);
   font-size: 1rem;
-  outline: none;
   border-radius: 0;
   color: var(--text-primary);
 }
@@ -868,6 +934,12 @@ input[type="range"]::-webkit-slider-thumb {
   min-height: 8.25rem;
   position: relative;
   overflow: hidden;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.docs-summary-card:hover {
+  border-color: rgba(5, 5, 5, 0.18);
+  transform: translateY(-1px);
 }
 
 .docs-summary-card::before {
@@ -981,6 +1053,12 @@ input[type="range"]::-webkit-slider-thumb {
   border: 1px solid rgba(5, 5, 5, 0.08);
   background: rgba(255, 255, 255, 0.78);
   padding: 1.25rem;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.docs-card:hover {
+  border-color: rgba(5, 5, 5, 0.18);
+  transform: translateY(-1px);
 }
 
 .docs-card strong {
@@ -998,6 +1076,12 @@ input[type="range"]::-webkit-slider-thumb {
   border: 1px solid rgba(5, 5, 5, 0.08);
   background: rgba(255, 255, 255, 0.82);
   padding: 1.25rem;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.docs-endpoint-card:hover {
+  border-color: rgba(5, 5, 5, 0.18);
+  transform: translateY(-1px);
 }
 
 .docs-endpoint-card + .docs-endpoint-card {
@@ -1062,6 +1146,12 @@ input[type="range"]::-webkit-slider-thumb {
   border: 1px solid rgba(5, 5, 5, 0.08);
   background: rgba(255, 255, 255, 0.82);
   overflow: hidden;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.docs-code-panel:hover {
+  border-color: rgba(5, 5, 5, 0.18);
+  transform: translateY(-1px);
 }
 
 .docs-code-toolbar {
@@ -1139,6 +1229,12 @@ input[type="range"]::-webkit-slider-thumb {
   border: 1px solid rgba(5, 5, 5, 0.08);
   background: rgba(255, 255, 255, 0.82);
   padding: 1.25rem;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.docs-step-card:hover {
+  border-color: rgba(5, 5, 5, 0.18);
+  transform: translateY(-1px);
 }
 
 .docs-step-number {
