@@ -2,10 +2,11 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { Instance, GPUOffering, GPUType, ProviderStatus, ProviderType, VaultModel, Worker, ProvisionRequest } from '../types';
-import { fetchWorkspaceProviderConfigs } from '../lib/api';
+import { fetchWorkspaceProviderConfigs, sendChatCompletion } from '../lib/api';
 import {
   getDeploymentRemediation,
   getDeploymentTimeline,
+  recordInferenceVerification,
   readDeploymentAttempts,
   recordFailedAttempt,
   recordProvisionedAttempt,
@@ -133,6 +134,12 @@ function formatAttemptTime(value: string) {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function formatVerificationLatency(latencyMs?: number) {
+  if (latencyMs == null) return null;
+  if (latencyMs < 1000) return `${latencyMs}ms`;
+  return `${(latencyMs / 1000).toFixed(2)}s`;
 }
 
 function timelineTone(state: DeploymentTimelineStep['state']) {
@@ -590,6 +597,7 @@ export function Instances() {
   const [configuredProviders, setConfiguredProviders] = useState<string[]>([]);
   const [provisionDraft, setProvisionDraft] = useState<ProvisionDraft | null>(null);
   const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
+  const [verifyingAttemptID, setVerifyingAttemptID] = useState<string | null>(null);
   const isMobile = useIsMobile(900);
   const { session } = useAuthSession();
   const workspaceID = session?.workspace?.id;
@@ -681,6 +689,55 @@ export function Instances() {
     setShowProvisionModal(true);
   };
 
+  const runInferenceVerification = async (summary: DeploymentAttemptSummary) => {
+    const model = summary.instance?.models?.[0] || summary.attempt.request.models?.[0];
+    if (!model) {
+      toast.error('No deployed model is available to verify');
+      return;
+    }
+
+    setVerifyingAttemptID(summary.attempt.id);
+    const startedAt = Date.now();
+
+    try {
+      const response = await sendChatCompletion({
+        model,
+        messages: [
+          { role: 'system', content: 'Reply with a short readiness confirmation.' },
+          { role: 'user', content: 'Return a short response confirming that inference is working.' },
+        ],
+        temperature: 0,
+        max_tokens: 16,
+      });
+
+      const latencyMs = Date.now() - startedAt;
+      const content = response.choices?.[0]?.message?.content?.trim() || '';
+      setDeploymentAttempts(
+        recordInferenceVerification(workspaceID, summary.attempt.id, {
+          status: 'passed',
+          verified_at: new Date().toISOString(),
+          latency_ms: latencyMs,
+          model,
+          response_preview: content.slice(0, 120),
+        }),
+      );
+      toast.success(`Inference verified in ${formatVerificationLatency(latencyMs) || `${latencyMs}ms`}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Verification request failed';
+      setDeploymentAttempts(
+        recordInferenceVerification(workspaceID, summary.attempt.id, {
+          status: 'failed',
+          verified_at: new Date().toISOString(),
+          model,
+          error: message,
+        }),
+      );
+      toast.error(message);
+    } finally {
+      setVerifyingAttemptID(null);
+    }
+  };
+
   const handleRemediation = (summary: DeploymentAttemptSummary, remediation: DeploymentRemediation | null) => {
     if (!remediation) return;
 
@@ -694,6 +751,9 @@ export function Instances() {
         return;
       case 'focus_instance':
         if (summary.instance?.id) focusInstance(summary.instance.id);
+        return;
+      case 'verify_inference':
+        void runInferenceVerification(summary);
         return;
     }
   };
@@ -718,6 +778,14 @@ export function Instances() {
               <div style={{ marginTop: '0.6rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                 {formatAttemptTime(latestDeployment.attempt.updated_at)}
               </div>
+              {latestDeployment.attempt.inference_verification && (
+                <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '44rem' }}>
+                  <div className="label-text" style={{ marginBottom: '0.35rem' }}>FIRST INFERENCE</div>
+                  {latestDeployment.attempt.inference_verification.status === 'passed'
+                    ? `Verified on ${formatAttemptTime(latestDeployment.attempt.inference_verification.verified_at)}${latestDeployment.attempt.inference_verification.latency_ms != null ? ` in ${formatVerificationLatency(latestDeployment.attempt.inference_verification.latency_ms)}` : ''}${latestDeployment.attempt.inference_verification.response_preview ? `. Response: ${latestDeployment.attempt.inference_verification.response_preview}` : '.'}`
+                    : `Inference check failed on ${formatAttemptTime(latestDeployment.attempt.inference_verification.verified_at)}${latestDeployment.attempt.inference_verification.error ? `: ${latestDeployment.attempt.inference_verification.error}` : '.'}`}
+                </div>
+              )}
               <DeploymentTimeline steps={latestTimeline} />
               {latestRemediation && (
                 <div style={{ marginTop: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '44rem' }}>
@@ -731,9 +799,19 @@ export function Instances() {
                 <span className="badge">{getStatusLabel(latestDeployment.instance.status).toUpperCase()}</span>
               )}
               {latestRemediation && (
-                <button className="action-btn" onClick={() => handleRemediation(latestDeployment, latestRemediation)}>
-                  {latestRemediation.label}
+                <button
+                  className="action-btn"
+                  disabled={latestRemediation.action === 'verify_inference' && verifyingAttemptID === latestDeployment.attempt.id}
+                  onClick={() => handleRemediation(latestDeployment, latestRemediation)}
+                >
+                  {latestRemediation.action === 'verify_inference' && verifyingAttemptID === latestDeployment.attempt.id
+                    ? 'VERIFYING...'
+                    : latestRemediation.label}
                 </button>
+              )}
+              {latestDeployment.inferenceVerified && <span className="badge">INFERENCE VERIFIED</span>}
+              {latestDeployment.attempt.inference_verification?.status === 'failed' && (
+                <span className="badge status-error">INFERENCE FAILED</span>
               )}
               {latestDeployment.retryable && latestRemediation?.action !== 'retry_config' && (
                 <button className="action-btn" onClick={() => openRetryModal(latestDeployment.attempt)}>
@@ -1012,7 +1090,17 @@ export function Instances() {
                           <span className="badge">{attempt.request.gpu_count || 1}x {attempt.request.gpu_type.replace('_', ' ')}</span>
                           {attempt.request.spot_instance ? <span className="badge">SPOT</span> : null}
                           {attempt.request.models?.length ? <span className="badge">{attempt.request.models.length} MODEL{attempt.request.models.length === 1 ? '' : 'S'}</span> : null}
+                          {summary.inferenceVerified ? <span className="badge">INFERENCE VERIFIED</span> : null}
+                          {attempt.inference_verification?.status === 'failed' ? <span className="badge status-error">INFERENCE FAILED</span> : null}
                         </div>
+                        {attempt.inference_verification && (
+                          <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
+                            <div className="label-text" style={{ marginBottom: '0.35rem' }}>FIRST INFERENCE</div>
+                            {attempt.inference_verification.status === 'passed'
+                              ? `Verified on ${formatAttemptTime(attempt.inference_verification.verified_at)}${attempt.inference_verification.latency_ms != null ? ` in ${formatVerificationLatency(attempt.inference_verification.latency_ms)}` : ''}${attempt.inference_verification.response_preview ? `. Response: ${attempt.inference_verification.response_preview}` : '.'}`
+                              : `Inference check failed on ${formatAttemptTime(attempt.inference_verification.verified_at)}${attempt.inference_verification.error ? `: ${attempt.inference_verification.error}` : '.'}`}
+                          </div>
+                        )}
                         <DeploymentTimeline steps={timeline} />
                         {remediation && (
                           <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
@@ -1024,8 +1112,14 @@ export function Instances() {
                       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         {instance && <InstanceActions instance={instance} compact />}
                         {remediation && (
-                          <button className="action-btn" onClick={() => handleRemediation(summary, remediation)}>
-                            {remediation.label}
+                          <button
+                            className="action-btn"
+                            disabled={remediation.action === 'verify_inference' && verifyingAttemptID === attempt.id}
+                            onClick={() => handleRemediation(summary, remediation)}
+                          >
+                            {remediation.action === 'verify_inference' && verifyingAttemptID === attempt.id
+                              ? 'VERIFYING...'
+                              : remediation.label}
                           </button>
                         )}
                         {retryable && remediation?.action !== 'retry_config' && (

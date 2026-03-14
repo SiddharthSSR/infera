@@ -14,6 +14,14 @@ export type DeploymentAttemptRecord = {
   instance_id?: string;
   instance_name?: string;
   failure_reason?: string;
+  inference_verification?: {
+    status: 'passed' | 'failed';
+    verified_at: string;
+    latency_ms?: number;
+    model?: string;
+    response_preview?: string;
+    error?: string;
+  };
 };
 
 export type DeploymentAttemptSummary = {
@@ -21,6 +29,7 @@ export type DeploymentAttemptSummary = {
   readiness: InstanceReadiness & { label: string; detail: string };
   instance: Instance | null;
   retryable: boolean;
+  inferenceVerified: boolean;
 };
 
 export type DeploymentTimelineStep = {
@@ -31,7 +40,7 @@ export type DeploymentTimelineStep = {
 export type DeploymentRemediation = {
   label: string;
   detail: string;
-  action: 'open_workspace' | 'view_capacity' | 'retry_config' | 'focus_instance';
+  action: 'open_workspace' | 'view_capacity' | 'retry_config' | 'focus_instance' | 'verify_inference';
 };
 
 function storageKey(workspaceID: string) {
@@ -125,6 +134,29 @@ export function recordFailedAttempt(
   return attempts;
 }
 
+export function recordInferenceVerification(
+  workspaceID: string | undefined,
+  attemptID: string,
+  verification: NonNullable<DeploymentAttemptRecord['inference_verification']>,
+): DeploymentAttemptRecord[] {
+  if (!workspaceID) return [];
+
+  const attempts = normalizeAttempts(
+    readDeploymentAttempts(workspaceID).map((attempt) => (
+      attempt.id === attemptID
+        ? {
+            ...attempt,
+            updated_at: verification.verified_at,
+            inference_verification: verification,
+          }
+        : attempt
+    )),
+  );
+
+  writeDeploymentAttempts(workspaceID, attempts);
+  return attempts;
+}
+
 export function summarizeDeploymentAttempt(
   attempt: DeploymentAttemptRecord,
   instances: Instance[] | undefined,
@@ -147,6 +179,7 @@ export function summarizeDeploymentAttempt(
         serving: false,
         verified: false,
       },
+      inferenceVerified: false,
     };
   }
 
@@ -162,6 +195,7 @@ export function summarizeDeploymentAttempt(
         serving: false,
         verified: false,
       },
+      inferenceVerified: false,
     };
   }
 
@@ -171,6 +205,7 @@ export function summarizeDeploymentAttempt(
     instance: liveInstance,
     retryable: ['error', 'stopped', 'terminated', 'terminating'].includes(liveInstance.status),
     readiness,
+    inferenceVerified: attempt.inference_verification?.status === 'passed',
   };
 }
 
@@ -187,6 +222,7 @@ export function getDeploymentTimeline(summary: DeploymentAttemptSummary): Deploy
     { label: 'Worker connected', state: 'pending' },
     { label: 'Models ready', state: 'pending' },
     { label: 'Serving verified', state: 'pending' },
+    { label: 'First inference', state: 'pending' },
   ];
 
   if (summary.attempt.outcome === 'request_failed') {
@@ -257,6 +293,13 @@ export function getDeploymentTimeline(summary: DeploymentAttemptSummary): Deploy
     case 'SERVING VERIFIED':
       steps[4].state = 'done';
       steps[5].state = 'done';
+      if (summary.attempt.inference_verification?.status === 'passed') {
+        steps[6].state = 'done';
+      } else if (summary.attempt.inference_verification?.status === 'failed') {
+        steps[6].state = 'failed';
+      } else {
+        steps[6].state = 'active';
+      }
       return steps;
     case 'FAILED':
       steps[4].state = 'failed';
@@ -298,6 +341,22 @@ export function getDeploymentRemediation(summary: DeploymentAttemptSummary): Dep
       label: 'RETRY CONFIG',
       detail: 'The original node is no longer present. Reopen the previous configuration to reprovision it.',
       action: 'retry_config',
+    };
+  }
+
+  if (summary.readiness.label === 'SERVING VERIFIED' && !summary.inferenceVerified) {
+    if (summary.attempt.inference_verification?.status === 'failed') {
+      return {
+        label: 'FOCUS NODE',
+        detail: `Runtime looks ready, but the first live inference failed${summary.attempt.inference_verification.error ? `: ${summary.attempt.inference_verification.error}` : '.'}`,
+        action: 'focus_instance',
+      };
+    }
+
+    return {
+      label: 'VERIFY SERVING',
+      detail: 'The runtime is healthy. Run one small inference request to confirm the model is actually answering traffic.',
+      action: 'verify_inference',
     };
   }
 
