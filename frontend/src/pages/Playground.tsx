@@ -63,10 +63,12 @@ export function Playground() {
     }
   }, [isMobile]);
 
-  // Auto-select first model if none selected
-  if (!selectedModel && allModels.length > 0) {
-    setSelectedModel(allModels[0].id);
-  }
+  // Auto-select the first available model after data loads.
+  useEffect(() => {
+    if (!selectedModel && allModels.length > 0) {
+      setSelectedModel(allModels[0].id);
+    }
+  }, [allModels, selectedModel, setSelectedModel]);
 
   // Auto-scroll response area as content streams in
   useEffect(() => {
