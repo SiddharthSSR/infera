@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { Instance, GPUOffering, GPUType, VaultModel } from '../types';
@@ -193,19 +193,33 @@ function ProvisionModal({ isOpen, onClose, offerings, preselectedModel }: {
   const selectedGPUVram = selectedOffering ? GPU_VRAM_GB[selectedOffering.gpu_type] : undefined;
 
   const allVaultModels = vaultModels?.models;
-  const compatibleModels = allVaultModels?.filter((m: VaultModel) => {
-    if (!selectedGPUVram) return true;
-    return m.vram_required <= selectedGPUVram * 1024;
-  });
+  const compatibleModels = useMemo(() => {
+    return allVaultModels?.filter((m: VaultModel) => {
+      if (!selectedGPUVram) return true;
+      return m.vram_required <= selectedGPUVram * 1024;
+    });
+  }, [allVaultModels, selectedGPUVram]);
 
   useEffect(() => {
+    if (!isOpen) return;
+
     const compatibleSources = new Set((compatibleModels || []).map((model) => model.source_uri));
     setSelectedModels((prev) => {
       const next = prev.filter((model) => compatibleSources.has(model));
-      if (preselectedModel && isOpen && compatibleSources.has(preselectedModel) && !next.includes(preselectedModel)) {
-        return [preselectedModel, ...next];
+
+      const normalizedNext =
+        preselectedModel && compatibleSources.has(preselectedModel) && !next.includes(preselectedModel)
+          ? [preselectedModel, ...next]
+          : next;
+
+      if (
+        normalizedNext.length === prev.length &&
+        normalizedNext.every((model, index) => model === prev[index])
+      ) {
+        return prev;
       }
-      return next;
+
+      return normalizedNext;
     });
   }, [compatibleModels, preselectedModel, isOpen]);
 
@@ -358,16 +372,6 @@ export function Instances() {
 
   const [preselectedModel, setPreselectedModel] = useState<string | null>(null);
 
-  // Auto-open provision modal if redirected from dashboard or registry
-  useEffect(() => {
-    if (searchParams.get('provision') === 'true') {
-      const model = searchParams.get('model');
-      if (model) setPreselectedModel(model);
-      setShowProvisionModal(true);
-      setSearchParams({}, { replace: true });
-    }
-  }, [searchParams, setSearchParams]);
-
   const filteredInstances = instances?.filter(instance => {
     if (statusFilter === 'active') return !['terminated', 'terminating'].includes(instance.status);
     if (statusFilter === 'all') return true;
@@ -380,6 +384,16 @@ export function Instances() {
     : 0;
   const totalMemUsed = healthyWorkers.reduce((sum, w) => sum + w.memory_used, 0);
   const totalMemTotal = healthyWorkers.reduce((sum, w) => sum + w.memory_total, 0);
+
+  // Auto-open provision modal if redirected from dashboard or registry.
+  useEffect(() => {
+    if (searchParams.get('provision') === 'true') {
+      const model = searchParams.get('model');
+      if (model) setPreselectedModel(model);
+      setShowProvisionModal(true);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   return (
     <div className="instances-page animate-fade-in">
