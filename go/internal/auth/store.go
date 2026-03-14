@@ -754,6 +754,55 @@ func (s *Store) ListWorkspaces() ([]*WorkspaceRecord, error) {
 	return workspaces, rows.Err()
 }
 
+func (s *Store) ListAccessibleWorkspaces(record *KeyRecord) ([]*WorkspaceRecord, error) {
+	if record == nil || record.Status != "active" {
+		return nil, fmt.Errorf("active key record is required")
+	}
+
+	if record.PrincipalType == PrincipalHuman && record.MemberEmail != nil {
+		email := strings.ToLower(strings.TrimSpace(*record.MemberEmail))
+		if email != "" {
+			rows, err := s.db.Query(`
+				SELECT DISTINCT w.id, w.slug, w.name, w.created_at, w.status
+				FROM workspace_memberships m
+				JOIN workspaces w ON w.id = m.workspace_id
+				JOIN api_keys k ON k.membership_id = m.id
+				WHERE lower(m.email) = ?
+				  AND m.status = 'active'
+				  AND k.status = 'active'
+				  AND k.principal_type = ?
+				ORDER BY w.created_at ASC`,
+				email, PrincipalHuman,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list accessible workspaces: %w", err)
+			}
+			defer rows.Close()
+
+			workspaces := make([]*WorkspaceRecord, 0)
+			for rows.Next() {
+				workspace := &WorkspaceRecord{}
+				if err := rows.Scan(&workspace.ID, &workspace.Slug, &workspace.Name, &workspace.CreatedAt, &workspace.Status); err != nil {
+					return nil, fmt.Errorf("failed to scan accessible workspace: %w", err)
+				}
+				workspaces = append(workspaces, workspace)
+			}
+			if err := rows.Err(); err != nil {
+				return nil, fmt.Errorf("failed to iterate accessible workspaces: %w", err)
+			}
+			if len(workspaces) > 0 {
+				return workspaces, nil
+			}
+		}
+	}
+
+	workspace, err := s.getWorkspace(record.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	return []*WorkspaceRecord{workspace}, nil
+}
+
 func (s *Store) GetWorkspaceQuota(workspaceID string) (*WorkspaceQuotaRecord, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	if workspaceID == "" {
@@ -770,6 +819,69 @@ func (s *Store) GetWorkspaceQuota(workspaceID string) (*WorkspaceQuotaRecord, er
 		workspaceID,
 	)
 	return scanWorkspaceQuota(row)
+}
+
+func (s *Store) SwitchSessionWorkspace(rawToken, workspaceID string) (*SessionRecord, *KeyRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil, nil, fmt.Errorf("workspace id is required")
+	}
+
+	session, currentKey, err := s.ValidateSession(rawToken)
+	if err != nil {
+		return nil, nil, err
+	}
+	if currentKey.WorkspaceID == workspaceID {
+		return session, currentKey, nil
+	}
+	if currentKey.PrincipalType != PrincipalHuman {
+		return nil, nil, fmt.Errorf("workspace switching is only available for human sessions")
+	}
+	if currentKey.MemberEmail == nil || strings.TrimSpace(*currentKey.MemberEmail) == "" {
+		return nil, nil, fmt.Errorf("workspace switching is unavailable for this session")
+	}
+
+	targetKeyID, err := s.findSwitchableWorkspaceKeyID(*currentKey.MemberEmail, workspaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if _, err := s.db.Exec(`UPDATE sessions SET key_id = ?, last_seen = ? WHERE id = ?`, targetKeyID, time.Now(), session.ID); err != nil {
+		return nil, nil, fmt.Errorf("failed to switch session workspace: %w", err)
+	}
+
+	return s.ValidateSession(rawToken)
+}
+
+func (s *Store) findSwitchableWorkspaceKeyID(email, workspaceID string) (string, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	workspaceID = strings.TrimSpace(workspaceID)
+	if email == "" || workspaceID == "" {
+		return "", fmt.Errorf("email and workspace id are required")
+	}
+
+	var keyID string
+	err := s.db.QueryRow(`
+		SELECT k.id
+		FROM workspace_memberships m
+		JOIN api_keys k ON k.membership_id = m.id
+		WHERE m.workspace_id = ?
+		  AND lower(m.email) = ?
+		  AND m.status = 'active'
+		  AND k.status = 'active'
+		  AND k.principal_type = ?
+		ORDER BY k.created_at ASC
+		LIMIT 1`,
+		workspaceID, email, PrincipalHuman,
+	).Scan(&keyID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("no accessible session key for workspace")
+		}
+		return "", fmt.Errorf("failed to locate switchable workspace key: %w", err)
+	}
+
+	return keyID, nil
 }
 
 func (s *Store) UpsertWorkspaceQuota(workspaceID string, monthlyRequestLimit, monthlyTokenLimit *int64, enforceHardLimits bool) (*WorkspaceQuotaRecord, error) {

@@ -131,6 +131,18 @@ export async function getSession(): Promise<SessionInfo | null> {
   }
 }
 
+export async function switchSessionWorkspace(workspaceId: string): Promise<SessionInfo> {
+  const response = await authFetch(`${API_BASE}/api/auth/session/workspace`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace_id: workspaceId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, 'Failed to switch workspace'));
+  }
+  return response.json();
+}
+
 // Destroy the current session (logout). Always succeeds.
 export async function destroySession(): Promise<void> {
   try {

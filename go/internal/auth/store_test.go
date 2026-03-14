@@ -230,6 +230,118 @@ func TestCreateServiceAccountKey(t *testing.T) {
 	}
 }
 
+func TestListAccessibleWorkspaces_MembershipSession(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+
+	workspaceA, err := s.CreateWorkspace("Alpha Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace alpha: %v", err)
+	}
+	workspaceB, err := s.CreateWorkspace("Beta Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace beta: %v", err)
+	}
+
+	tokenA, _, err := s.CreateWorkspaceInvitation(workspaceA.ID, "member@example.com", "Member", RoleOperator, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation alpha: %v", err)
+	}
+	tokenB, _, err := s.CreateWorkspaceInvitation(workspaceB.ID, "member@example.com", "Member", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation beta: %v", err)
+	}
+
+	_, _, currentKey, err := s.AcceptWorkspaceInvitation(tokenA, "Joined Member")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation alpha: %v", err)
+	}
+	if _, _, _, err := s.AcceptWorkspaceInvitation(tokenB, "Joined Member"); err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation beta: %v", err)
+	}
+
+	workspaces, err := s.ListAccessibleWorkspaces(currentKey)
+	if err != nil {
+		t.Fatalf("ListAccessibleWorkspaces: %v", err)
+	}
+	if len(workspaces) != 2 {
+		t.Fatalf("expected 2 workspaces, got %d", len(workspaces))
+	}
+}
+
+func TestSwitchSessionWorkspace(t *testing.T) {
+	s := newTestStore(t)
+
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+
+	workspaceA, err := s.CreateWorkspace("Alpha Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace alpha: %v", err)
+	}
+	workspaceB, err := s.CreateWorkspace("Beta Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace beta: %v", err)
+	}
+
+	tokenA, _, err := s.CreateWorkspaceInvitation(workspaceA.ID, "member@example.com", "Member", RoleOperator, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation alpha: %v", err)
+	}
+	tokenB, _, err := s.CreateWorkspaceInvitation(workspaceB.ID, "member@example.com", "Member", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation beta: %v", err)
+	}
+
+	_, fullKey, record, err := s.AcceptWorkspaceInvitation(tokenA, "Joined Member")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation alpha: %v", err)
+	}
+	if _, _, _, err := s.AcceptWorkspaceInvitation(tokenB, "Joined Member"); err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation beta: %v", err)
+	}
+
+	validated, err := s.ValidateKey(fullKey)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	sessionToken, _, err := s.CreateSession(validated.ID)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	switchedSession, switchedKey, err := s.SwitchSessionWorkspace(sessionToken, workspaceB.ID)
+	if err != nil {
+		t.Fatalf("SwitchSessionWorkspace: %v", err)
+	}
+	if switchedSession.ID == "" {
+		t.Fatal("expected session record after switch")
+	}
+	if switchedKey.WorkspaceID != workspaceB.ID {
+		t.Fatalf("expected switched workspace %q, got %q", workspaceB.ID, switchedKey.WorkspaceID)
+	}
+	if switchedKey.MemberEmail == nil || *switchedKey.MemberEmail != "member@example.com" {
+		t.Fatalf("expected switched member email, got %+v", switchedKey.MemberEmail)
+	}
+
+	_, currentSessionKey, err := s.ValidateSession(sessionToken)
+	if err != nil {
+		t.Fatalf("ValidateSession after switch: %v", err)
+	}
+	if currentSessionKey.WorkspaceID != workspaceB.ID {
+		t.Fatalf("expected persisted switched workspace %q, got %q", workspaceB.ID, currentSessionKey.WorkspaceID)
+	}
+	if record.WorkspaceID == workspaceB.ID {
+		t.Fatal("expected original record to remain on first workspace")
+	}
+}
+
 func TestWorkspaceQuotaLifecycle(t *testing.T) {
 	s := newTestStore(t)
 
