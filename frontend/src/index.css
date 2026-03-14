@@ -59,6 +59,14 @@ h1, h2, h3, h4 {
   margin: 0 auto;
 }
 
+.app-shell-auth {
+  width: min(100%, 1720px);
+  max-width: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.28)),
+    var(--bg-paper);
+}
+
 /* Top Navigation */
 .top-nav {
   display: flex;
@@ -128,7 +136,7 @@ h1, h2, h3, h4 {
 
 /* Display Header */
 .display-text {
-  font-size: 6rem;
+  font-size: clamp(4.25rem, 8vw, 6.75rem);
   line-height: 0.9;
   text-transform: uppercase;
   font-weight: 600;
@@ -503,6 +511,95 @@ h1, h2, h3, h4 {
   color: var(--text-secondary);
   font-size: 0.84rem;
   line-height: 1.5;
+}
+
+.provision-options-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0;
+  border-top: var(--grid-line);
+  border-left: var(--grid-line);
+}
+
+.provision-options-grid > * {
+  border-right: var(--grid-line);
+  border-bottom: var(--grid-line);
+}
+
+.provision-model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.5rem;
+}
+
+.dashboard-page .dashboard-metrics-row .cell,
+.instances-page .instances-metrics-row .cell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0.55)),
+    var(--bg-paper);
+}
+
+.dashboard-page .dashboard-models-cell,
+.instances-page .instances-list-cell,
+.workspace-page .workspace-provider-cell,
+.workspace-page .workspace-members-cell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.6)),
+    var(--bg-paper);
+}
+
+.dashboard-page .dashboard-overview-cell,
+.instances-page .instances-sidebar-cell,
+.workspace-page .workspace-access-cell,
+.workspace-page .workspace-trend-cell,
+.workspace-page .workspace-invites-cell {
+  background:
+    linear-gradient(180deg, rgba(244, 242, 238, 0.96), rgba(244, 242, 238, 0.82)),
+    var(--bg-accent) !important;
+}
+
+.workspace-page .workspace-quota-cell,
+.workspace-page .workspace-service-cell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.58)),
+    var(--bg-paper);
+}
+
+.dashboard-page .dashboard-footer-row .cell,
+.instances-page .instances-footer-row .cell {
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.workspace-page .grid-row,
+.dashboard-page .grid-row,
+.instances-page .grid-row {
+  align-items: stretch;
+}
+
+.workspace-page .responsive-scroll-x,
+.instances-page .responsive-scroll-x,
+.dashboard-page .responsive-scroll-x {
+  border-top: 1px solid rgba(5, 5, 5, 0.04);
+}
+
+.workspace-page .mobile-data-card,
+.instances-page .mobile-data-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.72)),
+    #fff;
+}
+
+.provision-modal-body {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent 18%),
+    var(--bg-paper);
+}
+
+.provision-modal-footer,
+.generic-modal-footer {
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.015), transparent),
+    rgba(255, 255, 255, 0.8);
 }
 
 /* Mono utility */
@@ -966,6 +1063,152 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 /* Responsive */
+@media (min-width: 1440px) {
+  .app-shell-auth .top-nav {
+    padding: 1.35rem 2.5rem;
+  }
+
+  .app-shell-auth .nav-links-group {
+    gap: 2.35rem;
+  }
+
+  .app-shell-auth .grid-row {
+    grid-template-columns: 1.08fr 1.08fr 0.92fr 0.92fr;
+  }
+
+  .app-shell-auth .cell {
+    padding: 2.35rem;
+  }
+
+  .app-shell-auth .display-text {
+    padding: 2.5rem 0 2.2rem;
+  }
+
+  .dashboard-main-row .dashboard-models-cell {
+    grid-column: span 3 !important;
+    min-height: 36rem;
+  }
+
+  .dashboard-main-row .dashboard-overview-cell {
+    grid-column: span 1 !important;
+    min-height: 36rem;
+  }
+
+  .instances-main-row .instances-list-cell {
+    min-height: 34rem;
+  }
+
+  .instances-main-row .instances-sidebar-cell {
+    min-height: 34rem;
+  }
+
+  .provision-modal-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+    gap: 2rem;
+    align-items: start;
+  }
+
+  .app-shell-auth .data-table th {
+    padding: 0.9rem 0;
+    font-size: 0.62rem;
+    letter-spacing: 0.12em;
+  }
+
+  .app-shell-auth .data-table td {
+    padding: 1.15rem 0;
+    font-size: 0.88rem;
+  }
+
+  .workspace-hero-row .workspace-profile-cell {
+    grid-column: span 3 !important;
+    min-height: 15rem;
+  }
+
+  .workspace-hero-row .workspace-access-cell {
+    grid-column: span 1 !important;
+    min-height: 15rem;
+  }
+
+  .workspace-usage-row .workspace-usage-cell,
+  .workspace-usage-row .workspace-trend-cell,
+  .workspace-ops-row .workspace-provider-cell,
+  .workspace-ops-row .workspace-quota-cell,
+  .workspace-ops-row .workspace-service-cell,
+  .workspace-members-row .workspace-members-cell,
+  .workspace-members-row .workspace-invites-cell {
+    min-height: 24rem;
+  }
+
+  .instances-page .responsive-scroll-x-content,
+  .workspace-page .responsive-scroll-x-content {
+    min-width: 900px;
+  }
+}
+
+@media (min-width: 1680px) {
+  .app-shell-auth .display-text {
+    font-size: 7.5rem;
+    letter-spacing: -0.055em;
+  }
+
+  .app-shell-auth .value-text {
+    font-size: 1.7rem;
+  }
+
+  .dashboard-main-row .dashboard-models-cell {
+    grid-column: span 3 !important;
+  }
+
+  .dashboard-main-row .dashboard-overview-cell {
+    grid-column: span 1 !important;
+  }
+
+  .app-shell-auth .top-nav {
+    padding-left: 3rem;
+    padding-right: 3rem;
+  }
+
+  .app-shell-auth .cell {
+    padding: 2.6rem;
+  }
+
+  .app-shell-auth .data-table td {
+    font-size: 0.9rem;
+  }
+
+  .workspace-ops-row {
+    grid-template-columns: 1.2fr 0.8fr 0.95fr 1.05fr;
+  }
+
+  .workspace-ops-row .workspace-provider-cell {
+    grid-column: span 2 !important;
+  }
+
+  .workspace-ops-row .workspace-quota-cell,
+  .workspace-ops-row .workspace-service-cell {
+    grid-column: span 1 !important;
+  }
+
+  .workspace-members-row .workspace-members-cell {
+    grid-column: span 3 !important;
+  }
+
+  .workspace-members-row .workspace-invites-cell {
+    grid-column: span 1 !important;
+  }
+
+  .workspace-page .mobile-data-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  .workspace-page .workspace-trend-cell .mobile-data-list {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1024px) {
   .grid-row {
     grid-template-columns: repeat(2, 1fr);

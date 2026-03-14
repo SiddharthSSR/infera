@@ -33,7 +33,7 @@ export function Dashboard() {
 
   if (isLoading) {
     return (
-      <div className="animate-fade-in">
+      <div className="dashboard-page animate-fade-in">
         <div className="grid-row">
           <SkeletonCell />
           <SkeletonCell />
@@ -46,7 +46,7 @@ export function Dashboard() {
 
   if (gatewayDown) {
     return (
-      <div className="animate-fade-in">
+      <div className="dashboard-page animate-fade-in">
         <div className="grid-row">
           <div className="cell" style={{ gridColumn: 'span 4', textAlign: 'center', padding: '4rem 2rem' }}>
             <div style={{ fontSize: '2rem', fontWeight: 700, marginBottom: '1rem', letterSpacing: '-0.02em' }}>
@@ -67,9 +67,9 @@ export function Dashboard() {
   }
 
   return (
-    <div className="animate-fade-in">
+    <div className="dashboard-page animate-fade-in">
       {/* Metrics Row */}
-      <div className="grid-row">
+      <div className="grid-row dashboard-metrics-row">
         <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
           <div className="label-text">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -122,9 +122,9 @@ export function Dashboard() {
       </div>
 
       {/* Main Content Row */}
-      <div className="grid-row" style={{ flexGrow: 1 }}>
+      <div className="grid-row dashboard-main-row" style={{ flexGrow: 1 }}>
         {/* Deployed Models */}
-        <div className="cell" style={{ gridColumn: 'span 2' }}>
+        <div className="cell dashboard-models-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '2rem' }}>DEPLOYED MODELS</div>
 
           {loadedModels.length > 0 ? (
@@ -160,7 +160,7 @@ export function Dashboard() {
         </div>
 
         {/* Right Panel */}
-        <div className="cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
+        <div className="cell dashboard-overview-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
           <div style={{ marginBottom: '3rem' }}>
             <div className="label-text">CLUSTER OVERVIEW</div>
             <h3 style={{ fontSize: '1.25rem', marginTop: '1rem', marginBottom: '1.5rem', fontWeight: 500 }}>
@@ -228,7 +228,7 @@ export function Dashboard() {
       </div>
 
       {/* Footer Row */}
-      <div className="grid-row" style={{ borderBottom: 'none' }}>
+      <div className="grid-row dashboard-footer-row" style={{ borderBottom: 'none' }}>
         <div className="cell">
           <div className="label-text">VERSION</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>v1.0.0</div>

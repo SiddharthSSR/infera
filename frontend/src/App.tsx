@@ -1,23 +1,24 @@
-import { useState, useEffect, useCallback, createContext, useContext } from 'react';
+import { useState, useEffect, useCallback, createContext, useContext, lazy, Suspense } from 'react';
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { cn } from './lib/utils';
-import { Dashboard } from './pages/Dashboard';
-import { Playground } from './pages/Playground';
-import { Instances } from './pages/Instances';
-import { Logs } from './pages/Logs';
-import { Models } from './pages/Models';
-import { ApiKeys } from './pages/ApiKeys';
-import { WorkspaceAdmin } from './pages/WorkspaceAdmin';
-import { Login } from './pages/Login';
-import { PublicApiDocs } from './pages/PublicApiDocs';
-import { GettingStarted } from './pages/GettingStarted';
-import { AcceptInvitation } from './pages/AcceptInvitation';
 import { getSession, destroySession, type SessionInfo } from './lib/api';
 import { AuthContext, useAuthSession } from './lib/auth-context';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import type { ChatMessage } from './types';
+
+const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })));
+const Playground = lazy(() => import('./pages/Playground').then((module) => ({ default: module.Playground })));
+const Instances = lazy(() => import('./pages/Instances').then((module) => ({ default: module.Instances })));
+const Logs = lazy(() => import('./pages/Logs').then((module) => ({ default: module.Logs })));
+const Models = lazy(() => import('./pages/Models').then((module) => ({ default: module.Models })));
+const ApiKeys = lazy(() => import('./pages/ApiKeys').then((module) => ({ default: module.ApiKeys })));
+const WorkspaceAdmin = lazy(() => import('./pages/WorkspaceAdmin').then((module) => ({ default: module.WorkspaceAdmin })));
+const Login = lazy(() => import('./pages/Login').then((module) => ({ default: module.Login })));
+const PublicApiDocs = lazy(() => import('./pages/PublicApiDocs').then((module) => ({ default: module.PublicApiDocs })));
+const GettingStarted = lazy(() => import('./pages/GettingStarted').then((module) => ({ default: module.GettingStarted })));
+const AcceptInvitation = lazy(() => import('./pages/AcceptInvitation').then((module) => ({ default: module.AcceptInvitation })));
 
 // Chat message with metadata
 interface Message extends ChatMessage {
@@ -139,6 +140,23 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
   );
 }
 
+function RouteLoader() {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: '40vh',
+      color: 'var(--text-secondary)',
+      fontFamily: 'var(--font-main)',
+      fontSize: '0.8rem',
+      letterSpacing: '0.08em',
+    }}>
+      LOADING VIEW...
+    </div>
+  );
+}
+
 // Main App Content
 function AppContent() {
   const location = useLocation();
@@ -212,12 +230,14 @@ function AppContent() {
 
   if (!session) {
     return (
-      <Routes>
-        <Route path="/docs" element={<PublicApiDocs />} />
-        <Route path="/getting-started" element={<GettingStarted />} />
-        <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession) => setSession(nextSession)} />} />
-        <Route path="*" element={<Login onAuthenticated={(nextSession) => setSession(nextSession)} />} />
-      </Routes>
+      <Suspense fallback={<RouteLoader />}>
+        <Routes>
+          <Route path="/docs" element={<PublicApiDocs />} />
+          <Route path="/getting-started" element={<GettingStarted />} />
+          <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession) => setSession(nextSession)} />} />
+          <Route path="*" element={<Login onAuthenticated={(nextSession) => setSession(nextSession)} />} />
+        </Routes>
+      </Suspense>
     );
   }
 
@@ -239,25 +259,27 @@ function AppContent() {
   return (
     <AuthContext.Provider value={{ session, setSession, refreshSession }}>
     <ChatContext.Provider value={chatContextValue}>
-      <div className="app-shell">
+      <div className="app-shell app-shell-auth">
         <TopNav onLogout={handleLogout} />
         {/* Display header - skip for playground which has its own layout */}
         {location.pathname !== '/playground' && (
           <header className="display-text">{pageTitle}</header>
         )}
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/playground" element={<Playground />} />
-          <Route path="/models" element={<Models />} />
-          <Route path="/instances" element={<Instances />} />
-          <Route path="/logs" element={<Logs />} />
-          <Route path="/api-keys" element={<ApiKeys />} />
-          <Route path="/workspace" element={<WorkspaceAdmin />} />
-          <Route path="/docs" element={<PublicApiDocs />} />
-          <Route path="/getting-started" element={<GettingStarted />} />
-          <Route path="/accept-invite" element={<Navigate to="/workspace" replace />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={<RouteLoader />}>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/playground" element={<Playground />} />
+            <Route path="/models" element={<Models />} />
+            <Route path="/instances" element={<Instances />} />
+            <Route path="/logs" element={<Logs />} />
+            <Route path="/api-keys" element={<ApiKeys />} />
+            <Route path="/workspace" element={<WorkspaceAdmin />} />
+            <Route path="/docs" element={<PublicApiDocs />} />
+            <Route path="/getting-started" element={<GettingStarted />} />
+            <Route path="/accept-invite" element={<Navigate to="/workspace" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </div>
     </ChatContext.Provider>
     </AuthContext.Provider>
