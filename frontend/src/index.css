@@ -979,6 +979,13 @@ h1, h2, h3, h4 {
     #fff;
 }
 
+.workspace-lifecycle-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-bottom: 1rem;
+}
+
 .badge.status-warning {
   border-color: rgba(173, 109, 27, 0.22);
   background: rgba(223, 181, 103, 0.16);
