@@ -75,9 +75,10 @@ export function Logs() {
   const sources = [...new Set(logs.map(l => l.source))];
 
   const handleExport = () => {
-    const content = filteredLogs
-      .map(log => `${log.timestamp.toISOString()}\t${log.level.toUpperCase()}\t${log.source}\t${log.message}`)
-      .join('\n');
+    const header = 'Timestamp\tLevel\tSource\tMessage';
+    const rows = filteredLogs
+      .map(log => `${log.timestamp.toISOString()}\t${log.level.toUpperCase()}\t${log.source}\t${log.message}`);
+    const content = [header, ...rows].join('\n');
     const blob = new Blob([content], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);

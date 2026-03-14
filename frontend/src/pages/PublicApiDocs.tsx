@@ -1,10 +1,12 @@
 import { Link } from 'react-router-dom';
 import { CodeExample } from '../components/CodeExample';
 
+const BASE_URL = typeof window !== 'undefined' ? window.location.origin : 'https://inferai.co.in';
+
 const summaryCards = [
   {
     label: 'Base URL',
-    value: 'https://inferai.co.in/v1',
+    value: `${BASE_URL}/v1`,
     tone: 'code',
   },
   {
@@ -78,7 +80,7 @@ const compatibilityCards = [
   },
 ];
 
-const curlExample = `curl https://inferai.co.in/v1/chat/completions \\
+const curlExample = `curl ${BASE_URL}/v1/chat/completions \\
   -H "Authorization: Bearer inf_..." \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -92,7 +94,7 @@ const pythonExample = `from openai import OpenAI
 
 client = OpenAI(
     api_key="YOUR_INFERA_KEY",
-    base_url="https://inferai.co.in/v1",
+    base_url="${BASE_URL}/v1",
 )
 
 resp = client.chat.completions.create(
@@ -106,7 +108,7 @@ const typescriptExample = `import OpenAI from "openai";
 
 const client = new OpenAI({
   apiKey: process.env.INFERA_API_KEY,
-  baseURL: "https://inferai.co.in/v1",
+  baseURL: "${BASE_URL}/v1",
 });
 
 const resp = await client.chat.completions.create({

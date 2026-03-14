@@ -229,28 +229,6 @@ export function Login({ onAuthenticated }: LoginProps) {
         </div>
       </div>
 
-      {/* Responsive styles */}
-      <style>{`
-        @media (max-width: 768px) {
-          .login-brand-panel {
-            padding: 2rem !important;
-            min-height: auto !important;
-          }
-          .login-brand-panel .display-text {
-            font-size: 3.5rem !important;
-          }
-          .login-form-panel {
-            padding: 2rem !important;
-          }
-          .animate-fade-in {
-            flex-direction: column !important;
-          }
-          .login-brand-panel {
-            border-right: none !important;
-            border-bottom: var(--grid-line) !important;
-          }
-        }
-      `}</style>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 
 type CodeLanguage = 'shell' | 'python' | 'typescript' | 'text';
 
@@ -64,17 +64,33 @@ function renderLine(line: string, language: CodeLanguage): ReactNode[] {
 }
 
 export function CodeExample({ code, language = 'text', className = '', style }: CodeExampleProps) {
+  const [copied, setCopied] = useState(false);
   const classes = ['code-block', 'docs-code-block', className].filter(Boolean).join(' ');
   const lines = code.split('\n');
 
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
-    <pre className={classes} style={style}>
-      {lines.map((line, index) => (
-        <span key={`${language}-${index}-${line}`} className="code-line">
-          {renderLine(line, language)}
-          {index < lines.length - 1 ? '\n' : ''}
-        </span>
-      ))}
-    </pre>
+    <div className="code-block-wrapper">
+      <pre className={classes} style={style}>
+        {lines.map((line, index) => (
+          <span key={`${language}-${index}-${line}`} className="code-line">
+            {renderLine(line, language)}
+            {index < lines.length - 1 ? '\n' : ''}
+          </span>
+        ))}
+      </pre>
+      <button
+        type="button"
+        className={`code-copy-btn${copied ? ' copied' : ''}`}
+        onClick={handleCopy}
+      >
+        {copied ? 'COPIED' : 'COPY'}
+      </button>
+    </div>
   );
 }

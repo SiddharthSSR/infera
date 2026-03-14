@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom';
 import { CodeExample } from '../components/CodeExample';
 
+const BASE_URL = typeof window !== 'undefined' ? window.location.origin : 'https://inferai.co.in';
+
 const prepCards = [
   {
     label: 'You need',
@@ -39,10 +41,10 @@ const steps = [
   },
 ];
 
-const modelsRequest = `curl https://inferai.co.in/v1/models \\
+const modelsRequest = `curl ${BASE_URL}/v1/models \\
   -H "Authorization: Bearer inf_..."`;
 
-const chatRequest = `curl https://inferai.co.in/v1/chat/completions \\
+const chatRequest = `curl ${BASE_URL}/v1/chat/completions \\
   -H "Authorization: Bearer inf_..." \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -52,7 +54,7 @@ const chatRequest = `curl https://inferai.co.in/v1/chat/completions \\
     ]
   }'`;
 
-const streamRequest = `curl https://inferai.co.in/v1/chat/completions \\
+const streamRequest = `curl ${BASE_URL}/v1/chat/completions \\
   -H "Authorization: Bearer inf_..." \\
   -H "Content-Type: application/json" \\
   -d '{
