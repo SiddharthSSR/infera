@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   instances: { data: [], isLoading: false } as QueryResult<any[]>,
   costs: { data: undefined, isLoading: false } as QueryResult<any>,
   models: { data: [], isLoading: false } as QueryResult<any[]>,
+  providers: { data: [], isLoading: false } as QueryResult<any[]>,
 }))
 
 vi.mock('react-router-dom', async () => {
@@ -31,6 +32,7 @@ vi.mock('../hooks/useApi', () => ({
   useInstances: () => mocks.instances,
   useCosts: () => mocks.costs,
   useModels: () => mocks.models,
+  useProviders: () => mocks.providers,
 }))
 
 vi.mock('../lib/auth-context', () => ({
@@ -56,6 +58,7 @@ describe('Dashboard', () => {
       isLoading: false,
     }
     mocks.models = { data: [], isLoading: false }
+    mocks.providers = { data: [], isLoading: false }
   })
 
   it('renders loading skeleton when both workers and stats are loading', () => {
@@ -162,6 +165,10 @@ describe('Dashboard', () => {
       },
     ]))
 
+    mocks.providers = {
+      data: [{ provider: 'runpod', connected: true }],
+      isLoading: false,
+    }
     mocks.workers = {
       data: [
         { worker_id: 'worker-1', status: 'healthy', last_heartbeat: new Date().toISOString(), gpu_utilization: 52, memory_used: 4, memory_total: 8, models: ['org/model-a'] },
@@ -235,8 +242,30 @@ describe('Dashboard', () => {
     expect(screen.getByText('VERIFY PENDING')).toBeInTheDocument()
     expect(screen.getByText('DEGRADED DEPLOYMENTS')).toBeInTheDocument()
     expect(screen.getByText('PENDING DEPLOYMENTS')).toBeInTheDocument()
+    expect(screen.getByText('ATTENTION QUEUE')).toBeInTheDocument()
+    expect(screen.getByText('Latest deployment request failed')).toBeInTheDocument()
     expect(screen.getByText('Model A')).toBeInTheDocument()
-    expect(screen.getByText(/provider auth failed/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/provider auth failed/i).length).toBeGreaterThan(0)
+  })
+
+  it('surfaces provider and worker issues in the attention queue', () => {
+    mocks.providers = {
+      data: [{ provider: 'runpod', connected: false }],
+      isLoading: false,
+    }
+    mocks.instances = {
+      data: [
+        { id: 'i1', provider_id: 'p1', provider: 'runpod', name: 'node-a', status: 'running', gpu_type: 'A100_40GB', gpu_count: 1, vcpu: 16, memory_gb: 64, storage_gb: 100, models: ['org/model-a'], cost_per_hour: 1.2, spot_instance: false, created_at: '2026-03-15T10:00:00.000Z' },
+      ],
+      isLoading: false,
+    }
+    mocks.models = { data: [{ id: 'org/model-a', loaded: true }], isLoading: false }
+
+    render(<Dashboard />)
+
+    expect(screen.getByText('No live provider connection')).toBeInTheDocument()
+    expect(screen.getByText('Workers are not connected')).toBeInTheDocument()
+    expect(screen.getAllByText('OPEN WORKSPACE').length).toBeGreaterThan(0)
   })
 
   it('navigates to provision flow from deploy button', () => {
