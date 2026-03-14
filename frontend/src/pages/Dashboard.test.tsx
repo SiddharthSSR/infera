@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   costs: { data: undefined, isLoading: false } as QueryResult<any>,
   models: { data: [], isLoading: false } as QueryResult<any[]>,
   providers: { data: [], isLoading: false } as QueryResult<any[]>,
+  fetchWorkspaceQuota: vi.fn(),
+  fetchAuditUsage: vi.fn(),
 }))
 
 vi.mock('react-router-dom', async () => {
@@ -36,8 +38,17 @@ vi.mock('../hooks/useApi', () => ({
 }))
 
 vi.mock('../lib/auth-context', () => ({
-  useAuthSession: () => ({ session: { workspace: { id: 'ws_test' } } }),
+  useAuthSession: () => ({ session: { workspace: { id: 'ws_test' }, key: { role: 'admin' } } }),
 }))
+
+vi.mock('../lib/api', async () => {
+  const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api')
+  return {
+    ...actual,
+    fetchWorkspaceQuota: mocks.fetchWorkspaceQuota,
+    fetchAuditUsage: mocks.fetchAuditUsage,
+  }
+})
 
 describe('Dashboard', () => {
   beforeEach(() => {
@@ -59,6 +70,8 @@ describe('Dashboard', () => {
     }
     mocks.models = { data: [], isLoading: false }
     mocks.providers = { data: [], isLoading: false }
+    mocks.fetchWorkspaceQuota.mockImplementation(() => new Promise(() => {}))
+    mocks.fetchAuditUsage.mockImplementation(() => new Promise(() => {}))
   })
 
   it('renders loading skeleton when both workers and stats are loading', () => {
@@ -129,7 +142,7 @@ describe('Dashboard', () => {
     expect(screen.getByText('7')).toBeInTheDocument()
   })
 
-  it('renders dashboard serving summary from deployment history', () => {
+  it('renders dashboard serving summary from deployment history', async () => {
     window.localStorage.setItem('infera:deployment-attempts:ws_test', JSON.stringify([
       {
         id: 'attempt_verified',
@@ -266,6 +279,41 @@ describe('Dashboard', () => {
     expect(screen.getByText('No live provider connection')).toBeInTheDocument()
     expect(screen.getByText('Workers are not connected')).toBeInTheDocument()
     expect(screen.getAllByText('OPEN WORKSPACE').length).toBeGreaterThan(0)
+  })
+
+  it('surfaces quota and spend alerts when billing pressure is high', async () => {
+    mocks.costs = {
+      data: {
+        current_hourly: 2.5,
+        today_total: 12,
+        month_total: 40,
+        projected_month: 120,
+        by_provider: { runpod: 11, vastai: 1 },
+        by_gpu: {},
+      },
+      isLoading: false,
+    }
+    mocks.fetchWorkspaceQuota.mockResolvedValue({
+      workspace_id: 'ws_test',
+      monthly_request_limit: 1000,
+      monthly_token_limit: 2000,
+      enforce_hard_limits: true,
+      updated_at: '2026-03-15T00:00:00.000Z',
+    })
+    mocks.fetchAuditUsage.mockResolvedValue({
+      bucket: 'day',
+      start: '2026-03-01T00:00:00.000Z',
+      end: '2026-03-15T00:00:00.000Z',
+      rows: [
+        { bucket_start: '2026-03-15T00:00:00.000Z', workspace_id: 'ws_test', key_id: 'key_1', requests: 920, tokens: 1500, successes: 900, errors: 20 },
+      ],
+    })
+
+    render(<Dashboard />)
+
+    expect(await screen.findByText('Workspace quota nearing limit')).toBeInTheDocument()
+    expect(screen.getByText('Current cost burn is elevated')).toBeInTheDocument()
+    expect(screen.getByText('Spend is concentrated on one provider')).toBeInTheDocument()
   })
 
   it('navigates to provision flow from deploy button', () => {

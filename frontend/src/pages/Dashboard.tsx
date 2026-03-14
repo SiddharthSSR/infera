@@ -4,6 +4,12 @@ import { useWorkers, useStats, useInstances, useCosts, useModels, useProviders }
 import { SkeletonCell } from '../components/Skeleton';
 import { useAuthSession } from '../lib/auth-context';
 import {
+  fetchAuditUsage,
+  fetchWorkspaceQuota,
+  type AuditUsageRow,
+  type WorkspaceQuotaRecord,
+} from '../lib/api';
+import {
   getDeploymentRemediation,
   readDeploymentAttempts,
   summarizeDeploymentAttempt,
@@ -127,7 +133,23 @@ function mapRemediationAction(action: 'open_workspace' | 'view_capacity' | 'retr
   }
 }
 
-function buildAttentionQueue(
+function monthRange() {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+  return { start: start.toISOString(), end: now.toISOString() };
+}
+
+function usageRatio(used: number, limit?: number | null): number {
+  if (limit == null) return 0;
+  if (limit <= 0) return used > 0 ? Number.POSITIVE_INFINITY : 1;
+  return used / limit;
+}
+
+function formatCount(value: number): string {
+  return new Intl.NumberFormat('en-US').format(value);
+}
+
+function buildOperationalAttentionQueue(
   deploymentSummaries: DeploymentAttemptSummary[],
   connectedProviders: number,
   visibleProviders: number,
@@ -212,13 +234,92 @@ function buildAttentionQueue(
     });
   }
 
-  return items.slice(0, 4);
+  return items;
+}
+
+function buildBillingAttentionQueue(
+  quota: WorkspaceQuotaRecord | null,
+  usageRows: AuditUsageRow[],
+  costs: { current_hourly: number; today_total: number; by_provider: Record<string, number> } | undefined,
+): AttentionItem[] {
+  if (!quota && usageRows.length === 0 && !costs) return [];
+
+  const usageSummary = usageRows.reduce((acc, row) => {
+    acc.requests += row.requests;
+    acc.tokens += row.tokens;
+    return acc;
+  }, { requests: 0, tokens: 0 });
+
+  const requestUsageRatio = usageRatio(usageSummary.requests, quota?.monthly_request_limit);
+  const tokenUsageRatio = usageRatio(usageSummary.tokens, quota?.monthly_token_limit);
+  const quotaPressure = Math.max(requestUsageRatio, tokenUsageRatio);
+  const dominantMetric = tokenUsageRatio >= requestUsageRatio ? 'token' : 'request';
+  const items: AttentionItem[] = [];
+
+  if (quota && quotaPressure >= 1) {
+    const limit = dominantMetric === 'token' ? quota.monthly_token_limit : quota.monthly_request_limit;
+    const used = dominantMetric === 'token' ? usageSummary.tokens : usageSummary.requests;
+    items.push({
+      id: 'quota-exceeded',
+      severity: 'critical',
+      title: 'Workspace quota exceeded',
+      detail: `${dominantMetric === 'token' ? 'Token' : 'Request'} usage is at ${Number.isFinite(quotaPressure) ? `${Math.round(quotaPressure * 100)}%` : '100%+'} of the configured limit (${formatCount(used)} / ${limit != null ? formatCount(limit) : '0'}).`,
+      actionLabel: 'ADJUST QUOTA',
+      action: 'open_workspace',
+    });
+  } else if (quota && quotaPressure >= 0.8) {
+    items.push({
+      id: 'quota-near-limit',
+      severity: 'warning',
+      title: 'Workspace quota nearing limit',
+      detail: `${dominantMetric === 'token' ? 'Token' : 'Request'} usage is at ${Math.round(quotaPressure * 100)}% of the monthly quota. Review limits before traffic is blocked.`,
+      actionLabel: 'OPEN WORKSPACE',
+      action: 'open_workspace',
+    });
+  }
+
+  if (costs && costs.current_hourly > 0 && costs.today_total > 5) {
+    const projectedDayFromCurrentHour = costs.current_hourly * 24;
+    if (projectedDayFromCurrentHour >= costs.today_total * 2.25) {
+      items.push({
+        id: 'cost-burn-spike',
+        severity: projectedDayFromCurrentHour >= costs.today_total * 3 ? 'critical' : 'warning',
+        title: 'Current cost burn is elevated',
+        detail: `At the current pace, hourly spend projects to about $${projectedDayFromCurrentHour.toFixed(2)} for the day versus $${costs.today_total.toFixed(2)} spent so far.`,
+        actionLabel: 'OPEN CLUSTERS',
+        action: 'open_clusters',
+      });
+    }
+  }
+
+  if (costs && costs.today_total > 10) {
+    const providerEntries = Object.entries(costs.by_provider || {}).sort(([, left], [, right]) => right - left);
+    const topProvider = providerEntries[0];
+    if (topProvider) {
+      const share = topProvider[1] / costs.today_total;
+      if (share >= 0.85) {
+        items.push({
+          id: 'provider-cost-concentration',
+          severity: 'info',
+          title: 'Spend is concentrated on one provider',
+          detail: `${topProvider[0]} accounts for ${Math.round(share * 100)}% of today’s spend. Check whether that concentration is intentional.`,
+          actionLabel: 'OPEN CLUSTERS',
+          action: 'open_clusters',
+        });
+      }
+    }
+  }
+
+  return items;
 }
 
 export function Dashboard() {
   const navigate = useNavigate();
   const { session } = useAuthSession();
   const workspaceID = session?.workspace?.id;
+  const role = session?.key?.role ?? 'user';
+  const canViewQuota = role === 'owner' || role === 'admin' || role === 'billing' || role === 'read_only';
+  const canViewUsage = canViewQuota;
   const { data: workers, isLoading: loadingWorkers, isError: errorWorkers } = useWorkers();
   const { data: stats, isLoading: loadingStats, isError: errorStats } = useStats();
   const { data: instances, isLoading: loadingInstances } = useInstances();
@@ -226,11 +327,51 @@ export function Dashboard() {
   const { data: models, isLoading: loadingModels } = useModels();
   const { data: providers, isLoading: loadingProviders } = useProviders();
   const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
+  const [quota, setQuota] = useState<WorkspaceQuotaRecord | null>(null);
+  const [usageRows, setUsageRows] = useState<AuditUsageRow[]>([]);
   const isLoading = loadingWorkers || loadingStats || loadingInstances || loadingCosts || loadingModels || loadingProviders;
 
   useEffect(() => {
     setDeploymentAttempts(readDeploymentAttempts(workspaceID));
   }, [workspaceID]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!workspaceID) {
+      setQuota(null);
+      setUsageRows([]);
+      return () => { cancelled = true; };
+    }
+
+    if (canViewQuota) {
+      fetchWorkspaceQuota(workspaceID)
+        .then((nextQuota) => {
+          if (!cancelled) setQuota(nextQuota);
+        })
+        .catch(() => {
+          if (!cancelled) setQuota(null);
+        });
+    } else {
+      setQuota(null);
+    }
+
+    if (canViewUsage) {
+      const { start, end } = monthRange();
+      fetchAuditUsage({ start, end, bucket: 'day', workspace_id: workspaceID })
+        .then((usage) => {
+          if (!cancelled) setUsageRows(usage.rows);
+        })
+        .catch(() => {
+          if (!cancelled) setUsageRows([]);
+        });
+    } else {
+      setUsageRows([]);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canViewQuota, canViewUsage, workspaceID]);
 
   const gatewayDown = !isLoading && (errorWorkers && !workers) && (errorStats && !stats);
 
@@ -265,9 +406,13 @@ export function Dashboard() {
     || summary.readiness.tone === 'error'
   ));
   const latestVerification = deploymentSummaries.find((summary) => Boolean(summary.attempt.inference_verification));
+  const billingAttention = useMemo(
+    () => buildBillingAttentionQueue(quota, usageRows, costs),
+    [costs, quota, usageRows],
+  );
   const attentionQueue = useMemo(
-    () => buildAttentionQueue(deploymentSummaries, connectedProviders.length, visibleProviders.length, workers, activeInstances, servingUnverifiedCount),
-    [activeInstances, connectedProviders.length, deploymentSummaries, servingUnverifiedCount, visibleProviders.length, workers],
+    () => [...buildOperationalAttentionQueue(deploymentSummaries, connectedProviders.length, visibleProviders.length, workers, activeInstances, servingUnverifiedCount), ...billingAttention].slice(0, 6),
+    [activeInstances, billingAttention, connectedProviders.length, deploymentSummaries, servingUnverifiedCount, visibleProviders.length, workers],
   );
 
   if (isLoading) {
@@ -434,7 +579,7 @@ export function Dashboard() {
             </div>
           ) : (
             <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-              No urgent operational issues are currently queued. The serving and deployment loop looks stable right now.
+              No urgent operational issues are currently queued. The serving, quota, and spend loop look stable right now.
             </div>
           )}
         </div>
@@ -580,6 +725,9 @@ export function Dashboard() {
             )}
             {latestVerification && (
               <button className="action-btn" onClick={() => navigate('/models')}>VERIFY SERVING</button>
+            )}
+            {billingAttention.length > 0 && (
+              <button className="action-btn" onClick={() => navigate('/workspace')}>VIEW USAGE</button>
             )}
           </div>
 
