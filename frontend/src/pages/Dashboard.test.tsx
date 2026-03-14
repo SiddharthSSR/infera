@@ -257,7 +257,7 @@ describe('Dashboard', () => {
     expect(screen.getByText('PENDING DEPLOYMENTS')).toBeInTheDocument()
     expect(screen.getByText('ATTENTION QUEUE')).toBeInTheDocument()
     expect(screen.getByText('Latest deployment request failed')).toBeInTheDocument()
-    expect(screen.getByText('Model A')).toBeInTheDocument()
+    expect(screen.getAllByText('Model A').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/provider auth failed/i).length).toBeGreaterThan(0)
   })
 
@@ -314,6 +314,119 @@ describe('Dashboard', () => {
     expect(await screen.findByText('Workspace quota nearing limit')).toBeInTheDocument()
     expect(screen.getByText('Current cost burn is elevated')).toBeInTheDocument()
     expect(screen.getByText('Spend is concentrated on one provider')).toBeInTheDocument()
+  })
+
+  it('renders dashboard trends and history from deployment and usage data', async () => {
+    window.localStorage.setItem('infera:deployment-attempts:ws_test', JSON.stringify([
+      {
+        id: 'attempt_verified',
+        created_at: '2026-03-14T10:00:00.000Z',
+        updated_at: '2026-03-14T10:05:00.000Z',
+        outcome: 'provisioned',
+        request: { gpu_type: 'A100_40GB', models: ['org/model-a'] },
+        selected_model_name: 'Model A',
+        instance_id: 'i1',
+        inference_verification: {
+          status: 'passed',
+          verified_at: '2026-03-14T10:05:00.000Z',
+          latency_ms: 182,
+          model: 'org/model-a',
+          response_preview: 'ready',
+        },
+      },
+      {
+        id: 'attempt_pending',
+        created_at: '2026-03-15T08:00:00.000Z',
+        updated_at: '2026-03-15T08:01:00.000Z',
+        outcome: 'provisioned',
+        request: { gpu_type: 'RTX_4090', models: ['org/model-b'] },
+        selected_model_name: 'Model B',
+        instance_id: 'i2',
+      },
+    ]))
+
+    mocks.providers = {
+      data: [{ provider: 'runpod', connected: true }],
+      isLoading: false,
+    }
+    mocks.workers = {
+      data: [
+        { worker_id: 'worker-1', status: 'healthy', last_heartbeat: new Date().toISOString(), gpu_utilization: 52, memory_used: 4, memory_total: 8, models: ['org/model-a'] },
+      ],
+      isLoading: false,
+      isError: false,
+    }
+    mocks.instances = {
+      data: [
+        {
+          id: 'i1',
+          provider_id: 'p1',
+          provider: 'runpod',
+          name: 'node-a',
+          status: 'running',
+          gpu_type: 'A100_40GB',
+          gpu_count: 1,
+          vcpu: 16,
+          memory_gb: 64,
+          storage_gb: 100,
+          worker_id: 'worker-1',
+          models: ['org/model-a'],
+          cost_per_hour: 1.2,
+          spot_instance: false,
+          created_at: '2026-03-14T10:00:00.000Z',
+        },
+        {
+          id: 'i2',
+          provider_id: 'p2',
+          provider: 'runpod',
+          name: 'node-b',
+          status: 'provisioning',
+          gpu_type: 'RTX_4090',
+          gpu_count: 1,
+          vcpu: 8,
+          memory_gb: 32,
+          storage_gb: 100,
+          models: ['org/model-b'],
+          cost_per_hour: 0.4,
+          spot_instance: false,
+          created_at: '2026-03-15T08:00:00.000Z',
+        },
+      ],
+      isLoading: false,
+    }
+    mocks.models = {
+      data: [
+        { id: 'org/model-a', loaded: true },
+        { id: 'org/model-b', loaded: false },
+      ],
+      isLoading: false,
+    }
+    mocks.fetchWorkspaceQuota.mockResolvedValue({
+      workspace_id: 'ws_test',
+      monthly_request_limit: 5000,
+      monthly_token_limit: 10000,
+      enforce_hard_limits: true,
+      updated_at: '2026-03-15T00:00:00.000Z',
+    })
+    mocks.fetchAuditUsage.mockResolvedValue({
+      bucket: 'day',
+      start: '2026-03-01T00:00:00.000Z',
+      end: '2026-03-15T00:00:00.000Z',
+      rows: [
+        { bucket_start: '2026-03-13T00:00:00.000Z', workspace_id: 'ws_test', key_id: 'key_1', requests: 200, tokens: 800, successes: 190, errors: 10 },
+        { bucket_start: '2026-03-14T00:00:00.000Z', workspace_id: 'ws_test', key_id: 'key_1', requests: 320, tokens: 1100, successes: 315, errors: 5 },
+        { bucket_start: '2026-03-15T00:00:00.000Z', workspace_id: 'ws_test', key_id: 'key_1', requests: 450, tokens: 1500, successes: 446, errors: 4 },
+      ],
+    })
+
+    render(<Dashboard />)
+
+    expect(screen.getByText('DEPLOYMENT HISTORY')).toBeInTheDocument()
+    expect(screen.getByText('VERIFICATION HISTORY')).toBeInTheDocument()
+    expect(screen.getByText('USAGE TRAJECTORY')).toBeInTheDocument()
+    expect(screen.getAllByText('Model B').length).toBeGreaterThan(0)
+    expect(await screen.findByText('450 req')).toBeInTheDocument()
+    expect(screen.getByText('Latency 182ms')).toBeInTheDocument()
   })
 
   it('navigates to provision flow from deploy button', () => {
