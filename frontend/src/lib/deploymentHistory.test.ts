@@ -4,6 +4,7 @@ import type { Instance, Worker } from '../types';
 import {
   getDeploymentRemediation,
   getDeploymentTimeline,
+  markAutoVerificationRequested,
   recordInferenceVerification,
   readDeploymentAttempts,
   recordFailedAttempt,
@@ -169,5 +170,25 @@ describe('deploymentHistory', () => {
     expect(summary.inferenceVerified).toBe(true);
     expect(getDeploymentTimeline(summary)[6].state).toBe('done');
     expect(getDeploymentRemediation(summary)).toBeNull();
+  });
+
+  it('marks auto verification as requested and changes remediation copy', () => {
+    const [attempt] = recordProvisionedAttempt(
+      workspaceID,
+      { name: 'worker-1', provider: 'runpod', gpu_type: 'A100_80GB', gpu_count: 1, models: ['org/model-a'] },
+      baseInstance,
+      'Model A',
+    );
+
+    const [updatedAttempt] = markAutoVerificationRequested(workspaceID, attempt.id, '2026-03-14T10:12:10.000Z');
+    const summary = summarizeDeploymentAttempt(
+      updatedAttempt,
+      [baseInstance],
+      [healthyWorker],
+      new Date('2026-03-14T10:12:20.000Z'),
+    );
+
+    expect(summary.autoVerificationRequested).toBe(true);
+    expect(getDeploymentRemediation(summary)?.label).toBe('VERIFY NOW');
   });
 });

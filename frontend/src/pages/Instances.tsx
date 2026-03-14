@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { Instance, GPUOffering, GPUType, ProviderStatus, ProviderType, VaultModel, Worker, ProvisionRequest } from '../types';
@@ -6,6 +6,7 @@ import { fetchWorkspaceProviderConfigs, sendChatCompletion } from '../lib/api';
 import {
   getDeploymentRemediation,
   getDeploymentTimeline,
+  markAutoVerificationRequested,
   recordInferenceVerification,
   readDeploymentAttempts,
   recordFailedAttempt,
@@ -32,6 +33,7 @@ const GPU_VRAM_GB: Record<GPUType, number> = {
 };
 
 const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai'] as const;
+const AUTO_VERIFY_DELAY_MS = 1500;
 
 type ProvisionDraft = {
   name?: string;
@@ -598,6 +600,7 @@ export function Instances() {
   const [provisionDraft, setProvisionDraft] = useState<ProvisionDraft | null>(null);
   const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
   const [verifyingAttemptID, setVerifyingAttemptID] = useState<string | null>(null);
+  const autoVerifyTimerRef = useRef<number | null>(null);
   const isMobile = useIsMobile(900);
   const { session } = useAuthSession();
   const workspaceID = session?.workspace?.id;
@@ -689,7 +692,7 @@ export function Instances() {
     setShowProvisionModal(true);
   };
 
-  const runInferenceVerification = async (summary: DeploymentAttemptSummary) => {
+  const runInferenceVerification = useCallback(async (summary: DeploymentAttemptSummary) => {
     const model = summary.instance?.models?.[0] || summary.attempt.request.models?.[0];
     if (!model) {
       toast.error('No deployed model is available to verify');
@@ -736,7 +739,7 @@ export function Instances() {
     } finally {
       setVerifyingAttemptID(null);
     }
-  };
+  }, [workspaceID]);
 
   const handleRemediation = (summary: DeploymentAttemptSummary, remediation: DeploymentRemediation | null) => {
     if (!remediation) return;
@@ -757,6 +760,43 @@ export function Instances() {
         return;
     }
   };
+
+  useEffect(() => {
+    if (autoVerifyTimerRef.current) {
+      window.clearTimeout(autoVerifyTimerRef.current);
+      autoVerifyTimerRef.current = null;
+    }
+
+    if (
+      !latestDeployment
+      || latestDeployment.readiness.label !== 'SERVING VERIFIED'
+      || latestDeployment.inferenceVerified
+      || latestDeployment.autoVerificationRequested
+      || latestDeployment.attempt.inference_verification?.status === 'failed'
+      || verifyingAttemptID
+    ) {
+      return;
+    }
+
+    setDeploymentAttempts(markAutoVerificationRequested(workspaceID, latestDeployment.attempt.id));
+    autoVerifyTimerRef.current = window.setTimeout(() => {
+      void runInferenceVerification({
+        ...latestDeployment,
+        autoVerificationRequested: true,
+        attempt: {
+          ...latestDeployment.attempt,
+          auto_verification_requested_at: new Date().toISOString(),
+        },
+      });
+    }, AUTO_VERIFY_DELAY_MS);
+
+    return () => {
+      if (autoVerifyTimerRef.current) {
+        window.clearTimeout(autoVerifyTimerRef.current);
+        autoVerifyTimerRef.current = null;
+      }
+    };
+  }, [latestDeployment, runInferenceVerification, verifyingAttemptID, workspaceID]);
 
   return (
     <div className="instances-page animate-fade-in">
@@ -812,6 +852,11 @@ export function Instances() {
               {latestDeployment.inferenceVerified && <span className="badge">INFERENCE VERIFIED</span>}
               {latestDeployment.attempt.inference_verification?.status === 'failed' && (
                 <span className="badge status-error">INFERENCE FAILED</span>
+              )}
+              {!latestDeployment.attempt.inference_verification && latestDeployment.autoVerificationRequested && (
+                <span className="badge status-warning">
+                  {verifyingAttemptID === latestDeployment.attempt.id ? 'AUTO VERIFYING' : 'AUTO VERIFY QUEUED'}
+                </span>
               )}
               {latestDeployment.retryable && latestRemediation?.action !== 'retry_config' && (
                 <button className="action-btn" onClick={() => openRetryModal(latestDeployment.attempt)}>
@@ -1092,6 +1137,9 @@ export function Instances() {
                           {attempt.request.models?.length ? <span className="badge">{attempt.request.models.length} MODEL{attempt.request.models.length === 1 ? '' : 'S'}</span> : null}
                           {summary.inferenceVerified ? <span className="badge">INFERENCE VERIFIED</span> : null}
                           {attempt.inference_verification?.status === 'failed' ? <span className="badge status-error">INFERENCE FAILED</span> : null}
+                          {!attempt.inference_verification && summary.autoVerificationRequested ? (
+                            <span className="badge status-warning">{verifyingAttemptID === attempt.id ? 'AUTO VERIFYING' : 'AUTO VERIFY QUEUED'}</span>
+                          ) : null}
                         </div>
                         {attempt.inference_verification && (
                           <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
