@@ -352,6 +352,12 @@ export function ApiKeys() {
           <div className="api-key-create-helper">
             Human keys can create dashboard sessions if their role allows dashboard access. Service-account keys are for automation only.
           </div>
+          <div className="help-callout" style={{ marginBottom: '2rem' }}>
+            <div className="label-text">WHEN TO USE WHICH KEY</div>
+            <div className="help-callout-copy">
+              Use a <strong>human key</strong> for a person who needs dashboard access inside the active workspace. Use a <strong>service account</strong> for CI, scripts, agents, and production automation. Switching workspace changes the session context you are browsing, but it does not make a key cross-workspace.
+            </div>
+          </div>
 
           <div style={{ marginBottom: '2rem' }}>
             <div className="label-text">KEY NAME</div>

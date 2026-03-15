@@ -868,6 +868,17 @@ export function Instances() {
         </div>
       )}
 
+      <div className="grid-row">
+        <div className="cell" style={{ gridColumn: 'span 4' }}>
+          <div className="help-callout">
+            <div className="label-text">CLUSTER STATUS GUIDE</div>
+            <div className="help-callout-copy">
+              <strong>Connected provider</strong> means the workspace credentials are valid and the provider can return live status. <strong>Serving verified</strong> means the worker heartbeat is fresh and runtime looks ready. <strong>Inference verified</strong> means a real chat-completions request passed. Treat the latest deployment banner as the fastest path from provisioned node to confirmed serving.
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Metrics Row */}
       <div className="grid-row instances-metrics-row">
         <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>

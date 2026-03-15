@@ -585,6 +585,17 @@ export function Models() {
         </button>
       </div>
 
+      <div className="grid-row">
+        <div className="cell" style={{ gridColumn: 'span 4' }}>
+          <div className="help-callout">
+            <div className="label-text">MODEL STATUS GUIDE</div>
+            <div className="help-callout-copy">
+              <strong>Serving verified</strong> means a live inference check passed for this model. <strong>Serving unverified</strong> means runtime looks ready but the model has not passed a live request yet. Use <strong>View deployments</strong> for node-level recovery and <strong>Verify serving</strong> when you want an explicit inference check from the registry.
+            </div>
+          </div>
+        </div>
+      </div>
+
       {isMobile ? (
         <div className="mobile-data-list" style={{ padding: '1rem' }}>
           {filtered.length === 0 ? (
