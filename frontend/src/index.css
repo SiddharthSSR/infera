@@ -920,6 +920,32 @@ h1, h2, h3, h4 {
   margin-top: 1rem;
 }
 
+.dashboard-live-ops-cell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.64)),
+    var(--bg-paper);
+}
+
+.dashboard-live-ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.9rem;
+  margin-top: 1rem;
+}
+
+.dashboard-live-ops-item {
+  padding: 1rem 1.05rem;
+  border: 1px solid rgba(5, 5, 5, 0.08);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.dashboard-live-ops-issue {
+  margin-top: 1rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid rgba(173, 109, 27, 0.16);
+  background: rgba(223, 181, 103, 0.1);
+}
+
 .dashboard-onboarding-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
