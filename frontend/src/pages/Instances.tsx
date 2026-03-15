@@ -6,11 +6,6 @@ import { fetchWorkspaceProviderConfigs, sendChatCompletion } from '../lib/api';
 import {
   getDeploymentRemediation,
   getDeploymentTimeline,
-  markAutoVerificationRequested,
-  recordInferenceVerification,
-  readDeploymentAttempts,
-  recordFailedAttempt,
-  recordProvisionedAttempt,
   summarizeDeploymentAttempt,
   type DeploymentAttemptRecord,
   type DeploymentAttemptSummary,
@@ -18,7 +13,7 @@ import {
   type DeploymentTimelineStep,
 } from '../lib/deploymentHistory';
 import { getInstanceReadiness } from '../lib/instanceReadiness';
-import { useInstances, useOfferings, useProviders, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useVaultModels, useWorkers } from '../hooks/useApi';
+import { useDeploymentAttempts, useInstances, useMarkDeploymentAutoVerificationRequested, useOfferings, useProviders, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useUpdateDeploymentVerification, useVaultModels, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { InstanceMobileCard } from '../components/InstanceMobileCard';
 import { useAuthSession } from '../lib/auth-context';
@@ -505,6 +500,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
       gpu_count: selectedOffering.gpu_count,
       spot_instance: spotInstance,
       models: selectedModels.length > 0 ? selectedModels : undefined,
+      selected_model_name: selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : undefined,
     } as const;
 
     try {
@@ -689,7 +685,6 @@ export function Instances() {
   const [statusFilter, setStatusFilter] = useState<string>('active');
   const [configuredProviders, setConfiguredProviders] = useState<string[]>([]);
   const [provisionDraft, setProvisionDraft] = useState<ProvisionDraft | null>(null);
-  const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
   const [verifyingAttemptID, setVerifyingAttemptID] = useState<string | null>(null);
   const autoVerifyTimerRef = useRef<number | null>(null);
   const isMobile = useIsMobile(900);
@@ -700,6 +695,9 @@ export function Instances() {
   const { data: offerings } = useOfferings();
   const { data: providers } = useProviders();
   const { data: workers } = useWorkers();
+  const { data: deploymentAttempts = [] } = useDeploymentAttempts(workspaceID);
+  const updateDeploymentVerification = useUpdateDeploymentVerification(workspaceID);
+  const markAutoVerificationRequested = useMarkDeploymentAutoVerificationRequested(workspaceID);
 
   const [preselectedModel, setPreselectedModel] = useState<string | null>(null);
   const drilldownModel = searchParams.get('model');
@@ -790,10 +788,6 @@ export function Instances() {
       .catch(() => setConfiguredProviders(visibleProviderStatuses.map((status) => status.provider)));
   }, [role, session?.workspace?.id, visibleProviderStatuses]);
 
-  useEffect(() => {
-    setDeploymentAttempts(readDeploymentAttempts(workspaceID));
-  }, [workspaceID]);
-
   const focusInstance = (instanceID: string) => {
     const target = document.getElementById(`instance-row-${instanceID}`);
     if (!target) return;
@@ -834,26 +828,28 @@ export function Instances() {
 
       const latencyMs = Date.now() - startedAt;
       const content = response.choices?.[0]?.message?.content?.trim() || '';
-      setDeploymentAttempts(
-        recordInferenceVerification(workspaceID, summary.attempt.id, {
+      await updateDeploymentVerification.mutateAsync({
+        attemptId: summary.attempt.id,
+        verification: {
           status: 'passed',
           verified_at: new Date().toISOString(),
           latency_ms: latencyMs,
           model,
           response_preview: content.slice(0, 120),
-        }),
-      );
+        },
+      });
       toast.success(`Inference verified in ${formatVerificationLatency(latencyMs) || `${latencyMs}ms`}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Verification request failed';
-      setDeploymentAttempts(
-        recordInferenceVerification(workspaceID, summary.attempt.id, {
+      await updateDeploymentVerification.mutateAsync({
+        attemptId: summary.attempt.id,
+        verification: {
           status: 'failed',
           verified_at: new Date().toISOString(),
           model,
           error: message,
-        }),
-      );
+        },
+      });
       toast.error(message);
     } finally {
       setVerifyingAttemptID(null);
@@ -924,7 +920,10 @@ export function Instances() {
       return;
     }
 
-    setDeploymentAttempts(markAutoVerificationRequested(workspaceID, latestDeployment.attempt.id));
+    void markAutoVerificationRequested.mutateAsync({
+      attemptId: latestDeployment.attempt.id,
+      requestedAt: new Date().toISOString(),
+    });
     autoVerifyTimerRef.current = window.setTimeout(() => {
       void runInferenceVerification({
         ...latestDeployment,
@@ -942,7 +941,7 @@ export function Instances() {
         autoVerifyTimerRef.current = null;
       }
     };
-  }, [latestDeployment, runInferenceVerification, verifyingAttemptID, workspaceID]);
+  }, [latestDeployment, markAutoVerificationRequested, runInferenceVerification, verifyingAttemptID]);
 
   return (
     <div className="instances-page animate-fade-in">
@@ -1458,13 +1457,10 @@ export function Instances() {
       <ProvisionModal
         isOpen={showProvisionModal}
         onClose={() => { setShowProvisionModal(false); setPreselectedModel(null); setProvisionDraft(null); }}
-        onProvisioned={(instance, request, modelName) => {
-          setDeploymentAttempts(recordProvisionedAttempt(workspaceID, request, instance, modelName));
+        onProvisioned={() => {
           setStatusFilter('active');
         }}
-        onProvisionFailed={(request, failureReason) => {
-          setDeploymentAttempts(recordFailedAttempt(workspaceID, request, failureReason));
-        }}
+        onProvisionFailed={() => {}}
         offerings={offerings}
         preselectedModel={preselectedModel}
         initialDraft={provisionDraft}

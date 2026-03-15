@@ -12,6 +12,7 @@ import {
   fetchOfferings,
   fetchProviders,
   fetchCosts,
+  fetchDeploymentAttempts,
   fetchApiKeys,
   createApiKey,
   revokeApiKey,
@@ -33,6 +34,8 @@ import {
   terminateInstance,
   startInstance,
   stopInstance,
+  updateDeploymentVerification,
+  markDeploymentAutoVerificationRequested,
   switchSessionWorkspace,
 } from './api'
 
@@ -193,6 +196,86 @@ describe('API Functions', () => {
         4,
         '/api/instances/new-inst',
         expect.objectContaining({ method: 'DELETE', credentials: 'include' })
+      )
+    })
+
+    it('fetchDeploymentAttempts/updateDeploymentVerification/markDeploymentAutoVerificationRequested should parse payloads', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            attempts: [
+              {
+                id: 'attempt-1',
+                outcome: 'provisioned',
+                request: { gpu_type: 'RTX_4090' },
+                created_at: '2026-03-16T00:00:00Z',
+                updated_at: '2026-03-16T00:00:00Z',
+              },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            attempt: {
+              id: 'attempt-1',
+              outcome: 'provisioned',
+              request: { gpu_type: 'RTX_4090' },
+              created_at: '2026-03-16T00:00:00Z',
+              updated_at: '2026-03-16T00:01:00Z',
+              inference_verification: {
+                status: 'passed',
+                verified_at: '2026-03-16T00:01:00Z',
+                latency_ms: 420,
+              },
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            attempt: {
+              id: 'attempt-1',
+              outcome: 'provisioned',
+              request: { gpu_type: 'RTX_4090' },
+              created_at: '2026-03-16T00:00:00Z',
+              updated_at: '2026-03-16T00:01:00Z',
+              auto_verification_requested_at: '2026-03-16T00:00:30Z',
+            },
+          }),
+        })
+
+      await expect(fetchDeploymentAttempts()).resolves.toHaveLength(1)
+      await expect(updateDeploymentVerification('attempt-1', {
+        status: 'passed',
+        verified_at: '2026-03-16T00:01:00Z',
+        latency_ms: 420,
+      })).resolves.toEqual(expect.objectContaining({
+        id: 'attempt-1',
+        inference_verification: expect.objectContaining({ status: 'passed' }),
+      }))
+      await expect(markDeploymentAutoVerificationRequested('attempt-1', '2026-03-16T00:00:30Z')).resolves.toEqual(
+        expect.objectContaining({
+          id: 'attempt-1',
+          auto_verification_requested_at: '2026-03-16T00:00:30Z',
+        }),
+      )
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/deployments',
+        expect.objectContaining({ credentials: 'include' }),
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/deployments/attempt-1/verification',
+        expect.objectContaining({ method: 'PUT', credentials: 'include' }),
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        3,
+        '/api/deployments/attempt-1/auto-verification',
+        expect.objectContaining({ method: 'PUT', credentials: 'include' }),
       )
     })
   })

@@ -172,6 +172,7 @@ export interface ProvisionRequest {
   spot_instance?: boolean;
   max_cost_hour?: number;
   models?: string[];
+  selected_model_name?: string;
 }
 
 // Vault (Model Registry) Types

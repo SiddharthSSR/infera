@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useWorkers, useStats, useInstances, useCosts, useModels, useProviders } from '../hooks/useApi';
+import { useDeploymentAttempts, useWorkers, useStats, useInstances, useCosts, useModels, useProviders } from '../hooks/useApi';
 import { SkeletonCell } from '../components/Skeleton';
 import { useAuthSession } from '../lib/auth-context';
 import {
@@ -15,7 +15,6 @@ import {
 } from '../lib/api';
 import {
   getDeploymentRemediation,
-  readDeploymentAttempts,
   summarizeDeploymentAttempt,
   type DeploymentAttemptRecord,
   type DeploymentAttemptSummary,
@@ -341,16 +340,12 @@ export function Dashboard() {
   const { data: costs, isLoading: loadingCosts } = useCosts();
   const { data: models, isLoading: loadingModels } = useModels();
   const { data: providers, isLoading: loadingProviders } = useProviders();
-  const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
+  const { data: deploymentAttempts = [] } = useDeploymentAttempts(workspaceID);
   const [quota, setQuota] = useState<WorkspaceQuotaRecord | null>(null);
   const [usageRows, setUsageRows] = useState<AuditUsageRow[]>([]);
   const [workspaceInvites, setWorkspaceInvites] = useState<WorkspaceInvitationRecord[]>([]);
   const [workspaceServiceAccounts, setWorkspaceServiceAccounts] = useState<ApiKeyRecord[]>([]);
   const isLoading = loadingWorkers || loadingStats || loadingInstances || loadingCosts || loadingModels || loadingProviders;
-
-  useEffect(() => {
-    setDeploymentAttempts(readDeploymentAttempts(workspaceID));
-  }, [workspaceID]);
 
   useEffect(() => {
     let cancelled = false;

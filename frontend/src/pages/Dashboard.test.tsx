@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   costs: { data: undefined, isLoading: false } as QueryResult<any>,
   models: { data: [], isLoading: false } as QueryResult<any[]>,
   providers: { data: [], isLoading: false } as QueryResult<any[]>,
+  deploymentAttempts: { data: [], isLoading: false } as QueryResult<any[]>,
   fetchApiKeys: vi.fn(),
   fetchWorkspaceQuota: vi.fn(),
   fetchAuditUsage: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('../hooks/useApi', () => ({
   useCosts: () => mocks.costs,
   useModels: () => mocks.models,
   useProviders: () => mocks.providers,
+  useDeploymentAttempts: () => mocks.deploymentAttempts,
 }))
 
 vi.mock('../lib/auth-context', () => ({
@@ -57,7 +59,6 @@ vi.mock('../lib/api', async () => {
 describe('Dashboard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    window.localStorage.clear()
     mocks.workers = { data: [], isLoading: false, isError: false }
     mocks.stats = { data: undefined, isLoading: false, isError: false }
     mocks.instances = { data: [], isLoading: false }
@@ -74,6 +75,7 @@ describe('Dashboard', () => {
     }
     mocks.models = { data: [], isLoading: false }
     mocks.providers = { data: [], isLoading: false }
+    mocks.deploymentAttempts = { data: [], isLoading: false }
     mocks.fetchApiKeys.mockImplementation(() => new Promise(() => {}))
     mocks.fetchWorkspaceQuota.mockImplementation(() => new Promise(() => {}))
     mocks.fetchAuditUsage.mockImplementation(() => new Promise(() => {}))
@@ -149,7 +151,7 @@ describe('Dashboard', () => {
   })
 
   it('renders dashboard serving summary from deployment history', async () => {
-    window.localStorage.setItem('infera:deployment-attempts:ws_test', JSON.stringify([
+    mocks.deploymentAttempts = { data: [
       {
         id: 'attempt_verified',
         created_at: '2026-03-15T10:00:00.000Z',
@@ -182,7 +184,7 @@ describe('Dashboard', () => {
         request: { gpu_type: 'RTX_4090', models: ['org/model-c'] },
         instance_id: 'i2',
       },
-    ]))
+    ], isLoading: false }
 
     mocks.providers = {
       data: [{ provider: 'runpod', connected: true }],
@@ -303,7 +305,7 @@ describe('Dashboard', () => {
     const createdAt = new Date(now.getTime() - 15 * 60 * 1000).toISOString()
     const heartbeatAt = new Date(now.getTime() - 2 * 60 * 1000).toISOString()
 
-    window.localStorage.setItem('infera:deployment-attempts:ws_test', JSON.stringify([
+    mocks.deploymentAttempts = { data: [
       {
         id: 'attempt_verified',
         created_at: createdAt,
@@ -320,7 +322,7 @@ describe('Dashboard', () => {
           response_preview: 'ready',
         },
       },
-    ]))
+    ], isLoading: false }
 
     mocks.providers = {
       data: [{ provider: 'runpod', connected: true }],
@@ -431,7 +433,7 @@ describe('Dashboard', () => {
   })
 
   it('renders dashboard trends and history from deployment and usage data', async () => {
-    window.localStorage.setItem('infera:deployment-attempts:ws_test', JSON.stringify([
+    mocks.deploymentAttempts = { data: [
       {
         id: 'attempt_verified',
         created_at: '2026-03-14T10:00:00.000Z',
@@ -457,7 +459,7 @@ describe('Dashboard', () => {
         selected_model_name: 'Model B',
         instance_id: 'i2',
       },
-    ]))
+    ], isLoading: false }
 
     mocks.providers = {
       data: [{ provider: 'runpod', connected: true }],
