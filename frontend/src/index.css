@@ -780,6 +780,26 @@ h1, h2, h3, h4 {
   line-height: 1.5;
 }
 
+.help-callout {
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(5, 5, 5, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.7)),
+    #fff;
+}
+
+.help-grid {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.help-callout-copy {
+  margin-top: 0.55rem;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.65;
+}
+
 .provision-options-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));

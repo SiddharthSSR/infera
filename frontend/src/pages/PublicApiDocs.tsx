@@ -23,7 +23,7 @@ const quickstartSteps = [
   {
     number: '01',
     title: 'Bring a key',
-    copy: 'Use an existing Infera API key or create one from the workspace admin area.',
+    copy: 'Use a workspace-scoped API key. Prefer a service-account key for automation and keep human keys for dashboard sign-in.',
   },
   {
     number: '02',
@@ -76,7 +76,7 @@ const compatibilityCards = [
   },
   {
     label: 'Auth model',
-    value: 'Public API access uses Bearer tokens. Dashboard sessions are separate browser auth.',
+    value: 'Public API access uses workspace-scoped Bearer tokens. Use service-account keys for automation; browser sessions are separate human auth.',
   },
 ];
 
@@ -249,7 +249,7 @@ export function PublicApiDocs() {
                   <h2 className="docs-section-title">Bearer token in, request out.</h2>
                 </div>
                 <div className="docs-section-copy">
-                  The public API does not use browser sessions. Treat it like any other machine-to-machine API and send your workspace key with each request.
+                  The public API does not use browser sessions. Treat it like any other machine-to-machine API and send your workspace key with each request. For production clients, use a service-account key instead of a human dashboard key.
                 </div>
               </div>
               <div className="docs-card-grid">

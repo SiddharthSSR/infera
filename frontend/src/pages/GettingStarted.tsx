@@ -6,7 +6,7 @@ const BASE_URL = typeof window !== 'undefined' ? window.location.origin : 'https
 const prepCards = [
   {
     label: 'You need',
-    value: 'An Infera API key with access to at least one workspace model.',
+    value: 'A workspace-scoped Infera API key with access to at least one model. Use a service-account key for automation when possible.',
   },
   {
     label: 'Best workflow',
@@ -22,7 +22,7 @@ const steps = [
   {
     number: '01',
     title: 'Confirm auth',
-    copy: 'Use the key as Authorization: Bearer inf_... and treat it like a service credential, not a browser login.',
+    copy: 'Use the key as Authorization: Bearer inf_... and treat it like a service credential, not a browser login. Prefer a service-account key for scripts and production clients.',
   },
   {
     number: '02',

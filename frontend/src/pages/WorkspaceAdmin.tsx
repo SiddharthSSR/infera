@@ -659,6 +659,12 @@ export function WorkspaceAdmin() {
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage quota</span><span className="mono">{canManageQuota ? 'YES' : 'NO'}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>View quota</span><span className="mono">{canViewQuota ? 'YES' : 'NO'}</span></div>
           </div>
+          <div className="help-callout" style={{ marginTop: '1.25rem' }}>
+            <div className="label-text">WORKSPACE ADMIN GUIDE</div>
+            <div className="help-callout-copy">
+              Invite creation still produces a manual share token or link, not an email. Service accounts are for automation in this workspace only. Provider states here mean: <strong>connected</strong> for healthy credentials and live status, <strong>degraded</strong> for reachable but unhealthy, and <strong>auth failed</strong> when the saved credentials are rejected.
+            </div>
+          </div>
         </div>
       </div>
 

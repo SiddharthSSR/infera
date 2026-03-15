@@ -121,6 +121,12 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
             <p style={{ marginTop: '1rem', color: 'var(--text-secondary)', maxWidth: 620, fontSize: '1rem', lineHeight: 1.6 }}>
               Use the invitation token you received from a workspace admin. The page previews the workspace and assigned role before acceptance.
             </p>
+            <div className="help-callout" style={{ marginTop: '1.5rem', maxWidth: 640 }}>
+              <div className="label-text">WHAT HAPPENS NEXT</div>
+              <div className="help-callout-copy">
+                Accepting an invitation creates a one-time human key for that workspace. Continuing starts a browser session in the invited workspace and makes it your active dashboard context. It does not email anyone automatically and it does not change any existing service-account keys.
+              </div>
+            </div>
             <div style={{ marginTop: '2rem', display: 'grid', gap: '1rem' }}>
               <div>
                 <div className="label-text">INVITATION TOKEN</div>

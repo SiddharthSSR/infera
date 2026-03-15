@@ -504,6 +504,17 @@ export function Dashboard() {
 
   return (
     <div className="dashboard-page animate-fade-in">
+      <div className="grid-row">
+        <div className="cell" style={{ gridColumn: 'span 4' }}>
+          <div className="help-callout">
+            <div className="label-text">HOW TO READ THIS DASHBOARD</div>
+            <div className="help-callout-copy">
+              <strong>Serving verified</strong> means runtime state looks healthy and the latest worker heartbeat is fresh. <strong>Inference verified</strong> means a real chat-completions request succeeded. Use the attention queue for what needs action now, then use recent deployment activity to see what changed most recently.
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="grid-row dashboard-metrics-row">
         <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
           <div className="label-text">
