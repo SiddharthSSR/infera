@@ -16,8 +16,10 @@ const mocks = vi.hoisted(() => ({
   costs: { data: undefined, isLoading: false } as QueryResult<any>,
   models: { data: [], isLoading: false } as QueryResult<any[]>,
   providers: { data: [], isLoading: false } as QueryResult<any[]>,
+  fetchApiKeys: vi.fn(),
   fetchWorkspaceQuota: vi.fn(),
   fetchAuditUsage: vi.fn(),
+  fetchWorkspaceInvites: vi.fn(),
 }))
 
 vi.mock('react-router-dom', async () => {
@@ -45,8 +47,10 @@ vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api')
   return {
     ...actual,
+    fetchApiKeys: mocks.fetchApiKeys,
     fetchWorkspaceQuota: mocks.fetchWorkspaceQuota,
     fetchAuditUsage: mocks.fetchAuditUsage,
+    fetchWorkspaceInvites: mocks.fetchWorkspaceInvites,
   }
 })
 
@@ -70,8 +74,10 @@ describe('Dashboard', () => {
     }
     mocks.models = { data: [], isLoading: false }
     mocks.providers = { data: [], isLoading: false }
+    mocks.fetchApiKeys.mockImplementation(() => new Promise(() => {}))
     mocks.fetchWorkspaceQuota.mockImplementation(() => new Promise(() => {}))
     mocks.fetchAuditUsage.mockImplementation(() => new Promise(() => {}))
+    mocks.fetchWorkspaceInvites.mockImplementation(() => new Promise(() => {}))
   })
 
   it('renders loading skeleton when both workers and stats are loading', () => {
@@ -259,6 +265,32 @@ describe('Dashboard', () => {
     expect(screen.getByText('Latest deployment request failed')).toBeInTheDocument()
     expect(screen.getAllByText('Model A').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/provider auth failed/i).length).toBeGreaterThan(0)
+  })
+
+  it('renders first workspace checklist for incomplete setup', async () => {
+    mocks.providers = {
+      data: [],
+      isLoading: false,
+    }
+    mocks.models = {
+      data: [],
+      isLoading: false,
+    }
+    mocks.instances = {
+      data: [],
+      isLoading: false,
+    }
+    mocks.fetchApiKeys.mockResolvedValue([])
+    mocks.fetchWorkspaceInvites.mockResolvedValue([])
+
+    render(<Dashboard />)
+
+    expect(await screen.findByText('FIRST WORKSPACE CHECKLIST')).toBeInTheDocument()
+    expect(screen.getByText('Add provider access')).toBeInTheDocument()
+    expect(screen.getByText('Register or confirm a model')).toBeInTheDocument()
+    expect(screen.getByText('Provision first node')).toBeInTheDocument()
+    expect(screen.getByText('Verify first inference')).toBeInTheDocument()
+    expect(screen.getByText('Add a teammate or automation identity')).toBeInTheDocument()
   })
 
   it('surfaces provider and worker issues in the attention queue', () => {

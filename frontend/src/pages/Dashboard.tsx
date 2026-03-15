@@ -5,9 +5,13 @@ import { SkeletonCell } from '../components/Skeleton';
 import { useAuthSession } from '../lib/auth-context';
 import {
   fetchAuditUsage,
+  fetchApiKeys,
   fetchWorkspaceQuota,
+  fetchWorkspaceInvites,
   type AuditUsageRow,
+  type ApiKeyRecord,
   type WorkspaceQuotaRecord,
+  type WorkspaceInvitationRecord,
 } from '../lib/api';
 import {
   getDeploymentRemediation,
@@ -16,6 +20,7 @@ import {
   type DeploymentAttemptRecord,
   type DeploymentAttemptSummary,
 } from '../lib/deploymentHistory';
+import { buildFirstWorkspaceChecklist } from '../lib/onboardingChecklist';
 import { getInstanceReadiness } from '../lib/instanceReadiness';
 import type { Instance, Model, Worker } from '../types';
 
@@ -335,6 +340,8 @@ export function Dashboard() {
   const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
   const [quota, setQuota] = useState<WorkspaceQuotaRecord | null>(null);
   const [usageRows, setUsageRows] = useState<AuditUsageRow[]>([]);
+  const [workspaceInvites, setWorkspaceInvites] = useState<WorkspaceInvitationRecord[]>([]);
+  const [workspaceServiceAccounts, setWorkspaceServiceAccounts] = useState<ApiKeyRecord[]>([]);
   const isLoading = loadingWorkers || loadingStats || loadingInstances || loadingCosts || loadingModels || loadingProviders;
 
   useEffect(() => {
@@ -346,6 +353,8 @@ export function Dashboard() {
     if (!workspaceID) {
       setQuota(null);
       setUsageRows([]);
+      setWorkspaceInvites([]);
+      setWorkspaceServiceAccounts([]);
       return () => { cancelled = true; };
     }
 
@@ -374,10 +383,31 @@ export function Dashboard() {
       setUsageRows([]);
     }
 
+    if (session?.key?.role === 'owner' || session?.key?.role === 'admin') {
+      fetchWorkspaceInvites(workspaceID)
+        .then((invites) => {
+          if (!cancelled) setWorkspaceInvites(invites);
+        })
+        .catch(() => {
+          if (!cancelled) setWorkspaceInvites([]);
+        });
+
+      fetchApiKeys()
+        .then((keys) => {
+          if (!cancelled) setWorkspaceServiceAccounts(keys.filter((key) => key.principal_type === 'service_account' && key.status === 'active'));
+        })
+        .catch(() => {
+          if (!cancelled) setWorkspaceServiceAccounts([]);
+        });
+    } else {
+      setWorkspaceInvites([]);
+      setWorkspaceServiceAccounts([]);
+    }
+
     return () => {
       cancelled = true;
     };
-  }, [canViewQuota, canViewUsage, workspaceID]);
+  }, [canViewQuota, canViewUsage, session?.key?.role, workspaceID]);
 
   const gatewayDown = !isLoading && (errorWorkers && !workers) && (errorStats && !stats);
 
@@ -466,6 +496,45 @@ export function Dashboard() {
     () => usageTrend.reduce((max, entry) => Math.max(max, entry.requests), 0),
     [usageTrend],
   );
+  const hasInferenceVerifiedDeployment = useMemo(
+    () => deploymentSummaries.some((summary) => summary.attempt.inference_verification?.status === 'passed'),
+    [deploymentSummaries],
+  );
+  const firstWorkspaceChecklist = useMemo(
+    () => buildFirstWorkspaceChecklist({
+      providerReady: visibleProviders.length > 0,
+      providerConnected: connectedProviders.length > 0,
+      modelReady: (models?.length || 0) > 0,
+      nodeReady: (instances?.length || 0) > 0,
+      inferenceVerified: hasInferenceVerifiedDeployment,
+      collaborationReady: workspaceInvites.length > 0 || workspaceServiceAccounts.length > 0,
+    }),
+    [connectedProviders.length, hasInferenceVerifiedDeployment, instances?.length, models?.length, visibleProviders.length, workspaceInvites.length, workspaceServiceAccounts.length],
+  );
+  const checklistCompletedCount = useMemo(
+    () => firstWorkspaceChecklist.filter((item) => item.done).length,
+    [firstWorkspaceChecklist],
+  );
+
+  const handleChecklistAction = (action: 'open_workspace' | 'open_models' | 'open_clusters' | 'open_docs' | 'open_api_keys') => {
+    switch (action) {
+      case 'open_workspace':
+        navigate('/workspace');
+        return;
+      case 'open_models':
+        navigate('/models');
+        return;
+      case 'open_clusters':
+        navigate('/instances');
+        return;
+      case 'open_api_keys':
+        navigate('/api-keys');
+        return;
+      case 'open_docs':
+        navigate('/getting-started');
+        return;
+    }
+  };
 
   if (isLoading) {
     return (
@@ -518,6 +587,40 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      {checklistCompletedCount < firstWorkspaceChecklist.length && (
+        <div className="grid-row">
+          <div className="cell" style={{ gridColumn: 'span 4' }}>
+            <div className="help-callout">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                <div>
+                  <div className="label-text">FIRST WORKSPACE CHECKLIST</div>
+                  <div className="help-callout-copy">
+                    Use this sequence to finish the first real workspace setup. The checklist is derived from live workspace state, not a static wizard.
+                  </div>
+                </div>
+                <span className="badge">{checklistCompletedCount} / {firstWorkspaceChecklist.length} COMPLETE</span>
+              </div>
+              <div className="dashboard-onboarding-grid" style={{ marginTop: '1rem' }}>
+                {firstWorkspaceChecklist.map((item) => (
+                  <div key={item.id} className="dashboard-onboarding-item">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: '0.92rem', fontWeight: 500 }}>{item.label}</div>
+                      <span className={`badge ${item.done ? '' : 'status-warning'}`}>{item.done ? 'DONE' : 'NEXT'}</span>
+                    </div>
+                    <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>{item.detail}</div>
+                    {!item.done && (
+                      <button className="action-btn" style={{ marginTop: '0.85rem' }} onClick={() => handleChecklistAction(item.action)}>
+                        {item.actionLabel}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid-row dashboard-metrics-row">
         <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>

@@ -907,6 +907,18 @@ h1, h2, h3, h4 {
   margin-bottom: 0.25rem;
 }
 
+.dashboard-onboarding-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.9rem;
+}
+
+.dashboard-onboarding-item {
+  padding: 1rem 1.05rem;
+  border: 1px solid rgba(5, 5, 5, 0.08);
+  background: rgba(255, 255, 255, 0.62);
+}
+
 .dashboard-trend-cell {
   min-height: 18rem;
   background:
