@@ -27,6 +27,7 @@ import {
 import type { ProviderCapabilities, ProviderStatus } from '../types';
 import { useAuthSession } from '../lib/auth-context';
 import { inviteStatusMeta, memberStatusMeta, normalizeInviteStatus } from '../lib/workspaceLifecycle';
+import { buildWorkspaceActivityItems } from '../lib/workspaceActivity';
 
 const assignableInviteRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
 const serviceAccountRoles = ['operator', 'developer', 'read_only', 'billing'] as const;
@@ -294,6 +295,23 @@ export function WorkspaceAdmin() {
     expired: invites.filter((invite) => normalizeInviteStatus(invite) === 'expired').length,
     revoked: invites.filter((invite) => normalizeInviteStatus(invite) === 'revoked').length,
   }), [invites, pendingInvites.length]);
+  const workspaceActivity = useMemo(
+    () => buildWorkspaceActivityItems({
+      members,
+      invites,
+      serviceAccounts,
+      providerConfigs,
+    }),
+    [members, invites, serviceAccounts, providerConfigs],
+  );
+  const teamActivity = useMemo(
+    () => workspaceActivity.filter((item) => item.category === 'team').slice(0, 6),
+    [workspaceActivity],
+  );
+  const accessActivity = useMemo(
+    () => workspaceActivity.filter((item) => item.category === 'access').slice(0, 6),
+    [workspaceActivity],
+  );
 
   const loadWorkspaceData = async () => {
     if (!workspaceId) return;
@@ -1158,11 +1176,71 @@ export function WorkspaceAdmin() {
       </div>
 
       <div className="grid-row">
+        <div className="cell workspace-activity-cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text" style={{ marginBottom: '1.5rem' }}>RECENT TEAM ACTIVITY</div>
+          {canManageMemberships ? (
+            teamActivity.length > 0 ? (
+              <div className="workspace-activity-list">
+                {teamActivity.map((item) => (
+                  <div key={item.id} className="workspace-activity-item">
+                    <div className="workspace-activity-header">
+                      <span className="label-text">{item.title}</span>
+                      <span className={`badge ${item.tone ? `status-${item.tone}` : ''}`.trim()}>{formatDate(item.timestamp)}</span>
+                    </div>
+                    <div className="workspace-activity-detail">{item.detail}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                Team activity will appear here once members join or invites are created.
+              </div>
+            )
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Team lifecycle visibility is restricted to workspace owners and admins.
+            </div>
+          )}
+        </div>
+
+        <div className="cell workspace-activity-cell workspace-activity-accent-cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text" style={{ marginBottom: '1.5rem' }}>ACCESS AND CONFIG ACTIVITY</div>
+          {(canManageKeys || canManageProviderConfigs) ? (
+            accessActivity.length > 0 ? (
+              <div className="workspace-activity-list">
+                {accessActivity.map((item) => (
+                  <div key={item.id} className="workspace-activity-item">
+                    <div className="workspace-activity-header">
+                      <span className="label-text">{item.title}</span>
+                      <span className={`badge ${item.tone ? `status-${item.tone}` : ''}`.trim()}>{formatDate(item.timestamp)}</span>
+                    </div>
+                    <div className="workspace-activity-detail">{item.detail}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                Provider updates and service-account usage will appear here once this workspace records access activity.
+              </div>
+            )
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Access activity is restricted to roles that can manage service accounts or provider configs.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="grid-row">
         <div className="cell" style={{ gridColumn: 'span 4' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>TOP KEY ACTIVITY THIS MONTH</div>
           {canViewUsage ? (
             usageSummary.topKeys.length > 0 ? (
-              <div className="responsive-scroll-x">
+              <>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: 1.6, marginBottom: '1rem' }}>
+                  This is a lightweight audit view of which keys are driving the most traffic in the active workspace this month. Use it to spot the hottest automation key, unexpected error-heavy traffic, or access concentration.
+                </div>
+                <div className="responsive-scroll-x">
                 <table className="data-table responsive-scroll-x-content">
                   <thead>
                     <tr>
@@ -1185,7 +1263,8 @@ export function WorkspaceAdmin() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+                </div>
+              </>
             ) : (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 Key-level usage will appear here once this workspace records traffic.

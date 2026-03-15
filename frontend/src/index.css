@@ -955,6 +955,18 @@ h1, h2, h3, h4 {
     var(--bg-paper);
 }
 
+.workspace-page .workspace-activity-cell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.6)),
+    var(--bg-paper);
+}
+
+.workspace-page .workspace-activity-accent-cell {
+  background:
+    linear-gradient(180deg, rgba(244, 242, 238, 0.96), rgba(244, 242, 238, 0.82)),
+    var(--bg-accent);
+}
+
 .dashboard-page .dashboard-footer-row .cell,
 .instances-page .instances-footer-row .cell {
   background: rgba(255, 255, 255, 0.38);
@@ -984,6 +996,32 @@ h1, h2, h3, h4 {
   flex-wrap: wrap;
   gap: 0.55rem;
   margin-bottom: 1rem;
+}
+
+.workspace-activity-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.workspace-activity-item {
+  padding: 0.95rem 1rem;
+  border: 1px solid rgba(5, 5, 5, 0.08);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.workspace-activity-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.workspace-activity-detail {
+  margin-top: 0.55rem;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.55;
 }
 
 .badge.status-warning {
