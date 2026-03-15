@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   fetchApiKeys,
@@ -154,6 +155,7 @@ function monthRange() {
 
 export function WorkspaceAdmin() {
   const { session } = useAuthSession();
+  const navigate = useNavigate();
   const workspaceId = session?.workspace?.id ?? '';
   const role = session?.key?.role ?? 'user';
   const member = session?.member;
@@ -751,6 +753,10 @@ export function WorkspaceAdmin() {
             ) : (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 No usage recorded for this workspace in the current month yet.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY A MODEL</button>
+                  <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+                </div>
               </div>
             )
           ) : (
@@ -959,7 +965,15 @@ export function WorkspaceAdmin() {
                       </tr>
                     ))}
                     {serviceAccounts.length === 0 && (
-                      <tr><td colSpan={5} style={{ color: 'var(--text-secondary)', padding: '1.5rem 0' }}>No service accounts yet.</td></tr>
+                      <tr>
+                        <td colSpan={5} style={{ color: 'var(--text-secondary)', padding: '1.5rem 0' }}>
+                          No service accounts yet.
+                          <div className="help-actions" style={{ justifyContent: 'center' }}>
+                            <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="ci-bot"]')?.focus()}>CREATE ONE</button>
+                            <button className="action-btn" onClick={() => navigate('/api-keys')}>OPEN API KEYS</button>
+                          </div>
+                        </td>
+                      </tr>
                     )}
                   </tbody>
                 </table>
@@ -1061,7 +1075,13 @@ export function WorkspaceAdmin() {
                 })}
               </div>
             ) : (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No members yet.</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                No members yet.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE INVITE</button>
+                  <button className="action-btn" onClick={() => navigate('/docs')}>READ TEAM ACCESS DOCS</button>
+                </div>
+              </div>
             )
           ) : (
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
@@ -1136,6 +1156,10 @@ export function WorkspaceAdmin() {
                 ) : (
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                     No pending invitations. Accepted, expired, and revoked invites appear in history below.
+                    <div className="help-actions">
+                      <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE INVITE</button>
+                      <button className="action-btn" onClick={() => navigate('/docs')}>READ INVITE FLOW</button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1166,11 +1190,15 @@ export function WorkspaceAdmin() {
                       );
                     })}
                   </div>
-                ) : (
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                    Invite history will appear once invites are accepted, revoked, or expire.
-                  </div>
-                )}
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                Invite history will appear once invites are accepted, revoked, or expire.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE FIRST INVITE</button>
+                  <button className="action-btn" onClick={() => navigate('/docs')}>READ INVITE FLOW</button>
+                </div>
+              </div>
+            )}
               </div>
             </>
           ) : (
@@ -1200,6 +1228,10 @@ export function WorkspaceAdmin() {
             ) : (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 Team activity will appear here once members join or invites are created.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>INVITE FIRST MEMBER</button>
+                  <button className="action-btn" onClick={() => navigate('/docs')}>READ WORKSPACE HELP</button>
+                </div>
               </div>
             )
           ) : (
@@ -1227,6 +1259,10 @@ export function WorkspaceAdmin() {
             ) : (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 Provider updates and service-account usage will appear here once this workspace records access activity.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => navigate('/api-keys')}>OPEN API KEYS</button>
+                  <button className="action-btn" onClick={() => navigate('/docs')}>READ AUTOMATION DOCS</button>
+                </div>
               </div>
             )
           ) : (
@@ -1274,6 +1310,10 @@ export function WorkspaceAdmin() {
             ) : (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 Key-level usage will appear here once this workspace records traffic.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY A MODEL</button>
+                  <button className="action-btn" onClick={() => navigate('/api-keys')}>OPEN API KEYS</button>
+                </div>
               </div>
             )
           ) : (

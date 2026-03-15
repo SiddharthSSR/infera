@@ -592,6 +592,10 @@ export function Models() {
             <div className="help-callout-copy">
               <strong>Serving verified</strong> means a live inference check passed for this model. <strong>Serving unverified</strong> means runtime looks ready but the model has not passed a live request yet. Use <strong>View deployments</strong> for node-level recovery and <strong>Verify serving</strong> when you want an explicit inference check from the registry.
             </div>
+            <div className="help-actions">
+              <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+              <button className="action-btn" onClick={() => navigate('/docs')}>READ API DOCS</button>
+            </div>
           </div>
         </div>
       </div>
@@ -601,6 +605,13 @@ export function Models() {
           {filtered.length === 0 ? (
             <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
               {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
+              {!searchQuery && (
+                <div className="help-actions" style={{ justifyContent: 'center' }}>
+                  <button className="action-btn" onClick={() => setShowRegisterModal(true)}>ADD MODEL</button>
+                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+                  <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+                </div>
+              )}
             </div>
           ) : (
             filtered.map(model => {
@@ -699,6 +710,13 @@ export function Models() {
             {filtered.length === 0 ? (
               <div style={{ padding: '4rem 2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
                 {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
+                {!searchQuery && (
+                  <div className="help-actions" style={{ justifyContent: 'center' }}>
+                    <button className="action-btn" onClick={() => setShowRegisterModal(true)}>ADD MODEL</button>
+                    <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+                    <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+                  </div>
+                )}
               </div>
             ) : (
               filtered.map(model => {
