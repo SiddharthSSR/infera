@@ -22,6 +22,7 @@ import {
 } from '../lib/deploymentHistory';
 import { buildFirstWorkspaceChecklist } from '../lib/onboardingChecklist';
 import { getInstanceReadiness } from '../lib/instanceReadiness';
+import { buildLiveWorkspaceOperations } from '../lib/liveWorkspaceOperations';
 import { buildWorkspaceMaturity } from '../lib/workspaceMaturity';
 import type { Instance, Model, Worker } from '../types';
 
@@ -449,9 +450,13 @@ export function Dashboard() {
     () => buildBillingAttentionQueue(quota, usageRows, costs),
     [costs, quota, usageRows],
   );
+  const operationalAttentionQueue = useMemo(
+    () => buildOperationalAttentionQueue(deploymentSummaries, connectedProviders.length, visibleProviders.length, workers, activeInstances, servingUnverifiedCount),
+    [activeInstances, connectedProviders.length, deploymentSummaries, servingUnverifiedCount, visibleProviders.length, workers],
+  );
   const attentionQueue = useMemo(
-    () => [...buildOperationalAttentionQueue(deploymentSummaries, connectedProviders.length, visibleProviders.length, workers, activeInstances, servingUnverifiedCount), ...billingAttention].slice(0, 6),
-    [activeInstances, billingAttention, connectedProviders.length, deploymentSummaries, servingUnverifiedCount, visibleProviders.length, workers],
+    () => [...operationalAttentionQueue, ...billingAttention].slice(0, 6),
+    [billingAttention, operationalAttentionQueue],
   );
   const deploymentTrend = useMemo(() => {
     const recent = deploymentSummaries.slice(0, 6);
@@ -535,6 +540,23 @@ export function Dashboard() {
     }),
     [activeInstances.length, attentionQueue, firstWorkspaceChecklist, pendingDeploymentCount, servingUnverifiedCount, servingVerifiedCount],
   );
+  const liveWorkspaceOperations = useMemo(
+    () => buildLiveWorkspaceOperations({
+      maturityState: workspaceMaturity.state,
+      modelServingStates,
+      activeNodeCount: activeInstances.length,
+      deploymentSummaries,
+      operationalAttentionQueue: operationalAttentionQueue.map(({ severity, title, detail }) => ({
+        severity,
+        title,
+        detail,
+      })),
+    }),
+    [activeInstances.length, deploymentSummaries, modelServingStates, operationalAttentionQueue, workspaceMaturity.state],
+  );
+  const dashboardGuideCopy = liveWorkspaceOperations.show
+    ? 'Use workspace state for the top-level health signal, live operations for day-two serving health, and the attention queue for what needs operator action right now.'
+    : 'Serving verified means runtime state looks healthy and the latest worker heartbeat is fresh. Inference verified means a real chat-completions request succeeded. Use the attention queue for what needs action now, then use recent deployment activity to see what changed most recently.';
 
   const handleDashboardAction = (action: DashboardAction) => {
     switch (action) {
@@ -599,7 +621,7 @@ export function Dashboard() {
           <div className="help-callout">
             <div className="label-text">HOW TO READ THIS DASHBOARD</div>
             <div className="help-callout-copy">
-              <strong>Serving verified</strong> means runtime state looks healthy and the latest worker heartbeat is fresh. <strong>Inference verified</strong> means a real chat-completions request succeeded. Use the attention queue for what needs action now, then use recent deployment activity to see what changed most recently.
+              <strong>Serving verified</strong> means runtime state looks healthy and the latest worker heartbeat is fresh. <strong>Inference verified</strong> means a real chat-completions request succeeded. {dashboardGuideCopy}
             </div>
             <div className="help-actions">
               <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
@@ -635,6 +657,78 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      {liveWorkspaceOperations.show && (
+        <div className="grid-row">
+          <div className="cell dashboard-live-ops-cell" style={{ gridColumn: 'span 4' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+              <div>
+                <div className="label-text">LIVE OPERATIONS</div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 600, marginTop: '0.75rem', letterSpacing: '-0.02em' }}>
+                  {liveWorkspaceOperations.headline}
+                </div>
+                <div className="dashboard-summary-text" style={{ marginTop: '0.55rem', maxWidth: '60rem' }}>
+                  {liveWorkspaceOperations.detail}
+                </div>
+              </div>
+              <span className={`badge ${
+                liveWorkspaceOperations.verificationFreshness === 'fresh'
+                  ? ''
+                  : liveWorkspaceOperations.verificationFreshness === 'recent'
+                    ? 'status-inactive'
+                    : 'status-warning'
+              }`}>
+                {liveWorkspaceOperations.verificationLabel}
+              </span>
+            </div>
+            <div className="dashboard-live-ops-grid">
+              <div className="dashboard-live-ops-item">
+                <div className="label-text">ACTIVE SERVING MODELS</div>
+                <div className="value-text" style={{ marginTop: '0.7rem' }}>{liveWorkspaceOperations.activeServingModels}</div>
+                <div className="dashboard-summary-text">Models currently serving or awaiting a fresh verification result.</div>
+              </div>
+              <div className="dashboard-live-ops-item">
+                <div className="label-text">ACTIVE NODES</div>
+                <div className="value-text" style={{ marginTop: '0.7rem' }}>{liveWorkspaceOperations.activeNodes}</div>
+                <div className="dashboard-summary-text">Running compute nodes attached to the active workspace.</div>
+              </div>
+              <div className="dashboard-live-ops-item">
+                <div className="label-text">VERIFICATION FRESHNESS</div>
+                <div style={{ marginTop: '0.85rem' }}>
+                  <span className={`badge ${
+                    liveWorkspaceOperations.verificationFreshness === 'fresh'
+                      ? ''
+                      : liveWorkspaceOperations.verificationFreshness === 'recent'
+                        ? 'status-inactive'
+                        : 'status-warning'
+                  }`}>
+                    {liveWorkspaceOperations.verificationLabel}
+                  </span>
+                </div>
+                <div className="dashboard-summary-text" style={{ marginTop: '0.85rem' }}>Freshness of the latest successful live inference verification.</div>
+              </div>
+              <div className="dashboard-live-ops-item">
+                <div className="label-text">DEGRADED RUNTIME</div>
+                <div className="value-text" style={{ marginTop: '0.7rem' }}>{liveWorkspaceOperations.degradedRuntimeCount}</div>
+                <div className="dashboard-summary-text">Models with degraded or failed serving state in the active workspace.</div>
+              </div>
+            </div>
+            {liveWorkspaceOperations.operatorIssueTitle && (
+              <div className="dashboard-live-ops-issue">
+                <div className="dashboard-alert-title-row">
+                  <span className="badge status-warning">LATEST ISSUE</span>
+                  <span style={{ fontSize: '0.95rem', fontWeight: 500 }}>{liveWorkspaceOperations.operatorIssueTitle}</span>
+                </div>
+                <div className="dashboard-summary-text">{liveWorkspaceOperations.operatorIssueDetail}</div>
+              </div>
+            )}
+            <div className="dashboard-maturity-actions">
+              <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+              <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {checklistCompletedCount < firstWorkspaceChecklist.length && (
         <div className="grid-row">

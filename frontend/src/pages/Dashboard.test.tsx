@@ -297,6 +297,83 @@ describe('Dashboard', () => {
     expect(screen.getByText('Add a teammate or automation identity')).toBeInTheDocument()
   })
 
+  it('renders live operations summary for a mature verified workspace', async () => {
+    const now = new Date()
+    const verifiedAt = new Date(now.getTime() - 10 * 60 * 1000).toISOString()
+    const createdAt = new Date(now.getTime() - 15 * 60 * 1000).toISOString()
+    const heartbeatAt = new Date(now.getTime() - 2 * 60 * 1000).toISOString()
+
+    window.localStorage.setItem('infera:deployment-attempts:ws_test', JSON.stringify([
+      {
+        id: 'attempt_verified',
+        created_at: createdAt,
+        updated_at: verifiedAt,
+        outcome: 'provisioned',
+        request: { gpu_type: 'A100_40GB', models: ['org/model-a'] },
+        selected_model_name: 'Model A',
+        instance_id: 'i1',
+        inference_verification: {
+          status: 'passed',
+          verified_at: verifiedAt,
+          latency_ms: 182,
+          model: 'org/model-a',
+          response_preview: 'ready',
+        },
+      },
+    ]))
+
+    mocks.providers = {
+      data: [{ provider: 'runpod', connected: true }],
+      isLoading: false,
+    }
+    mocks.workers = {
+      data: [
+        { worker_id: 'worker-1', status: 'healthy', last_heartbeat: heartbeatAt, gpu_utilization: 52, memory_used: 4, memory_total: 8, models: ['org/model-a'] },
+      ],
+      isLoading: false,
+      isError: false,
+    }
+    mocks.instances = {
+      data: [
+        {
+          id: 'i1',
+          provider_id: 'p1',
+          provider: 'runpod',
+          name: 'node-a',
+          status: 'running',
+          gpu_type: 'A100_40GB',
+          gpu_count: 1,
+          vcpu: 16,
+          memory_gb: 64,
+          storage_gb: 100,
+          worker_id: 'worker-1',
+          models: ['org/model-a'],
+          cost_per_hour: 1.2,
+          spot_instance: false,
+          created_at: createdAt,
+        },
+      ],
+      isLoading: false,
+    }
+    mocks.models = {
+      data: [
+        { id: 'org/model-a', loaded: true },
+      ],
+      isLoading: false,
+    }
+    mocks.fetchApiKeys.mockResolvedValue([
+      { id: 'key_sa', name: 'deploy-bot', status: 'active', principal_type: 'service_account', role: 'admin' },
+    ])
+    mocks.fetchWorkspaceInvites.mockResolvedValue([])
+
+    render(<Dashboard />)
+
+    expect(await screen.findByText('LIVE OPERATIONS')).toBeInTheDocument()
+    expect(screen.getAllByText('FRESH VERIFICATION').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('ACTIVE NODES').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('ACTIVE SERVING MODELS').length).toBeGreaterThan(0)
+  })
+
   it('surfaces provider and worker issues in the attention queue', () => {
     mocks.providers = {
       data: [{ provider: 'runpod', connected: false }],
