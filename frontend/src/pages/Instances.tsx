@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { Instance, GPUOffering, GPUType, ProviderStatus, ProviderType, VaultModel, Worker, ProvisionRequest } from '../types';
@@ -42,6 +42,12 @@ type ProvisionDraft = {
   gpu_count?: number;
   spot_instance?: boolean;
   models?: string[];
+};
+
+type NodeIncident = {
+  title: string;
+  detail: string;
+  tone: '' | 'warning' | 'error' | 'inactive';
 };
 
 function describeProvisioningState(configuredProviders: string[], providerStatuses: ProviderStatus[], offeringsCount: number) {
@@ -171,6 +177,62 @@ function DeploymentTimeline({ steps }: { steps: DeploymentTimelineStep[] }) {
   );
 }
 
+function deriveNodeIncident(
+  instance: Instance,
+  workers: Worker[] | undefined,
+  summary: DeploymentAttemptSummary | null,
+): NodeIncident | null {
+  const readiness = getInstanceReadiness(instance, workers);
+  const verification = summary?.attempt.inference_verification;
+
+  if (verification?.status === 'failed') {
+    return {
+      title: 'INFERENCE CHECK FAILED',
+      detail: verification.error
+        ? `Latest verification failed on ${formatAttemptTime(verification.verified_at)}: ${verification.error}`
+        : `Latest verification failed on ${formatAttemptTime(verification.verified_at)}.`,
+      tone: 'error',
+    };
+  }
+
+  if (instance.status === 'error') {
+    return {
+      title: 'PROVIDER INCIDENT',
+      detail: instance.error || 'Provider reported a node error during startup or serving.',
+      tone: 'error',
+    };
+  }
+
+  switch (readiness.label) {
+    case 'WORKER NOT CONNECTED':
+    case 'WORKER MISSING':
+    case 'WORKER UNHEALTHY':
+    case 'WORKER DEGRADED':
+      return {
+        title: readiness.label,
+        detail: readiness.detail,
+        tone: readiness.tone,
+      };
+    case 'MODEL LOADING':
+    case 'MODEL LOAD DELAY':
+    case 'PARTIAL READY':
+      return {
+        title: 'MODEL RUNTIME ISSUE',
+        detail: readiness.detail,
+        tone: readiness.tone,
+      };
+    case 'HEARTBEAT STALE':
+    case 'SERVING UNVERIFIED':
+      return {
+        title: 'VERIFICATION STALE',
+        detail: readiness.detail,
+        tone: readiness.tone,
+      };
+    default:
+      return null;
+  }
+}
+
 function useInstanceActions(instance: Instance) {
   const terminateMutation = useTerminateInstance();
   const startMutation = useStartInstance();
@@ -211,12 +273,21 @@ function useInstanceActions(instance: Instance) {
   return { isLoading, handleStart, handleStop, handleTerminate };
 }
 
-function InstanceActions({ instance, compact = false }: { instance: Instance; compact?: boolean }) {
+function InstanceActions({
+  instance,
+  compact = false,
+  incidentActions,
+}: {
+  instance: Instance;
+  compact?: boolean;
+  incidentActions?: ReactNode;
+}) {
   const { isLoading, handleStart, handleStop, handleTerminate } = useInstanceActions(instance);
   const buttonStyle = compact ? { fontSize: '0.65rem' } : { fontSize: '0.65rem', marginRight: '1rem' };
 
   return (
     <>
+      {incidentActions}
       {instance.status === 'stopped' && (
         <button className="action-btn" style={buttonStyle} disabled={isLoading} onClick={handleStart}>START</button>
       )}
@@ -237,7 +308,19 @@ function InstanceActions({ instance, compact = false }: { instance: Instance; co
   );
 }
 
-function InstanceRow({ instance, workers, highlighted }: { instance: Instance; workers: Worker[] | undefined; highlighted?: boolean }) {
+function InstanceRow({
+  instance,
+  workers,
+  highlighted,
+  incident,
+  incidentActions,
+}: {
+  instance: Instance;
+  workers: Worker[] | undefined;
+  highlighted?: boolean;
+  incident?: NodeIncident | null;
+  incidentActions?: ReactNode;
+}) {
   const statusClass = getStatusClass(instance.status);
   const statusLabel = getStatusLabel(instance.status);
   const readiness = getInstanceReadiness(instance, workers);
@@ -264,6 +347,14 @@ function InstanceRow({ instance, workers, highlighted }: { instance: Instance; w
         <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5, maxWidth: '22rem' }}>
           {readiness.detail}
         </div>
+        {incident && (
+          <div style={{ marginTop: '0.65rem', maxWidth: '22rem' }}>
+            <span className={`badge ${incident.tone ? `status-${incident.tone}` : ''}`}>{incident.title}</span>
+            <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              {incident.detail}
+            </div>
+          </div>
+        )}
       </td>
       <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
         <div className="mono">${instance.cost_per_hour.toFixed(2)}/hr</div>
@@ -276,7 +367,7 @@ function InstanceRow({ instance, workers, highlighted }: { instance: Instance; w
         )}
       </td>
       <td style={{ padding: '1.5rem 0', verticalAlign: 'middle', textAlign: 'right' }}>
-        <InstanceActions instance={instance} />
+        <InstanceActions instance={instance} incidentActions={incidentActions} />
       </td>
     </tr>
   );
@@ -632,7 +723,8 @@ export function Instances() {
       if (statusFilter === 'active' && ['terminated', 'terminating'].includes(instance.status)) return false;
       if (statusFilter !== 'active' && statusFilter !== 'all' && instance.status !== statusFilter) return false;
       if (drilldownFocus === 'degraded') {
-        return getInstanceReadiness(instance, workers).tone === 'error';
+        const tone = getInstanceReadiness(instance, workers).tone;
+        return tone === 'warning' || tone === 'error';
       }
       return true;
     });
@@ -649,6 +741,24 @@ export function Instances() {
   const latestDeployment = deploymentHistory[0] || null;
   const latestTimeline = latestDeployment ? getDeploymentTimeline(latestDeployment) : [];
   const latestRemediation = latestDeployment ? getDeploymentRemediation(latestDeployment) : null;
+  const deploymentSummaryByInstanceID = useMemo(
+    () => new Map(
+      deploymentHistory
+        .filter((summary): summary is DeploymentAttemptSummary & { instance: Instance } => Boolean(summary.instance?.id))
+        .map((summary) => [summary.instance.id, summary]),
+    ),
+    [deploymentHistory],
+  );
+  const incidentRows = useMemo(
+    () => filteredInstances
+      .map((instance) => {
+        const summary = deploymentSummaryByInstanceID.get(instance.id) || null;
+        const incident = deriveNodeIncident(instance, workers, summary);
+        return { instance, summary, incident };
+      })
+      .filter((row) => row.incident),
+    [deploymentSummaryByInstanceID, filteredInstances, workers],
+  );
 
   // Auto-open provision modal if redirected from dashboard or registry.
   useEffect(() => {
@@ -768,6 +878,33 @@ export function Instances() {
         void runInferenceVerification(summary);
         return;
     }
+  };
+
+  const renderIncidentActions = (instance: Instance, summary: DeploymentAttemptSummary | null, compact = false) => {
+    if (!summary) return null;
+
+    const buttonStyle = compact ? { fontSize: '0.65rem' } : { fontSize: '0.65rem', marginRight: '1rem' };
+    const hasModel = Boolean(instance.models?.length || summary.attempt.request.models?.length);
+
+    return (
+      <>
+        {instance.status === 'running' && hasModel && (
+          <button
+            className="action-btn"
+            style={buttonStyle}
+            disabled={verifyingAttemptID === summary.attempt.id}
+            onClick={() => void runInferenceVerification(summary)}
+          >
+            {verifyingAttemptID === summary.attempt.id ? 'VERIFYING...' : 'VERIFY NOW'}
+          </button>
+        )}
+        {summary.retryable && (
+          <button className="action-btn" style={buttonStyle} onClick={() => openRetryModal(summary.attempt)}>
+            RETRY CONFIG
+          </button>
+        )}
+      </>
+    );
   };
 
   useEffect(() => {
@@ -907,6 +1044,39 @@ export function Instances() {
                   {filteredInstances.length} NODE{filteredInstances.length === 1 ? '' : 'S'}
                 </span>
               </div>
+              {incidentRows.length > 0 && (
+                <div style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
+                  {incidentRows.slice(0, 3).map(({ instance, summary, incident }) => (
+                    <div
+                      key={`incident-${instance.id}`}
+                      style={{
+                        display: 'grid',
+                        gap: '0.5rem',
+                        padding: '0.85rem 1rem',
+                        border: '1px solid var(--border-color)',
+                        background: 'rgba(255, 255, 255, 0.88)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <div>
+                          <div className="mono" style={{ fontSize: '0.85rem' }}>{instance.name || instance.id.slice(0, 16)}</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                            {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
+                          </div>
+                        </div>
+                        <span className={`badge ${incident?.tone ? `status-${incident.tone}` : ''}`}>{incident?.title}</span>
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                        {incident?.detail}
+                      </div>
+                      <div className="help-actions">
+                        <button className="action-btn" onClick={() => focusInstance(instance.id)}>FOCUS NODE</button>
+                        {summary && renderIncidentActions(instance, summary)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="help-actions">
                 <button className="action-btn" onClick={() => setSearchParams({}, { replace: true })}>CLEAR DRILLDOWN</button>
                 <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
@@ -1038,17 +1208,21 @@ export function Instances() {
             </div>
           ) : isMobile ? (
             <div className="mobile-data-list">
-              {filteredInstances.map(instance => (
-                <InstanceMobileCard
-                  key={instance.id}
-                  anchorId={`instance-row-${instance.id}`}
-                  instance={instance}
-                  statusClass={getStatusClass(instance.status)}
-                  statusLabel={getStatusLabel(instance.status)}
-                  readiness={getInstanceReadiness(instance, workers)}
-                  actions={<InstanceActions instance={instance} compact />}
-                />
-              ))}
+              {filteredInstances.map(instance => {
+                const summary = deploymentSummaryByInstanceID.get(instance.id) || null;
+                return (
+                  <InstanceMobileCard
+                    key={instance.id}
+                    anchorId={`instance-row-${instance.id}`}
+                    instance={instance}
+                    statusClass={getStatusClass(instance.status)}
+                    statusLabel={getStatusLabel(instance.status)}
+                    readiness={getInstanceReadiness(instance, workers)}
+                    incident={deriveNodeIncident(instance, workers, summary) || undefined}
+                    actions={<InstanceActions instance={instance} compact incidentActions={renderIncidentActions(instance, summary, true)} />}
+                  />
+                );
+              })}
             </div>
           ) : (
             <div className="responsive-scroll-x">
@@ -1063,14 +1237,19 @@ export function Instances() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredInstances.map(instance => (
-                    <InstanceRow
-                      key={instance.id}
-                      instance={instance}
-                      workers={workers}
-                      highlighted={instance.id === latestDeployment?.attempt.instance_id}
-                    />
-                  ))}
+                  {filteredInstances.map(instance => {
+                    const summary = deploymentSummaryByInstanceID.get(instance.id) || null;
+                    return (
+                      <InstanceRow
+                        key={instance.id}
+                        instance={instance}
+                        workers={workers}
+                        highlighted={instance.id === latestDeployment?.attempt.instance_id}
+                        incident={deriveNodeIncident(instance, workers, summary)}
+                        incidentActions={renderIncidentActions(instance, summary)}
+                      />
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
