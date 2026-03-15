@@ -15,6 +15,7 @@ import (
 
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
+	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/gateway"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/providers/mock"
@@ -194,6 +195,14 @@ func main() {
 	} else {
 		defer auditStore.Close()
 		gw.SetAuditStore(auditStore)
+	}
+
+	deploymentStore, err := deployments.NewStore("data/deployments.db")
+	if err != nil {
+		log.Warn("failed to initialize deployment store", slog.String("error", err.Error()))
+	} else {
+		defer deploymentStore.Close()
+		gw.SetDeploymentStore(deploymentStore)
 	}
 
 	// Handle shutdown

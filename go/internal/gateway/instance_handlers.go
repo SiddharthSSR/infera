@@ -1,28 +1,38 @@
 package gateway
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/infera/infera/go/internal/auth"
+	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/providers"
 )
 
 type InstanceHandlers struct {
-	manager *providers.Manager
+	manager         *providers.Manager
+	deploymentStore *deployments.Store
 }
 
 func NewInstanceHandlers(manager *providers.Manager) *InstanceHandlers {
 	return &InstanceHandlers{manager: manager}
 }
 
+func (h *InstanceHandlers) SetDeploymentStore(store *deployments.Store) {
+	h.deploymentStore = store
+}
+
 func (h *InstanceHandlers) RegisterRoutes(mux *http.ServeMux, corsHandler func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("/api/instances", corsHandler(h.handleInstances))
 	mux.HandleFunc("/api/instances/", corsHandler(h.handleInstanceByID))
 	mux.HandleFunc("/api/instances/provision", corsHandler(h.handleProvision))
+	mux.HandleFunc("/api/deployments", corsHandler(h.handleDeployments))
+	mux.HandleFunc("/api/deployments/", corsHandler(h.handleDeploymentByID))
 	mux.HandleFunc("/api/offerings", corsHandler(h.handleOfferings))
 	mux.HandleFunc("/api/providers", corsHandler(h.handleProviders))
 	mux.HandleFunc("/api/costs", corsHandler(h.handleCosts))
@@ -39,8 +49,8 @@ func (h *InstanceHandlers) handleInstances(w http.ResponseWriter, r *http.Reques
 
 	current := auth.KeyFromContext(r.Context())
 	instances := h.manager.ListInstances()
-	if current != nil && current.WorkspaceID != auth.DefaultWorkspaceID {
-		instances = h.manager.ListInstancesByWorkspace(current.WorkspaceID)
+	if current != nil && effectiveWorkspaceID(current) != auth.DefaultWorkspaceID {
+		instances = h.manager.ListInstancesByWorkspace(effectiveWorkspaceID(current))
 	}
 	response := make([]map[string]interface{}, 0, len(instances))
 	for _, inst := range instances {
@@ -75,7 +85,7 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusNotFound, "not_found", "Instance not found")
 			return
 		}
-		if current != nil && current.WorkspaceID != auth.DefaultWorkspaceID && instance.WorkspaceID != current.WorkspaceID {
+		if current != nil && effectiveWorkspaceID(current) != auth.DefaultWorkspaceID && instance.WorkspaceID != effectiveWorkspaceID(current) {
 			writeError(w, http.StatusNotFound, "not_found", "Instance not found")
 			return
 		}
@@ -86,9 +96,9 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 			return
 		}
 		current := auth.KeyFromContext(r.Context())
-		if current != nil && current.WorkspaceID != auth.DefaultWorkspaceID {
+		if current != nil && effectiveWorkspaceID(current) != auth.DefaultWorkspaceID {
 			instance, exists := h.manager.GetInstance(instanceID)
-			if !exists || instance.WorkspaceID != current.WorkspaceID {
+			if !exists || instance.WorkspaceID != effectiveWorkspaceID(current) {
 				writeError(w, http.StatusNotFound, "not_found", "Instance not found")
 				return
 			}
@@ -104,9 +114,9 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 			return
 		}
 		current := auth.KeyFromContext(r.Context())
-		if current != nil && current.WorkspaceID != auth.DefaultWorkspaceID {
+		if current != nil && effectiveWorkspaceID(current) != auth.DefaultWorkspaceID {
 			instance, exists := h.manager.GetInstance(instanceID)
-			if !exists || instance.WorkspaceID != current.WorkspaceID {
+			if !exists || instance.WorkspaceID != effectiveWorkspaceID(current) {
 				writeError(w, http.StatusNotFound, "not_found", "Instance not found")
 				return
 			}
@@ -149,6 +159,7 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		SpotInstance   bool     `json:"spot_instance"`
 		MaxCostHour    float64  `json:"max_cost_hour"`
 		Models         []string `json:"models"`
+		SelectedModelName string `json:"selected_model_name"`
 		GatewayAddress string   `json:"gateway_address"`
 	}
 
@@ -191,14 +202,154 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 
 	instance, err := h.manager.Provision(r.Context(), provisionReq)
 	if err != nil {
+		if h.deploymentStore != nil {
+			_, _ = h.deploymentStore.RecordFailedAttempt(
+				currentWorkspaceID(r),
+				currentKeyID(r),
+				*provisionReq,
+				req.SelectedModelName,
+				deploymentFailureReason(err),
+			)
+		}
 		writeProviderActionError(w, "provision_failed", err)
 		return
+	}
+
+	if h.deploymentStore != nil {
+		_, _ = h.deploymentStore.RecordProvisionedAttempt(
+			currentWorkspaceID(r),
+			currentKeyID(r),
+			*provisionReq,
+			req.SelectedModelName,
+			instance,
+		)
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"success":  true,
 		"instance": instanceToMap(instance),
 	})
+}
+
+func (h *InstanceHandlers) handleDeployments(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
+		return
+	}
+	if !requireGatewayPermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
+		return
+	}
+	if h.deploymentStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "deployment_history_unavailable", "Deployment history store is not configured")
+		return
+	}
+
+	attempts, err := h.deploymentStore.ListAttempts(currentWorkspaceID(r), 25)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "deployment_history_failed", "Failed to load deployment history")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"attempts": attempts,
+		"total":    len(attempts),
+	})
+}
+
+func (h *InstanceHandlers) handleDeploymentByID(w http.ResponseWriter, r *http.Request) {
+	if !requireGatewayPermission(w, r, auth.PermissionViewInfrastructure, "Infrastructure view access required") {
+		return
+	}
+	if h.deploymentStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "deployment_history_unavailable", "Deployment history store is not configured")
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/deployments/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Deployment attempt ID and action are required")
+		return
+	}
+
+	attemptID := strings.TrimSpace(parts[0])
+	action := strings.TrimSpace(parts[1])
+	switch {
+	case r.Method == http.MethodPut && action == "verification":
+		var req struct {
+			Status          string `json:"status"`
+			VerifiedAt      string `json:"verified_at"`
+			LatencyMS       *int64 `json:"latency_ms"`
+			Model           string `json:"model"`
+			ResponsePreview string `json:"response_preview"`
+			Error           string `json:"error"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON")
+			return
+		}
+		verifiedAt := time.Now().UTC()
+		if strings.TrimSpace(req.VerifiedAt) != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, req.VerifiedAt)
+			if err != nil {
+				parsed, err = time.Parse(time.RFC3339, req.VerifiedAt)
+				if err != nil {
+					writeError(w, http.StatusBadRequest, "invalid_request", "verified_at must be a valid RFC3339 timestamp")
+					return
+				}
+			}
+			verifiedAt = parsed.UTC()
+		}
+
+		attempt, err := h.deploymentStore.UpdateVerification(currentWorkspaceID(r), attemptID, deployments.InferenceVerification{
+			Status:          req.Status,
+			VerifiedAt:      verifiedAt,
+			LatencyMS:       req.LatencyMS,
+			Model:           req.Model,
+			ResponsePreview: req.ResponsePreview,
+			Error:           req.Error,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "not_found", "Deployment attempt not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "deployment_history_failed", "Failed to update verification")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"attempt": attempt})
+	case r.Method == http.MethodPut && action == "auto-verification":
+		var req struct {
+			RequestedAt string `json:"requested_at"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON")
+			return
+		}
+		requestedAt := time.Now().UTC()
+		if strings.TrimSpace(req.RequestedAt) != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, req.RequestedAt)
+			if err != nil {
+				parsed, err = time.Parse(time.RFC3339, req.RequestedAt)
+				if err != nil {
+					writeError(w, http.StatusBadRequest, "invalid_request", "requested_at must be a valid RFC3339 timestamp")
+					return
+				}
+			}
+			requestedAt = parsed.UTC()
+		}
+		attempt, err := h.deploymentStore.MarkAutoVerificationRequested(currentWorkspaceID(r), attemptID, requestedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "not_found", "Deployment attempt not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "deployment_history_failed", "Failed to mark auto verification")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"attempt": attempt})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Unsupported deployment action")
+	}
 }
 
 func (h *InstanceHandlers) handleOfferings(w http.ResponseWriter, r *http.Request) {
@@ -263,8 +414,8 @@ func (h *InstanceHandlers) handleCosts(w http.ResponseWriter, r *http.Request) {
 	}
 	summary := h.manager.GetCostSummary()
 	current := auth.KeyFromContext(r.Context())
-	if current != nil && current.WorkspaceID != auth.DefaultWorkspaceID {
-		summary = h.manager.GetCostSummaryForWorkspace(current.WorkspaceID)
+	if current != nil && effectiveWorkspaceID(current) != auth.DefaultWorkspaceID {
+		summary = h.manager.GetCostSummaryForWorkspace(effectiveWorkspaceID(current))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -298,9 +449,32 @@ func instanceToMap(inst *providers.Instance) map[string]interface{} {
 func currentWorkspaceID(r *http.Request) string {
 	current := auth.KeyFromContext(r.Context())
 	if current == nil {
+		return auth.DefaultWorkspaceID
+	}
+	return effectiveWorkspaceID(current)
+}
+
+func currentKeyID(r *http.Request) string {
+	current := auth.KeyFromContext(r.Context())
+	if current == nil {
 		return ""
 	}
-	return current.WorkspaceID
+	return current.ID
+}
+
+func effectiveWorkspaceID(record *auth.KeyRecord) string {
+	if record == nil || strings.TrimSpace(record.WorkspaceID) == "" {
+		return auth.DefaultWorkspaceID
+	}
+	return record.WorkspaceID
+}
+
+func deploymentFailureReason(err error) string {
+	var providerErr *providers.ProviderError
+	if errors.As(err, &providerErr) && strings.TrimSpace(providerErr.Message) != "" {
+		return providerErr.Message
+	}
+	return err.Error()
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

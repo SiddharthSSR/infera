@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   providers: { data: [], isLoading: false } as any,
   instances: { data: [], isLoading: false } as any,
   workers: { data: [], isLoading: false } as any,
+  deploymentAttempts: { data: [], isLoading: false } as any,
 }));
 
 vi.mock('../hooks/useIsMobile', () => ({
@@ -26,6 +27,8 @@ vi.mock('../hooks/useApi', () => ({
   useProviders: () => mocks.providers,
   useInstances: () => mocks.instances,
   useWorkers: () => mocks.workers,
+  useDeploymentAttempts: () => mocks.deploymentAttempts,
+  useUpdateDeploymentVerification: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useRegisterVaultModel: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useDeleteVaultModel: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
@@ -37,13 +40,13 @@ vi.mock('../lib/auth-context', () => ({
 describe('Models mobile layout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    window.localStorage.clear();
     mocks.models = { data: [], isLoading: false };
     mocks.vaultModels = { data: { models: [] }, isLoading: false };
     mocks.offerings = { data: [], isLoading: false };
     mocks.providers = { data: [], isLoading: false };
     mocks.instances = { data: [], isLoading: false };
     mocks.workers = { data: [], isLoading: false };
+    mocks.deploymentAttempts = { data: [], isLoading: false };
   });
 
   it('renders mobile cards on Models page', () => {
@@ -89,7 +92,7 @@ describe('Models mobile layout', () => {
   });
 
   it('renders degraded runtime drilldown actions for deployed models', () => {
-    window.localStorage.setItem('infera:deployment-attempts:ws_test', JSON.stringify([
+    mocks.deploymentAttempts = { data: [
       {
         id: 'attempt_failed',
         created_at: '2026-03-16T11:40:00.000Z',
@@ -104,7 +107,7 @@ describe('Models mobile layout', () => {
           error: 'connection reset',
         },
       },
-    ]));
+    ], isLoading: false };
 
     mocks.models = {
       data: [

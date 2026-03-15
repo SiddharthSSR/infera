@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
+	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/internal/vault"
@@ -44,6 +45,9 @@ type Gateway struct {
 
 	// Audit (inference usage tracking)
 	auditStore *audit.Store
+
+	// Deployments (shared deployment history)
+	deploymentStore *deployments.Store
 
 	// Rate limiting
 	rateLimiter *RateLimiter
@@ -123,6 +127,14 @@ func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 // SetAuditStore sets the inference audit store.
 func (g *Gateway) SetAuditStore(s *audit.Store) {
 	g.auditStore = s
+}
+
+// SetDeploymentStore sets the shared deployment history store.
+func (g *Gateway) SetDeploymentStore(s *deployments.Store) {
+	g.deploymentStore = s
+	if g.instanceHandlers != nil {
+		g.instanceHandlers.SetDeploymentStore(s)
+	}
 }
 
 // Start starts the HTTP server.

@@ -1,18 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { GPUOffering, Model, ProviderStatus, Instance, Worker } from '../types';
 import { sendChatCompletion } from '../lib/api';
 import {
-  readDeploymentAttempts,
-  recordInferenceVerification,
   summarizeDeploymentAttempt,
   type DeploymentAttemptRecord,
   type DeploymentAttemptSummary,
 } from '../lib/deploymentHistory';
 import { getInstanceReadiness } from '../lib/instanceReadiness';
 import { deriveModelRuntimeDrilldown } from '../lib/modelRuntimeDrilldown';
-import { useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel, useOfferings, useProviders, useInstances, useWorkers } from '../hooks/useApi';
+import { useDeploymentAttempts, useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel, useOfferings, useProviders, useInstances, useUpdateDeploymentVerification, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useAuthSession } from '../lib/auth-context';
 
@@ -434,16 +432,13 @@ export function Models() {
   const deleteMutation = useDeleteVaultModel();
   const [searchQuery, setSearchQuery] = useState('');
   const [showRegisterModal, setShowRegisterModal] = useState(false);
-  const [deploymentAttempts, setDeploymentAttempts] = useState<DeploymentAttemptRecord[]>([]);
   const [verifyingModelID, setVerifyingModelID] = useState<string | null>(null);
+  const { data: deploymentAttempts = [] } = useDeploymentAttempts(workspaceID);
+  const updateDeploymentVerification = useUpdateDeploymentVerification(workspaceID);
 
   const allModels = models || [];
   const vaultModels = vaultData?.models || [];
   const liveInstances = instances || [];
-
-  useEffect(() => {
-    setDeploymentAttempts(readDeploymentAttempts(workspaceID));
-  }, [workspaceID]);
 
   // Build a lookup of vault model IDs by source_uri for delete actions
   const vaultIdByUri = new Map(vaultModels.map(vm => [vm.source_uri, vm.id]));
@@ -532,28 +527,30 @@ export function Models() {
       const latencyMs = Date.now() - startedAt;
       const content = response.choices?.[0]?.message?.content?.trim() || '';
       if (attempt) {
-        setDeploymentAttempts(
-          recordInferenceVerification(workspaceID, attempt.id, {
+        await updateDeploymentVerification.mutateAsync({
+          attemptId: attempt.id,
+          verification: {
             status: 'passed',
             verified_at: new Date().toISOString(),
             latency_ms: latencyMs,
             model: model.id,
             response_preview: content.slice(0, 120),
-          }),
-        );
+          },
+        });
       }
       toast.success(`Serving verified for ${model.id.split('/').pop()} in ${latencyMs < 1000 ? `${latencyMs}ms` : `${(latencyMs / 1000).toFixed(2)}s`}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Verification request failed';
       if (attempt) {
-        setDeploymentAttempts(
-          recordInferenceVerification(workspaceID, attempt.id, {
+        await updateDeploymentVerification.mutateAsync({
+          attemptId: attempt.id,
+          verification: {
             status: 'failed',
             verified_at: new Date().toISOString(),
             model: model.id,
             error: message,
-          }),
-        );
+          },
+        });
       }
       toast.error(message);
     } finally {

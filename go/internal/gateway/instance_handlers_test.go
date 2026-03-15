@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/infera/infera/go/internal/auth"
+	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/providers/mock"
 )
@@ -24,6 +26,16 @@ func setupTestHandlers(t *testing.T) *InstanceHandlers {
 	}
 	mgr.RegisterProvider(mock.New())
 	return NewInstanceHandlers(mgr)
+}
+
+func newTestDeploymentStore(t *testing.T) *deployments.Store {
+	t.Helper()
+	store, err := deployments.NewStore(filepath.Join(t.TempDir(), "deployments.db"))
+	if err != nil {
+		t.Fatalf("deployments.NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
 type failingProvider struct {
@@ -515,6 +527,131 @@ func TestHandleProvisionMapsProviderErrors(t *testing.T) {
 	}
 	if resp["error"]["retryable"] != true {
 		t.Fatalf("expected retryable=true, got %#v", resp)
+	}
+}
+
+func TestHandleDeployments(t *testing.T) {
+	h := setupTestHandlers(t)
+	store := newTestDeploymentStore(t)
+	h.SetDeploymentStore(store)
+
+	body := map[string]interface{}{
+		"name":                "test-worker",
+		"provider":            "mock",
+		"gpu_type":            "RTX_4090",
+		"gpu_count":           1,
+		"selected_model_name": "Model A",
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	provReq := authedWorkspaceRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator, "ws_alpha")
+	provReq.Header.Set("Content-Type", "application/json")
+	provW := httptest.NewRecorder()
+	h.handleProvision(provW, provReq)
+	if provW.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", provW.Code, provW.Body.String())
+	}
+
+	req := authedWorkspaceRequest(httptest.NewRequest(http.MethodGet, "/api/deployments", nil), auth.RoleOperator, "ws_alpha")
+	w := httptest.NewRecorder()
+	h.handleDeployments(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Attempts []map[string]interface{} `json:"attempts"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Attempts) != 1 {
+		t.Fatalf("expected 1 attempt, got %d", len(resp.Attempts))
+	}
+	if resp.Attempts[0]["selected_model_name"] != "Model A" {
+		t.Fatalf("expected selected_model_name to be persisted, got %#v", resp.Attempts[0])
+	}
+
+	reqOther := authedWorkspaceRequest(httptest.NewRequest(http.MethodGet, "/api/deployments", nil), auth.RoleOperator, "ws_beta")
+	wOther := httptest.NewRecorder()
+	h.handleDeployments(wOther, reqOther)
+	if wOther.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", wOther.Code, wOther.Body.String())
+	}
+	var otherResp struct {
+		Attempts []map[string]interface{} `json:"attempts"`
+	}
+	if err := json.Unmarshal(wOther.Body.Bytes(), &otherResp); err != nil {
+		t.Fatalf("decode other response: %v", err)
+	}
+	if len(otherResp.Attempts) != 0 {
+		t.Fatalf("expected 0 attempts for other workspace, got %d", len(otherResp.Attempts))
+	}
+}
+
+func TestHandleDeploymentVerificationUpdates(t *testing.T) {
+	h := setupTestHandlers(t)
+	store := newTestDeploymentStore(t)
+	h.SetDeploymentStore(store)
+
+	body := map[string]interface{}{
+		"name":     "test-worker",
+		"provider": "mock",
+		"gpu_type": "RTX_4090",
+		"gpu_count": 1,
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	provReq := authedWorkspaceRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator, "ws_alpha")
+	provReq.Header.Set("Content-Type", "application/json")
+	provW := httptest.NewRecorder()
+	h.handleProvision(provW, provReq)
+	if provW.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", provW.Code, provW.Body.String())
+	}
+
+	attempts, err := store.ListAttempts("ws_alpha", 10)
+	if err != nil {
+		t.Fatalf("ListAttempts: %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("expected 1 attempt, got %d", len(attempts))
+	}
+
+	verifyBody, _ := json.Marshal(map[string]interface{}{
+		"status":      "passed",
+		"verified_at": "2026-03-16T00:01:00Z",
+		"latency_ms":  321,
+		"model":       "org/model-a",
+	})
+	verifyReq := authedWorkspaceRequest(httptest.NewRequest(http.MethodPut, "/api/deployments/"+attempts[0].ID+"/verification", bytes.NewReader(verifyBody)), auth.RoleOperator, "ws_alpha")
+	verifyReq.Header.Set("Content-Type", "application/json")
+	verifyW := httptest.NewRecorder()
+	h.handleDeploymentByID(verifyW, verifyReq)
+	if verifyW.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", verifyW.Code, verifyW.Body.String())
+	}
+
+	autoBody, _ := json.Marshal(map[string]interface{}{
+		"requested_at": "2026-03-16T00:00:30Z",
+	})
+	autoReq := authedWorkspaceRequest(httptest.NewRequest(http.MethodPut, "/api/deployments/"+attempts[0].ID+"/auto-verification", bytes.NewReader(autoBody)), auth.RoleOperator, "ws_alpha")
+	autoReq.Header.Set("Content-Type", "application/json")
+	autoW := httptest.NewRecorder()
+	h.handleDeploymentByID(autoW, autoReq)
+	if autoW.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", autoW.Code, autoW.Body.String())
+	}
+
+	updated, err := store.ListAttempts("ws_alpha", 10)
+	if err != nil {
+		t.Fatalf("ListAttempts updated: %v", err)
+	}
+	if updated[0].InferenceVerification == nil || updated[0].InferenceVerification.Status != "passed" {
+		t.Fatalf("expected verification to be persisted, got %#v", updated[0].InferenceVerification)
+	}
+	if updated[0].AutoVerificationRequestedAt == nil {
+		t.Fatalf("expected auto verification timestamp to be persisted")
 	}
 }
 
