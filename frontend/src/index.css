@@ -907,6 +907,19 @@ h1, h2, h3, h4 {
   margin-bottom: 0.25rem;
 }
 
+.dashboard-maturity-cell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(255, 255, 255, 0.64)),
+    var(--bg-paper);
+}
+
+.dashboard-maturity-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
 .dashboard-onboarding-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

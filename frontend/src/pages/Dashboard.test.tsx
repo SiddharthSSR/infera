@@ -257,12 +257,15 @@ describe('Dashboard', () => {
 
     render(<Dashboard />)
 
+    expect(screen.getByText('WORKSPACE STATE')).toBeInTheDocument()
+    expect(screen.getAllByText('ATTENTION REQUIRED').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Latest deployment request failed').length).toBeGreaterThan(0)
     expect(screen.getAllByText('SERVING VERIFIED').length).toBeGreaterThan(0)
     expect(screen.getByText('VERIFY PENDING')).toBeInTheDocument()
     expect(screen.getByText('DEGRADED DEPLOYMENTS')).toBeInTheDocument()
     expect(screen.getByText('PENDING DEPLOYMENTS')).toBeInTheDocument()
     expect(screen.getByText('ATTENTION QUEUE')).toBeInTheDocument()
-    expect(screen.getByText('Latest deployment request failed')).toBeInTheDocument()
+    expect(screen.getAllByText('Latest deployment request failed').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Model A').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/provider auth failed/i).length).toBeGreaterThan(0)
   })
@@ -285,6 +288,7 @@ describe('Dashboard', () => {
 
     render(<Dashboard />)
 
+    expect(await screen.findByText('NEW WORKSPACE')).toBeInTheDocument()
     expect(await screen.findByText('FIRST WORKSPACE CHECKLIST')).toBeInTheDocument()
     expect(screen.getByText('Add provider access')).toBeInTheDocument()
     expect(screen.getByText('Register or confirm a model')).toBeInTheDocument()
@@ -308,7 +312,8 @@ describe('Dashboard', () => {
 
     render(<Dashboard />)
 
-    expect(screen.getByText('No live provider connection')).toBeInTheDocument()
+    expect(screen.getAllByText('ATTENTION REQUIRED').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('No live provider connection').length).toBeGreaterThan(0)
     expect(screen.getByText('Workers are not connected')).toBeInTheDocument()
     expect(screen.getAllByText('OPEN WORKSPACE').length).toBeGreaterThan(0)
   })
@@ -344,7 +349,7 @@ describe('Dashboard', () => {
     render(<Dashboard />)
 
     expect(await screen.findByText('Workspace quota nearing limit')).toBeInTheDocument()
-    expect(screen.getByText('Current cost burn is elevated')).toBeInTheDocument()
+    expect(screen.getAllByText('Current cost burn is elevated').length).toBeGreaterThan(0)
     expect(screen.getByText('Spend is concentrated on one provider')).toBeInTheDocument()
   })
 

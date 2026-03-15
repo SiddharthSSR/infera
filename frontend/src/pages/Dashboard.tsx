@@ -22,6 +22,7 @@ import {
 } from '../lib/deploymentHistory';
 import { buildFirstWorkspaceChecklist } from '../lib/onboardingChecklist';
 import { getInstanceReadiness } from '../lib/instanceReadiness';
+import { buildWorkspaceMaturity } from '../lib/workspaceMaturity';
 import type { Instance, Model, Worker } from '../types';
 
 function ChartBars({ heights, activeIndex }: { heights: number[]; activeIndex?: number }) {
@@ -51,6 +52,8 @@ type AttentionItem = {
   action: AttentionAction;
   timestamp?: string;
 };
+
+type DashboardAction = 'open_clusters' | 'open_models' | 'open_workspace' | 'verify_now' | 'open_docs' | 'open_api_keys';
 
 function deriveModelServingState(
   model: Model,
@@ -515,13 +518,31 @@ export function Dashboard() {
     () => firstWorkspaceChecklist.filter((item) => item.done).length,
     [firstWorkspaceChecklist],
   );
+  const workspaceMaturity = useMemo(
+    () => buildWorkspaceMaturity({
+      checklist: firstWorkspaceChecklist,
+      attentionQueue: attentionQueue.map(({ severity, title, detail, actionLabel, action }) => ({
+        severity,
+        title,
+        detail,
+        actionLabel,
+        action,
+      })),
+      servingVerifiedCount,
+      servingUnverifiedCount,
+      pendingDeploymentCount,
+      activeInstanceCount: activeInstances.length,
+    }),
+    [activeInstances.length, attentionQueue, firstWorkspaceChecklist, pendingDeploymentCount, servingUnverifiedCount, servingVerifiedCount],
+  );
 
-  const handleChecklistAction = (action: 'open_workspace' | 'open_models' | 'open_clusters' | 'open_docs' | 'open_api_keys') => {
+  const handleDashboardAction = (action: DashboardAction) => {
     switch (action) {
       case 'open_workspace':
         navigate('/workspace');
         return;
       case 'open_models':
+      case 'verify_now':
         navigate('/models');
         return;
       case 'open_clusters':
@@ -588,6 +609,33 @@ export function Dashboard() {
         </div>
       </div>
 
+      <div className="grid-row">
+        <div className="cell dashboard-maturity-cell" style={{ gridColumn: 'span 4' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+            <div>
+              <div className="label-text">WORKSPACE STATE</div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 600, marginTop: '0.75rem', letterSpacing: '-0.02em' }}>
+                {workspaceMaturity.headline}
+              </div>
+              <div className="dashboard-summary-text" style={{ marginTop: '0.55rem', maxWidth: '60rem' }}>
+                {workspaceMaturity.detail}
+              </div>
+            </div>
+            <span className={`badge ${getSummaryToneClass(workspaceMaturity.tone)}`}>{workspaceMaturity.label}</span>
+          </div>
+          <div className="dashboard-maturity-actions">
+            <button className="action-btn" onClick={() => handleDashboardAction(workspaceMaturity.action)}>
+              {workspaceMaturity.actionLabel}
+            </button>
+            {workspaceMaturity.state !== 'serving_verified' && (
+              <button className="action-btn" onClick={() => navigate('/workspace')}>
+                OPEN WORKSPACE
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       {checklistCompletedCount < firstWorkspaceChecklist.length && (
         <div className="grid-row">
           <div className="cell" style={{ gridColumn: 'span 4' }}>
@@ -605,12 +653,12 @@ export function Dashboard() {
                 {firstWorkspaceChecklist.map((item) => (
                   <div key={item.id} className="dashboard-onboarding-item">
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
-                      <div style={{ fontSize: '0.92rem', fontWeight: 500 }}>{item.label}</div>
-                      <span className={`badge ${item.done ? '' : 'status-warning'}`}>{item.done ? 'DONE' : 'NEXT'}</span>
-                    </div>
-                    <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>{item.detail}</div>
-                    {!item.done && (
-                      <button className="action-btn" style={{ marginTop: '0.85rem' }} onClick={() => handleChecklistAction(item.action)}>
+                    <div style={{ fontSize: '0.92rem', fontWeight: 500 }}>{item.label}</div>
+                    <span className={`badge ${item.done ? '' : 'status-warning'}`}>{item.done ? 'DONE' : 'NEXT'}</span>
+                  </div>
+                  <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>{item.detail}</div>
+                  {!item.done && (
+                      <button className="action-btn" style={{ marginTop: '0.85rem' }} onClick={() => handleDashboardAction(item.action)}>
                         {item.actionLabel}
                       </button>
                     )}
@@ -736,11 +784,7 @@ export function Dashboard() {
                   <button
                     className="action-btn"
                     style={{ marginTop: '0.95rem' }}
-                    onClick={() => {
-                      if (item.action === 'open_workspace') navigate('/workspace');
-                      else if (item.action === 'open_models' || item.action === 'verify_now') navigate('/models');
-                      else navigate('/instances');
-                    }}
+                    onClick={() => handleDashboardAction(item.action)}
                   >
                     {item.actionLabel}
                   </button>
