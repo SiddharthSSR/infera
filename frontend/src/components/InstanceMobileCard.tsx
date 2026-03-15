@@ -7,6 +7,7 @@ export function InstanceMobileCard({
   statusClass,
   statusLabel,
   readiness,
+  incident,
   actions,
 }: {
   anchorId?: string;
@@ -14,6 +15,7 @@ export function InstanceMobileCard({
   statusClass: string;
   statusLabel: string;
   readiness?: { label: string; detail: string; tone?: string };
+  incident?: { title: string; detail: string; tone?: string };
   actions?: ReactNode;
 }) {
   return (
@@ -43,6 +45,13 @@ export function InstanceMobileCard({
             <span className="label-text">READINESS</span>{' '}
             <span className={`badge ${readiness.tone ? `status-${readiness.tone}` : ''}`}>{readiness.label}</span>
             <div style={{ marginTop: '0.35rem', lineHeight: 1.5 }}>{readiness.detail}</div>
+          </div>
+        )}
+        {incident && (
+          <div>
+            <span className="label-text">INCIDENT</span>{' '}
+            <span className={`badge ${incident.tone ? `status-${incident.tone}` : ''}`}>{incident.title}</span>
+            <div style={{ marginTop: '0.35rem', lineHeight: 1.5 }}>{incident.detail}</div>
           </div>
         )}
         <div>
