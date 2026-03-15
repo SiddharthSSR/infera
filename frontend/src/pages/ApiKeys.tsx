@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { createApiKey, fetchApiKeys, revokeApiKey, type ApiKeyRecord } from '../lib/api';
 import { useAuthSession } from '../lib/auth-context';
@@ -239,6 +240,12 @@ export function ApiKeys() {
               {keys.length === 0 ? (
                 <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem 0' }}>
                   No workspace keys. Create one to get started.
+                  <div className="help-actions" style={{ justifyContent: 'center' }}>
+                    <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder*="Platform operator"], input[placeholder*="CI deploy bot"]')?.focus()}>
+                      CREATE KEY NOW
+                    </button>
+                    <Link className="action-btn" to="/docs">READ AUTH DOCS</Link>
+                  </div>
                 </div>
               ) : (
                 keys.map((key) => (
@@ -335,6 +342,12 @@ export function ApiKeys() {
                     <tr>
                       <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 0' }}>
                         No workspace keys. Create one to get started.
+                        <div className="help-actions" style={{ justifyContent: 'center' }}>
+                          <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder*="Platform operator"], input[placeholder*="CI deploy bot"]')?.focus()}>
+                            CREATE KEY NOW
+                          </button>
+                          <Link className="action-btn" to="/docs">READ AUTH DOCS</Link>
+                        </div>
                       </td>
                     </tr>
                   )}
@@ -356,6 +369,10 @@ export function ApiKeys() {
             <div className="label-text">WHEN TO USE WHICH KEY</div>
             <div className="help-callout-copy">
               Use a <strong>human key</strong> for a person who needs dashboard access inside the active workspace. Use a <strong>service account</strong> for CI, scripts, agents, and production automation. Switching workspace changes the session context you are browsing, but it does not make a key cross-workspace.
+            </div>
+            <div className="help-actions">
+              <Link className="action-btn" to="/workspace">OPEN WORKSPACE</Link>
+              <Link className="action-btn" to="/docs">READ AUTH DOCS</Link>
             </div>
           </div>
 

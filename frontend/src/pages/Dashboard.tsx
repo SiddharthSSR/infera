@@ -511,6 +511,10 @@ export function Dashboard() {
             <div className="help-callout-copy">
               <strong>Serving verified</strong> means runtime state looks healthy and the latest worker heartbeat is fresh. <strong>Inference verified</strong> means a real chat-completions request succeeded. Use the attention queue for what needs action now, then use recent deployment activity to see what changed most recently.
             </div>
+            <div className="help-actions">
+              <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+              <button className="action-btn" onClick={() => navigate('/docs')}>OPEN API DOCS</button>
+            </div>
           </div>
         </div>
       </div>
@@ -707,6 +711,10 @@ export function Dashboard() {
           ) : (
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               No inference verification history yet.
+              <div className="help-actions">
+                <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
+                <button className="action-btn" onClick={() => navigate('/docs')}>READ VERIFY FLOW</button>
+              </div>
             </div>
           )}
         </div>
@@ -738,6 +746,10 @@ export function Dashboard() {
           ) : (
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               No workspace usage recorded yet this month.
+              <div className="help-actions">
+                <button className="action-btn" onClick={() => navigate('/workspace')}>OPEN WORKSPACE</button>
+                <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY A MODEL</button>
+              </div>
             </div>
           )}
         </div>
@@ -776,7 +788,11 @@ export function Dashboard() {
             </div>
           )}
 
-          <button className="action-btn" style={{ marginTop: '1.5rem' }} onClick={() => navigate('/models')}>DEPLOY NEW MODEL</button>
+          <div className="help-actions">
+            <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY NEW MODEL</button>
+            <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+            <button className="action-btn" onClick={() => navigate('/getting-started')}>SEE ONBOARDING PATH</button>
+          </div>
         </div>
 
         <div className="cell dashboard-overview-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
@@ -871,6 +887,10 @@ export function Dashboard() {
             ) : (
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                 No recent deployment activity yet. Provision capacity from Clusters to start tracking deployment health here.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+                  <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+                </div>
               </div>
             )}
           </div>

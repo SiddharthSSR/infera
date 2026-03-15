@@ -875,6 +875,10 @@ export function Instances() {
             <div className="help-callout-copy">
               <strong>Connected provider</strong> means the workspace credentials are valid and the provider can return live status. <strong>Serving verified</strong> means the worker heartbeat is fresh and runtime looks ready. <strong>Inference verified</strong> means a real chat-completions request passed. Treat the latest deployment banner as the fastest path from provisioned node to confirmed serving.
             </div>
+            <div className="help-actions">
+              <button className="action-btn" onClick={() => navigate('/workspace')}>OPEN WORKSPACE</button>
+              <button className="action-btn" onClick={() => navigate('/docs')}>READ DEPLOYMENT DOCS</button>
+            </div>
           </div>
         </div>
       </div>
@@ -967,18 +971,22 @@ export function Instances() {
               <div style={{ maxWidth: '34rem', margin: '0 auto 1.25rem', lineHeight: 1.6 }}>
                 {provisioningState?.detail || 'Provision your first node to start serving models from this workspace.'}
               </div>
-              <button
-                className="action-btn"
-                onClick={() => {
-                  if (provisioningState) {
-                    navigate('/workspace');
-                    return;
-                  }
-                  openFreshProvisionModal();
-                }}
-              >
-                {provisioningState?.action || 'PROVISION NEW NODE'}
-              </button>
+              <div className="help-actions" style={{ justifyContent: 'center' }}>
+                <button
+                  className="action-btn"
+                  onClick={() => {
+                    if (provisioningState) {
+                      navigate('/workspace');
+                      return;
+                    }
+                    openFreshProvisionModal();
+                  }}
+                >
+                  {provisioningState?.action || 'PROVISION NEW NODE'}
+                </button>
+                <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
+                <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+              </div>
             </div>
           ) : isMobile ? (
             <div className="mobile-data-list">
