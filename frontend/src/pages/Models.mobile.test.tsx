@@ -37,6 +37,7 @@ vi.mock('../lib/auth-context', () => ({
 describe('Models mobile layout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     mocks.models = { data: [], isLoading: false };
     mocks.vaultModels = { data: { models: [] }, isLoading: false };
     mocks.offerings = { data: [], isLoading: false };
@@ -85,5 +86,80 @@ describe('Models mobile layout', () => {
     expect(screen.getByText(/Ready on 1 GPU config/i)).toBeInTheDocument();
     expect(container.querySelectorAll('.mobile-data-card').length).toBeGreaterThan(0);
     expect(screen.queryByText('MODEL NAME & VERSION')).not.toBeInTheDocument();
+  });
+
+  it('renders degraded runtime drilldown actions for deployed models', () => {
+    window.localStorage.setItem('infera:deployment-attempts:ws_test', JSON.stringify([
+      {
+        id: 'attempt_failed',
+        created_at: '2026-03-16T11:40:00.000Z',
+        updated_at: '2026-03-16T11:55:00.000Z',
+        outcome: 'provisioned',
+        request: { gpu_type: 'A100_40GB', gpu_count: 1, models: ['org/model-a'] },
+        instance_id: 'instance_1',
+        inference_verification: {
+          status: 'failed',
+          verified_at: '2026-03-16T11:55:00.000Z',
+          model: 'org/model-a',
+          error: 'connection reset',
+        },
+      },
+    ]));
+
+    mocks.models = {
+      data: [
+        {
+          id: 'org/model-a',
+          loaded: false,
+          vault_status: 'available',
+          family: 'llama',
+          parameters: '8B',
+          quantization: 'AWQ',
+          max_context: 8192,
+          owned_by: 'org',
+        },
+      ],
+      isLoading: false,
+    };
+    mocks.vaultModels = {
+      data: { models: [{ id: 'vault_1', source_uri: 'org/model-a' }] },
+      isLoading: false,
+    };
+    mocks.instances = {
+      data: [
+        {
+          id: 'instance_1',
+          provider_id: 'provider_1',
+          provider: 'runpod',
+          name: 'node-a',
+          status: 'error',
+          gpu_type: 'A100_40GB',
+          gpu_count: 1,
+          vcpu: 16,
+          memory_gb: 64,
+          storage_gb: 100,
+          models: ['org/model-a'],
+          cost_per_hour: 1.2,
+          spot_instance: false,
+          created_at: '2026-03-16T11:30:00.000Z',
+        },
+      ],
+      isLoading: false,
+    };
+    mocks.providers = {
+      data: [{ provider: 'runpod', connected: true }],
+      isLoading: false,
+    };
+
+    render(
+      <MemoryRouter>
+        <Models />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getAllByText('DEGRADED').length).toBeGreaterThan(0);
+    expect(screen.getByText('connection reset')).toBeInTheDocument();
+    expect(screen.getByText('OPEN DEGRADED NODES')).toBeInTheDocument();
+    expect(screen.getByText('VIEW DEPLOYMENTS')).toBeInTheDocument();
   });
 });

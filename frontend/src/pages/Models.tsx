@@ -11,6 +11,7 @@ import {
   type DeploymentAttemptSummary,
 } from '../lib/deploymentHistory';
 import { getInstanceReadiness } from '../lib/instanceReadiness';
+import { deriveModelRuntimeDrilldown } from '../lib/modelRuntimeDrilldown';
 import { useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel, useOfferings, useProviders, useInstances, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useAuthSession } from '../lib/auth-context';
@@ -484,6 +485,13 @@ export function Models() {
     }
     return map;
   }, [deploymentAttempts, displayModels, liveInstances, workers]);
+  const modelRuntimeByID = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof deriveModelRuntimeDrilldown>>();
+    for (const model of displayModels) {
+      map.set(model.id, deriveModelRuntimeDrilldown(model.id, liveInstances, workers, deploymentAttempts));
+    }
+    return map;
+  }, [deploymentAttempts, displayModels, liveInstances, workers]);
   const readyCount = filtered.filter((model) => describeDeployReadiness(model, visibleOfferings, visibleProviders).state === 'ready').length;
   const activeCount = filtered.filter((model) => (modelOverviewByID.get(model.id)?.activeInstances || 0) > 0).length;
   const servingVerifiedCount = filtered.filter((model) => modelOverviewByID.get(model.id)?.state === 'serving_verified').length;
@@ -590,7 +598,7 @@ export function Models() {
           <div className="help-callout">
             <div className="label-text">MODEL STATUS GUIDE</div>
             <div className="help-callout-copy">
-              <strong>Serving verified</strong> means a live inference check passed for this model. <strong>Serving unverified</strong> means runtime looks ready but the model has not passed a live request yet. Use <strong>View deployments</strong> for node-level recovery and <strong>Verify serving</strong> when you want an explicit inference check from the registry.
+              <strong>Serving verified</strong> means a live inference check passed for this model. <strong>Fresh verify</strong> means that proof is recent enough to trust immediately. <strong>Stale verify</strong> means the model was verified before, but the proof is old. Use <strong>View deployments</strong> or <strong>Open degraded nodes</strong> for node-level recovery and <strong>Verify now</strong> when you want a new explicit inference check from the registry.
             </div>
             <div className="help-actions">
               <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
@@ -621,9 +629,12 @@ export function Models() {
               const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
               const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
               const overview = modelOverviewByID.get(model.id)!;
+              const runtime = modelRuntimeByID.get(model.id)!;
               const shortName = model.id.split('/').pop() || model.id;
               const provider = model.owned_by || model.family || '';
               const hasVaultEntry = vaultIdByUri.has(model.id);
+              const deploymentsTarget = `/instances?model=${encodeURIComponent(model.id)}`;
+              const degradedTarget = `/instances?model=${encodeURIComponent(model.id)}&focus=degraded`;
 
               return (
                 <div key={model.id} className="mobile-data-card">
@@ -644,11 +655,18 @@ export function Models() {
                     <div><span className="label-text">QUANT</span> <span>{model.quantization || 'FP16'}</span></div>
                     <div><span className="label-text">CONTEXT</span> <span className="mono">{model.max_context ? model.max_context.toLocaleString() : 'N/A'}</span></div>
                     <div><span className="label-text">SERVING</span> <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span></div>
-                    <div><span className="label-text">DEPLOYMENTS</span> <span className="mono">{overview.activeInstances}</span></div>
+                    <div><span className="label-text">DEPLOYMENTS</span> <span className="mono">{runtime.activeNodes}</span></div>
+                    <div><span className="label-text">VERIFY</span> <span className={`badge ${runtime.verificationFreshness === 'stale' ? 'status-warning' : runtime.verificationFreshness === 'never' ? 'status-inactive' : ''}`}>{runtime.verificationLabel}</span></div>
+                    {runtime.degradedNodes > 0 && (
+                      <div><span className="label-text">DEGRADED</span> <span className="mono">{runtime.degradedNodes} node{runtime.degradedNodes === 1 ? '' : 's'}</span></div>
+                    )}
                     <div><span className="label-text">DEPLOY</span> <span>{deployState.summary}</span></div>
                     <div><span className="label-text">STATUS</span> <span>{overview.summary}</span></div>
                     {overview.verifiedAt && (
                       <div><span className="label-text">LAST VERIFY</span> <span>{formatVerificationMeta(overview.verifiedAt, overview.latestVerificationLatencyMs)}</span></div>
+                    )}
+                    {runtime.latestIssue && (
+                      <div><span className="label-text">LATEST ISSUE</span> <span>{runtime.latestIssue}</span></div>
                     )}
                   </div>
 
@@ -656,22 +674,31 @@ export function Models() {
                     <button
                       type="button"
                       className="mobile-data-action"
-                      onClick={() => navigate(overview.activeInstances > 0 ? '/instances' : deployState.actionTarget)}
+                      onClick={() => navigate(runtime.activeNodes > 0 ? deploymentsTarget : deployState.actionTarget)}
                     >
-                      {overview.activeInstances > 0 ? 'VIEW DEPLOYMENTS' : deployState.actionLabel}
+                      {runtime.activeNodes > 0 ? 'VIEW DEPLOYMENTS' : deployState.actionLabel}
                     </button>
-                    {overview.activeInstances > 0 ? (
+                    {runtime.activeNodes > 0 ? (
                       <button
                         type="button"
-                        className={`mobile-data-action${overview.state === 'serving_verified' ? ' muted' : ''}`}
+                        className={`mobile-data-action${overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? ' muted' : ''}`}
                         disabled={verifyingModelID === model.id}
-                        onClick={() => overview.state === 'serving_verified'
+                        onClick={() => overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh'
                           ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)
                           : handleVerifyServing(model)}
                       >
-                        {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' ? 'DEPLOY MORE' : 'VERIFY SERVING'}
+                        {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? 'DEPLOY MORE' : 'VERIFY NOW'}
                       </button>
                     ) : null}
+                    {runtime.degradedNodes > 0 && (
+                      <button
+                        type="button"
+                        className="mobile-data-action muted"
+                        onClick={() => navigate(degradedTarget)}
+                      >
+                        OPEN DEGRADED NODES
+                      </button>
+                    )}
                     {hasVaultEntry && !isLoaded && !isDeploying && (
                       <button
                         type="button"
@@ -726,9 +753,12 @@ export function Models() {
             const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
             const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
             const overview = modelOverviewByID.get(model.id)!;
+            const runtime = modelRuntimeByID.get(model.id)!;
             const shortName = model.id.split('/').pop() || model.id;
             const provider = model.owned_by || model.family || '';
             const hasVaultEntry = vaultIdByUri.has(model.id);
+            const deploymentsTarget = `/instances?model=${encodeURIComponent(model.id)}`;
+            const degradedTarget = `/instances?model=${encodeURIComponent(model.id)}&focus=degraded`;
 
             return (
               <div
@@ -748,7 +778,9 @@ export function Models() {
                   </div>
                   <div style={{ marginTop: '0.45rem', display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
                     <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
-                    {overview.activeInstances > 0 && <span className="badge">{overview.activeInstances} DEPLOYMENT{overview.activeInstances === 1 ? '' : 'S'}</span>}
+                    {runtime.activeNodes > 0 && <span className="badge">{runtime.activeNodes} DEPLOYMENT{runtime.activeNodes === 1 ? '' : 'S'}</span>}
+                    <span className={`badge ${runtime.verificationFreshness === 'stale' ? 'status-warning' : runtime.verificationFreshness === 'never' ? 'status-inactive' : ''}`}>{runtime.verificationLabel}</span>
+                    {runtime.degradedNodes > 0 && <span className="badge status-error">{runtime.degradedNodes} DEGRADED NODE{runtime.degradedNodes === 1 ? '' : 'S'}</span>}
                   </div>
                   <div style={{ marginTop: '0.45rem', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                     {overview.summary}
@@ -756,6 +788,11 @@ export function Models() {
                   {overview.verifiedAt && (
                     <div style={{ marginTop: '0.45rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                       Last verify: {formatVerificationMeta(overview.verifiedAt, overview.latestVerificationLatencyMs)}
+                    </div>
+                  )}
+                  {runtime.latestIssue && (
+                    <div style={{ marginTop: '0.45rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Latest issue: {runtime.latestIssue}
                     </div>
                   )}
                 </div>
@@ -774,29 +811,38 @@ export function Models() {
                   <button
                     type="button"
                     className="action-link"
-                    onClick={() => navigate(overview.activeInstances > 0 ? '/instances' : deployState.actionTarget)}
+                    onClick={() => navigate(runtime.activeNodes > 0 ? deploymentsTarget : deployState.actionTarget)}
                   >
-                    {overview.activeInstances > 0 ? 'VIEW DEPLOYMENTS' : deployState.actionLabel}
+                    {runtime.activeNodes > 0 ? 'VIEW DEPLOYMENTS' : deployState.actionLabel}
                   </button>
-                  {overview.activeInstances > 0 && (
+                  {runtime.activeNodes > 0 && (
                     <button
                       type="button"
-                      className={`action-link${overview.state === 'serving_verified' ? ' muted' : ''}`}
+                      className={`action-link${overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? ' muted' : ''}`}
                       disabled={verifyingModelID === model.id}
-                      onClick={() => overview.state === 'serving_verified'
+                      onClick={() => overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh'
                         ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)
                         : handleVerifyServing(model)}
                     >
-                      {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' ? 'DEPLOY MORE' : 'VERIFY SERVING'}
+                      {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? 'DEPLOY MORE' : 'VERIFY NOW'}
                     </button>
                   )}
-                  {overview.activeInstances === 0 && (
+                  {runtime.activeNodes === 0 && (
                     <button
                       type="button"
                       className={`action-link${deployState.state === 'capacity' ? ' muted' : ''}`}
                       onClick={() => navigate('/instances')}
                     >
                       OPEN CLUSTERS
+                    </button>
+                  )}
+                  {runtime.degradedNodes > 0 && (
+                    <button
+                      type="button"
+                      className="action-link danger"
+                      onClick={() => navigate(degradedTarget)}
+                    >
+                      OPEN DEGRADED NODES
                     </button>
                   )}
                   {hasVaultEntry && !isLoaded && !isDeploying && (

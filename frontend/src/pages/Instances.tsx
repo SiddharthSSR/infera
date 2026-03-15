@@ -611,12 +611,10 @@ export function Instances() {
   const { data: workers } = useWorkers();
 
   const [preselectedModel, setPreselectedModel] = useState<string | null>(null);
-
-  const filteredInstances = instances?.filter(instance => {
-    if (statusFilter === 'active') return !['terminated', 'terminating'].includes(instance.status);
-    if (statusFilter === 'all') return true;
-    return instance.status === statusFilter;
-  }) || [];
+  const drilldownModel = searchParams.get('model');
+  const drilldownFocus = searchParams.get('focus');
+  const drilldownModelLabel = drilldownModel?.split('/').pop() || drilldownModel;
+  const allInstances = instances || [];
 
   const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];
   const totalGpuUtil = healthyWorkers.length > 0
@@ -628,6 +626,17 @@ export function Instances() {
     () => (providers || []).filter((status) => CONFIGURABLE_PROVIDERS.includes(status.provider as typeof CONFIGURABLE_PROVIDERS[number])),
     [providers],
   );
+  const filteredInstances = useMemo(() => {
+    return allInstances.filter((instance) => {
+      if (drilldownModel && !(instance.models || []).includes(drilldownModel)) return false;
+      if (statusFilter === 'active' && ['terminated', 'terminating'].includes(instance.status)) return false;
+      if (statusFilter !== 'active' && statusFilter !== 'all' && instance.status !== statusFilter) return false;
+      if (drilldownFocus === 'degraded') {
+        return getInstanceReadiness(instance, workers).tone === 'error';
+      }
+      return true;
+    });
+  }, [allInstances, drilldownFocus, drilldownModel, statusFilter, workers]);
   const connectedProviders = visibleProviderStatuses.filter((status) => status.connected);
   const provisioningState = describeProvisioningState(configuredProviders, visibleProviderStatuses, offerings?.length ?? 0);
   const providerSummary = filteredInstances.length > 0
@@ -883,6 +892,30 @@ export function Instances() {
         </div>
       </div>
 
+      {drilldownModel && (
+        <div className="grid-row">
+          <div className="cell" style={{ gridColumn: 'span 4' }}>
+            <div className="help-callout">
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                <div>
+                  <div className="label-text">MODEL DRILLDOWN</div>
+                  <div className="help-callout-copy">
+                    Showing {drilldownFocus === 'degraded' ? 'degraded runtime nodes' : 'nodes'} for <strong>{drilldownModelLabel}</strong>. Use this view to inspect the deployments behind the model health signal from the registry.
+                  </div>
+                </div>
+                <span className={`badge ${drilldownFocus === 'degraded' ? 'status-error' : ''}`}>
+                  {filteredInstances.length} NODE{filteredInstances.length === 1 ? '' : 'S'}
+                </span>
+              </div>
+              <div className="help-actions">
+                <button className="action-btn" onClick={() => setSearchParams({}, { replace: true })}>CLEAR DRILLDOWN</button>
+                <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Metrics Row */}
       <div className="grid-row instances-metrics-row">
         <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
@@ -960,6 +993,11 @@ export function Instances() {
                 <option value="stopped">Stopped</option>
                 <option value="all">All</option>
               </select>
+              {drilldownModel && (
+                <button className="action-btn" onClick={() => setSearchParams({}, { replace: true })}>
+                  CLEAR MODEL FILTER
+                </button>
+              )}
             </div>
           </div>
 
@@ -967,14 +1005,24 @@ export function Instances() {
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading...</div>
           ) : filteredInstances.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '4rem 0', color: 'var(--text-secondary)' }}>
-              <div style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>{provisioningState?.title || 'No instances found'}</div>
+              <div style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+                {drilldownModel
+                  ? `No ${drilldownFocus === 'degraded' ? 'degraded ' : ''}instances found for ${drilldownModelLabel}`
+                  : provisioningState?.title || 'No instances found'}
+              </div>
               <div style={{ maxWidth: '34rem', margin: '0 auto 1.25rem', lineHeight: 1.6 }}>
-                {provisioningState?.detail || 'Provision your first node to start serving models from this workspace.'}
+                {drilldownModel
+                  ? 'This model does not currently match the selected node view. Clear the drilldown to return to the full cluster inventory.'
+                  : provisioningState?.detail || 'Provision your first node to start serving models from this workspace.'}
               </div>
               <div className="help-actions" style={{ justifyContent: 'center' }}>
                 <button
                   className="action-btn"
                   onClick={() => {
+                    if (drilldownModel) {
+                      setSearchParams({}, { replace: true });
+                      return;
+                    }
                     if (provisioningState) {
                       navigate('/workspace');
                       return;
@@ -982,7 +1030,7 @@ export function Instances() {
                     openFreshProvisionModal();
                   }}
                 >
-                  {provisioningState?.action || 'PROVISION NEW NODE'}
+                  {drilldownModel ? 'CLEAR DRILLDOWN' : provisioningState?.action || 'PROVISION NEW NODE'}
                 </button>
                 <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
                 <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
