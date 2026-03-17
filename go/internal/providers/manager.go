@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -154,6 +155,13 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 		req.GatewayAddress = m.gatewayAddress
 	}
 
+	if reusable := m.findReusableStoppedInstance(providerType, req); reusable != nil {
+		if err := m.Start(ctx, reusable.ID); err != nil {
+			return nil, err
+		}
+		return reusable, nil
+	}
+
 	// Create instance via provider
 	instance, err := provider.Provision(ctx, req)
 	if err != nil {
@@ -228,6 +236,14 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 	// Resume cost tracking
 	m.costs.StartTracking(instance)
 
+	m.mu.Lock()
+	now := time.Now()
+	instance.Status = InstanceStatusProvisioning
+	instance.StartedAt = &now
+	instance.StoppedAt = nil
+	instance.ErrorMessage = ""
+	m.mu.Unlock()
+
 	return nil
 }
 
@@ -249,6 +265,12 @@ func (m *Manager) Stop(ctx context.Context, instanceID string) error {
 
 	// Stop cost tracking
 	m.costs.StopTracking(instanceID)
+
+	m.mu.Lock()
+	now := time.Now()
+	instance.Status = InstanceStatusStopped
+	instance.StoppedAt = &now
+	m.mu.Unlock()
 
 	return nil
 }
@@ -298,6 +320,54 @@ func (m *Manager) ListInstancesByWorkspace(workspaceID string) []*Instance {
 		}
 	}
 	return instances
+}
+
+func (m *Manager) findReusableStoppedInstance(providerType ProviderType, req *ProvisionRequest) *Instance {
+	if len(req.Models) == 0 {
+		return nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var best *Instance
+	for _, inst := range m.instances {
+		if inst.Provider != providerType || inst.WorkspaceID != req.WorkspaceID {
+			continue
+		}
+		if inst.Status != InstanceStatusStopped {
+			continue
+		}
+		if inst.GPUType != req.GPUType || inst.GPUCount != req.GPUCount {
+			continue
+		}
+		if !sameModels(inst.Models, req.Models) {
+			continue
+		}
+		if best == nil || stoppedAtUnix(inst) > stoppedAtUnix(best) {
+			best = inst
+		}
+	}
+
+	return best
+}
+
+func sameModels(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	left := append([]string(nil), a...)
+	right := append([]string(nil), b...)
+	slices.Sort(left)
+	slices.Sort(right)
+	return slices.Equal(left, right)
+}
+
+func stoppedAtUnix(inst *Instance) int64 {
+	if inst.StoppedAt != nil {
+		return inst.StoppedAt.Unix()
+	}
+	return inst.CreatedAt.Unix()
 }
 
 // RefreshInstances updates instance status from providers.

@@ -17,6 +17,14 @@ import { useAuthSession } from '../lib/auth-context';
 const FAMILY_OPTIONS = ['mistral', 'llama', 'qwen', 'phi', 'gemma', 'deepseek', 'falcon', 'mixtral', 'yi', 'command-r'];
 const QUANT_OPTIONS = ['none', 'GPTQ', 'AWQ', 'GGUF', 'FP8', 'INT8', 'INT4'];
 const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai'] as const;
+const RECOMMENDED_MODEL_IDS = [
+  'Qwen/Qwen3-4B-Thinking-2507',
+  'moonshotai/Kimi-K2.5-Instruct',
+] as const;
+const RECOMMENDED_MODEL_LABELS: Record<string, string> = {
+  'Qwen/Qwen3-4B-Thinking-2507': 'Budget Reasoning',
+  'moonshotai/Kimi-K2.5-Instruct': 'High-Capacity',
+};
 const GPU_VRAM_GB: Record<string, number> = {
   RTX_4090: 24,
   RTX_4080: 16,
@@ -490,6 +498,12 @@ export function Models() {
   const readyCount = filtered.filter((model) => describeDeployReadiness(model, visibleOfferings, visibleProviders).state === 'ready').length;
   const activeCount = filtered.filter((model) => (modelOverviewByID.get(model.id)?.activeInstances || 0) > 0).length;
   const servingVerifiedCount = filtered.filter((model) => modelOverviewByID.get(model.id)?.state === 'serving_verified').length;
+  const recommendedModels = useMemo(
+    () => RECOMMENDED_MODEL_IDS
+      .map((id) => displayModels.find((model) => model.id === id))
+      .filter((model): model is Model => Boolean(model)),
+    [displayModels],
+  );
 
   const handleRemove = async (modelId: string) => {
     const vaultId = vaultIdByUri.get(modelId);
@@ -604,6 +618,52 @@ export function Models() {
           </div>
         </div>
       </div>
+
+      {recommendedModels.length > 0 && (
+        <div className="grid-row">
+          <div className="cell" style={{ gridColumn: 'span 4' }}>
+            <div className="help-callout">
+              <div className="label-text">RECOMMENDED NOW</div>
+              <div className="help-callout-copy">
+                Curated picks from the expanded catalog. Qwen is the lighter reasoning option to trial quickly; Kimi is the high-capacity frontier candidate and will usually need larger infrastructure than the current default fleet.
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.85rem', marginTop: '1rem' }}>
+                {recommendedModels.map((model) => {
+                  const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
+                  const overview = modelOverviewByID.get(model.id);
+                  return (
+                    <div key={model.id} className="workspace-provider-card">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
+                        <div>
+                          <div style={{ fontSize: '1rem', fontWeight: 600 }}>{model.id.split('/').pop() || model.id}</div>
+                          <div className="mono" style={{ marginTop: '0.3rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                            {model.parameters || 'N/A'} · {model.family || model.owned_by || 'model'}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          {RECOMMENDED_MODEL_LABELS[model.id] ? <span className="badge">{RECOMMENDED_MODEL_LABELS[model.id]}</span> : null}
+                          {overview ? <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span> : null}
+                        </div>
+                      </div>
+                      <div style={{ marginTop: '0.8rem', color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.6 }}>
+                        {deployState.summary}
+                      </div>
+                      <div style={{ marginTop: '0.9rem', display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <button className="action-btn" onClick={() => navigate(deployState.actionTarget)}>
+                          {deployState.actionLabel}
+                        </button>
+                        <button className="action-btn" onClick={() => setSearchQuery(model.id.split('/').pop() || model.id)}>
+                          FILTER
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isMobile ? (
         <div className="mobile-data-list" style={{ padding: '1rem' }}>

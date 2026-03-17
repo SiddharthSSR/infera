@@ -29,6 +29,8 @@ const PROVIDER_LABELS: Record<ProviderType, string> = {
 const AVAILABLE_MODELS = [
   { id: 'mistralai/Mistral-7B-Instruct-v0.2', name: 'Mistral 7B Instruct', vram: 16, gated: false },
   { id: 'meta-llama/Llama-3-8B-Instruct', name: 'Llama 3 8B Instruct', vram: 18, gated: true },
+  { id: 'Qwen/Qwen3-4B-Thinking-2507', name: 'Qwen3 4B Thinking 2507', vram: 12, gated: false },
+  { id: 'moonshotai/Kimi-K2.5-Instruct', name: 'Kimi K2.5 Instruct', vram: 660, gated: false },
   { id: 'microsoft/phi-2', name: 'Phi-2 (2.7B)', vram: 6, gated: false },
   { id: 'google/gemma-7b-it', name: 'Gemma 7B Instruct', vram: 16, gated: true },
 ];
@@ -164,7 +166,7 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
           <div>
             <label className="block text-sm text-gray-400 mb-1.5">GPU Type</label>
             <div className="grid grid-cols-2 gap-2">
-              {(availableGPUs.length > 0 ? availableGPUs : ['RTX_4090', 'A100_40GB', 'A100_80GB', 'H100'] as GPUType[]).map(gpu => {
+              {availableGPUs.map(gpu => {
                 const offering = providerOfferings.find(o => o.gpu_type === gpu);
                 return (
                   <button
@@ -195,6 +197,11 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
                 );
               })}
             </div>
+            {availableGPUs.length === 0 && (
+              <p className="text-sm text-amber-400">
+                No live GPU offerings are currently available for this provider.
+              </p>
+            )}
           </div>
 
           {/* GPU Count */}

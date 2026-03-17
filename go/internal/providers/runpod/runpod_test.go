@@ -123,6 +123,12 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	if got := input["imageName"]; got != "custom/worker:v1" {
 		t.Fatalf("expected custom image, got %#v", got)
 	}
+	if got := input["volumeMountPath"]; got != "/workspace" {
+		t.Fatalf("expected persistent workspace mount, got %#v", got)
+	}
+	if got := input["volumeInGb"]; got != float64(70) {
+		t.Fatalf("expected volume size 70GB, got %#v", got)
+	}
 
 	env, ok := input["env"].([]interface{})
 	if !ok {
@@ -130,6 +136,94 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	}
 	assertEnvContains(t, env, "INFERA_ROUTER_ADDRESS", "https://gateway.example.com")
 	assertEnvContains(t, env, "INFERA_WORKER_SHARED_TOKEN", "worker-shared-token")
+	assertEnvContains(t, env, "XDG_CACHE_HOME", "/workspace/.cache")
+	assertEnvContains(t, env, "HF_HOME", "/workspace/.cache/huggingface")
+	assertEnvContains(t, env, "HUGGINGFACE_HUB_CACHE", "/workspace/.cache/huggingface/hub")
+}
+
+func TestListOfferingsUsesLiveRunPodValues(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[
+			{"id":"gpu-4090","displayName":"NVIDIA GeForce RTX 4090","memoryInGb":24,"communityPrice":0.41,"securePrice":0.52,"communitySpotPrice":0.22,"secureSpotPrice":0.31,"maxGpuCountCommunityCloud":14,"maxGpuCountSecureCloud":0},
+			{"id":"gpu-unknown","displayName":"NVIDIA Mystery GPU","memoryInGb":48,"communityPrice":0.99,"securePrice":1.10,"communitySpotPrice":0.45,"secureSpotPrice":0.55,"maxGpuCountCommunityCloud":8,"maxGpuCountSecureCloud":0},
+			{"id":"gpu-h100","displayName":"NVIDIA H100 PCIe","memoryInGb":80,"communityPrice":1.99,"securePrice":2.20,"communitySpotPrice":1.09,"secureSpotPrice":1.30,"maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":0}
+		]}}`), nil
+	})
+
+	offerings, err := provider.ListOfferings(context.Background())
+	if err != nil {
+		t.Fatalf("ListOfferings: %v", err)
+	}
+
+	if len(offerings) != 1 {
+		t.Fatalf("expected 1 supported live offering, got %d", len(offerings))
+	}
+
+	offering := offerings[0]
+	if offering.GPUType != providers.GPURTX4090 {
+		t.Fatalf("expected RTX_4090, got %s", offering.GPUType)
+	}
+	if offering.CostPerHour != 0.41 {
+		t.Fatalf("expected live cost 0.41, got %f", offering.CostPerHour)
+	}
+	if offering.SpotPrice != 0.22 {
+		t.Fatalf("expected live spot price 0.22, got %f", offering.SpotPrice)
+	}
+	if offering.Available != 14 {
+		t.Fatalf("expected live availability 14, got %d", offering.Available)
+	}
+}
+
+func TestListOfferingsReturnsErrorWhenLiveQueryFails(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusInternalServerError, `{"errors":[{"message":"boom"}]}`), nil
+	})
+
+	_, err = provider.ListOfferings(context.Background())
+	if err == nil {
+		t.Fatal("expected ListOfferings to return live query error")
+	}
+
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Provider != providers.ProviderRunPod {
+		t.Fatalf("expected runpod provider error, got %q", providerErr.Provider)
+	}
+}
+
+func TestProvisionRejectsUnsupportedGPUType(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:    "worker",
+		GPUType: providers.GPUType("UNKNOWN_GPU"),
+	})
+	if err == nil {
+		t.Fatal("expected unsupported GPU type error")
+	}
+
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != "invalid_gpu_type" {
+		t.Fatalf("expected invalid_gpu_type, got %q", providerErr.Code)
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

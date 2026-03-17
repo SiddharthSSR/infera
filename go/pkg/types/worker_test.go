@@ -7,10 +7,10 @@ import (
 
 func TestWorkerStatsCurrentLoad(t *testing.T) {
 	tests := []struct {
-		name     string
-		stats    WorkerStats
-		wantMin  float64
-		wantMax  float64
+		name    string
+		stats   WorkerStats
+		wantMin float64
+		wantMax float64
 	}{
 		{
 			name:    "idle worker",
@@ -21,6 +21,12 @@ func TestWorkerStatsCurrentLoad(t *testing.T) {
 		{
 			name:    "GPU heavy",
 			stats:   WorkerStats{GPUUtilization: 0.9},
+			wantMin: 0.4,
+			wantMax: 0.5,
+		},
+		{
+			name:    "GPU heavy percent scale",
+			stats:   WorkerStats{GPUUtilization: 90},
 			wantMin: 0.4,
 			wantMax: 0.5,
 		},
@@ -61,14 +67,14 @@ func TestWorkerStatsCurrentLoad(t *testing.T) {
 
 func TestWorkerStatsIsOverloaded(t *testing.T) {
 	t.Run("not overloaded", func(t *testing.T) {
-		s := &WorkerStats{GPUUtilization: 0.5}
+		s := &WorkerStats{GPUUtilization: 50}
 		if s.IsOverloaded() {
 			t.Error("should not be overloaded at 50% GPU")
 		}
 	})
 
 	t.Run("overloaded by load", func(t *testing.T) {
-		s := &WorkerStats{GPUUtilization: 1.0, QueueDepth: 200, MemoryUsedBytes: 16e9, MemoryTotalBytes: 16e9}
+		s := &WorkerStats{GPUUtilization: 100, QueueDepth: 200, MemoryUsedBytes: 16e9, MemoryTotalBytes: 16e9}
 		if !s.IsOverloaded() {
 			t.Error("should be overloaded")
 		}
@@ -100,14 +106,14 @@ func TestWorkerInfoHasModel(t *testing.T) {
 
 func TestWorkerInfoHasCapacity(t *testing.T) {
 	t.Run("healthy with capacity", func(t *testing.T) {
-		w := &WorkerInfo{Status: WorkerStatusHealthy, Stats: WorkerStats{GPUUtilization: 0.5}}
+		w := &WorkerInfo{Status: WorkerStatusHealthy, Stats: WorkerStats{GPUUtilization: 50}}
 		if !w.HasCapacity() {
 			t.Error("should have capacity")
 		}
 	})
 
 	t.Run("unhealthy has no capacity", func(t *testing.T) {
-		w := &WorkerInfo{Status: WorkerStatusUnhealthy, Stats: WorkerStats{GPUUtilization: 0.1}}
+		w := &WorkerInfo{Status: WorkerStatusUnhealthy, Stats: WorkerStats{GPUUtilization: 10}}
 		if w.HasCapacity() {
 			t.Error("unhealthy should not have capacity")
 		}

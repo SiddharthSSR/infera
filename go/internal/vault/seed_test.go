@@ -19,18 +19,18 @@ func TestSeedDefaultModels(t *testing.T) {
 		}
 
 		count, _ := s.Count()
-		if count != 8 {
-			t.Errorf("expected 8 seeded models, got %d", count)
+		if count != 10 {
+			t.Errorf("expected 10 seeded models, got %d", count)
 		}
 
 		// Verify families
 		families, _ := s.ListFamilies()
-		if len(families) < 4 {
-			t.Errorf("expected at least 4 families, got %d: %v", len(families), families)
+		if len(families) < 5 {
+			t.Errorf("expected at least 5 families, got %d: %v", len(families), families)
 		}
 	})
 
-	t.Run("skips if models already exist", func(t *testing.T) {
+	t.Run("adds missing defaults without duplicating existing models", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "test_seed_skip.db")
 		s, err := NewStore(dbPath)
 		if err != nil {
@@ -46,8 +46,8 @@ func TestSeedDefaultModels(t *testing.T) {
 		}
 
 		count, _ := s.Count()
-		if count != 1 {
-			t.Errorf("expected 1 model (seed should skip), got %d", count)
+		if count != 11 {
+			t.Errorf("expected 11 models after additive seed, got %d", count)
 		}
 	})
 
@@ -63,8 +63,8 @@ func TestSeedDefaultModels(t *testing.T) {
 		SeedDefaultModels(s)
 
 		count, _ := s.Count()
-		if count != 8 {
-			t.Errorf("expected 8 models after double seed, got %d", count)
+		if count != 10 {
+			t.Errorf("expected 10 models after double seed, got %d", count)
 		}
 	})
 }

@@ -30,6 +30,11 @@ ENV INFERA_HTTP_PORT=8081
 ENV INFERA_GRPC_PORT=50051
 ENV INFERA_LOG_LEVEL=INFO
 ENV INFERA_LOG_FORMAT=json
+ENV XDG_CACHE_HOME=/workspace/.cache
+ENV HF_HOME=/workspace/.cache/huggingface
+ENV HUGGINGFACE_HUB_CACHE=/workspace/.cache/huggingface/hub
+ENV TRANSFORMERS_CACHE=/workspace/.cache/huggingface/hub
+ENV TORCH_HOME=/workspace/.cache/torch
 
 # vLLM specific settings
 ENV VLLM_USE_MODELSCOPE=false

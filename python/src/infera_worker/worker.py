@@ -35,6 +35,13 @@ class Worker:
         self._total_latency_ms = 0.0
         self._latencies: list[float] = []  # For percentile calculation
         self._started_at = datetime.now()
+        self._active_requests = 0
+        self._queued_requests = 0
+        self._request_semaphore = asyncio.Semaphore(
+            max(1, self.config.max_concurrent_requests)
+        )
+        self._all_requests_idle = asyncio.Event()
+        self._all_requests_idle.set()
         
         # Lifecycle
         self._shutdown_event = asyncio.Event()
@@ -66,9 +73,15 @@ class Worker:
         
         if graceful:
             self.state = WorkerState.DRAINING
-            # Wait for active requests to complete (with timeout)
-            # In production, track active requests and wait
-            await asyncio.sleep(1)
+            try:
+                await asyncio.wait_for(self._all_requests_idle.wait(), timeout=1)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Timed out waiting for in-flight requests to drain",
+                    worker_id=self.worker_id,
+                    active_requests=self._active_requests,
+                    queued_requests=self._queued_requests,
+                )
         
         self.state = WorkerState.SHUTTING_DOWN
         self._shutdown_event.set()
@@ -120,13 +133,14 @@ class Worker:
         if self.engine is None:
             raise RuntimeError("Worker not ready: not initialized")
         
-        if self.state != WorkerState.READY:
+        if self.state not in {WorkerState.READY, WorkerState.BUSY}:
             raise RuntimeError(f"Worker not ready: {self.state}")
         
         if not self.engine.is_model_loaded(request.model_id):
             raise ValueError(f"Model {request.model_id} not loaded")
         
         start_time = datetime.now()
+        await self._acquire_request_slot()
         self._request_count += 1
         
         try:
@@ -153,6 +167,8 @@ class Worker:
                 error=str(e),
             )
             raise
+        finally:
+            self._release_request_slot()
 
     async def infer_stream(
         self, request: InferenceRequest
@@ -161,13 +177,14 @@ class Worker:
         if self.engine is None:
             raise RuntimeError("Worker not ready: not initialized")
         
-        if self.state != WorkerState.READY:
+        if self.state not in {WorkerState.READY, WorkerState.BUSY}:
             raise RuntimeError(f"Worker not ready: {self.state}")
         
         if not self.engine.is_model_loaded(request.model_id):
             raise ValueError(f"Model {request.model_id} not loaded")
         
         start_time = datetime.now()
+        await self._acquire_request_slot()
         self._request_count += 1
         
         try:
@@ -191,6 +208,8 @@ class Worker:
                 error=str(e),
             )
             raise
+        finally:
+            self._release_request_slot()
 
     async def cancel(self, request_id: str) -> bool:
         """Cancel an in-progress request."""
@@ -250,8 +269,8 @@ class Worker:
         gpu_util = self._get_gpu_utilization()
 
         return WorkerStats(
-            queue_depth=0,
-            active_requests=0,
+            queue_depth=self._queued_requests,
+            active_requests=self._active_requests,
             gpu_utilization=gpu_util,
             memory_used_bytes=used_memory,
             memory_total_bytes=total_memory,
@@ -289,3 +308,41 @@ class Worker:
         index = int(len(sorted_latencies) * p / 100)
         index = min(index, len(sorted_latencies) - 1)
         return sorted_latencies[index]
+
+    async def _acquire_request_slot(self) -> None:
+        """Track queued work until a concurrency slot is available."""
+        self._queued_requests += 1
+        self._refresh_runtime_state()
+        try:
+            await self._request_semaphore.acquire()
+        except Exception:
+            self._queued_requests -= 1
+            self._refresh_runtime_state()
+            raise
+
+        self._queued_requests -= 1
+        self._active_requests += 1
+        self._refresh_runtime_state()
+
+    def _release_request_slot(self) -> None:
+        """Release a concurrency slot and update runtime state."""
+        if self._active_requests > 0:
+            self._active_requests -= 1
+            self._request_semaphore.release()
+        self._refresh_runtime_state()
+
+    def _refresh_runtime_state(self) -> None:
+        """Update worker state based on in-flight demand."""
+        if self._active_requests == 0 and self._queued_requests == 0:
+            self._all_requests_idle.set()
+        else:
+            self._all_requests_idle.clear()
+
+        if self.state not in {WorkerState.READY, WorkerState.BUSY}:
+            return
+
+        if self._active_requests >= max(1, self.config.max_concurrent_requests):
+            self.state = WorkerState.BUSY
+            return
+
+        self.state = WorkerState.READY

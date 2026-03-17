@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestNormalizeMetricPath(t *testing.T) {
@@ -60,6 +61,9 @@ func TestGatewayMetricsRecordInference(t *testing.T) {
 	m := NewGatewayMetrics()
 	m.RecordInference(true, "success", 128, 150*time.Millisecond)
 	m.RecordInference(false, "inference_timeout", 0, 300*time.Millisecond)
+	m.RecordTTFT("model-1", false, 250*time.Millisecond)
+	m.RecordTPOT("model-1", false, 25*time.Millisecond)
+	m.RecordBatch("model-1", 4, 40*time.Millisecond)
 
 	successCount := testutil.ToFloat64(m.inferenceRequests.WithLabelValues("true", "success"))
 	if successCount != 1 {
@@ -75,6 +79,32 @@ func TestGatewayMetricsRecordInference(t *testing.T) {
 	if tokens != 128 {
 		t.Fatalf("expected tokens counter=128, got %v", tokens)
 	}
+
+	if got := histogramCountForLabels(t, m, "infera_gateway_inference_ttft_seconds", map[string]string{
+		"model":  "model-1",
+		"stream": "false",
+	}); got != 1 {
+		t.Fatalf("expected ttft histogram count=1, got %d", got)
+	}
+
+	if got := histogramCountForLabels(t, m, "infera_gateway_inference_tpot_seconds", map[string]string{
+		"model":  "model-1",
+		"stream": "false",
+	}); got != 1 {
+		t.Fatalf("expected tpot histogram count=1, got %d", got)
+	}
+
+	if got := histogramCountForLabels(t, m, "infera_gateway_batch_size", map[string]string{
+		"model": "model-1",
+	}); got != 1 {
+		t.Fatalf("expected batch size histogram count=1, got %d", got)
+	}
+
+	if got := histogramCountForLabels(t, m, "infera_gateway_batch_wait_seconds", map[string]string{
+		"model": "model-1",
+	}); got != 1 {
+		t.Fatalf("expected batch wait histogram count=1, got %d", got)
+	}
 }
 
 func TestGatewayMetricsHandler(t *testing.T) {
@@ -89,6 +119,9 @@ func TestGatewayMetricsHandler(t *testing.T) {
 	httpHandler.ServeHTTP(httpRec, httpReq)
 
 	m.RecordInference(false, "success", 42, 120*time.Millisecond)
+	m.RecordTTFT("model-1", false, 200*time.Millisecond)
+	m.RecordTPOT("model-1", false, 20*time.Millisecond)
+	m.RecordBatch("model-1", 2, 30*time.Millisecond)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -106,6 +139,10 @@ func TestGatewayMetricsHandler(t *testing.T) {
 		"infera_gateway_info",
 		"infera_gateway_inference_requests_total",
 		"infera_gateway_inference_duration_seconds",
+		"infera_gateway_inference_ttft_seconds",
+		"infera_gateway_inference_tpot_seconds",
+		"infera_gateway_batch_size",
+		"infera_gateway_batch_wait_seconds",
 		"infera_gateway_inference_tokens_total",
 	} {
 		if !strings.Contains(body, metric) {
@@ -142,4 +179,45 @@ func TestStatusRecorderPreservesFlusher(t *testing.T) {
 	if !rec.flushed {
 		t.Fatalf("expected underlying flusher to be invoked")
 	}
+}
+
+func histogramCountForLabels(t *testing.T, m *GatewayMetrics, name string, wantLabels map[string]string) uint64 {
+	t.Helper()
+
+	families, err := m.registry.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			if labelsMatch(metric, wantLabels) && metric.Histogram != nil {
+				return metric.GetHistogram().GetSampleCount()
+			}
+		}
+	}
+
+	return 0
+}
+
+func labelsMatch(metric *dto.Metric, want map[string]string) bool {
+	if len(want) == 0 {
+		return true
+	}
+
+	got := make(map[string]string, len(metric.GetLabel()))
+	for _, label := range metric.GetLabel() {
+		got[label.GetName()] = label.GetValue()
+	}
+
+	for key, value := range want {
+		if got[key] != value {
+			return false
+		}
+	}
+
+	return true
 }
