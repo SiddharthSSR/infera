@@ -47,6 +47,7 @@ func main() {
 	if workerImage == "" {
 		log.Warn("INFERA_WORKER_IMAGE is not set; provider-specific fallback images may use floating tags")
 	}
+	enableMockProvider := os.Getenv("INFERA_DEV_MODE") == "1" || os.Getenv("INFERA_ENABLE_MOCK_PROVIDER") == "1"
 	gatewayAddress := strings.TrimSpace(os.Getenv("INFERA_GATEWAY_ADDRESS"))
 	if gatewayAddress == "" {
 		gatewayAddress = fmt.Sprintf("localhost:%d", *httpPort)
@@ -72,8 +73,10 @@ func main() {
 		}
 	}()
 
-	// Register mock provider (always available for testing)
-	instanceMgr.RegisterProvider(mock.New())
+	if enableMockProvider {
+		instanceMgr.RegisterProvider(mock.New())
+		log.Info("provider registered", slog.String("provider", "mock"))
+	}
 
 	// Register RunPod if API key provided
 	if *runpodKey != "" {

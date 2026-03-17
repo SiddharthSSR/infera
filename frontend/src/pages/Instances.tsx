@@ -296,7 +296,7 @@ function useInstanceActions(instance: Instance) {
       toast.success('Instance started');
     } catch (err) {
       console.error('Failed to start instance', err);
-      toast.error('Failed to start');
+      toast.error(err instanceof Error ? err.message : 'Failed to start');
     }
   };
 
@@ -306,7 +306,7 @@ function useInstanceActions(instance: Instance) {
       toast.success('Instance stopped');
     } catch (err) {
       console.error('Failed to stop instance', err);
-      toast.error('Failed to stop');
+      toast.error(err instanceof Error ? err.message : 'Failed to stop');
     }
   };
 
@@ -448,19 +448,23 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const provisionMutation = useProvisionInstance();
   const { data: vaultModels } = useVaultModels({ status: 'available' });
+  const initializedDraftRef = useRef<string | null>(null);
 
   const getOfferingKey = (o: GPUOffering) =>
     `${o.provider}-${o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}`;
 
   // Deduplicate offerings
-  const dedupedOfferings = offerings ? Array.from(
-    offerings.reduce((map, o) => {
-      const key = getOfferingKey(o);
-      const existing = map.get(key);
-      if (!existing || o.cost_per_hour < existing.cost_per_hour) map.set(key, o);
-      return map;
-    }, new Map<string, GPUOffering>()).values()
-  ) : undefined;
+  const dedupedOfferings = useMemo(
+    () => offerings ? Array.from(
+      offerings.reduce((map, o) => {
+        const key = getOfferingKey(o);
+        const existing = map.get(key);
+        if (!existing || o.cost_per_hour < existing.cost_per_hour) map.set(key, o);
+        return map;
+      }, new Map<string, GPUOffering>()).values()
+    ) : undefined,
+    [offerings],
+  );
   const provisioningState = describeProvisioningState(configuredProviders, providerStatuses, dedupedOfferings?.length ?? 0);
 
   const selectedOffering = dedupedOfferings?.find(o => getOfferingKey(o) === selectedGPU);
@@ -507,7 +511,16 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
   );
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      initializedDraftRef.current = null;
+      return;
+    }
+
+    const initKey = JSON.stringify({
+      draft: initialDraft || null,
+      preselectedModel: preselectedModel || null,
+    });
+    if (initializedDraftRef.current === initKey) return;
 
     setName(initialDraft?.name || '');
     setSpotInstance(Boolean(initialDraft?.spot_instance));
@@ -525,6 +538,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
     );
 
     setSelectedGPU(matchingOffering ? getOfferingKey(matchingOffering) : '');
+    initializedDraftRef.current = initKey;
   }, [dedupedOfferings, initialDraft, isOpen, preselectedModel]);
 
   useEffect(() => {
@@ -593,7 +607,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
     } catch (error) {
       const failureReason = error instanceof Error ? error.message : 'Provider request failed before an instance was created.';
       onProvisionFailed(request, failureReason);
-      toast.error('Failed to provision');
+      toast.error(failureReason);
     }
   };
 
@@ -848,7 +862,11 @@ export function Instances() {
     });
   }, [allInstances, drilldownFocus, drilldownModel, statusFilter, workers]);
   const connectedProviders = visibleProviderStatuses.filter((status) => status.connected);
-  const provisioningState = describeProvisioningState(configuredProviders, visibleProviderStatuses, offerings?.length ?? 0);
+  const visibleOfferings = useMemo(
+    () => (offerings || []).filter((offering) => CONFIGURABLE_PROVIDERS.includes(offering.provider as typeof CONFIGURABLE_PROVIDERS[number])),
+    [offerings],
+  );
+  const provisioningState = describeProvisioningState(configuredProviders, visibleProviderStatuses, visibleOfferings.length);
   const providerSummary = filteredInstances.length > 0
     ? [...new Set(filteredInstances.map((instance) => instance.provider))]
     : visibleProviderStatuses.filter((status) => configuredProviders.includes(status.provider)).map((status) => status.provider);
@@ -1580,8 +1598,10 @@ export function Instances() {
         onProvisioned={() => {
           setStatusFilter('active');
         }}
-        onProvisionFailed={() => {}}
-        offerings={offerings}
+        onProvisionFailed={(request) => {
+          setProvisionDraft(request);
+        }}
+        offerings={visibleOfferings}
         preselectedModel={preselectedModel}
         initialDraft={provisionDraft}
         providerStatuses={visibleProviderStatuses}

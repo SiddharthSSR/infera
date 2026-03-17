@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -443,6 +444,56 @@ func TestManagerStartStop(t *testing.T) {
 			t.Fatalf("expected 1 provider start call, got %d", len(provider.started))
 		}
 	})
+}
+
+func TestManagerStartRejectedForTerminatedInstance(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	provider := newMockTestProvider()
+	mgr.RegisterProvider(provider)
+
+	ctx := context.Background()
+	req := &ProvisionRequest{Name: "terminated-start", GPUType: GPURTX4090}
+	instance, _ := mgr.Provision(ctx, req)
+	instance.Status = InstanceStatusTerminated
+
+	err := mgr.Start(ctx, instance.ID)
+	if err == nil {
+		t.Fatal("expected terminated instance start to fail")
+	}
+
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != ProviderErrorNotFound {
+		t.Fatalf("expected not_found, got %q", providerErr.Code)
+	}
+}
+
+func TestManagerRefreshMarksMissingInstanceTerminated(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	provider := newMockTestProvider()
+	mgr.RegisterProvider(provider)
+
+	ctx := context.Background()
+	req := &ProvisionRequest{Name: "missing-on-refresh", GPUType: GPURTX4090}
+	instance, _ := mgr.Provision(ctx, req)
+	delete(provider.instances, instance.ProviderID)
+
+	if err := mgr.RefreshInstances(ctx); err != nil {
+		t.Fatalf("RefreshInstances failed: %v", err)
+	}
+
+	refreshed, ok := mgr.GetInstance(instance.ID)
+	if !ok {
+		t.Fatal("expected tracked instance to still exist")
+	}
+	if refreshed.Status != InstanceStatusTerminated {
+		t.Fatalf("expected terminated status, got %s", refreshed.Status)
+	}
+	if refreshed.ErrorMessage == "" {
+		t.Fatal("expected refresh to persist missing-instance error")
+	}
 }
 
 func TestManagerProvisionReusesStoppedInstance(t *testing.T) {

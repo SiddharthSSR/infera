@@ -260,8 +260,9 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
       toast.success(`Registered ${form.name}`);
       setForm({ name: '', source_uri: '', family: '', parameters: '', quantization: 'none', max_context: 4096, vram_required: 0, tags: '' });
       onClose();
-    } catch {
-      toast.error('Failed to register model');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to register model';
+      toast.error(message);
     }
   };
 

@@ -223,6 +223,13 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 	if !exists {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
+	if instance.Status == InstanceStatusTerminated {
+		return &ProviderError{
+			Provider: instance.Provider,
+			Code:     ProviderErrorNotFound,
+			Message:  "instance can no longer be started because the provider no longer reports it",
+		}
+	}
 
 	provider, err := m.resolveProvider(instance.WorkspaceID, instance.Provider)
 	if err != nil {
@@ -386,6 +393,20 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 		}
 		refreshed, err := provider.GetInstance(ctx, inst.ProviderID)
 		if err != nil {
+			var providerErr *ProviderError
+			if errors.As(err, &providerErr) && providerErr.Code == ProviderErrorNotFound {
+				m.mu.Lock()
+				if existing, exists := m.instances[inst.ID]; exists {
+					existing.Status = InstanceStatusTerminated
+					existing.ErrorMessage = "Provider no longer reports this instance"
+					now := time.Now()
+					if existing.StoppedAt == nil {
+						existing.StoppedAt = &now
+					}
+				}
+				m.mu.Unlock()
+				m.costs.StopTracking(inst.ID)
+			}
 			continue
 		}
 
