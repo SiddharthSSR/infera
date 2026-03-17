@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import type { Instance, GPUOffering, GPUType, ProviderStatus, ProviderType, VaultModel, Worker, ProvisionRequest } from '../types';
+import type { Instance, GPUOffering, KnownGPUType, GPUType, ProviderStatus, ProviderType, VaultModel, Worker, ProvisionRequest } from '../types';
 import { fetchWorkspaceProviderConfigs, sendChatCompletion } from '../lib/api';
 import {
   getDeploymentRemediation,
@@ -18,7 +18,7 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { InstanceMobileCard } from '../components/InstanceMobileCard';
 import { useAuthSession } from '../lib/auth-context';
 
-const GPU_VRAM_GB: Record<GPUType, number> = {
+const GPU_VRAM_GB: Record<KnownGPUType, number> = {
   RTX_4090: 24,
   RTX_4080: 16,
   A100_40GB: 40,
@@ -26,6 +26,11 @@ const GPU_VRAM_GB: Record<GPUType, number> = {
   H100: 80,
   L40S: 48,
 };
+
+function formatGPUDisplayName(gpuType: GPUType, displayName?: string) {
+  if (displayName?.trim()) return displayName.trim();
+  return gpuType.replace(/_/g, ' ');
+}
 
 const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai'] as const;
 const AUTO_VERIFY_DELAY_MS = 1500;
@@ -381,7 +386,7 @@ function InstanceRow({
       <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
         <div className="mono">{instance.name || instance.id.slice(0, 16)}</div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
-          {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
+          {instance.gpu_count}x {formatGPUDisplayName(instance.gpu_type)}
           {instance.models && instance.models.length > 0 && (
             <> &middot; {instance.models[0].split('/').pop()}</>
           )}
@@ -451,7 +456,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
   const initializedDraftRef = useRef<string | null>(null);
 
   const getOfferingKey = (o: GPUOffering) =>
-    `${o.provider}-${o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}`;
+    `${o.provider}-${o.provider_gpu_type_id || o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}`;
 
   // Deduplicate offerings
   const dedupedOfferings = useMemo(
@@ -468,7 +473,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
   const provisioningState = describeProvisioningState(configuredProviders, providerStatuses, dedupedOfferings?.length ?? 0);
 
   const selectedOffering = dedupedOfferings?.find(o => getOfferingKey(o) === selectedGPU);
-  const selectedGPUVram = selectedOffering ? GPU_VRAM_GB[selectedOffering.gpu_type] : undefined;
+  const selectedGPUVram = selectedOffering ? (selectedOffering.memory_gb || GPU_VRAM_GB[selectedOffering.gpu_type as KnownGPUType]) : undefined;
 
   const allVaultModels = vaultModels?.models;
   const selectedModelRecord = useMemo(
@@ -494,7 +499,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
     if (!selectedModelRecord?.vram_required) return dedupedOfferings;
 
     return dedupedOfferings.filter((offering) => {
-      const vramGB = GPU_VRAM_GB[offering.gpu_type] || 0;
+      const vramGB = offering.memory_gb || GPU_VRAM_GB[offering.gpu_type as KnownGPUType] || 0;
       return vramGB * 1024 >= selectedModelRecord.vram_required;
     });
   }, [dedupedOfferings, selectedModelRecord]);
@@ -581,6 +586,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
       name: name || 'infera-worker',
       provider: selectedOffering.provider,
       gpu_type: selectedOffering.gpu_type,
+      provider_gpu_type_id: selectedOffering.provider_gpu_type_id,
       gpu_count: selectedOffering.gpu_count,
       spot_instance: spotInstance,
       models: selectedModels.length > 0 ? selectedModels : undefined,
@@ -596,8 +602,8 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
       );
       toast.success(
         selectedModels.length > 0
-          ? `Provisioning ${selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : `${selectedModels.length} models`} on ${selectedOffering.gpu_type.replace('_', ' ')}`
-          : `Provisioning node on ${selectedOffering.gpu_type.replace('_', ' ')}`,
+          ? `Provisioning ${selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : `${selectedModels.length} models`} on ${formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}`
+          : `Provisioning node on ${formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}`,
       );
       onClose();
       setName('');
@@ -653,7 +659,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
               <div style={{ marginTop: '0.85rem', fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                 {selectedPreset ? `${selectedPreset.detail} ` : ''}
                 {pinnedModelCompatibleOfferings.length > 0
-                  ? `${presetOffering ? `Preferred preset currently maps to ${presetOffering.gpu_count}x ${presetOffering.gpu_type.replace('_', ' ')} on ${presetOffering.provider}. ` : ''}This model fits ${pinnedModelCompatibleOfferings.length} live GPU option${pinnedModelCompatibleOfferings.length === 1 ? '' : 's'}${recommendedOffering ? `, starting from $${recommendedOffering.cost_per_hour.toFixed(2)}/hr on ${recommendedOffering.provider}.` : '.'}`
+                  ? `${presetOffering ? `Preferred preset currently maps to ${presetOffering.gpu_count}x ${formatGPUDisplayName(presetOffering.gpu_type, presetOffering.display_name)} on ${presetOffering.provider}. ` : ''}This model fits ${pinnedModelCompatibleOfferings.length} live GPU option${pinnedModelCompatibleOfferings.length === 1 ? '' : 's'}${recommendedOffering ? `, starting from $${recommendedOffering.cost_per_hour.toFixed(2)}/hr on ${recommendedOffering.provider}.` : '.'}`
                   : 'No live GPU option currently satisfies the recorded VRAM requirement for this model.'}
               </div>
               {selectedPreset && pinnedModelCompatibleOfferings.length === 0 && (
@@ -700,7 +706,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
                           <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.5rem' }}>
-                            {o.gpu_count}x {o.gpu_type.replace('_', ' ')}
+                            {o.gpu_count}x {formatGPUDisplayName(o.gpu_type, o.display_name)}
                           </div>
                           <span className="badge">{o.provider.toUpperCase()}</span>
                         </div>
@@ -1198,7 +1204,7 @@ export function Instances() {
                         <div>
                           <div className="mono" style={{ fontSize: '0.85rem' }}>{instance.name || instance.id.slice(0, 16)}</div>
                           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                            {instance.gpu_count}x {instance.gpu_type.replace('_', ' ')}
+                            {instance.gpu_count}x {formatGPUDisplayName(instance.gpu_type)}
                           </div>
                         </div>
                         <span className={`badge ${incident?.tone ? `status-${incident.tone}` : ''}`}>{incident?.title}</span>
@@ -1515,7 +1521,7 @@ export function Instances() {
                         <div style={{ marginTop: '0.65rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
                           <span className="badge">{formatAttemptTime(attempt.updated_at)}</span>
                           {attempt.request.provider && <span className="badge">{attempt.request.provider.toUpperCase()}</span>}
-                          <span className="badge">{attempt.request.gpu_count || 1}x {attempt.request.gpu_type.replace('_', ' ')}</span>
+                          <span className="badge">{attempt.request.gpu_count || 1}x {formatGPUDisplayName(attempt.request.gpu_type)}</span>
                           {attempt.request.spot_instance ? <span className="badge">SPOT</span> : null}
                           {attempt.request.models?.length ? <span className="badge">{attempt.request.models.length} MODEL{attempt.request.models.length === 1 ? '' : 'S'}</span> : null}
                           {summary.inferenceVerified ? <span className="badge">INFERENCE VERIFIED</span> : null}

@@ -51,7 +51,7 @@ function describeDeployReadiness(model: Model, offerings: GPUOffering[], provide
   const requiredMB = model.vram_required || 0;
   const compatibleOfferings = offerings.filter((offering) => {
     if (!requiredMB) return true;
-    const vramGB = GPU_VRAM_GB[offering.gpu_type] || 0;
+    const vramGB = offering.memory_gb || GPU_VRAM_GB[offering.gpu_type] || 0;
     return vramGB * 1024 >= requiredMB;
   });
   const cheapest = compatibleOfferings.reduce<GPUOffering | null>((best, offering) => {

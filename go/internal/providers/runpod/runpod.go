@@ -94,7 +94,10 @@ type graphQLResponse struct {
 // Provision creates a new GPU pod.
 func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionRequest) (*providers.Instance, error) {
 	// Map our GPU types to RunPod GPU IDs
-	gpuTypeID := mapGPUType(req.GPUType)
+	gpuTypeID := strings.TrimSpace(req.ProviderGPUTypeID)
+	if gpuTypeID == "" {
+		gpuTypeID = mapGPUType(req.GPUType)
+	}
 	if gpuTypeID == "" {
 		return nil, &providers.ProviderError{
 			Provider: providers.ProviderRunPod,
@@ -561,10 +564,7 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 
 	offerings := make([]*providers.GPUOffering, 0, len(result.GpuTypes))
 	for _, gpu := range result.GpuTypes {
-		gpuType, ok := mapDisplayNameToGPUType(gpu.DisplayName)
-		if !ok {
-			continue
-		}
+		gpuType := gpuTypeFromDisplayName(gpu.DisplayName)
 		available := gpu.MaxGPUCountCommunity
 		if available == 0 {
 			available = gpu.MaxGPUCountSecureCloud
@@ -598,14 +598,16 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 		}
 
 		offerings = append(offerings, &providers.GPUOffering{
-			Provider:    providers.ProviderRunPod,
-			GPUType:     gpuType,
-			GPUCount:    1,
-			MemoryGB:    gpu.MemoryInGb,
-			CostPerHour: price,
-			SpotPrice:   spotPrice,
-			Region:      "global",
-			Available:   available,
+			Provider:          providers.ProviderRunPod,
+			GPUType:           gpuType,
+			DisplayName:       compactGPUDisplayName(gpu.DisplayName),
+			ProviderGPUTypeID: gpu.ID,
+			GPUCount:          1,
+			MemoryGB:          gpu.MemoryInGb,
+			CostPerHour:       price,
+			SpotPrice:         spotPrice,
+			Region:            "global",
+			Available:         available,
 		})
 	}
 
@@ -843,9 +845,7 @@ func (p *Provider) convertPod(pod *runpodPod) *providers.Instance {
 	}
 
 	if pod.Machine != nil {
-		if gpuType, ok := mapDisplayNameToGPUType(pod.Machine.GPUDisplayName); ok {
-			instance.GPUType = gpuType
-		}
+		instance.GPUType = gpuTypeFromDisplayName(pod.Machine.GPUDisplayName)
 		instance.CostPerHour = pod.Machine.CostPerHr
 	}
 
@@ -930,4 +930,23 @@ func mapDisplayNameToGPUType(displayName string) (providers.GPUType, bool) {
 	default:
 		return "", false
 	}
+}
+
+func gpuTypeFromDisplayName(displayName string) providers.GPUType {
+	if gpuType, ok := mapDisplayNameToGPUType(displayName); ok {
+		return gpuType
+	}
+
+	normalized := strings.TrimSpace(displayName)
+	if normalized == "" {
+		return providers.GPUType("UNKNOWN_GPU")
+	}
+	return providers.GPUType(normalized)
+}
+
+func compactGPUDisplayName(displayName string) string {
+	displayName = strings.TrimSpace(displayName)
+	displayName = strings.TrimPrefix(displayName, "NVIDIA ")
+	displayName = strings.TrimPrefix(displayName, "GeForce ")
+	return displayName
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X, Cpu, DollarSign, Loader2, Box } from 'lucide-react';
-import type { GPUOffering, ProvisionRequest, ProviderType, GPUType } from '../types';
+import type { GPUOffering, ProvisionRequest, ProviderType, GPUType, KnownGPUType } from '../types';
 import { useProvisionInstance } from '../hooks/useApi';
 
 interface ProvisionModalProps {
@@ -9,7 +9,7 @@ interface ProvisionModalProps {
   offerings: GPUOffering[] | undefined;
 }
 
-const GPU_LABELS: Record<GPUType, string> = {
+const GPU_LABELS: Record<KnownGPUType, string> = {
   RTX_4090: 'RTX 4090 (24GB)',
   RTX_4080: 'RTX 4080 (16GB)',
   A100_40GB: 'A100 40GB',
@@ -36,7 +36,7 @@ const AVAILABLE_MODELS = [
 ];
 
 // GPU VRAM in GB
-const GPU_VRAM: Record<GPUType, number> = {
+const GPU_VRAM: Record<KnownGPUType, number> = {
   RTX_4090: 24,
   RTX_4080: 16,
   A100_40GB: 40,
@@ -75,7 +75,7 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
     : 0;
 
   // Filter models that fit in selected GPU
-  const gpuVram = GPU_VRAM[gpuType] || 24;
+  const gpuVram = selectedOffering?.memory_gb || GPU_VRAM[gpuType as KnownGPUType] || 24;
   const compatibleModels = AVAILABLE_MODELS.filter(m => m.vram <= gpuVram * gpuCount);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -86,6 +86,7 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
       name,
       provider,
       gpu_type: gpuType,
+      provider_gpu_type_id: selectedOffering?.provider_gpu_type_id,
       gpu_count: gpuCount,
       spot_instance: spotInstance,
       max_cost_hour: estimatedCost * 1.5,
@@ -181,7 +182,7 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
                   >
                     <div className="flex items-center gap-2 mb-1">
                       <Cpu className="w-4 h-4" />
-                      <span className="font-medium text-sm">{GPU_LABELS[gpu] || gpu}</span>
+                      <span className="font-medium text-sm">{GPU_LABELS[gpu as KnownGPUType] || gpu}</span>
                     </div>
                     {offering && (
                       <div className="text-xs text-gray-400">

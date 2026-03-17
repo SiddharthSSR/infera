@@ -100,14 +100,15 @@ type Instance struct {
 
 // ProvisionRequest contains parameters for creating a new instance.
 type ProvisionRequest struct {
-	Name         string       `json:"name"`
-	Provider     ProviderType `json:"provider"`
-	WorkspaceID  string       `json:"workspace_id,omitempty"`
-	GPUType      GPUType      `json:"gpu_type"`
-	GPUCount     int          `json:"gpu_count"`
-	Region       string       `json:"region,omitempty"`
-	SpotInstance bool         `json:"spot_instance"`
-	MaxCostHour  float64      `json:"max_cost_hour,omitempty"` // Budget limit
+	Name              string       `json:"name"`
+	Provider          ProviderType `json:"provider"`
+	WorkspaceID       string       `json:"workspace_id,omitempty"`
+	GPUType           GPUType      `json:"gpu_type"`
+	ProviderGPUTypeID string       `json:"provider_gpu_type_id,omitempty"`
+	GPUCount          int          `json:"gpu_count"`
+	Region            string       `json:"region,omitempty"`
+	SpotInstance      bool         `json:"spot_instance"`
+	MaxCostHour       float64      `json:"max_cost_hour,omitempty"` // Budget limit
 
 	// Worker configuration
 	Models         []string `json:"models,omitempty"`
@@ -123,16 +124,18 @@ type ProvisionRequest struct {
 
 // GPUOffering represents an available GPU configuration from a provider.
 type GPUOffering struct {
-	Provider    ProviderType `json:"provider"`
-	GPUType     GPUType      `json:"gpu_type"`
-	GPUCount    int          `json:"gpu_count"`
-	VCPU        int          `json:"vcpu"`
-	MemoryGB    int          `json:"memory_gb"`
-	StorageGB   int          `json:"storage_gb"`
-	CostPerHour float64      `json:"cost_per_hour"`
-	SpotPrice   float64      `json:"spot_price,omitempty"`
-	Region      string       `json:"region"`
-	Available   int          `json:"available"`
+	Provider          ProviderType `json:"provider"`
+	GPUType           GPUType      `json:"gpu_type"`
+	DisplayName       string       `json:"display_name,omitempty"`
+	ProviderGPUTypeID string       `json:"provider_gpu_type_id,omitempty"`
+	GPUCount          int          `json:"gpu_count"`
+	VCPU              int          `json:"vcpu"`
+	MemoryGB          int          `json:"memory_gb"`
+	StorageGB         int          `json:"storage_gb"`
+	CostPerHour       float64      `json:"cost_per_hour"`
+	SpotPrice         float64      `json:"spot_price,omitempty"`
+	Region            string       `json:"region"`
+	Available         int          `json:"available"`
 }
 
 // ProviderStatus contains provider health and quota info.

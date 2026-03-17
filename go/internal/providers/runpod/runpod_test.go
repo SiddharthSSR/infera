@@ -223,13 +223,19 @@ func TestListOfferingsUsesLiveRunPodValues(t *testing.T) {
 		t.Fatalf("ListOfferings: %v", err)
 	}
 
-	if len(offerings) != 1 {
-		t.Fatalf("expected 1 supported live offering, got %d", len(offerings))
+	if len(offerings) != 2 {
+		t.Fatalf("expected 2 live offerings, got %d", len(offerings))
 	}
 
 	offering := offerings[0]
 	if offering.GPUType != providers.GPURTX4090 {
 		t.Fatalf("expected RTX_4090, got %s", offering.GPUType)
+	}
+	if offering.DisplayName != "RTX 4090" {
+		t.Fatalf("expected compact display name RTX 4090, got %q", offering.DisplayName)
+	}
+	if offering.ProviderGPUTypeID != "gpu-4090" {
+		t.Fatalf("expected provider gpu id gpu-4090, got %q", offering.ProviderGPUTypeID)
 	}
 	if offering.CostPerHour != 0.41 {
 		t.Fatalf("expected live cost 0.41, got %f", offering.CostPerHour)
@@ -239,6 +245,10 @@ func TestListOfferingsUsesLiveRunPodValues(t *testing.T) {
 	}
 	if offering.Available != 14 {
 		t.Fatalf("expected live availability 14, got %d", offering.Available)
+	}
+
+	if offerings[1].GPUType != providers.GPUType("NVIDIA Mystery GPU") {
+		t.Fatalf("expected unknown gpu to be preserved, got %q", offerings[1].GPUType)
 	}
 }
 
