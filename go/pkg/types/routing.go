@@ -25,6 +25,8 @@ type RoutedRequest struct {
 	Request         *InferenceRequest `json:"request"`
 	WorkerID        string            `json:"worker_id"`
 	BatchID         string            `json:"batch_id,omitempty"`
+	BatchSize       int               `json:"batch_size,omitempty"`
+	BatchWaitMS     int64             `json:"batch_wait_ms,omitempty"`
 	RoutingDecision RoutingDecision   `json:"routing_decision"`
 	RoutedAt        time.Time         `json:"routed_at"`
 	Attempt         int               `json:"attempt"`
@@ -51,6 +53,10 @@ func (r *RoutedRequest) IsExpired() bool {
 func (r *RoutedRequest) WithRetry() *RoutedRequest {
 	return &RoutedRequest{
 		Request:     r.Request,
+		WorkerID:    r.WorkerID,
+		BatchID:     r.BatchID,
+		BatchSize:   r.BatchSize,
+		BatchWaitMS: r.BatchWaitMS,
 		Attempt:     r.Attempt + 1,
 		MaxAttempts: r.MaxAttempts,
 		Deadline:    r.Deadline,

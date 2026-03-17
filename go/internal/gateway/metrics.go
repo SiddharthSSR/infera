@@ -24,10 +24,18 @@ type GatewayMetrics struct {
 
 	inferenceRequests *prometheus.CounterVec
 	inferenceDuration *prometheus.HistogramVec
+	inferenceTTFT     *prometheus.HistogramVec
+	inferenceTPOT     *prometheus.HistogramVec
+	batchSize         *prometheus.HistogramVec
+	batchWait         *prometheus.HistogramVec
 	inferenceTokens   prometheus.Counter
 }
 
 var inferenceDurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60}
+var inferenceTTFTBuckets = []float64{0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10}
+var inferenceTPOTBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5}
+var batchSizeBuckets = []float64{1, 2, 4, 8, 16, 32}
+var batchWaitBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1}
 
 func NewGatewayMetrics() *GatewayMetrics {
 	registry := prometheus.NewRegistry()
@@ -60,6 +68,26 @@ func NewGatewayMetrics() *GatewayMetrics {
 			Help:    "Inference request duration in seconds.",
 			Buckets: inferenceDurationBuckets,
 		}, []string{"stream", "status"}),
+		inferenceTTFT: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "infera_gateway_inference_ttft_seconds",
+			Help:    "Time to first token for inference requests.",
+			Buckets: inferenceTTFTBuckets,
+		}, []string{"model", "stream"}),
+		inferenceTPOT: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "infera_gateway_inference_tpot_seconds",
+			Help:    "Time per output token after the first token.",
+			Buckets: inferenceTPOTBuckets,
+		}, []string{"model", "stream"}),
+		batchSize: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "infera_gateway_batch_size",
+			Help:    "Observed dispatched batch size for batched requests.",
+			Buckets: batchSizeBuckets,
+		}, []string{"model"}),
+		batchWait: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "infera_gateway_batch_wait_seconds",
+			Help:    "Time requests waited in the batch queue before dispatch.",
+			Buckets: batchWaitBuckets,
+		}, []string{"model"}),
 		inferenceTokens: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "infera_gateway_inference_tokens_total",
 			Help: "Total number of tokens generated/used by inference requests.",
@@ -75,6 +103,10 @@ func NewGatewayMetrics() *GatewayMetrics {
 		m.gatewayInfo,
 		m.inferenceRequests,
 		m.inferenceDuration,
+		m.inferenceTTFT,
+		m.inferenceTPOT,
+		m.batchSize,
+		m.batchWait,
 		m.inferenceTokens,
 	)
 	m.gatewayInfo.WithLabelValues("gateway", inferaEnv(), inferaVersion()).Set(1)
@@ -116,6 +148,29 @@ func (m *GatewayMetrics) RecordInference(stream bool, status string, tokenCount 
 	m.inferenceDuration.WithLabelValues(streamLabel, statusLabel).Observe(duration.Seconds())
 	if tokenCount > 0 {
 		m.inferenceTokens.Add(float64(tokenCount))
+	}
+}
+
+func (m *GatewayMetrics) RecordTTFT(model string, stream bool, duration time.Duration) {
+	if duration <= 0 {
+		return
+	}
+	m.inferenceTTFT.WithLabelValues(strings.TrimSpace(model), strconv.FormatBool(stream)).Observe(duration.Seconds())
+}
+
+func (m *GatewayMetrics) RecordTPOT(model string, stream bool, duration time.Duration) {
+	if duration <= 0 {
+		return
+	}
+	m.inferenceTPOT.WithLabelValues(strings.TrimSpace(model), strconv.FormatBool(stream)).Observe(duration.Seconds())
+}
+
+func (m *GatewayMetrics) RecordBatch(model string, size int, wait time.Duration) {
+	if size > 0 {
+		m.batchSize.WithLabelValues(strings.TrimSpace(model)).Observe(float64(size))
+	}
+	if wait > 0 {
+		m.batchWait.WithLabelValues(strings.TrimSpace(model)).Observe(wait.Seconds())
 	}
 }
 

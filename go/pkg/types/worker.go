@@ -43,7 +43,7 @@ type WorkerStats struct {
 
 // CurrentLoad returns a normalized load score (0.0 - 1.0).
 func (s *WorkerStats) CurrentLoad() float64 {
-	gpuLoad := s.GPUUtilization * 0.5
+	gpuLoad := s.normalizedGPUUtilization() * 0.5
 	queueLoad := min(float64(s.QueueDepth)/100.0, 1.0) * 0.3
 	memoryLoad := 0.0
 	if s.MemoryTotalBytes > 0 {
@@ -148,4 +148,15 @@ func min(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+func (s *WorkerStats) normalizedGPUUtilization() float64 {
+	util := s.GPUUtilization
+	if util > 1.0 {
+		util = util / 100.0
+	}
+	if util < 0 {
+		return 0
+	}
+	return min(util, 1.0)
 }

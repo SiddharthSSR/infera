@@ -1,19 +1,13 @@
 package vault
 
-import "log/slog"
+import (
+	"errors"
+	"log/slog"
+)
 
-// SeedDefaultModels populates the registry with well-known models if it's empty.
-// This is idempotent — it skips seeding if any models already exist.
+// SeedDefaultModels ensures well-known default models exist in the registry.
+// This is idempotent and additive: missing defaults are inserted, existing ones are left unchanged.
 func SeedDefaultModels(store *Store) error {
-	count, err := store.Count()
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		slog.Info("vault seed skipped, models already exist", slog.Int("count", count))
-		return nil
-	}
-
 	models := []Model{
 		{
 			Name:         "Mistral 7B Instruct v0.3",
@@ -88,6 +82,30 @@ func SeedDefaultModels(store *Store) error {
 			Status:       "available",
 		},
 		{
+			Name:         "Qwen3 4B Thinking 2507",
+			Source:       "huggingface",
+			SourceURI:    "Qwen/Qwen3-4B-Thinking-2507",
+			Parameters:   "4B",
+			Quantization: "none",
+			VRAMRequired: 12288,
+			MaxContext:   262144,
+			Family:       "qwen",
+			Tags:         []string{"chat", "reasoning", "multilingual"},
+			Status:       "available",
+		},
+		{
+			Name:         "Kimi K2.5 Instruct",
+			Source:       "huggingface",
+			SourceURI:    "moonshotai/Kimi-K2.5-Instruct",
+			Parameters:   "1T MoE",
+			Quantization: "none",
+			VRAMRequired: 675840,
+			MaxContext:   131072,
+			Family:       "kimi",
+			Tags:         []string{"chat", "reasoning", "coding", "moe"},
+			Status:       "available",
+		},
+		{
 			Name:         "CodeLlama 13B Instruct",
 			Source:       "huggingface",
 			SourceURI:    "codellama/CodeLlama-13b-Instruct-hf",
@@ -113,12 +131,25 @@ func SeedDefaultModels(store *Store) error {
 		},
 	}
 
+	inserted := 0
 	for i := range models {
+		_, err := store.GetBySourceURI(models[i].SourceURI)
+		if err == nil {
+			continue
+		}
+		if err != nil && !errors.Is(err, ErrModelNotFound) {
+			return err
+		}
 		if err := store.Create(&models[i]); err != nil {
 			return err
 		}
+		inserted++
 	}
 
-	slog.Info("vault seeded default models", slog.Int("count", len(models)))
+	slog.Info(
+		"vault seeded default models",
+		slog.Int("inserted", inserted),
+		slog.Int("defaults", len(models)),
+	)
 	return nil
 }

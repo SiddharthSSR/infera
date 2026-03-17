@@ -189,6 +189,84 @@ func TestHandleChatCompletionsPassesOpenAIParametersToWorker(t *testing.T) {
 	}
 }
 
+func TestHandleChatCompletionsRecordsBatchAndLatencyMetrics(t *testing.T) {
+	t.Parallel()
+
+	const modelID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
+	g := newGatewayWithTestWorker(t, modelID, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		resp := WorkerInferResponse{
+			RequestID: "req-1",
+			ModelID:   modelID,
+			Choices: []struct {
+				Index   int `json:"index"`
+				Message struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			}{
+				{
+					Index: 0,
+					Message: struct {
+						Role    string `json:"role"`
+						Content string `json:"content"`
+					}{Role: "assistant", Content: "hello from metrics"},
+					FinishReason: "stop",
+				},
+			},
+		}
+		resp.Usage.PromptTokens = 12
+		resp.Usage.CompletionTokens = 4
+		resp.Usage.TotalTokens = 16
+		resp.Latency.TimeToFirstTokenMS = 120
+		resp.Latency.TotalMS = 210
+
+		respBody, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatalf("marshal worker response: %v", err)
+		}
+
+		return jsonHTTPResponse(http.StatusOK, string(respBody)), nil
+	}))
+
+	body := `{"model":"` + modelID + `","messages":[{"role":"user","content":"measure metrics"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	g.handleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_inference_ttft_seconds", map[string]string{
+		"model":  modelID,
+		"stream": "false",
+	}); got != 1 {
+		t.Fatalf("expected ttft metric count=1, got %d", got)
+	}
+
+	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_inference_tpot_seconds", map[string]string{
+		"model":  modelID,
+		"stream": "false",
+	}); got != 1 {
+		t.Fatalf("expected tpot metric count=1, got %d", got)
+	}
+
+	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_batch_size", map[string]string{
+		"model": modelID,
+	}); got != 1 {
+		t.Fatalf("expected batch size metric count=1, got %d", got)
+	}
+
+	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_batch_wait_seconds", map[string]string{
+		"model": modelID,
+	}); got != 1 {
+		t.Fatalf("expected batch wait metric count=1, got %d", got)
+	}
+}
+
 func TestHandleChatCompletionsStreamingReturnsSSEChunksAndDone(t *testing.T) {
 	t.Parallel()
 

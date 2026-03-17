@@ -505,7 +505,7 @@ make docker-push DOCKER_USERNAME=your_username
 make run-gateway-runpod \
   INFERA_WORKER_SHARED_TOKEN=xxx \
   RUNPOD_API_KEY=xxx \
-  INFERA_WORKER_IMAGE=your_username/infera-worker:latest
+  INFERA_WORKER_IMAGE=your_username/infera-worker:v1.2.0
 ```
 
 ### Option 4: Install from GitHub (No Docker Push Required)

@@ -107,6 +107,20 @@ func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gatew
 		startedAt:          time.Now(),
 	}
 
+	if r != nil {
+		r.OnBatchDispatch(func(batch *types.BatchContext) {
+			if gw.metrics == nil {
+				return
+			}
+
+			wait := time.Since(batch.CreatedAt)
+			if batch.SealedAt != nil {
+				wait = batch.SealedAt.Sub(batch.CreatedAt)
+			}
+			gw.metrics.RecordBatch(batch.ModelID, batch.Size(), wait)
+		})
+	}
+
 	if instanceMgr != nil {
 		gw.instanceHandlers = NewInstanceHandlers(instanceMgr)
 	}
@@ -522,8 +536,18 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Route the request
-	routed, err := g.router.Route(inferenceReq)
+	routed, err := g.router.Route(ctx, inferenceReq)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			auditStatus = "client_canceled"
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			auditStatus = "failed"
+			auditErrorCode = "inference_timeout"
+			g.writeError(w, http.StatusGatewayTimeout, "inference_timeout", "Inference request timed out")
+			return
+		}
 		g.log.Warn("inference.route_failed",
 			slog.String("request_id", requestID),
 			slog.String("key_id", keyID),
@@ -596,6 +620,9 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 	completionTokens := resp.Usage.CompletionTokens
 	if completionTokens == 0 {
 		completionTokens = estimateCompletionTokens(resp)
+	}
+	if g.metrics != nil {
+		g.recordNonStreamingLatencyMetrics(model, resp, completionTokens)
 	}
 	totalTokens := usageTotalTokens(
 		promptTokens,
@@ -713,6 +740,7 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 
 	requestID := "chatcmpl-" + req.RequestID
 	created := time.Now().Unix()
+	streamStart := time.Now()
 
 	// Send initial role chunk (OpenAI format)
 	initialChunk := ChatCompletionChunk{
@@ -738,8 +766,21 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	bestPromptTokens := 0
 	bestCompletionTokens := 0
 	bestTotalTokens := 0
+	firstChunkObserved := false
+	var previousChunkAt time.Time
 
 	for chunk := range chunks {
+		now := time.Now()
+		if !firstChunkObserved {
+			firstChunkObserved = true
+			if g.metrics != nil {
+				g.metrics.RecordTTFT(model, true, now.Sub(streamStart))
+			}
+		} else if g.metrics != nil {
+			g.metrics.RecordTPOT(model, true, now.Sub(previousChunkAt))
+		}
+		previousChunkAt = now
+
 		generatedChars += len(chunk.Delta)
 		if chunk.Usage != nil {
 			bestPromptTokens = maxInt(bestPromptTokens, chunk.Usage.PromptTokens)
@@ -789,6 +830,22 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	))
 
 	return tokenCount, "success"
+}
+
+func (g *Gateway) recordNonStreamingLatencyMetrics(model string, resp *types.InferenceResponse, completionTokens int) {
+	ttft := time.Duration(resp.Latency.TimeToFirstTokenMS) * time.Millisecond
+	g.metrics.RecordTTFT(model, false, ttft)
+
+	if completionTokens <= 1 {
+		return
+	}
+
+	total := time.Duration(resp.Latency.TotalMS) * time.Millisecond
+	if total <= ttft {
+		return
+	}
+
+	g.metrics.RecordTPOT(model, false, (total-ttft)/time.Duration(completionTokens-1))
 }
 
 func (g *Gateway) handlePrometheusWorkerTargets(w http.ResponseWriter, r *http.Request) {

@@ -10,15 +10,18 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/infera/infera/go/internal/providers"
 )
 
 const (
-	defaultEndpoint = "https://api.runpod.io/graphql"
-	pollInterval    = 5 * time.Second
-	readyTimeout    = 10 * time.Minute
+	defaultEndpoint    = "https://api.runpod.io/graphql"
+	pollInterval       = 5 * time.Second
+	readyTimeout       = 10 * time.Minute
+	defaultWorkerImage = "codingtensor/infera-worker:latest"
+	workspaceMountPath = "/workspace"
 )
 
 // Provider implements the RunPod GPU provider.
@@ -93,13 +96,28 @@ type graphQLResponse struct {
 func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionRequest) (*providers.Instance, error) {
 	// Map our GPU types to RunPod GPU IDs
 	gpuTypeID := mapGPUType(req.GPUType)
+	if gpuTypeID == "" {
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     "invalid_gpu_type",
+			Message:  fmt.Sprintf("unsupported RunPod GPU type: %s", req.GPUType),
+		}
+	}
 
 	// Default to the custom infera worker image with vLLM 0.16+
-	dockerImage := "codingtensor/infera-worker:latest"
+	dockerImage := strings.TrimSpace(req.DockerImage)
 
-	// If custom image provided, use it
-	if req.DockerImage != "" {
-		dockerImage = req.DockerImage
+	if dockerImage == "" {
+		dockerImage = defaultWorkerImage
+		slog.Warn("runpod.provision.using_fallback_worker_image",
+			slog.String("image", dockerImage),
+			slog.String("recommendation", "Set INFERA_WORKER_IMAGE to a pinned tag or digest"),
+		)
+	} else if usesFloatingImageRef(dockerImage) {
+		slog.Warn("runpod.provision.using_unpinned_worker_image",
+			slog.String("image", dockerImage),
+			slog.String("recommendation", "Use a pinned tag or digest to keep warm restarts predictable"),
+		)
 	}
 
 	// Build environment variables
@@ -107,6 +125,11 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		{"key": "INFERA_ENGINE", "value": "vllm"},
 		{"key": "INFERA_HTTP_PORT", "value": "8081"},
 		{"key": "INFERA_LOG_LEVEL", "value": "INFO"},
+		{"key": "XDG_CACHE_HOME", "value": workspaceMountPath + "/.cache"},
+		{"key": "HF_HOME", "value": workspaceMountPath + "/.cache/huggingface"},
+		{"key": "HUGGINGFACE_HUB_CACHE", "value": workspaceMountPath + "/.cache/huggingface/hub"},
+		{"key": "TRANSFORMERS_CACHE", "value": workspaceMountPath + "/.cache/huggingface/hub"},
+		{"key": "TORCH_HOME", "value": workspaceMountPath + "/.cache/torch"},
 	}
 
 	// Add gateway address for worker registration
@@ -180,16 +203,18 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 	if len(req.Models) > 0 {
 		containerDiskSize = 50 + (len(req.Models) * 20)
 	}
+	volumeSize := containerDiskSize
 
 	// Build the input for RunPod API
-	// We use containerDiskInGb for model storage (no persistent volume)
-	// This avoids the "volume cannot be default" error
+	// The persistent volume mounted at /workspace keeps model caches warm across stop/start.
 	input := map[string]interface{}{
 		"name":              req.Name,
 		"imageName":         dockerImage,
 		"gpuTypeId":         gpuTypeID,
 		"gpuCount":          req.GPUCount,
 		"containerDiskInGb": containerDiskSize,
+		"volumeInGb":        volumeSize,
+		"volumeMountPath":   workspaceMountPath,
 		"minVcpuCount":      4,
 		"minMemoryInGb":     16,
 		"ports":             "8081/http,22/tcp",
@@ -262,8 +287,10 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		Models:       models,
 		CreatedAt:    time.Now(),
 		Metadata: map[string]string{
-			"machine_id": pod.MachineID,
-			"image":      pod.ImageName,
+			"machine_id":      pod.MachineID,
+			"image":           pod.ImageName,
+			"workspace_mount": workspaceMountPath,
+			"volume_gb":       fmt.Sprintf("%d", volumeSize),
 		},
 	}, nil
 }
@@ -319,6 +346,12 @@ func (p *Provider) Terminate(ctx context.Context, instanceID string) error {
 
 // Start starts a stopped pod.
 func (p *Provider) Start(ctx context.Context, instanceID string) error {
+	gpuCount := 1
+	instance, err := p.GetInstance(ctx, instanceID)
+	if err == nil && instance.GPUCount > 0 {
+		gpuCount = instance.GPUCount
+	}
+
 	query := `
 		mutation ResumePod($input: PodResumeInput!) {
 			podResume(input: $input) {
@@ -331,11 +364,11 @@ func (p *Provider) Start(ctx context.Context, instanceID string) error {
 	variables := map[string]interface{}{
 		"input": map[string]interface{}{
 			"podId":    instanceID,
-			"gpuCount": 1, // Resume with same GPU count
+			"gpuCount": gpuCount,
 		},
 	}
 
-	_, err := p.graphQL(ctx, query, variables)
+	_, err = p.graphQL(ctx, query, variables)
 	return err
 }
 
@@ -483,6 +516,8 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 				communityPrice
 				secureSpotPrice
 				communitySpotPrice
+				maxGpuCountCommunityCloud
+				maxGpuCountSecureCloud
 				lowestPrice(input: { gpuCount: 1 }) {
 					minimumBidPrice
 					uninterruptablePrice
@@ -493,20 +528,21 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 
 	resp, err := p.graphQL(ctx, query, nil)
 	if err != nil {
-		// If the query fails, return a static list of common RunPod GPUs
-		return p.getStaticOfferings(), nil
+		return nil, err
 	}
 
 	var result struct {
 		GpuTypes []struct {
-			ID                 string  `json:"id"`
-			DisplayName        string  `json:"displayName"`
-			MemoryInGb         int     `json:"memoryInGb"`
-			SecurePrice        float64 `json:"securePrice"`
-			CommunityPrice     float64 `json:"communityPrice"`
-			SecureSpotPrice    float64 `json:"secureSpotPrice"`
-			CommunitySpotPrice float64 `json:"communitySpotPrice"`
-			LowestPrice        *struct {
+			ID                     string  `json:"id"`
+			DisplayName            string  `json:"displayName"`
+			MemoryInGb             int     `json:"memoryInGb"`
+			SecurePrice            float64 `json:"securePrice"`
+			CommunityPrice         float64 `json:"communityPrice"`
+			SecureSpotPrice        float64 `json:"secureSpotPrice"`
+			CommunitySpotPrice     float64 `json:"communitySpotPrice"`
+			MaxGPUCountCommunity   int     `json:"maxGpuCountCommunityCloud"`
+			MaxGPUCountSecureCloud int     `json:"maxGpuCountSecureCloud"`
+			LowestPrice            *struct {
 				MinimumBidPrice      float64 `json:"minimumBidPrice"`
 				UninterruptablePrice float64 `json:"uninterruptablePrice"`
 			} `json:"lowestPrice"`
@@ -514,17 +550,30 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 	}
 
 	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		// Return static offerings on parse error
-		return p.getStaticOfferings(), nil
+		return nil, fmt.Errorf("failed to parse gpuTypes response: %w", err)
 	}
 
 	if len(result.GpuTypes) == 0 {
-		return p.getStaticOfferings(), nil
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     "no_offerings",
+			Message:  "RunPod returned no live GPU offerings",
+		}
 	}
 
 	offerings := make([]*providers.GPUOffering, 0, len(result.GpuTypes))
 	for _, gpu := range result.GpuTypes {
-		gpuType := mapDisplayNameToGPUType(gpu.DisplayName)
+		gpuType, ok := mapDisplayNameToGPUType(gpu.DisplayName)
+		if !ok {
+			continue
+		}
+		available := gpu.MaxGPUCountCommunity
+		if available == 0 {
+			available = gpu.MaxGPUCountSecureCloud
+		}
+		if available == 0 {
+			continue
+		}
 
 		// Determine the best on-demand price: prefer community, fall back to secure, then lowestPrice
 		price := gpu.CommunityPrice
@@ -558,68 +607,19 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 			CostPerHour: price,
 			SpotPrice:   spotPrice,
 			Region:      "global",
-			Available:   -1, // Unknown
+			Available:   available,
 		})
 	}
 
-	return offerings, nil
-}
-
-// getStaticOfferings returns a static list of common RunPod GPU offerings.
-// Prices reflect RunPod community cloud on-demand rates as of March 2026.
-func (p *Provider) getStaticOfferings() []*providers.GPUOffering {
-	return []*providers.GPUOffering{
-		{
-			Provider:    providers.ProviderRunPod,
-			GPUType:     providers.GPURTX4090,
-			GPUCount:    1,
-			MemoryGB:    24,
-			CostPerHour: 0.34,
-			SpotPrice:   0.17,
-			Region:      "global",
-			Available:   -1,
-		},
-		{
-			Provider:    providers.ProviderRunPod,
-			GPUType:     providers.GPUA100_40,
-			GPUCount:    1,
-			MemoryGB:    40,
-			CostPerHour: 1.19,
-			SpotPrice:   0.59,
-			Region:      "global",
-			Available:   -1,
-		},
-		{
-			Provider:    providers.ProviderRunPod,
-			GPUType:     providers.GPUA100_80,
-			GPUCount:    1,
-			MemoryGB:    80,
-			CostPerHour: 1.19,
-			SpotPrice:   0.59,
-			Region:      "global",
-			Available:   -1,
-		},
-		{
-			Provider:    providers.ProviderRunPod,
-			GPUType:     providers.GPUH100,
-			GPUCount:    1,
-			MemoryGB:    80,
-			CostPerHour: 1.99,
-			SpotPrice:   0.99,
-			Region:      "global",
-			Available:   -1,
-		},
-		{
-			Provider:    providers.ProviderRunPod,
-			GPUType:     providers.GPUL40S,
-			GPUCount:    1,
-			MemoryGB:    48,
-			CostPerHour: 0.79,
-			SpotPrice:   0.39,
-			Region:      "global",
-			Available:   -1,
-		},
+	if len(offerings) == 0 {
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     "no_supported_offerings",
+			Message:  "RunPod returned no supported live GPU offerings",
+		}
 	}
+
+	return offerings, nil
 }
 
 // getEstimatedPrice returns estimated hourly price for a GPU type.
@@ -818,7 +818,10 @@ type runpodPod struct {
 	DesiredStatus string `json:"desiredStatus"`
 	Runtime       *struct {
 		UptimeSeconds int `json:"uptimeInSeconds"`
-		Ports         []struct {
+		GPUs          []struct {
+			ID string `json:"id"`
+		} `json:"gpus"`
+		Ports []struct {
 			IP          string `json:"ip"`
 			IsPublic    bool   `json:"isIpPublic"`
 			PrivatePort int    `json:"privatePort"`
@@ -842,11 +845,16 @@ func (p *Provider) convertPod(pod *runpodPod) *providers.Instance {
 	}
 
 	if pod.Machine != nil {
-		instance.GPUType = mapDisplayNameToGPUType(pod.Machine.GPUDisplayName)
+		if gpuType, ok := mapDisplayNameToGPUType(pod.Machine.GPUDisplayName); ok {
+			instance.GPUType = gpuType
+		}
 		instance.CostPerHour = pod.Machine.CostPerHr
 	}
 
 	if pod.Runtime != nil {
+		if len(pod.Runtime.GPUs) > 0 {
+			instance.GPUCount = len(pod.Runtime.GPUs)
+		}
 		for _, port := range pod.Runtime.Ports {
 			if port.IsPublic && port.PrivatePort == 8081 {
 				instance.PublicIP = port.IP
@@ -859,6 +867,18 @@ func (p *Provider) convertPod(pod *runpodPod) *providers.Instance {
 	}
 
 	return instance
+}
+
+func usesFloatingImageRef(image string) bool {
+	if strings.Contains(image, "@sha256:") {
+		return false
+	}
+	lastSlash := strings.LastIndex(image, "/")
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon <= lastSlash {
+		return true
+	}
+	return strings.EqualFold(image[lastColon+1:], "latest")
 }
 
 func mapStatus(status string) providers.InstanceStatus {
@@ -891,25 +911,25 @@ func mapGPUType(gpuType providers.GPUType) string {
 	case providers.GPUL40S:
 		return "NVIDIA L40S"
 	default:
-		return "NVIDIA GeForce RTX 4090"
+		return ""
 	}
 }
 
-func mapDisplayNameToGPUType(displayName string) providers.GPUType {
+func mapDisplayNameToGPUType(displayName string) (providers.GPUType, bool) {
 	switch displayName {
 	case "NVIDIA GeForce RTX 4090", "RTX 4090":
-		return providers.GPURTX4090
+		return providers.GPURTX4090, true
 	case "NVIDIA GeForce RTX 4080", "RTX 4080":
-		return providers.GPURTX4080
+		return providers.GPURTX4080, true
 	case "NVIDIA A100 40GB PCIe", "A100 40GB":
-		return providers.GPUA100_40
+		return providers.GPUA100_40, true
 	case "NVIDIA A100 80GB PCIe", "A100 80GB":
-		return providers.GPUA100_80
+		return providers.GPUA100_80, true
 	case "NVIDIA H100 PCIe", "H100":
-		return providers.GPUH100
+		return providers.GPUH100, true
 	case "NVIDIA L40S", "L40S":
-		return providers.GPUL40S
+		return providers.GPUL40S, true
 	default:
-		return providers.GPURTX4090
+		return "", false
 	}
 }

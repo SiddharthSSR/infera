@@ -42,6 +42,10 @@ func TestRoutedRequest(t *testing.T) {
 	t.Run("WithRetry", func(t *testing.T) {
 		r := &RoutedRequest{
 			Request:     &InferenceRequest{RequestID: "req-1"},
+			WorkerID:    "worker-1",
+			BatchID:     "batch-1",
+			BatchSize:   4,
+			BatchWaitMS: 25,
 			Attempt:     1,
 			MaxAttempts: 3,
 			Deadline:    time.Now().Add(time.Hour),
@@ -52,6 +56,9 @@ func TestRoutedRequest(t *testing.T) {
 		}
 		if retry.Request.RequestID != "req-1" {
 			t.Error("retry should keep same request")
+		}
+		if retry.WorkerID != "worker-1" || retry.BatchID != "batch-1" || retry.BatchSize != 4 || retry.BatchWaitMS != 25 {
+			t.Errorf("retry should preserve routing metadata, got %+v", retry)
 		}
 		if retry == r {
 			t.Error("WithRetry should return a new RoutedRequest instance")

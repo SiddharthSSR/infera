@@ -42,10 +42,10 @@ func main() {
 	r := router.New(routerConfig)
 
 	// Create instance manager
-	// Get worker image from env or use default
-	workerImage := os.Getenv("INFERA_WORKER_IMAGE")
+	// Prefer an explicitly pinned worker image for reproducible warm restarts.
+	workerImage := strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE"))
 	if workerImage == "" {
-		workerImage = "infera/worker:latest"
+		log.Warn("INFERA_WORKER_IMAGE is not set; provider-specific fallback images may use floating tags")
 	}
 	gatewayAddress := strings.TrimSpace(os.Getenv("INFERA_GATEWAY_ADDRESS"))
 	if gatewayAddress == "" {

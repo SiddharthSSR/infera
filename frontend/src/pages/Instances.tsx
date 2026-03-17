@@ -29,6 +29,35 @@ const GPU_VRAM_GB: Record<GPUType, number> = {
 
 const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai'] as const;
 const AUTO_VERIFY_DELAY_MS = 1500;
+const RECOMMENDED_MODEL_IDS = [
+  'Qwen/Qwen3-4B-Thinking-2507',
+  'moonshotai/Kimi-K2.5-Instruct',
+] as const;
+
+type ModelDeploymentPreset = {
+  label: string;
+  detail: string;
+  preferredProvider?: ProviderType;
+  preferredGPUType: GPUType;
+  preferredGPUCount: number;
+};
+
+const MODEL_DEPLOYMENT_PRESETS: Record<string, ModelDeploymentPreset> = {
+  'Qwen/Qwen3-4B-Thinking-2507': {
+    label: 'Budget Reasoning',
+    detail: 'Starts on a single RTX 4090 when available and is the cheapest recommended reasoning trial.',
+    preferredProvider: 'runpod',
+    preferredGPUType: 'RTX_4090',
+    preferredGPUCount: 1,
+  },
+  'moonshotai/Kimi-K2.5-Instruct': {
+    label: 'High-Capacity',
+    detail: 'Treat this as a large-cluster target. Prefer H100-class multi-GPU capacity and expect materially higher cost.',
+    preferredProvider: 'runpod',
+    preferredGPUType: 'H100',
+    preferredGPUCount: 8,
+  },
+};
 
 type ProvisionDraft = {
   name?: string;
@@ -170,6 +199,33 @@ function DeploymentTimeline({ steps }: { steps: DeploymentTimelineStep[] }) {
       ))}
     </div>
   );
+}
+
+function findPresetOffering(
+  offerings: GPUOffering[] | undefined,
+  preset?: ModelDeploymentPreset,
+): GPUOffering | null {
+  if (!offerings || !preset) return null;
+
+  const exact = offerings.find((offering) =>
+    (!preset.preferredProvider || offering.provider === preset.preferredProvider) &&
+    offering.gpu_type === preset.preferredGPUType &&
+    offering.gpu_count === preset.preferredGPUCount,
+  );
+  if (exact) return exact;
+
+  const sameGPU = offerings
+    .filter((offering) =>
+      (!preset.preferredProvider || offering.provider === preset.preferredProvider) &&
+      offering.gpu_type === preset.preferredGPUType,
+    )
+    .sort((a, b) => a.cost_per_hour - b.cost_per_hour);
+  return sameGPU[0] || null;
+}
+
+function presetCapacityWarning(preset?: ModelDeploymentPreset): string | null {
+  if (!preset) return null;
+  return `This preset currently needs ${preset.preferredGPUCount}x ${preset.preferredGPUType.replace('_', ' ')} or larger live capacity.`;
 }
 
 function deriveNodeIncident(
@@ -415,12 +471,20 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
     () => allVaultModels?.find((model) => model.source_uri === preselectedModel),
     [allVaultModels, preselectedModel],
   );
+  const selectedPreset = useMemo(
+    () => (preselectedModel ? MODEL_DEPLOYMENT_PRESETS[preselectedModel] : undefined),
+    [preselectedModel],
+  );
   const compatibleModels = useMemo(() => {
     return allVaultModels?.filter((m: VaultModel) => {
       if (!selectedGPUVram) return true;
       return m.vram_required <= selectedGPUVram * 1024;
     });
   }, [allVaultModels, selectedGPUVram]);
+  const recommendedVaultModels = useMemo(
+    () => (allVaultModels || []).filter((model) => RECOMMENDED_MODEL_IDS.includes(model.source_uri as typeof RECOMMENDED_MODEL_IDS[number])),
+    [allVaultModels],
+  );
   const pinnedModelCompatibleOfferings = useMemo(() => {
     if (!dedupedOfferings) return [];
     if (!selectedModelRecord?.vram_required) return dedupedOfferings;
@@ -436,6 +500,10 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
       return best;
     }, null),
     [pinnedModelCompatibleOfferings],
+  );
+  const presetOffering = useMemo(
+    () => findPresetOffering(dedupedOfferings, selectedPreset),
+    [dedupedOfferings, selectedPreset],
   );
 
   useEffect(() => {
@@ -483,9 +551,11 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
   }, [compatibleModels, preselectedModel, isOpen]);
 
   useEffect(() => {
-    if (!isOpen || !preselectedModel || selectedGPU || !recommendedOffering) return;
-    setSelectedGPU(getOfferingKey(recommendedOffering));
-  }, [isOpen, preselectedModel, recommendedOffering, selectedGPU]);
+    if (!isOpen || !preselectedModel || selectedGPU) return;
+    const targetOffering = presetOffering || recommendedOffering;
+    if (!targetOffering) return;
+    setSelectedGPU(getOfferingKey(targetOffering));
+  }, [isOpen, preselectedModel, presetOffering, recommendedOffering, selectedGPU]);
 
   const toggleModel = (sourceUri: string) => {
     setSelectedModels(prev => prev.includes(sourceUri) ? prev.filter(id => id !== sourceUri) : [...prev, sourceUri]);
@@ -560,16 +630,33 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  {selectedPreset && <span className="badge">{selectedPreset.label}</span>}
                   {selectedModelRecord.parameters && <span className="badge">{selectedModelRecord.parameters}</span>}
                   {selectedModelRecord.quantization && <span className="badge">{selectedModelRecord.quantization}</span>}
                   {selectedModelRecord.vram_required ? <span className="badge mono">{Math.ceil(selectedModelRecord.vram_required / 1024)}GB VRAM</span> : null}
                 </div>
               </div>
               <div style={{ marginTop: '0.85rem', fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                {selectedPreset ? `${selectedPreset.detail} ` : ''}
                 {pinnedModelCompatibleOfferings.length > 0
-                  ? `This model fits ${pinnedModelCompatibleOfferings.length} live GPU option${pinnedModelCompatibleOfferings.length === 1 ? '' : 's'}${recommendedOffering ? `, starting from $${recommendedOffering.cost_per_hour.toFixed(2)}/hr on ${recommendedOffering.provider}.` : '.'}`
+                  ? `${presetOffering ? `Preferred preset currently maps to ${presetOffering.gpu_count}x ${presetOffering.gpu_type.replace('_', ' ')} on ${presetOffering.provider}. ` : ''}This model fits ${pinnedModelCompatibleOfferings.length} live GPU option${pinnedModelCompatibleOfferings.length === 1 ? '' : 's'}${recommendedOffering ? `, starting from $${recommendedOffering.cost_per_hour.toFixed(2)}/hr on ${recommendedOffering.provider}.` : '.'}`
                   : 'No live GPU option currently satisfies the recorded VRAM requirement for this model.'}
               </div>
+              {selectedPreset && pinnedModelCompatibleOfferings.length === 0 && (
+                <div
+                  style={{
+                    marginTop: '1rem',
+                    padding: '0.85rem 1rem',
+                    border: '1px solid rgba(184, 93, 32, 0.25)',
+                    background: 'rgba(184, 93, 32, 0.08)',
+                  }}
+                >
+                  <div className="label-text" style={{ marginBottom: '0.4rem' }}>PRESET CAPACITY GAP</div>
+                  <div style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                    {presetCapacityWarning(selectedPreset)} Open clusters after more capacity appears, or choose a smaller reasoning model if you need an immediate single-node deployment.
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -633,6 +720,39 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
                     {selectedGPUVram ? `Showing models that fit within ${selectedGPUVram}GB VRAM` : 'Select a GPU to filter compatible models'}
                   </div>
+                  {recommendedVaultModels.length > 0 && (
+                    <div style={{ marginBottom: '1rem' }}>
+                      <div className="label-text" style={{ marginBottom: '0.5rem' }}>RECOMMENDED QUICK PICKS</div>
+                      <div className="provision-model-grid" style={{ marginBottom: '0.75rem' }}>
+                        {recommendedVaultModels.map((model) => {
+                          const isSelected = selectedModels.includes(model.source_uri);
+                          const isCompatible = !selectedGPUVram || model.vram_required <= selectedGPUVram * 1024;
+                          return (
+                            <button
+                              key={`recommended-${model.id}`}
+                              onClick={() => toggleModel(model.source_uri)}
+                              disabled={!isCompatible}
+                              style={{
+                                padding: '0.6rem 1rem',
+                                cursor: isCompatible ? 'pointer' : 'not-allowed',
+                                border: isSelected ? '1px solid var(--text-primary)' : 'var(--grid-line)',
+                                background: isSelected ? 'var(--bg-accent)' : 'transparent',
+                                opacity: isCompatible ? 1 : 0.45,
+                                fontFamily: 'var(--font-main)',
+                                fontSize: '0.82rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                              }}
+                            >
+                              {model.name}
+                              {model.parameters && <span className="badge">{model.parameters}</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <div className="provision-model-grid">
                     {(compatibleModels || []).map(model => {
                       const isSelected = selectedModels.includes(model.source_uri);

@@ -1,7 +1,7 @@
 """Tests for the main worker."""
 
+import asyncio
 import pytest
-from datetime import datetime
 
 from infera_worker.worker import Worker
 from infera_worker.config import WorkerConfig, ModelConfig
@@ -178,6 +178,54 @@ class TestWorker:
         
         assert stats.requests_per_second >= 0
         assert stats.avg_latency_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_get_stats_tracks_queued_and_active_requests(self):
+        worker = Worker(WorkerConfig(engine="mock", max_concurrent_requests=1))
+        await worker.start()
+        await worker.load_model(ModelConfig(model_id="test-model"))
+
+        original_infer = worker.engine.infer
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked_infer(request):
+            started.set()
+            await release.wait()
+            return await original_infer(request)
+
+        worker.engine.infer = blocked_infer
+
+        first = InferenceRequest(
+            request_id="req-1",
+            model_id="test-model",
+            messages=[Message(role=Role.USER, content="First")],
+        )
+        second = InferenceRequest(
+            request_id="req-2",
+            model_id="test-model",
+            messages=[Message(role=Role.USER, content="Second")],
+        )
+
+        task1 = asyncio.create_task(worker.infer(first))
+        await started.wait()
+
+        task2 = asyncio.create_task(worker.infer(second))
+        await asyncio.sleep(0.05)
+
+        stats = worker.get_stats()
+
+        assert stats.active_requests == 1
+        assert stats.queue_depth == 1
+        assert worker.get_state() == WorkerState.BUSY
+
+        release.set()
+        await asyncio.gather(task1, task2)
+
+        final_stats = worker.get_stats()
+        assert final_stats.active_requests == 0
+        assert final_stats.queue_depth == 0
+        assert worker.get_state() == WorkerState.READY
 
     def test_get_state(self, worker):
         assert worker.get_state() == WorkerState.INITIALIZING
