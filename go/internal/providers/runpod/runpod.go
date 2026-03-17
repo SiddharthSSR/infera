@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -519,7 +520,23 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 				communitySpotPrice
 				maxGpuCountCommunityCloud
 				maxGpuCountSecureCloud
-				lowestPrice(input: { gpuCount: 1 }) {
+				lowestPrice1: lowestPrice(input: { gpuCount: 1 }) {
+					minimumBidPrice
+					uninterruptablePrice
+				}
+				lowestPrice2: lowestPrice(input: { gpuCount: 2 }) {
+					minimumBidPrice
+					uninterruptablePrice
+				}
+				lowestPrice4: lowestPrice(input: { gpuCount: 4 }) {
+					minimumBidPrice
+					uninterruptablePrice
+				}
+				lowestPrice8: lowestPrice(input: { gpuCount: 8 }) {
+					minimumBidPrice
+					uninterruptablePrice
+				}
+				lowestPrice16: lowestPrice(input: { gpuCount: 16 }) {
 					minimumBidPrice
 					uninterruptablePrice
 				}
@@ -534,19 +551,20 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 
 	var result struct {
 		GpuTypes []struct {
-			ID                     string  `json:"id"`
-			DisplayName            string  `json:"displayName"`
-			MemoryInGb             int     `json:"memoryInGb"`
-			SecurePrice            float64 `json:"securePrice"`
-			CommunityPrice         float64 `json:"communityPrice"`
-			SecureSpotPrice        float64 `json:"secureSpotPrice"`
-			CommunitySpotPrice     float64 `json:"communitySpotPrice"`
-			MaxGPUCountCommunity   int     `json:"maxGpuCountCommunityCloud"`
-			MaxGPUCountSecureCloud int     `json:"maxGpuCountSecureCloud"`
-			LowestPrice            *struct {
-				MinimumBidPrice      float64 `json:"minimumBidPrice"`
-				UninterruptablePrice float64 `json:"uninterruptablePrice"`
-			} `json:"lowestPrice"`
+			ID                     string             `json:"id"`
+			DisplayName            string             `json:"displayName"`
+			MemoryInGb             int                `json:"memoryInGb"`
+			SecurePrice            float64            `json:"securePrice"`
+			CommunityPrice         float64            `json:"communityPrice"`
+			SecureSpotPrice        float64            `json:"secureSpotPrice"`
+			CommunitySpotPrice     float64            `json:"communitySpotPrice"`
+			MaxGPUCountCommunity   int                `json:"maxGpuCountCommunityCloud"`
+			MaxGPUCountSecureCloud int                `json:"maxGpuCountSecureCloud"`
+			LowestPrice1           *runpodLowestPrice `json:"lowestPrice1"`
+			LowestPrice2           *runpodLowestPrice `json:"lowestPrice2"`
+			LowestPrice4           *runpodLowestPrice `json:"lowestPrice4"`
+			LowestPrice8           *runpodLowestPrice `json:"lowestPrice8"`
+			LowestPrice16          *runpodLowestPrice `json:"lowestPrice16"`
 		} `json:"gpuTypes"`
 	}
 
@@ -562,7 +580,7 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 		}
 	}
 
-	offerings := make([]*providers.GPUOffering, 0, len(result.GpuTypes))
+	offerings := make([]*providers.GPUOffering, 0, len(result.GpuTypes)*4)
 	for _, gpu := range result.GpuTypes {
 		gpuType := gpuTypeFromDisplayName(gpu.DisplayName)
 		available := gpu.MaxGPUCountCommunity
@@ -578,8 +596,8 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 		if price == 0 {
 			price = gpu.SecurePrice
 		}
-		if price == 0 && gpu.LowestPrice != nil {
-			price = gpu.LowestPrice.UninterruptablePrice
+		if price == 0 && gpu.LowestPrice1 != nil {
+			price = gpu.LowestPrice1.UninterruptablePrice
 		}
 		if price == 0 {
 			price = getEstimatedPrice(gpuType)
@@ -590,25 +608,42 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 		if spotPrice == 0 {
 			spotPrice = gpu.SecureSpotPrice
 		}
-		if spotPrice == 0 && gpu.LowestPrice != nil {
-			spotPrice = gpu.LowestPrice.MinimumBidPrice
+		if spotPrice == 0 && gpu.LowestPrice1 != nil {
+			spotPrice = gpu.LowestPrice1.MinimumBidPrice
 		}
 		if spotPrice == 0 {
 			spotPrice = price * 0.5
 		}
 
-		offerings = append(offerings, &providers.GPUOffering{
-			Provider:          providers.ProviderRunPod,
-			GPUType:           gpuType,
-			DisplayName:       compactGPUDisplayName(gpu.DisplayName),
-			ProviderGPUTypeID: gpu.ID,
-			GPUCount:          1,
-			MemoryGB:          gpu.MemoryInGb,
-			CostPerHour:       price,
-			SpotPrice:         spotPrice,
-			Region:            "global",
-			Available:         available,
-		})
+		priceByCount := map[int]float64{
+			1:  price,
+			2:  firstPositive(priceFromRunPodPrice(gpu.LowestPrice2), price*2),
+			4:  firstPositive(priceFromRunPodPrice(gpu.LowestPrice4), price*4),
+			8:  firstPositive(priceFromRunPodPrice(gpu.LowestPrice8), price*8),
+			16: firstPositive(priceFromRunPodPrice(gpu.LowestPrice16), price*16),
+		}
+		spotByCount := map[int]float64{
+			1:  spotPrice,
+			2:  firstPositive(spotPriceFromRunPodPrice(gpu.LowestPrice2), spotPrice*2),
+			4:  firstPositive(spotPriceFromRunPodPrice(gpu.LowestPrice4), spotPrice*4),
+			8:  firstPositive(spotPriceFromRunPodPrice(gpu.LowestPrice8), spotPrice*8),
+			16: firstPositive(spotPriceFromRunPodPrice(gpu.LowestPrice16), spotPrice*16),
+		}
+
+		for _, count := range practicalGPUCounts(available) {
+			offerings = append(offerings, &providers.GPUOffering{
+				Provider:          providers.ProviderRunPod,
+				GPUType:           gpuType,
+				DisplayName:       compactGPUDisplayName(gpu.DisplayName),
+				ProviderGPUTypeID: gpu.ID,
+				GPUCount:          count,
+				MemoryGB:          gpu.MemoryInGb * count,
+				CostPerHour:       firstPositive(priceByCount[count], price*float64(count)),
+				SpotPrice:         firstPositive(spotByCount[count], spotPrice*float64(count)),
+				Region:            "global",
+				Available:         available,
+			})
+		}
 	}
 
 	if len(offerings) == 0 {
@@ -620,6 +655,52 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 	}
 
 	return offerings, nil
+}
+
+func practicalGPUCounts(maxCount int) []int {
+	if maxCount <= 0 {
+		return nil
+	}
+
+	counts := []int{1}
+	for _, count := range []int{2, 4, 8, 16} {
+		if count <= maxCount {
+			counts = append(counts, count)
+		}
+	}
+	if maxCount > 1 && !slices.Contains(counts, maxCount) {
+		counts = append(counts, maxCount)
+	}
+	slices.Sort(counts)
+	return counts
+}
+
+func firstPositive(values ...float64) float64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+type runpodLowestPrice struct {
+	MinimumBidPrice      float64 `json:"minimumBidPrice"`
+	UninterruptablePrice float64 `json:"uninterruptablePrice"`
+}
+
+func priceFromRunPodPrice(price *runpodLowestPrice) float64 {
+	if price == nil {
+		return 0
+	}
+	return price.UninterruptablePrice
+}
+
+func spotPriceFromRunPodPrice(price *runpodLowestPrice) float64 {
+	if price == nil {
+		return 0
+	}
+	return price.MinimumBidPrice
 }
 
 // getEstimatedPrice returns estimated hourly price for a GPU type.

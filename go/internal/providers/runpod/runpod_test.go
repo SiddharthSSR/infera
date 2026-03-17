@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -212,7 +213,7 @@ func TestListOfferingsUsesLiveRunPodValues(t *testing.T) {
 
 	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[
-			{"id":"gpu-4090","displayName":"NVIDIA GeForce RTX 4090","memoryInGb":24,"communityPrice":0.41,"securePrice":0.52,"communitySpotPrice":0.22,"secureSpotPrice":0.31,"maxGpuCountCommunityCloud":14,"maxGpuCountSecureCloud":0},
+			{"id":"gpu-4090","displayName":"NVIDIA GeForce RTX 4090","memoryInGb":24,"communityPrice":0.41,"securePrice":0.52,"communitySpotPrice":0.22,"secureSpotPrice":0.31,"maxGpuCountCommunityCloud":14,"maxGpuCountSecureCloud":0,"lowestPrice2":{"minimumBidPrice":0.40,"uninterruptablePrice":0.80},"lowestPrice4":{"minimumBidPrice":0.78,"uninterruptablePrice":1.56},"lowestPrice8":{"minimumBidPrice":1.52,"uninterruptablePrice":3.04}},
 			{"id":"gpu-unknown","displayName":"NVIDIA Mystery GPU","memoryInGb":48,"communityPrice":0.99,"securePrice":1.10,"communitySpotPrice":0.45,"secureSpotPrice":0.55,"maxGpuCountCommunityCloud":8,"maxGpuCountSecureCloud":0},
 			{"id":"gpu-h100","displayName":"NVIDIA H100 PCIe","memoryInGb":80,"communityPrice":1.99,"securePrice":2.20,"communitySpotPrice":1.09,"secureSpotPrice":1.30,"maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":0}
 		]}}`), nil
@@ -223,8 +224,8 @@ func TestListOfferingsUsesLiveRunPodValues(t *testing.T) {
 		t.Fatalf("ListOfferings: %v", err)
 	}
 
-	if len(offerings) != 2 {
-		t.Fatalf("expected 2 live offerings, got %d", len(offerings))
+	if len(offerings) != 9 {
+		t.Fatalf("expected 9 live offerings, got %d", len(offerings))
 	}
 
 	offering := offerings[0]
@@ -247,8 +248,20 @@ func TestListOfferingsUsesLiveRunPodValues(t *testing.T) {
 		t.Fatalf("expected live availability 14, got %d", offering.Available)
 	}
 
-	if offerings[1].GPUType != providers.GPUType("NVIDIA Mystery GPU") {
-		t.Fatalf("expected unknown gpu to be preserved, got %q", offerings[1].GPUType)
+	if offerings[1].GPUCount != 2 || offerings[1].CostPerHour != 0.80 {
+		t.Fatalf("expected 2x RTX_4090 live offering with aliased pricing, got count=%d price=%f", offerings[1].GPUCount, offerings[1].CostPerHour)
+	}
+	if offerings[4].GPUCount != 14 {
+		t.Fatalf("expected exact max count offering to be surfaced, got %d", offerings[4].GPUCount)
+	}
+	if math.Abs(offerings[4].CostPerHour-5.74) > 0.0001 {
+		t.Fatalf("expected fallback scaled price for 14x offering, got %f", offerings[4].CostPerHour)
+	}
+	if offerings[5].GPUType != providers.GPUType("NVIDIA Mystery GPU") {
+		t.Fatalf("expected unknown gpu to be preserved, got %q", offerings[5].GPUType)
+	}
+	if offerings[8].GPUCount != 8 {
+		t.Fatalf("expected 8x unknown gpu offering to be surfaced, got %d", offerings[8].GPUCount)
 	}
 }
 
