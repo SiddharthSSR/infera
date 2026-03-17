@@ -45,7 +45,7 @@ func main() {
 	// Prefer an explicitly pinned worker image for reproducible warm restarts.
 	workerImage := strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE"))
 	if workerImage == "" {
-		log.Warn("INFERA_WORKER_IMAGE is not set; provider-specific fallback images may use floating tags")
+		log.Warn("INFERA_WORKER_IMAGE is not set; non-mock provisioning will fail until a pinned worker image tag or digest is configured")
 	}
 	enableMockProvider := os.Getenv("INFERA_DEV_MODE") == "1" || os.Getenv("INFERA_ENABLE_MOCK_PROVIDER") == "1"
 	gatewayAddress := strings.TrimSpace(os.Getenv("INFERA_GATEWAY_ADDRESS"))

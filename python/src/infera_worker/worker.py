@@ -233,23 +233,42 @@ class Worker:
             pass
 
         # Fallback: derive from GPU memory usage
-        try:
-            import torch
-            if torch.cuda.is_available():
-                used = torch.cuda.memory_allocated()
-                total = torch.cuda.get_device_properties(0).total_memory
-                if total > 0:
-                    return round((used / total) * 100, 1)
-        except Exception:
-            pass
+        used, total = self._get_gpu_memory_usage()
+        if total > 0:
+            return round((used / total) * 100, 1)
 
         return 0.0
 
+    def _get_gpu_memory_usage(self) -> tuple[int, int]:
+        """Get best-effort GPU memory usage in bytes."""
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            return int(mem.used), int(mem.total)
+        except Exception:
+            pass
+
+        try:
+            import torch
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated()
+                reserved = torch.cuda.memory_reserved()
+                total = torch.cuda.get_device_properties(0).total_memory
+                return int(max(allocated, reserved)), int(total)
+        except Exception:
+            pass
+
+        return 0, 0
+
     def get_stats(self) -> WorkerStats:
         """Get current worker statistics."""
-        used_memory, total_memory = (0, 0)
+        used_memory, total_memory = self._get_gpu_memory_usage()
         if self.engine:
-            used_memory, total_memory = self.engine.get_memory_usage()
+            engine_used, engine_total = self.engine.get_memory_usage()
+            used_memory = max(used_memory, engine_used)
+            total_memory = max(total_memory, engine_total)
 
         # Calculate percentiles
         p50 = self._percentile(50)

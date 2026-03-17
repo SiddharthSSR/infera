@@ -144,6 +144,21 @@ class HTTPServer:
             version=self._runtime_version(),
         ).set(1)
 
+    def _worker_tags(self) -> dict[str, str]:
+        """Build stable worker metadata sent to the gateway."""
+        tags = {
+            "provider": self._runtime_provider(),
+            "engine": self.config.engine,
+            "env": self._runtime_env(),
+            "version": self._runtime_version(),
+        }
+
+        if runpod_pod_id := os.environ.get("RUNPOD_POD_ID"):
+            tags["instance_id"] = runpod_pod_id
+            tags["provider_id"] = runpod_pod_id
+
+        return tags
+
     def _record_gateway_registration(self, status: str) -> None:
         self._gateway_registration.labels(status=status).inc()
 
@@ -230,12 +245,7 @@ class HTTPServer:
             "worker_id": self.worker.worker_id,
             "address": worker_address,
             "status": "healthy",
-            "tags": {
-                "provider": self._runtime_provider(),
-                "engine": self.config.engine,
-                "env": self._runtime_env(),
-                "version": self._runtime_version(),
-            },
+            "tags": self._worker_tags(),
             "loaded_models": [
                 {
                     "model_id": m.model_id,

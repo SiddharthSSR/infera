@@ -141,6 +141,69 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	assertEnvContains(t, env, "HUGGINGFACE_HUB_CACHE", "/workspace/.cache/huggingface/hub")
 }
 
+func TestProvisionAddsRuntimeEnvOverridesForKnownModel(t *testing.T) {
+	t.Setenv("INFERA_WORKER_SHARED_TOKEN", "worker-shared-token")
+
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var captured graphQLRequest
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S"}}}}`), nil
+	})
+
+	req := &providers.ProvisionRequest{
+		Name:           "worker",
+		GPUType:        providers.GPUL40S,
+		GPUCount:       1,
+		DockerImage:    "custom/worker:v1",
+		Models:         []string{"Qwen/Qwen2.5-7B-Instruct"},
+		GatewayAddress: "https://gateway.example.com",
+	}
+	providers.ApplyRuntimeDefaults(req)
+
+	if _, err := provider.Provision(context.Background(), req); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	input, ok := captured.Variables["input"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graphql input variables, got %#v", captured.Variables)
+	}
+	env, ok := input["env"].([]interface{})
+	if !ok {
+		t.Fatalf("expected env array, got %#v", input["env"])
+	}
+	assertEnvContains(t, env, providers.OptionVLLMMaxModelLen, "32768")
+	assertEnvContains(t, env, providers.OptionVLLMGPUMemoryUtilization, "0.94")
+}
+
+func TestProvisionRejectsFloatingWorkerImage(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:        "worker",
+		GPUType:     providers.GPUL40S,
+		GPUCount:    1,
+		DockerImage: "codingtensor/infera-worker:latest",
+	})
+	if err == nil {
+		t.Fatal("expected floating worker image to be rejected")
+	}
+}
+
 func TestListOfferingsUsesLiveRunPodValues(t *testing.T) {
 	provider, err := New(Config{APIKey: "test-key"})
 	if err != nil {

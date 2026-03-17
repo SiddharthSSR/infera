@@ -1188,6 +1188,8 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	g.linkWorkerToInstance(workerInfo)
+
 	// Register worker client
 	g.RegisterWorkerClient(req.WorkerID, req.Address)
 
@@ -1252,6 +1254,10 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if worker, found := g.router.GetWorker(req.WorkerID); found {
+		g.linkWorkerToInstance(worker)
+	}
+
 	// Sync loaded models from heartbeat (self-healing if registration missed them)
 	if len(req.LoadedModels) > 0 {
 		models := make([]types.LoadedModel, len(req.LoadedModels))
@@ -1268,6 +1274,73 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"acknowledged": true,
 	})
+}
+
+func (g *Gateway) linkWorkerToInstance(worker *types.WorkerInfo) {
+	if g == nil || g.instanceManager == nil || worker == nil {
+		return
+	}
+
+	if instance, found := g.instanceManager.GetInstanceByWorker(worker.WorkerID); found && instance != nil {
+		return
+	}
+
+	instanceID := strings.TrimSpace(worker.Tags["instance_id"])
+	if instanceID == "" {
+		instanceID = strings.TrimSpace(worker.Tags["provider_id"])
+	}
+
+	if instanceID != "" {
+		if inst, found := g.instanceManager.GetInstance(instanceID); found && inst != nil {
+			_ = g.instanceManager.LinkWorker(inst.ID, worker.WorkerID)
+			return
+		}
+	}
+
+	providerID, providerType, ok := inferWorkerProviderRef(worker)
+	if !ok {
+		return
+	}
+
+	if inst, found := g.instanceManager.GetInstanceByProviderRef(providerType, providerID); found && inst != nil {
+		_ = g.instanceManager.LinkWorker(inst.ID, worker.WorkerID)
+	}
+}
+
+func inferWorkerProviderRef(worker *types.WorkerInfo) (providerID string, providerType providers.ProviderType, ok bool) {
+	if worker == nil {
+		return "", "", false
+	}
+
+	if tagProviderID := strings.TrimSpace(worker.Tags["provider_id"]); tagProviderID != "" {
+		provider := providers.ProviderType(strings.TrimSpace(worker.Tags["provider"]))
+		if provider != "" {
+			return tagProviderID, provider, true
+		}
+	}
+
+	address := strings.TrimSpace(worker.Address)
+	if address == "" {
+		return "", "", false
+	}
+
+	host := address
+	if parsedHost, _, err := net.SplitHostPort(address); err == nil {
+		host = parsedHost
+	}
+	host = strings.ToLower(strings.TrimSpace(host))
+
+	if strings.Contains(host, ".proxy.runpod.net") {
+		firstLabel := host
+		if idx := strings.Index(host, "."); idx >= 0 {
+			firstLabel = host[:idx]
+		}
+		if dash := strings.Index(firstLabel, "-"); dash > 0 {
+			return firstLabel[:dash], providers.ProviderRunPod, true
+		}
+	}
+
+	return "", "", false
 }
 
 func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {

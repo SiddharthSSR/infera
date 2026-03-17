@@ -96,8 +96,12 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 	}
 
 	dockerImage := strings.TrimSpace(req.DockerImage)
-	if dockerImage == "" {
-		dockerImage = "codingtensor/infera-worker:latest"
+	if err := providers.ValidateWorkerImageRef(dockerImage); err != nil {
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderVastAI,
+			Code:     providers.ProviderErrorInvalidRequest,
+			Message:  err.Error(),
+		}
 	}
 
 	env := p.buildEnv(req)
@@ -378,6 +382,10 @@ func (p *Provider) buildEnv(req *providers.ProvisionRequest) map[string]string {
 	if hfToken := strings.TrimSpace(os.Getenv("HF_TOKEN")); hfToken != "" {
 		env["HF_TOKEN"] = hfToken
 		env["HUGGING_FACE_HUB_TOKEN"] = hfToken
+	}
+
+	for key, value := range providers.WorkerRuntimeEnv(req) {
+		env[key] = value
 	}
 
 	return env

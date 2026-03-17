@@ -12,6 +12,8 @@ import (
 
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
+	"github.com/infera/infera/go/internal/providers"
+	mockprovider "github.com/infera/infera/go/internal/providers/mock"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/pkg/types"
 )
@@ -110,6 +112,120 @@ func TestRequireWorkerTokenOnRegister(t *testing.T) {
 	handler(recWithToken, reqWithToken)
 	if recWithToken.Code != http.StatusOK {
 		t.Fatalf("expected 200 with valid token, got %d", recWithToken.Code)
+	}
+}
+
+func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
+	r := router.New(router.DefaultConfig())
+	defer r.Stop()
+
+	manager, err := providers.NewManager(providers.ManagerConfig{
+		DefaultProvider: providers.ProviderMock,
+	})
+	if err != nil {
+		t.Fatalf("providers.NewManager: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	runpod := mockprovider.New()
+	manager.RegisterProvider(runpod)
+
+	instance, err := manager.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:     "runpod-like-instance",
+		Provider: providers.ProviderMock,
+		GPUType:  providers.GPUL40S,
+		GPUCount: 1,
+		Models:   []string{"Qwen/Qwen2.5-7B-Instruct"},
+	})
+	if err != nil {
+		t.Fatalf("manager.Provision: %v", err)
+	}
+
+	// Re-shape the mock instance so it looks like a RunPod-managed pod.
+	instance.Provider = providers.ProviderRunPod
+	instance.ProviderID = "uxh9he0pyoqpho"
+
+	g := New(Config{WorkerSharedToken: "secret-token"}, r, manager)
+	handler := g.requireWorkerToken(g.handleRegisterWorker)
+
+	body := `{"worker_id":"w1","address":"uxh9he0pyoqpho-8081.proxy.runpod.net","status":"healthy","tags":{"provider":"runpod"},"loaded_models":[{"model_id":"Qwen/Qwen2.5-7B-Instruct","version":"main"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/register", strings.NewReader(body))
+	req.Header.Set("X-Worker-Token", "secret-token")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	linked, found := manager.GetInstance(instance.ID)
+	if !found {
+		t.Fatalf("expected instance %s to exist", instance.ID)
+	}
+	if linked.WorkerID != "w1" {
+		t.Fatalf("expected instance worker_id to be linked to w1, got %q", linked.WorkerID)
+	}
+}
+
+func TestHandleWorkerHeartbeatRepairsMissingInstanceLink(t *testing.T) {
+	r := router.New(router.DefaultConfig())
+	defer r.Stop()
+
+	manager, err := providers.NewManager(providers.ManagerConfig{
+		DefaultProvider: providers.ProviderMock,
+	})
+	if err != nil {
+		t.Fatalf("providers.NewManager: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	runpod := mockprovider.New()
+	manager.RegisterProvider(runpod)
+
+	instance, err := manager.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:     "heartbeat-link-instance",
+		Provider: providers.ProviderMock,
+		GPUType:  providers.GPUL40S,
+		GPUCount: 1,
+		Models:   []string{"Qwen/Qwen2.5-7B-Instruct"},
+	})
+	if err != nil {
+		t.Fatalf("manager.Provision: %v", err)
+	}
+
+	instance.Provider = providers.ProviderRunPod
+	instance.ProviderID = "uxh9he0pyoqpho"
+	instance.WorkerID = ""
+
+	if err := r.RegisterWorker(&types.WorkerInfo{
+		WorkerID: "w1",
+		Address:  "uxh9he0pyoqpho-8081.proxy.runpod.net",
+		Status:   types.WorkerStatusHealthy,
+		Tags: map[string]string{
+			"provider": "runpod",
+		},
+	}); err != nil {
+		t.Fatalf("RegisterWorker: %v", err)
+	}
+
+	g := New(Config{WorkerSharedToken: "secret-token"}, r, manager)
+	handler := g.requireWorkerToken(g.handleWorkerHeartbeat)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(`{"worker_id":"w1","stats":{"queue_depth":0,"active_requests":0}}`))
+	req.Header.Set("X-Worker-Token", "secret-token")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	linked, found := manager.GetInstance(instance.ID)
+	if !found {
+		t.Fatalf("expected instance %s to exist", instance.ID)
+	}
+	if linked.WorkerID != "w1" {
+		t.Fatalf("expected heartbeat to repair worker link to w1, got %q", linked.WorkerID)
 	}
 }
 

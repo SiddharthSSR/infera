@@ -20,7 +20,6 @@ const (
 	defaultEndpoint    = "https://api.runpod.io/graphql"
 	pollInterval       = 5 * time.Second
 	readyTimeout       = 10 * time.Minute
-	defaultWorkerImage = "codingtensor/infera-worker:latest"
 	workspaceMountPath = "/workspace"
 )
 
@@ -104,20 +103,13 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		}
 	}
 
-	// Default to the custom infera worker image with vLLM 0.16+
 	dockerImage := strings.TrimSpace(req.DockerImage)
-
-	if dockerImage == "" {
-		dockerImage = defaultWorkerImage
-		slog.Warn("runpod.provision.using_fallback_worker_image",
-			slog.String("image", dockerImage),
-			slog.String("recommendation", "Set INFERA_WORKER_IMAGE to a pinned tag or digest"),
-		)
-	} else if usesFloatingImageRef(dockerImage) {
-		slog.Warn("runpod.provision.using_unpinned_worker_image",
-			slog.String("image", dockerImage),
-			slog.String("recommendation", "Use a pinned tag or digest to keep warm restarts predictable"),
-		)
+	if err := providers.ValidateWorkerImageRef(dockerImage); err != nil {
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorInvalidRequest,
+			Message:  err.Error(),
+		}
 	}
 
 	// Build environment variables
@@ -178,6 +170,12 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		// Also set as HUGGING_FACE_HUB_TOKEN for compatibility
 		env = append(env, map[string]string{
 			"key": "HUGGING_FACE_HUB_TOKEN", "value": hfToken,
+		})
+	}
+
+	for key, value := range providers.WorkerRuntimeEnv(req) {
+		env = append(env, map[string]string{
+			"key": key, "value": value,
 		})
 	}
 

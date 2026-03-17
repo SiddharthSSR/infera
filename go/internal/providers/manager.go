@@ -154,6 +154,16 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	if req.GatewayAddress == "" {
 		req.GatewayAddress = m.gatewayAddress
 	}
+	ApplyRuntimeDefaults(req)
+	if providerType != ProviderMock {
+		if err := ValidateWorkerImageRef(req.DockerImage); err != nil {
+			return nil, &ProviderError{
+				Provider: providerType,
+				Code:     ProviderErrorInvalidRequest,
+				Message:  err.Error(),
+			}
+		}
+	}
 
 	if reusable := m.findReusableStoppedInstance(providerType, req); reusable != nil {
 		if err := m.Start(ctx, reusable.ID); err != nil {
@@ -526,6 +536,19 @@ func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
 
 	for _, inst := range m.instances {
 		if inst.WorkerID == workerID {
+			return inst, true
+		}
+	}
+	return nil, false
+}
+
+// GetInstanceByProviderRef finds an instance by provider type and provider-native ID.
+func (m *Manager) GetInstanceByProviderRef(providerType ProviderType, providerID string) (*Instance, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, inst := range m.instances {
+		if inst.Provider == providerType && inst.ProviderID == providerID {
 			return inst, true
 		}
 	}

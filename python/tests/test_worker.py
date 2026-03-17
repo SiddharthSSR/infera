@@ -166,6 +166,24 @@ class TestWorker:
         assert stats.memory_total_bytes >= 0
 
     @pytest.mark.asyncio
+    async def test_get_stats_prefers_runtime_or_engine_memory(self, monkeypatch):
+        worker = Worker(WorkerConfig(engine="mock"))
+        await worker.start()
+
+        monkeypatch.setattr(worker, "_get_gpu_memory_usage", lambda: (1024, 4096))
+
+        class FakeEngine:
+            def get_memory_usage(self):
+                return (2048, 4096)
+
+        worker.engine = FakeEngine()
+
+        stats = worker.get_stats()
+
+        assert stats.memory_used_bytes == 2048
+        assert stats.memory_total_bytes == 4096
+
+    @pytest.mark.asyncio
     async def test_get_stats_after_requests(self, worker, sample_request):
         await worker.start()
         await worker.load_model(ModelConfig(model_id="test-model"))

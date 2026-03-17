@@ -615,3 +615,25 @@ func TestManagerLinkWorkerNonExistent(t *testing.T) {
 		t.Error("expected error for non-existent instance")
 	}
 }
+
+func TestManagerGetInstanceByProviderRef(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(newMockTestProvider())
+
+	ctx := context.Background()
+	instance, err := mgr.Provision(ctx, &ProvisionRequest{Name: "provider-ref-test", GPUType: GPURTX4090})
+	if err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+
+	instance.Provider = ProviderRunPod
+	instance.ProviderID = "pod-123"
+
+	found, ok := mgr.GetInstanceByProviderRef(ProviderRunPod, "pod-123")
+	if !ok {
+		t.Fatal("expected provider ref lookup to find instance")
+	}
+	if found.ID != instance.ID {
+		t.Fatalf("expected instance %q, got %q", instance.ID, found.ID)
+	}
+}

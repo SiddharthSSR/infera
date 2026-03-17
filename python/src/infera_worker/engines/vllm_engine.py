@@ -247,9 +247,18 @@ class VLLMEngine(InferenceEngine):
     def get_memory_usage(self) -> tuple[int, int]:
         """Get GPU memory usage."""
         try:
+            import pynvml
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            return int(mem.used), int(mem.total)
+        except Exception:
+            pass
+
+        try:
             import torch
             if torch.cuda.is_available():
-                used = torch.cuda.memory_allocated()
+                used = max(torch.cuda.memory_allocated(), torch.cuda.memory_reserved())
                 total = torch.cuda.get_device_properties(0).total_memory
                 return used, total
         except ImportError:
@@ -330,7 +339,7 @@ class VLLMEngine(InferenceEngine):
         try:
             import torch
             if torch.cuda.is_available():
-                return torch.cuda.memory_allocated()
+                return max(torch.cuda.memory_allocated(), torch.cuda.memory_reserved())
         except ImportError:
             pass
         return 8 * 1024 * 1024 * 1024  # Default 8GB estimate
