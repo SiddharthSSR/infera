@@ -768,6 +768,7 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	bestTotalTokens := 0
 	firstChunkObserved := false
 	var previousChunkAt time.Time
+	prevCompletionTokens := 0
 
 	for chunk := range chunks {
 		now := time.Now()
@@ -777,7 +778,21 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 				g.metrics.RecordTTFT(model, true, now.Sub(streamStart))
 			}
 		} else if g.metrics != nil {
-			g.metrics.RecordTPOT(model, true, now.Sub(previousChunkAt))
+			elapsed := now.Sub(previousChunkAt)
+			// Derive how many completion tokens arrived in this chunk using
+			// the cumulative CompletionTokens counter. Fall back to 1 when
+			// the worker doesn't populate Usage mid-stream.
+			tokensInChunk := 1
+			if chunk.Usage != nil && chunk.Usage.CompletionTokens > prevCompletionTokens {
+				tokensInChunk = chunk.Usage.CompletionTokens - prevCompletionTokens
+			}
+			perToken := elapsed / time.Duration(tokensInChunk)
+			for i := 0; i < tokensInChunk; i++ {
+				g.metrics.RecordTPOT(model, true, perToken)
+			}
+		}
+		if chunk.Usage != nil && chunk.Usage.CompletionTokens > 0 {
+			prevCompletionTokens = chunk.Usage.CompletionTokens
 		}
 		previousChunkAt = now
 
@@ -1292,36 +1307,61 @@ func (g *Gateway) linkWorkerToInstance(worker *types.WorkerInfo) {
 
 	if instanceID != "" {
 		if inst, found := g.instanceManager.GetInstance(instanceID); found && inst != nil {
-			_ = g.instanceManager.LinkWorker(inst.ID, worker.WorkerID)
+			if err := g.instanceManager.LinkWorker(inst.ID, worker.WorkerID); err == nil {
+				g.log.Info("worker.linked_via_tag",
+					slog.String("worker_id", worker.WorkerID),
+					slog.String("instance_id", inst.ID),
+				)
+			}
 			return
 		}
 	}
 
-	providerID, providerType, ok := inferWorkerProviderRef(worker)
+	providerID, providerType, method, ok := inferWorkerProviderRef(worker)
 	if !ok {
+		g.log.Debug("worker.link_skipped",
+			slog.String("worker_id", worker.WorkerID),
+			slog.String("address", worker.Address),
+			slog.String("reason", "no provider ref resolvable from tags or hostname"),
+		)
 		return
 	}
 
 	if inst, found := g.instanceManager.GetInstanceByProviderRef(providerType, providerID); found && inst != nil {
-		_ = g.instanceManager.LinkWorker(inst.ID, worker.WorkerID)
+		if err := g.instanceManager.LinkWorker(inst.ID, worker.WorkerID); err == nil {
+			g.log.Info("worker.linked_via_provider_ref",
+				slog.String("worker_id", worker.WorkerID),
+				slog.String("instance_id", inst.ID),
+				slog.String("provider", string(providerType)),
+				slog.String("provider_id", providerID),
+				slog.String("method", method),
+			)
+		}
+	} else {
+		g.log.Warn("worker.link_no_instance",
+			slog.String("worker_id", worker.WorkerID),
+			slog.String("provider", string(providerType)),
+			slog.String("provider_id", providerID),
+			slog.String("method", method),
+		)
 	}
 }
 
-func inferWorkerProviderRef(worker *types.WorkerInfo) (providerID string, providerType providers.ProviderType, ok bool) {
+func inferWorkerProviderRef(worker *types.WorkerInfo) (providerID string, providerType providers.ProviderType, method string, ok bool) {
 	if worker == nil {
-		return "", "", false
+		return "", "", "", false
 	}
 
 	if tagProviderID := strings.TrimSpace(worker.Tags["provider_id"]); tagProviderID != "" {
 		provider := providers.ProviderType(strings.TrimSpace(worker.Tags["provider"]))
 		if provider != "" {
-			return tagProviderID, provider, true
+			return tagProviderID, provider, "tags", true
 		}
 	}
 
 	address := strings.TrimSpace(worker.Address)
 	if address == "" {
-		return "", "", false
+		return "", "", "", false
 	}
 
 	host := address
@@ -1336,11 +1376,11 @@ func inferWorkerProviderRef(worker *types.WorkerInfo) (providerID string, provid
 			firstLabel = host[:idx]
 		}
 		if dash := strings.Index(firstLabel, "-"); dash > 0 {
-			return firstLabel[:dash], providers.ProviderRunPod, true
+			return firstLabel[:dash], providers.ProviderRunPod, "runpod_hostname", true
 		}
 	}
 
-	return "", "", false
+	return "", "", "", false
 }
 
 func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {

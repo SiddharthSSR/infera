@@ -46,6 +46,13 @@ class WorkerConfig(BaseSettings):
     vllm_tensor_parallel_size: int = Field(default=1, description="Tensor parallel size")
     vllm_gpu_memory_utilization: float = Field(default=0.9, description="GPU memory utilization")
     vllm_max_model_len: int | None = Field(default=None, description="Max model length")
+
+    # vLLM speculative decoding
+    # Set to a HuggingFace model ID for draft-model mode, or "[ngram]" for ngram mode.
+    # Leave empty (default) to disable speculative decoding.
+    vllm_speculative_model: str = Field(default="", description="Draft model ID or '[ngram]' for speculative decoding")
+    vllm_num_speculative_tokens: int = Field(default=0, description="Tokens to speculate per step (0 = disabled)")
+    vllm_ngram_prompt_lookup_num_tokens: int = Field(default=0, description="Ngram look-back window (ngram mode only)")
     
     # Logging
     log_level: str = Field(default="INFO", description="Log level")

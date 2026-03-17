@@ -397,6 +397,13 @@
         "type": "prometheus",
         "uid": "infera-prometheus"
       },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "id": 7,
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -406,32 +413,24 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 3 }
             ]
           },
           "unit": "s"
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 13
-      },
-      "id": 7,
       "options": {
         "legend": {
-          "calcs": [],
+          "calcs": ["mean", "lastNotNull"],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -439,12 +438,19 @@
         {
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum by (le, model) (rate(infera_gateway_inference_ttft_seconds_bucket[5m])))",
-          "legendFormat": "model={{model}}",
+          "legendFormat": "p95 {{model}}",
           "range": true,
           "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le, model) (rate(infera_gateway_inference_ttft_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{model}}",
+          "range": true,
+          "refId": "B"
         }
       ],
-      "title": "Inference TTFT p95 by Model (s)",
+      "title": "Inference TTFT p95/p50 by Model (s)",
       "type": "timeseries"
     },
     {
@@ -461,10 +467,9 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.1 },
+              { "color": "red", "value": 0.25 }
             ]
           },
           "unit": "s"
@@ -480,13 +485,13 @@
       "id": 8,
       "options": {
         "legend": {
-          "calcs": [],
+          "calcs": ["mean", "lastNotNull"],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -494,12 +499,19 @@
         {
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum by (le, model) (rate(infera_gateway_inference_tpot_seconds_bucket[5m])))",
-          "legendFormat": "model={{model}}",
+          "legendFormat": "p95 {{model}}",
           "range": true,
           "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le, model) (rate(infera_gateway_inference_tpot_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{model}}",
+          "range": true,
+          "refId": "B"
         }
       ],
-      "title": "Inference TPOT p95 by Model (s)",
+      "title": "Inference TPOT p95/p50 by Model (s)",
       "type": "timeseries"
     },
     {
@@ -535,13 +547,13 @@
       "id": 9,
       "options": {
         "legend": {
-          "calcs": [],
+          "calcs": ["mean", "lastNotNull"],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -590,13 +602,13 @@
       "id": 10,
       "options": {
         "legend": {
-          "calcs": [],
+          "calcs": ["mean", "lastNotNull"],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
@@ -632,6 +644,6 @@
   "timezone": "browser",
   "title": "Infera Overview",
   "uid": "infera-overview",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

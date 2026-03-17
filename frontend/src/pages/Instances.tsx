@@ -84,7 +84,6 @@ type OfferingGroup = {
   provider: ProviderType;
   gpuType: GPUType;
   displayName?: string;
-  perGpuMemoryGB: number;
   region: string;
   counts: GPUOffering[];
   cheapestCostPerHour: number;
@@ -501,7 +500,6 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
             provider: offering.provider,
             gpuType: offering.gpu_type,
             displayName: offering.display_name,
-            perGpuMemoryGB: Math.max(1, Math.round((offering.memory_gb || 0) / Math.max(offering.gpu_count || 1, 1))),
             region: offering.region || 'global',
             counts: [offering],
             cheapestCostPerHour: offering.cost_per_hour,
@@ -511,10 +509,6 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
 
         existing.counts.push(offering);
         existing.cheapestCostPerHour = Math.min(existing.cheapestCostPerHour, offering.cost_per_hour);
-        existing.perGpuMemoryGB = Math.max(
-          existing.perGpuMemoryGB,
-          Math.max(1, Math.round((offering.memory_gb || 0) / Math.max(offering.gpu_count || 1, 1))),
-        );
         return map;
       }, new Map<string, OfferingGroup>()).values(),
     );
@@ -746,9 +740,13 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
                     const selectedGroupOffering = group.counts.find((offering) => getOfferingKey(offering) === selectedGPU) || null;
                     const activeOffering = selectedGroupOffering || group.counts[0];
                     const isSelected = Boolean(selectedGroupOffering);
+                    const perGpuMemoryGB = Math.max(1, Math.round((activeOffering.memory_gb || 0) / Math.max(activeOffering.gpu_count || 1, 1)));
+                    const activeKey = getOfferingKey(activeOffering);
                     return (
                       <div
                         key={group.key}
+                        role="group"
+                        aria-label={formatGPUDisplayName(group.gpuType, group.displayName)}
                         style={{
                           padding: '1.25rem',
                           border: isSelected ? '2px solid var(--text-primary)' : 'var(--grid-line)',
@@ -763,7 +761,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
                           <span className="badge">{group.provider.toUpperCase()}</span>
                         </div>
                         <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                          <span>{group.perGpuMemoryGB}GB each</span>
+                          <span>{perGpuMemoryGB}GB each</span>
                           <span>{group.region || 'global'}</span>
                         </div>
                         <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
@@ -771,7 +769,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
                             <span>COUNT</span>
                             <select
                               className="control-select"
-                              value={getOfferingKey(activeOffering)}
+                              value={activeKey}
                               onChange={(e) => setSelectedGPU(e.target.value)}
                               style={{ minWidth: '8rem' }}
                             >
@@ -784,7 +782,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
                           </label>
                           <button
                             className="action-btn"
-                            onClick={() => setSelectedGPU((prev) => prev === getOfferingKey(activeOffering) ? '' : getOfferingKey(activeOffering))}
+                            onClick={() => setSelectedGPU((prev) => prev === activeKey ? '' : activeKey)}
                             style={{ fontSize: '0.7rem' }}
                           >
                             {isSelected ? 'SELECTED' : 'SELECT'}

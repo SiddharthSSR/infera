@@ -52,7 +52,7 @@ class VLLMEngine(InferenceEngine):
         """Load a model using vLLM."""
         model_path = model_config.model_path or model_config.model_id
 
-        engine_args = AsyncEngineArgs(
+        engine_kwargs: dict = dict(
             model=model_path,
             revision=model_config.revision,
             tensor_parallel_size=self.config.vllm_tensor_parallel_size,
@@ -61,6 +61,16 @@ class VLLMEngine(InferenceEngine):
             quantization=model_config.quantization,
             trust_remote_code=True,
         )
+
+        spec_model = self.config.vllm_speculative_model.strip()
+        num_spec_tokens = self.config.vllm_num_speculative_tokens
+        if spec_model and num_spec_tokens > 0:
+            engine_kwargs["speculative_model"] = spec_model
+            engine_kwargs["num_speculative_tokens"] = num_spec_tokens
+            if spec_model == "[ngram]" and self.config.vllm_ngram_prompt_lookup_num_tokens > 0:
+                engine_kwargs["ngram_prompt_lookup_num_tokens"] = self.config.vllm_ngram_prompt_lookup_num_tokens
+
+        engine_args = AsyncEngineArgs(**engine_kwargs)
 
         engine = AsyncLLMEngine.from_engine_args(engine_args)
         self.engines[model_config.model_id] = engine

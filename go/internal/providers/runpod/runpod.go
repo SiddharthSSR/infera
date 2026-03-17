@@ -668,7 +668,9 @@ func practicalGPUCounts(maxCount int) []int {
 			counts = append(counts, count)
 		}
 	}
-	if maxCount > 1 && !slices.Contains(counts, maxCount) {
+	// Only append maxCount if it's a large non-standard value (≥8) and not already included.
+	// Small odd counts like 3 or 5 are not standard RunPod configurations and would confuse users.
+	if maxCount >= 8 && !slices.Contains(counts, maxCount) {
 		counts = append(counts, maxCount)
 	}
 	slices.Sort(counts)
