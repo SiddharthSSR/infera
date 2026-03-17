@@ -79,6 +79,17 @@ type NodeIncident = {
   tone: '' | 'warning' | 'error' | 'inactive';
 };
 
+type OfferingGroup = {
+  key: string;
+  provider: ProviderType;
+  gpuType: GPUType;
+  displayName?: string;
+  perGpuMemoryGB: number;
+  region: string;
+  counts: GPUOffering[];
+  cheapestCostPerHour: number;
+};
+
 function describeProvisioningState(configuredProviders: string[], providerStatuses: ProviderStatus[], offeringsCount: number) {
   const visibleStatuses = providerStatuses.filter((status) => CONFIGURABLE_PROVIDERS.includes(status.provider as typeof CONFIGURABLE_PROVIDERS[number]));
   const connectedProviders = visibleStatuses.filter((status) => status.connected);
@@ -458,6 +469,9 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
   const getOfferingKey = (o: GPUOffering) =>
     `${o.provider}-${o.provider_gpu_type_id || o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}`;
 
+  const getOfferingGroupKey = (o: GPUOffering) =>
+    `${o.provider}-${o.provider_gpu_type_id || o.gpu_type}-${o.display_name || o.gpu_type}`;
+
   // Deduplicate offerings
   const dedupedOfferings = useMemo(
     () => offerings ? Array.from(
@@ -474,6 +488,44 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
 
   const selectedOffering = dedupedOfferings?.find(o => getOfferingKey(o) === selectedGPU);
   const selectedGPUVram = selectedOffering ? (selectedOffering.memory_gb || GPU_VRAM_GB[selectedOffering.gpu_type as KnownGPUType]) : undefined;
+  const groupedOfferings = useMemo(() => {
+    if (!dedupedOfferings) return [];
+
+    const groups = Array.from(
+      dedupedOfferings.reduce((map, offering) => {
+        const key = getOfferingGroupKey(offering);
+        const existing = map.get(key);
+        if (!existing) {
+          map.set(key, {
+            key,
+            provider: offering.provider,
+            gpuType: offering.gpu_type,
+            displayName: offering.display_name,
+            perGpuMemoryGB: Math.max(1, Math.round((offering.memory_gb || 0) / Math.max(offering.gpu_count || 1, 1))),
+            region: offering.region || 'global',
+            counts: [offering],
+            cheapestCostPerHour: offering.cost_per_hour,
+          } satisfies OfferingGroup);
+          return map;
+        }
+
+        existing.counts.push(offering);
+        existing.cheapestCostPerHour = Math.min(existing.cheapestCostPerHour, offering.cost_per_hour);
+        existing.perGpuMemoryGB = Math.max(
+          existing.perGpuMemoryGB,
+          Math.max(1, Math.round((offering.memory_gb || 0) / Math.max(offering.gpu_count || 1, 1))),
+        );
+        return map;
+      }, new Map<string, OfferingGroup>()).values(),
+    );
+
+    return groups
+      .map((group) => ({
+        ...group,
+        counts: [...group.counts].sort((left, right) => left.gpu_count - right.gpu_count || left.cost_per_hour - right.cost_per_hour),
+      }))
+      .sort((left, right) => left.cheapestCostPerHour - right.cheapestCostPerHour);
+  }, [dedupedOfferings]);
 
   const allVaultModels = vaultModels?.models;
   const selectedModelRecord = useMemo(
@@ -690,15 +742,15 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
               <div className="label-text" style={{ marginBottom: '1rem' }}>GPU CONFIGURATION</div>
               {dedupedOfferings && dedupedOfferings.length > 0 ? (
                 <div className="provision-options-grid" style={{ marginBottom: '2rem' }}>
-                  {dedupedOfferings.map(o => {
-                    const key = getOfferingKey(o);
-                    const isSelected = selectedGPU === key;
+                  {groupedOfferings.map((group) => {
+                    const selectedGroupOffering = group.counts.find((offering) => getOfferingKey(offering) === selectedGPU) || null;
+                    const activeOffering = selectedGroupOffering || group.counts[0];
+                    const isSelected = Boolean(selectedGroupOffering);
                     return (
-                      <button
-                        key={key}
-                        onClick={() => setSelectedGPU(prev => prev === key ? '' : key)}
+                      <div
+                        key={group.key}
                         style={{
-                          padding: '1.25rem', textAlign: 'left', cursor: 'pointer',
+                          padding: '1.25rem',
                           border: isSelected ? '2px solid var(--text-primary)' : 'var(--grid-line)',
                           background: isSelected ? 'var(--bg-accent)' : 'transparent',
                           fontFamily: 'var(--font-main)',
@@ -706,19 +758,45 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
                           <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.5rem' }}>
-                            {o.gpu_count}x {formatGPUDisplayName(o.gpu_type, o.display_name)}
+                            {formatGPUDisplayName(group.gpuType, group.displayName)}
                           </div>
-                          <span className="badge">{o.provider.toUpperCase()}</span>
+                          <span className="badge">{group.provider.toUpperCase()}</span>
                         </div>
                         <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                          <span>{o.vcpu} vCPU</span>
-                          <span>{o.memory_gb}GB</span>
-                          <span>{o.region || 'default'}</span>
+                          <span>{group.perGpuMemoryGB}GB each</span>
+                          <span>{group.region || 'global'}</span>
+                        </div>
+                        <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                            <span>COUNT</span>
+                            <select
+                              className="control-select"
+                              value={getOfferingKey(activeOffering)}
+                              onChange={(e) => setSelectedGPU(e.target.value)}
+                              style={{ minWidth: '8rem' }}
+                            >
+                              {group.counts.map((offering) => (
+                                <option key={getOfferingKey(offering)} value={getOfferingKey(offering)}>
+                                  {offering.gpu_count}x
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            className="action-btn"
+                            onClick={() => setSelectedGPU((prev) => prev === getOfferingKey(activeOffering) ? '' : getOfferingKey(activeOffering))}
+                            style={{ fontSize: '0.7rem' }}
+                          >
+                            {isSelected ? 'SELECTED' : 'SELECT'}
+                          </button>
                         </div>
                         <div className="mono" style={{ marginTop: '0.75rem', fontSize: '1rem' }}>
-                          ${o.cost_per_hour.toFixed(2)}<span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/hr</span>
+                          ${activeOffering.cost_per_hour.toFixed(2)}<span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/hr</span>
                         </div>
-                      </button>
+                        <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                          {activeOffering.gpu_count}x selected · {activeOffering.memory_gb}GB total VRAM
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
