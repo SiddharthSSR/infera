@@ -4,6 +4,9 @@ import { toast } from 'sonner';
 import { createApiKey, fetchApiKeys, revokeApiKey, type ApiKeyRecord } from '../lib/api';
 import { useAuthSession } from '../lib/auth-context';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { ActionGroup } from '../components/ActionGroup';
+import { MetadataList } from '../components/MetadataList';
+import { SectionHeader } from '../components/SectionHeader';
 
 const humanKeyRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
 const serviceAccountRoles = ['operator', 'developer', 'read_only', 'billing'] as const;
@@ -80,6 +83,8 @@ export function ApiKeys() {
   const [creating, setCreating] = useState(false);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
+  const [keyFilter, setKeyFilter] = useState('');
+  const [principalFilter, setPrincipalFilter] = useState<'all' | 'human' | 'service_account'>('all');
 
   const activeWorkspaceName = session?.workspace?.name || 'Current workspace';
   const canSwitchWorkspaces = availableWorkspaces.length > 1;
@@ -113,6 +118,23 @@ export function ApiKeys() {
   const activeKeys = keys.filter((key) => key.status === 'active');
   const humanKeys = activeKeys.filter((key) => key.principal_type !== 'service_account');
   const serviceAccountKeys = activeKeys.filter((key) => key.principal_type === 'service_account');
+  const visibleKeys = keys.filter((key) => {
+    if (principalFilter !== 'all' && key.principal_type !== principalFilter) {
+      return false;
+    }
+    if (!keyFilter.trim()) {
+      return true;
+    }
+    const normalized = keyFilter.trim().toLowerCase();
+    return [
+      key.name,
+      key.key_prefix,
+      key.workspace_name,
+      key.workspace_slug,
+      key.role,
+      key.principal_type,
+    ].some((value) => value?.toLowerCase().includes(normalized));
+  });
 
   const handleGenerate = async () => {
     if (!newKeyName.trim()) {
@@ -191,55 +213,76 @@ export function ApiKeys() {
 
       <div className="grid-row api-keys-session-row">
         <div className="cell api-keys-session-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text">ACTIVE SESSION</div>
-          <h2 style={{ fontSize: '1.75rem', lineHeight: 1.1, marginTop: '0.8rem' }}>{activeWorkspaceName}</h2>
-          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '1rem' }}>
-            <span className="badge">{sessionModeLabel}</span>
+          <SectionHeader
+            eyebrow="ACTIVE SESSION"
+            title={activeWorkspaceName}
+            description={sessionDetail}
+            badge={<span className="badge">{sessionModeLabel}</span>}
+          />
+          <div className="chip-row" style={{ marginTop: '1rem' }}>
             {session?.key?.role && <span className="badge">{roleLabel(session.key.role)}</span>}
             {session?.workspace?.slug && <span className="badge mono">{session.workspace.slug}</span>}
           </div>
-          <p className="api-keys-session-detail">{sessionDetail}</p>
         </div>
         <div className="cell api-keys-summary-cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
-          <div className="label-text">WORKSPACE KEY SUMMARY</div>
-          <div className="api-keys-summary-grid">
-            <div>
-              <div className="label-text">ACTIVE KEYS</div>
-              <div className="value-text">{activeKeys.length}</div>
-            </div>
-            <div>
-              <div className="label-text">HUMAN</div>
-              <div className="value-text">{humanKeys.length}</div>
-            </div>
-            <div>
-              <div className="label-text">SERVICE ACCOUNTS</div>
-              <div className="value-text">{serviceAccountKeys.length}</div>
-            </div>
-            <div>
-              <div className="label-text">WORKSPACE SCOPE</div>
-              <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', lineHeight: 1.5 }}>
-                Keys listed here belong to <strong>{activeWorkspaceName}</strong> only.
-              </div>
-            </div>
+          <SectionHeader
+            eyebrow="WORKSPACE KEY SUMMARY"
+            title="Scope and inventory"
+            description={`Keys listed here belong to ${activeWorkspaceName} only.`}
+          />
+          <div style={{ marginTop: '1.2rem' }}>
+            <MetadataList
+              items={[
+                { label: 'ACTIVE KEYS', value: String(activeKeys.length), mono: true },
+                { label: 'HUMAN', value: String(humanKeys.length), mono: true },
+                { label: 'SERVICE ACCOUNTS', value: String(serviceAccountKeys.length), mono: true },
+                { label: 'VISIBLE NOW', value: String(visibleKeys.length), mono: true },
+              ]}
+              columns={2}
+            />
           </div>
         </div>
       </div>
 
       <div className="grid-row">
         <div className="cell" style={{ gridColumn: 'span 3' }}>
-          <div className="label-text" style={{ marginBottom: '2rem' }}>
-            WORKSPACE API KEYS
-          </div>
+          <SectionHeader
+            eyebrow="WORKSPACE API KEYS"
+            title="Filterable key inventory"
+            description="Keep the visible list scoped to the keys you need to inspect or revoke."
+            actions={(
+              <ActionGroup compact>
+                <input
+                  type="text"
+                  value={keyFilter}
+                  onChange={(event) => setKeyFilter(event.target.value)}
+                  placeholder="Search by key name, prefix, role, or workspace..."
+                  className="control-input"
+                  style={{ minWidth: isMobile ? '100%' : '22rem', margin: 0 }}
+                />
+                <select
+                  className="control-input"
+                  value={principalFilter}
+                  onChange={(event) => setPrincipalFilter(event.target.value as 'all' | 'human' | 'service_account')}
+                  style={{ minWidth: isMobile ? '100%' : '11rem', margin: 0 }}
+                >
+                  <option value="all">All principals</option>
+                  <option value="human">Human</option>
+                  <option value="service_account">Service account</option>
+                </select>
+              </ActionGroup>
+            )}
+          />
 
           {loading ? (
             <div style={{ padding: '3rem 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
               Loading keys...
             </div>
           ) : isMobile ? (
-            <div className="mobile-data-list">
-              {keys.length === 0 ? (
+            <div className="mobile-data-list" style={{ marginTop: '1.5rem' }}>
+              {visibleKeys.length === 0 ? (
                 <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem 0' }}>
-                  No workspace keys. Create one to get started.
+                  {keys.length === 0 ? 'No workspace keys. Create one to get started.' : 'No keys match the current filter.'}
                   <div className="help-actions" style={{ justifyContent: 'center' }}>
                     <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder*="Platform operator"], input[placeholder*="CI deploy bot"]')?.focus()}>
                       CREATE KEY NOW
@@ -248,7 +291,7 @@ export function ApiKeys() {
                   </div>
                 </div>
               ) : (
-                keys.map((key) => (
+                visibleKeys.map((key) => (
                   <div key={key.id} className="mobile-data-card">
                     <div className="mobile-data-card-header">
                       <div>
@@ -284,7 +327,7 @@ export function ApiKeys() {
               )}
             </div>
           ) : (
-            <div className="responsive-scroll-x">
+            <div className="responsive-scroll-x" style={{ marginTop: '1.5rem' }}>
               <table className="data-table responsive-scroll-x-content">
                 <thead>
                   <tr>
@@ -299,7 +342,7 @@ export function ApiKeys() {
                   </tr>
                 </thead>
                 <tbody>
-                  {keys.map((key) => (
+                  {visibleKeys.map((key) => (
                     <tr key={key.id}>
                       <td>
                         <div style={{ fontWeight: 500 }}>{key.name}</div>
@@ -338,10 +381,10 @@ export function ApiKeys() {
                       </td>
                     </tr>
                   ))}
-                  {keys.length === 0 && (
+                  {visibleKeys.length === 0 && (
                     <tr>
                       <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 0' }}>
-                        No workspace keys. Create one to get started.
+                        {keys.length === 0 ? 'No workspace keys. Create one to get started.' : 'No keys match the current filter.'}
                         <div className="help-actions" style={{ justifyContent: 'center' }}>
                           <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder*="Platform operator"], input[placeholder*="CI deploy bot"]')?.focus()}>
                             CREATE KEY NOW
@@ -358,21 +401,16 @@ export function ApiKeys() {
         </div>
 
         <div className="cell api-key-create-cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>
-            CREATE WORKSPACE KEY
-          </div>
+          <SectionHeader
+            eyebrow="CREATE WORKSPACE KEY"
+            title="Create a scoped credential"
+            description="Human keys can create dashboard sessions if their role allows dashboard access. Service-account keys are for automation only."
+          />
 
-          <div className="api-key-create-helper">
-            Human keys can create dashboard sessions if their role allows dashboard access. Service-account keys are for automation only.
-          </div>
-          <div className="help-callout" style={{ marginBottom: '2rem' }}>
+          <div className="help-callout" style={{ marginTop: '1.5rem', marginBottom: '1.5rem' }}>
             <div className="label-text">WHEN TO USE WHICH KEY</div>
             <div className="help-callout-copy">
               Use a <strong>human key</strong> for a person who needs dashboard access inside the active workspace. Use a <strong>service account</strong> for CI, scripts, agents, and production automation. Switching workspace changes the session context you are browsing, but it does not make a key cross-workspace.
-            </div>
-            <div className="help-actions">
-              <Link className="action-btn" to="/workspace">OPEN WORKSPACE</Link>
-              <Link className="action-btn" to="/docs">READ AUTH DOCS</Link>
             </div>
           </div>
 
@@ -449,6 +487,11 @@ export function ApiKeys() {
 
           <div className="api-key-create-footer">
             Keys are SHA-256 hashed and are scoped to <strong>{activeWorkspaceName}</strong>. Switching workspace changes which keys and session context you are looking at.
+          </div>
+
+          <div className="action-group compact" style={{ marginTop: '1rem' }}>
+            <Link className="action-btn" to="/workspace">OPEN WORKSPACE</Link>
+            <Link className="action-btn" to="/docs">READ AUTH DOCS</Link>
           </div>
         </div>
       </div>

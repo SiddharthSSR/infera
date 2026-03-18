@@ -92,13 +92,13 @@ export function Logs() {
   };
 
   return (
-    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 180px)', overflow: 'hidden' }}>
+    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 160px)', overflow: 'hidden' }}>
       {/* Filter Bar */}
       <div style={{
         backgroundColor: 'var(--bg-accent)',
-        padding: '1rem 2rem',
+        padding: '0.9rem 1.25rem',
         display: 'flex',
-        gap: '2rem',
+        gap: '1rem',
         flexWrap: 'wrap',
         alignItems: 'flex-end',
         borderBottom: 'var(--grid-line)',
@@ -114,7 +114,7 @@ export function Logs() {
               background: 'transparent', border: 'none',
               borderBottom: '1px solid var(--text-primary)',
               fontFamily: 'var(--font-main)', fontSize: '0.85rem',
-              padding: '2px 0', width: 240, outline: 'none', color: 'var(--text-primary)',
+              padding: '2px 0', width: 220, outline: 'none', color: 'var(--text-primary)',
             }}
           />
         </div>
@@ -135,8 +135,9 @@ export function Logs() {
             {sources.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
-        <div style={{ marginLeft: isMobile ? 0 : 'auto' }}>
-          <button className="action-btn" onClick={handleExport}>EXPORT .TSV</button>
+        <div style={{ marginLeft: isMobile ? 0 : 'auto', display: 'grid', gap: '0.35rem' }}>
+          <div className="label-text">VISIBLE</div>
+          <div className="mono" style={{ fontSize: '0.8rem' }}>{filteredLogs.length} log lines</div>
         </div>
       </div>
 
@@ -184,16 +185,16 @@ export function Logs() {
             <tbody>
               {filteredLogs.map(log => (
                 <tr key={log.id}>
-                  <td style={{ padding: '0.75rem 2rem', borderBottom: '1px solid #EEEEEC', color: 'var(--text-secondary)', width: 160, verticalAlign: 'top' }}>
+                  <td style={{ padding: '0.6rem 1.25rem', borderBottom: '1px solid #EEEEEC', color: 'var(--text-secondary)', width: 160, verticalAlign: 'top' }}>
                     {log.timestamp.toISOString().slice(0, 19).replace('T', ' ')}
                   </td>
-                  <td style={{ padding: '0.75rem 0.5rem', borderBottom: '1px solid #EEEEEC', verticalAlign: 'top' }}>
+                  <td style={{ padding: '0.6rem 0.5rem', borderBottom: '1px solid #EEEEEC', verticalAlign: 'top' }}>
                     <span className={`log-level ${levelClass(log.level)}`}>{log.level.toUpperCase()}</span>
                   </td>
-                  <td style={{ padding: '0.75rem 0.5rem', borderBottom: '1px solid #EEEEEC', fontWeight: 500, color: 'var(--text-primary)', width: 140, verticalAlign: 'top' }}>
+                  <td style={{ padding: '0.6rem 0.5rem', borderBottom: '1px solid #EEEEEC', fontWeight: 500, color: 'var(--text-primary)', width: 140, verticalAlign: 'top' }}>
                     {log.source}
                   </td>
-                  <td style={{ padding: '0.75rem 2rem 0.75rem 0.5rem', borderBottom: '1px solid #EEEEEC', color: 'var(--text-secondary)', verticalAlign: 'top' }}>
+                  <td style={{ padding: '0.6rem 1.25rem 0.6rem 0.5rem', borderBottom: '1px solid #EEEEEC', color: 'var(--text-secondary)', verticalAlign: 'top' }}>
                     {log.message}
                   </td>
                 </tr>

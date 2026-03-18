@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { Models } from './Models';
 
@@ -161,6 +161,7 @@ describe('Models mobile layout', () => {
     );
 
     expect(screen.getAllByText('DEGRADED').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: /show details/i }));
     expect(screen.getByText('connection reset')).toBeInTheDocument();
     expect(screen.getByText('OPEN DEGRADED NODES')).toBeInTheDocument();
     expect(screen.getByText('VIEW DEPLOYMENTS')).toBeInTheDocument();

@@ -15,6 +15,10 @@ import {
 import { getInstanceReadiness } from '../lib/instanceReadiness';
 import { useDeploymentAttempts, useInstances, useMarkDeploymentAutoVerificationRequested, useOfferings, useProviders, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useUpdateDeploymentVerification, useVaultModels, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { ActionGroup } from '../components/ActionGroup';
+import { CollapsibleSection } from '../components/CollapsibleSection';
+import { MetadataList } from '../components/MetadataList';
+import { SectionHeader } from '../components/SectionHeader';
 import { InstanceMobileCard } from '../components/InstanceMobileCard';
 import { useAuthSession } from '../lib/auth-context';
 
@@ -1235,15 +1239,22 @@ export function Instances() {
 
       <div className="grid-row">
         <div className="cell" style={{ gridColumn: 'span 4' }}>
-          <div className="help-callout">
-            <div className="label-text">CLUSTER STATUS GUIDE</div>
-            <div className="help-callout-copy">
-              <strong>Connected provider</strong> means the workspace credentials are valid and the provider can return live status. <strong>Serving verified</strong> means the worker heartbeat is fresh and runtime looks ready. <strong>Inference verified</strong> means a real chat-completions request passed. Treat the latest deployment banner as the fastest path from provisioned node to confirmed serving.
-            </div>
-            <div className="help-actions">
-              <button className="action-btn" onClick={() => navigate('/workspace')}>OPEN WORKSPACE</button>
-              <button className="action-btn" onClick={() => navigate('/docs')}>READ DEPLOYMENT DOCS</button>
-            </div>
+          <div className="help-callout" style={{ padding: '1rem 1.25rem' }}>
+            <SectionHeader
+              eyebrow="CLUSTER STATUS GUIDE"
+              title="Latest deployment first, history on demand"
+              description={(
+                <>
+                  <strong>Connected provider</strong> means the workspace credentials are valid and the provider can return live status. <strong>Serving verified</strong> means the worker heartbeat is fresh and runtime looks ready. <strong>Inference verified</strong> means a real chat-completions request passed. Treat the latest deployment banner as the fastest path from provisioned node to confirmed serving.
+                </>
+              )}
+              actions={(
+                <ActionGroup compact>
+                  <button className="action-btn" onClick={() => navigate('/workspace')}>OPEN WORKSPACE</button>
+                  <button className="action-btn" onClick={() => navigate('/docs')}>READ DEPLOYMENT DOCS</button>
+                </ActionGroup>
+              )}
+            />
           </div>
         </div>
       </div>
@@ -1481,71 +1492,79 @@ export function Instances() {
 
         {/* Sidebar */}
         <div className="cell instances-sidebar-cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
-          <div className="label-text" style={{ marginBottom: '2rem' }}>CLUSTER INFO</div>
+          <SectionHeader
+            eyebrow="CLUSTER INFO"
+            title="Summary modules"
+            description="Keep node operations in the main list. Use these modules for provider posture, loaded models, and fleet health."
+          />
 
-          <div style={{ marginBottom: '2.5rem' }}>
-            <div className="label-text">PROVIDERS</div>
-            <div style={{ marginTop: '0.9rem', display: 'grid', gap: '0.65rem' }}>
-              {CONFIGURABLE_PROVIDERS.map((providerName) => {
-                const status = visibleProviderStatuses.find((provider) => provider.provider === providerName);
-                const configured = configuredProviders.includes(providerName);
-                const badge = providerStateBadge(status, configured);
-                return (
-                  <div key={providerName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
-                    <span style={{ fontSize: '0.85rem' }}>{providerName}</span>
-                    <span className={`badge ${badge.tone ? `status-${badge.tone}` : ''}`}>{badge.label}</span>
+          <div className="stack-list" style={{ marginTop: '1.5rem' }}>
+            <CollapsibleSection
+              title="PROVIDERS"
+              description="Workspace provider reachability and live capacity posture."
+              defaultExpanded
+            >
+              <div className="stack-list">
+                {CONFIGURABLE_PROVIDERS.map((providerName) => {
+                  const status = visibleProviderStatuses.find((provider) => provider.provider === providerName);
+                  const configured = configuredProviders.includes(providerName);
+                  const badge = providerStateBadge(status, configured);
+                  return (
+                    <div key={providerName} className="overview-card">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                        <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{providerName}</span>
+                        <span className={`badge ${badge.tone ? `status-${badge.tone}` : ''}`}>{badge.label}</span>
+                      </div>
+                      <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>
+                        {status?.error || (configured ? 'Provider is configured for this workspace.' : 'Provider credentials have not been saved yet.')}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="CAPACITY SNAPSHOT"
+              description="Current workers and model footprint."
+              defaultExpanded
+            >
+              <MetadataList
+                items={[
+                  { label: 'TOTAL WORKERS', value: String(healthyWorkers.length), mono: true },
+                  { label: 'LIVE PROVIDERS', value: String(connectedProviders.length), mono: true },
+                  { label: 'ACTIVE MODELS', value: String([...new Set(healthyWorkers.flatMap((worker) => worker.models || []))].length), mono: true },
+                  { label: 'ACTIVE NODES', value: String(filteredInstances.filter((instance) => instance.status === 'running').length), mono: true },
+                ]}
+                columns={2}
+              />
+              <div style={{ marginTop: '1rem' }}>
+                {healthyWorkers.length > 0 ? (
+                  <div className="chip-row">
+                    {[...new Set(healthyWorkers.flatMap((worker) => worker.models || []))].slice(0, 8).map((model) => (
+                      <span key={model} className="badge">{model.split('/').pop()}</span>
+                    ))}
                   </div>
-                );
-              })}
-            </div>
-          </div>
+                ) : (
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No active model assignments yet.</div>
+                )}
+              </div>
+            </CollapsibleSection>
 
-          <div style={{ marginBottom: '2.5rem' }}>
-            <div className="label-text">TOTAL WORKERS</div>
-            <div className="mono" style={{ fontSize: '1.25rem', marginTop: '0.5rem' }}>
-              {healthyWorkers.length}
-            </div>
-          </div>
-
-          <div style={{ marginBottom: '2.5rem' }}>
-            <div className="label-text">ACTIVE MODELS</div>
-            <div style={{ marginTop: '0.5rem' }}>
-              {healthyWorkers.length > 0 ? (
-                [...new Set(healthyWorkers.flatMap(w => w.models || []))].map(model => (
-                  <div key={model} style={{ fontSize: '0.85rem', padding: '0.25rem 0' }}>
-                    {model.split('/').pop()}
-                  </div>
-                ))
-              ) : (
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>None</div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ marginTop: '4rem', borderTop: '1px solid var(--border-color)', paddingTop: '2rem' }}>
-            <div className="label-text">CLUSTER HEALTH</div>
-            <div style={{ marginTop: '1rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-                <span>Gateway</span>
-                <span style={{ color: 'var(--color-success)' }}>OK</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-                <span>Router</span>
-                <span style={{ color: 'var(--color-success)' }}>OK</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
-                <span>Workers</span>
-                <span style={{ color: healthyWorkers.length > 0 ? 'var(--color-success)' : 'var(--color-warning)' }}>
-                  {healthyWorkers.length > 0 ? 'OK' : 'NONE'}
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginTop: '0.5rem' }}>
-                <span>Providers</span>
-                <span style={{ color: connectedProviders.length > 0 ? 'var(--color-success)' : 'var(--color-warning)' }}>
-                  {connectedProviders.length > 0 ? `${connectedProviders.length} live` : 'CHECK'}
-                </span>
-              </div>
-            </div>
+            <CollapsibleSection
+              title="CLUSTER HEALTH"
+              description="Quick status for the routing path."
+            >
+              <MetadataList
+                items={[
+                  { label: 'Gateway', value: 'OK' },
+                  { label: 'Router', value: 'OK' },
+                  { label: 'Workers', value: healthyWorkers.length > 0 ? 'OK' : 'NONE', tone: healthyWorkers.length > 0 ? '' : 'warning' },
+                  { label: 'Providers', value: connectedProviders.length > 0 ? `${connectedProviders.length} live` : 'CHECK', tone: connectedProviders.length > 0 ? '' : 'warning' },
+                ]}
+                columns={2}
+              />
+            </CollapsibleSection>
           </div>
         </div>
       </div>
@@ -1553,61 +1572,67 @@ export function Instances() {
       {deploymentHistory.length > 0 && (
         <div className="grid-row">
           <div className="cell" style={{ gridColumn: 'span 4' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-              <div>
-                <div className="label-text" style={{ marginBottom: '0.35rem' }}>DEPLOYMENT HISTORY</div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                  Recent provisioning attempts persist per workspace so you can recover the flow after refresh.
-                </div>
-              </div>
-              <button className="action-btn" onClick={openFreshProvisionModal}>NEW ATTEMPT</button>
-            </div>
+            <SectionHeader
+              eyebrow="DEPLOYMENT HISTORY"
+              title="Recent attempts"
+              description="The latest deployment remains pinned above. Expand history entries only when you need the timeline and remediation detail."
+              actions={(
+                <ActionGroup compact>
+                  <button className="action-btn" onClick={openFreshProvisionModal}>NEW ATTEMPT</button>
+                </ActionGroup>
+              )}
+            />
 
-            <div style={{ display: 'grid', gap: '0.85rem' }}>
+            <div style={{ display: 'grid', gap: '0.85rem', marginTop: '1.5rem' }}>
               {deploymentHistory.slice(0, 5).map((summary) => {
                 const { attempt, readiness, instance, retryable } = summary;
                 const timeline = getDeploymentTimeline(summary);
                 const remediation = getDeploymentRemediation(summary);
+                const title = attempt.selected_model_name
+                  || attempt.instance_name
+                  || attempt.request.name
+                  || attempt.request.models?.[0]?.split('/').pop()
+                  || 'Provisioning attempt';
 
                 return (
                   <div
                     key={attempt.id}
                     style={{
-                      border: 'var(--grid-line)',
-                      padding: '1rem 1.1rem',
                       background: latestDeployment?.attempt.id === attempt.id ? 'rgba(244, 242, 238, 0.7)' : 'transparent',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                      <div style={{ minWidth: 0, flex: '1 1 28rem' }}>
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                          <div style={{ fontSize: '0.95rem', fontWeight: 600 }}>
-                            {attempt.selected_model_name
-                              || attempt.instance_name
-                              || attempt.request.name
-                              || attempt.request.models?.[0]?.split('/').pop()
-                              || 'Provisioning attempt'}
-                          </div>
+                    <CollapsibleSection
+                      title={title}
+                      description={readiness.detail}
+                      badge={(
+                        <div className="chip-row">
                           <span className={`badge ${readiness.tone ? `status-${readiness.tone}` : ''}`}>{readiness.label}</span>
-                          {instance && <span className="badge">{getStatusLabel(instance.status).toUpperCase()}</span>}
+                          {instance ? <span className="badge">{getStatusLabel(instance.status).toUpperCase()}</span> : null}
                         </div>
-                        <div style={{ marginTop: '0.45rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
-                          {readiness.detail}
-                        </div>
-                        <div style={{ marginTop: '0.65rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                      )}
+                      summary={(
+                        <div className="chip-row">
                           <span className="badge">{formatAttemptTime(attempt.updated_at)}</span>
-                          {attempt.request.provider && <span className="badge">{attempt.request.provider.toUpperCase()}</span>}
+                          {attempt.request.provider ? <span className="badge">{attempt.request.provider.toUpperCase()}</span> : null}
                           <span className="badge">{attempt.request.gpu_count || 1}x {formatGPUDisplayName(attempt.request.gpu_type)}</span>
                           {attempt.request.spot_instance ? <span className="badge">SPOT</span> : null}
-                          {attempt.request.models?.length ? <span className="badge">{attempt.request.models.length} MODEL{attempt.request.models.length === 1 ? '' : 'S'}</span> : null}
                           {summary.inferenceVerified ? <span className="badge">INFERENCE VERIFIED</span> : null}
                           {attempt.inference_verification?.status === 'failed' ? <span className="badge status-error">INFERENCE FAILED</span> : null}
-                          {!attempt.inference_verification && summary.autoVerificationRequested ? (
-                            <span className="badge status-warning">{verifyingAttemptID === attempt.id ? 'AUTO VERIFYING' : 'AUTO VERIFY QUEUED'}</span>
-                          ) : null}
                         </div>
+                      )}
+                    >
+                      <div style={{ display: 'grid', gap: '1rem' }}>
+                        <MetadataList
+                          items={[
+                            { label: 'UPDATED', value: formatAttemptTime(attempt.updated_at) },
+                            { label: 'REQUEST', value: attempt.request.provider ? attempt.request.provider.toUpperCase() : 'Manual' },
+                            { label: 'GPU', value: `${attempt.request.gpu_count || 1}x ${formatGPUDisplayName(attempt.request.gpu_type)}` },
+                            { label: 'MODELS', value: String(attempt.request.models?.length || 0), mono: true },
+                          ]}
+                          columns={2}
+                        />
                         {attempt.inference_verification && (
-                          <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
+                          <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
                             <div className="label-text" style={{ marginBottom: '0.35rem' }}>FIRST INFERENCE</div>
                             {attempt.inference_verification.status === 'passed'
                               ? `Verified on ${formatAttemptTime(attempt.inference_verification.verified_at)}${attempt.inference_verification.latency_ms != null ? ` in ${formatVerificationLatency(attempt.inference_verification.latency_ms)}` : ''}${attempt.inference_verification.response_preview ? `. Response: ${attempt.inference_verification.response_preview}` : '.'}`
@@ -1616,32 +1641,31 @@ export function Instances() {
                         )}
                         <DeploymentTimeline steps={timeline} />
                         {remediation && (
-                          <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
+                          <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
                             {remediation.detail}
                           </div>
                         )}
+                        <ActionGroup compact>
+                          {instance && <InstanceActions instance={instance} compact />}
+                          {remediation && (
+                            <button
+                              className="action-btn"
+                              disabled={remediation.action === 'verify_inference' && verifyingAttemptID === attempt.id}
+                              onClick={() => handleRemediation(summary, remediation)}
+                            >
+                              {remediation.action === 'verify_inference' && verifyingAttemptID === attempt.id
+                                ? 'VERIFYING...'
+                                : remediation.label}
+                            </button>
+                          )}
+                          {retryable && remediation?.action !== 'retry_config' && (
+                            <button className="action-btn" onClick={() => openRetryModal(attempt)}>
+                              RETRY CONFIG
+                            </button>
+                          )}
+                        </ActionGroup>
                       </div>
-
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                        {instance && <InstanceActions instance={instance} compact />}
-                        {remediation && (
-                          <button
-                            className="action-btn"
-                            disabled={remediation.action === 'verify_inference' && verifyingAttemptID === attempt.id}
-                            onClick={() => handleRemediation(summary, remediation)}
-                          >
-                            {remediation.action === 'verify_inference' && verifyingAttemptID === attempt.id
-                              ? 'VERIFYING...'
-                              : remediation.label}
-                          </button>
-                        )}
-                        {retryable && remediation?.action !== 'retry_config' && (
-                          <button className="action-btn" onClick={() => openRetryModal(attempt)}>
-                            RETRY CONFIG
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                    </CollapsibleSection>
                   </div>
                 );
               })}

@@ -3,6 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { GPUOffering, Model, ProviderStatus, Instance, Worker } from '../types';
 import { sendChatCompletion } from '../lib/api';
+import { ActionGroup } from '../components/ActionGroup';
+import { CollapsibleSection } from '../components/CollapsibleSection';
+import { MetadataList } from '../components/MetadataList';
+import { SectionHeader } from '../components/SectionHeader';
 import {
   summarizeDeploymentAttempt,
   type DeploymentAttemptRecord,
@@ -116,6 +120,12 @@ function formatVerificationMeta(verifiedAt?: string, latencyMs?: number) {
   });
   if (latencyMs == null) return label;
   return `${label} in ${latencyMs < 1000 ? `${latencyMs}ms` : `${(latencyMs / 1000).toFixed(2)}s`}`;
+}
+
+function verificationToneClass(freshness: 'fresh' | 'stale' | 'never' | 'recent') {
+  if (freshness === 'stale') return 'status-warning';
+  if (freshness === 'never') return 'status-inactive';
+  return '';
 }
 
 function deriveModelServingOverview(
@@ -575,7 +585,6 @@ export function Models() {
 
   return (
     <div className="animate-fade-in">
-      {/* Search Bar */}
       <div style={{
         padding: '1rem 2rem',
         display: 'flex',
@@ -585,37 +594,54 @@ export function Models() {
         alignItems: 'center',
         borderBottom: 'var(--grid-line)',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Filter by model name or provider..."
-            style={{
-              background: 'transparent', border: 'none', fontFamily: 'var(--font-main)',
-              fontSize: '0.9rem', width: 'min(300px, 62vw)', outline: 'none', color: 'var(--text-primary)',
-            }}
-          />
+        <div style={{ display: 'grid', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Filter by model name or provider..."
+              style={{
+                background: 'transparent', border: 'none', fontFamily: 'var(--font-main)',
+                fontSize: '0.9rem', width: 'min(320px, 70vw)', outline: 'none', color: 'var(--text-primary)',
+              }}
+            />
+          </div>
+          <div className="chip-row">
+            <span className="badge">{displayModels.length} REGISTRY MODELS</span>
+            <span className="badge">{activeCount} ACTIVE</span>
+            <span className="badge">{readyCount} READY TO DEPLOY</span>
+            <span className="badge">{servingVerifiedCount} SERVING VERIFIED</span>
+          </div>
         </div>
-        <button className="btn-primary" onClick={() => setShowRegisterModal(true)}>
-          ADD MODEL
-        </button>
+        <ActionGroup compact>
+          <button className="btn-primary" onClick={() => setShowRegisterModal(true)}>
+            ADD MODEL
+          </button>
+        </ActionGroup>
       </div>
 
       <div className="grid-row">
         <div className="cell" style={{ gridColumn: 'span 4' }}>
-          <div className="help-callout">
-            <div className="label-text">MODEL STATUS GUIDE</div>
-            <div className="help-callout-copy">
-              <strong>Serving verified</strong> means a live inference check passed for this model. <strong>Fresh verify</strong> means that proof is recent enough to trust immediately. <strong>Stale verify</strong> means the model was verified before, but the proof is old. Use <strong>View deployments</strong> or <strong>Open degraded nodes</strong> for node-level recovery and <strong>Verify now</strong> when you want a new explicit inference check from the registry.
-            </div>
-            <div className="help-actions">
-              <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
-              <button className="action-btn" onClick={() => navigate('/docs')}>READ API DOCS</button>
-            </div>
+          <div className="help-callout" style={{ padding: '1rem 1.25rem' }}>
+            <SectionHeader
+              eyebrow="MODEL STATUS GUIDE"
+              title="Registry first, runtime detail on demand"
+              description={(
+                <>
+                  <strong>Serving verified</strong> means a live inference check passed for this model. <strong>Fresh verify</strong> means that proof is recent enough to trust immediately. <strong>Stale verify</strong> means the model was verified before, but the proof is old. Use <strong>View deployments</strong> or <strong>Open degraded nodes</strong> for node-level recovery and <strong>Verify now</strong> when you want a new explicit inference check from the registry.
+                </>
+              )}
+              actions={(
+                <ActionGroup compact>
+                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+                  <button className="action-btn" onClick={() => navigate('/docs')}>READ API DOCS</button>
+                </ActionGroup>
+              )}
+            />
           </div>
         </div>
       </div>
@@ -623,17 +649,18 @@ export function Models() {
       {recommendedModels.length > 0 && (
         <div className="grid-row">
           <div className="cell" style={{ gridColumn: 'span 4' }}>
-            <div className="help-callout">
-              <div className="label-text">RECOMMENDED NOW</div>
-              <div className="help-callout-copy">
-                Curated picks from the expanded catalog. Qwen is the lighter reasoning option to trial quickly; Kimi is the high-capacity frontier candidate and will usually need larger infrastructure than the current default fleet.
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.85rem', marginTop: '1rem' }}>
+            <div className="help-callout" style={{ padding: '1rem 1.25rem' }}>
+              <SectionHeader
+                eyebrow="RECOMMENDED NOW"
+                title="Fast-start picks"
+                description="Curated picks from the expanded catalog. Qwen is the lighter reasoning option to trial quickly; Kimi is the high-capacity frontier candidate and will usually need larger infrastructure than the current default fleet."
+              />
+              <div className="panel-grid columns-2" style={{ marginTop: '1rem' }}>
                 {recommendedModels.map((model) => {
                   const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
                   const overview = modelOverviewByID.get(model.id);
                   return (
-                    <div key={model.id} className="workspace-provider-card">
+                    <div key={model.id} className="overview-card accent">
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
                         <div>
                           <div style={{ fontSize: '1rem', fontWeight: 600 }}>{model.id.split('/').pop() || model.id}</div>
@@ -649,7 +676,7 @@ export function Models() {
                       <div style={{ marginTop: '0.8rem', color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.6 }}>
                         {deployState.summary}
                       </div>
-                      <div style={{ marginTop: '0.9rem', display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                      <div className="action-group compact" style={{ marginTop: '0.9rem' }}>
                         <button className="action-btn" onClick={() => navigate(deployState.actionTarget)}>
                           {deployState.actionLabel}
                         </button>
@@ -703,29 +730,23 @@ export function Models() {
                         {model.parameters && `${model.parameters} — `}{provider}
                       </div>
                     </div>
-                    <div className="mobile-status-inline">
-                      <span className={`status-dot ${statusDotClass}`} />
-                      {statusLabel}
+                    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <span className="mobile-status-inline">
+                        <span className={`status-dot ${statusDotClass}`} />
+                        {statusLabel}
+                      </span>
+                      <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
                     </div>
                   </div>
 
                   <div className="mobile-data-meta">
-                    <div><span className="label-text">QUANT</span> <span>{model.quantization || 'FP16'}</span></div>
-                    <div><span className="label-text">CONTEXT</span> <span className="mono">{model.max_context ? model.max_context.toLocaleString() : 'N/A'}</span></div>
-                    <div><span className="label-text">SERVING</span> <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span></div>
                     <div><span className="label-text">DEPLOYMENTS</span> <span className="mono">{runtime.activeNodes}</span></div>
-                    <div><span className="label-text">VERIFY</span> <span className={`badge ${runtime.verificationFreshness === 'stale' ? 'status-warning' : runtime.verificationFreshness === 'never' ? 'status-inactive' : ''}`}>{runtime.verificationLabel}</span></div>
+                    <div><span className="label-text">VERIFY</span> <span className={`badge ${verificationToneClass(runtime.verificationFreshness)}`}>{runtime.verificationLabel}</span></div>
                     {runtime.degradedNodes > 0 && (
                       <div><span className="label-text">DEGRADED</span> <span className="mono">{runtime.degradedNodes} node{runtime.degradedNodes === 1 ? '' : 's'}</span></div>
                     )}
                     <div><span className="label-text">DEPLOY</span> <span>{deployState.summary}</span></div>
                     <div><span className="label-text">STATUS</span> <span>{overview.summary}</span></div>
-                    {overview.verifiedAt && (
-                      <div><span className="label-text">LAST VERIFY</span> <span>{formatVerificationMeta(overview.verifiedAt, overview.latestVerificationLatencyMs)}</span></div>
-                    )}
-                    {runtime.latestIssue && (
-                      <div><span className="label-text">LATEST ISSUE</span> <span>{runtime.latestIssue}</span></div>
-                    )}
                   </div>
 
                   <div className="mobile-data-actions">
@@ -767,33 +788,35 @@ export function Models() {
                       </button>
                     )}
                   </div>
+
+                  <div style={{ marginTop: '1rem' }}>
+                    <CollapsibleSection
+                      title="SHOW DETAILS"
+                      description="Secondary runtime, verification, and registry metadata."
+                    >
+                      <MetadataList
+                        items={[
+                          { label: 'QUANT', value: model.quantization || 'FP16' },
+                          { label: 'CONTEXT', value: model.max_context ? model.max_context.toLocaleString() : 'N/A', mono: true },
+                          { label: 'LAST VERIFY', value: formatVerificationMeta(overview.verifiedAt, overview.latestVerificationLatencyMs) || 'Never' },
+                          { label: 'SERVING', value: overview.summary },
+                          { label: 'DEPLOY', value: deployState.summary },
+                          { label: 'LATEST ISSUE', value: runtime.latestIssue || 'None' },
+                        ]}
+                        columns={1}
+                      />
+                    </CollapsibleSection>
+                  </div>
                 </div>
               );
             })
           )}
         </div>
       ) : (
-      <div className="responsive-scroll-x">
-        <div className="responsive-scroll-x-content">
-          {/* Table Header */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: '2fr 1fr 1fr 1fr 120px',
-            padding: '1rem 2rem',
-            backgroundColor: 'var(--bg-accent)',
-            borderBottom: 'var(--grid-line)',
-          }}>
-            <div className="label-text">MODEL NAME &amp; VERSION</div>
-            <div className="label-text">STATUS</div>
-            <div className="label-text">QUANTIZATION</div>
-            <div className="label-text">CONTEXT</div>
-            <div className="label-text">ACTION</div>
-          </div>
-
-          {/* Table Rows */}
-          <div style={{ flexGrow: 1 }}>
+        <div style={{ padding: '1rem 1.25rem 1.25rem' }}>
+          <div className="stack-list">
             {filtered.length === 0 ? (
-              <div style={{ padding: '4rem 2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              <div className="stack-item" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
                 {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
                 {!searchQuery && (
                   <div className="help-actions" style={{ justifyContent: 'center' }}>
@@ -805,124 +828,136 @@ export function Models() {
               </div>
             ) : (
               filtered.map(model => {
-            const isLoaded = model.loaded !== false;
-            const isDeploying = model.vault_status === 'testing';
-            const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
-            const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
-            const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
-            const overview = modelOverviewByID.get(model.id)!;
-            const runtime = modelRuntimeByID.get(model.id)!;
-            const shortName = model.id.split('/').pop() || model.id;
-            const provider = model.owned_by || model.family || '';
-            const hasVaultEntry = vaultIdByUri.has(model.id);
-            const deploymentsTarget = `/instances?model=${encodeURIComponent(model.id)}`;
-            const degradedTarget = `/instances?model=${encodeURIComponent(model.id)}&focus=degraded`;
+                const isLoaded = model.loaded !== false;
+                const isDeploying = model.vault_status === 'testing';
+                const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
+                const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
+                const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
+                const overview = modelOverviewByID.get(model.id)!;
+                const runtime = modelRuntimeByID.get(model.id)!;
+                const shortName = model.id.split('/').pop() || model.id;
+                const provider = model.owned_by || model.family || '';
+                const hasVaultEntry = vaultIdByUri.has(model.id);
+                const deploymentsTarget = `/instances?model=${encodeURIComponent(model.id)}`;
+                const degradedTarget = `/instances?model=${encodeURIComponent(model.id)}&focus=degraded`;
 
-            return (
-              <div
-                key={model.id}
-                className={`model-row${isLoaded ? ' model-row-active' : ''}`}
-              >
-                <div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 500 }}>{shortName}</div>
-                  <div className="mono" style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                    {model.parameters && `${model.parameters} — `}{provider}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
-                    <span className={`status-dot ${statusDotClass}`} />
-                    {statusLabel}
-                  </div>
-                  <div style={{ marginTop: '0.45rem', display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
-                    <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
-                    {runtime.activeNodes > 0 && <span className="badge">{runtime.activeNodes} DEPLOYMENT{runtime.activeNodes === 1 ? '' : 'S'}</span>}
-                    <span className={`badge ${runtime.verificationFreshness === 'stale' ? 'status-warning' : runtime.verificationFreshness === 'never' ? 'status-inactive' : ''}`}>{runtime.verificationLabel}</span>
-                    {runtime.degradedNodes > 0 && <span className="badge status-error">{runtime.degradedNodes} DEGRADED NODE{runtime.degradedNodes === 1 ? '' : 'S'}</span>}
-                  </div>
-                  <div style={{ marginTop: '0.45rem', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                    {overview.summary}
-                  </div>
-                  {overview.verifiedAt && (
-                    <div style={{ marginTop: '0.45rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                      Last verify: {formatVerificationMeta(overview.verifiedAt, overview.latestVerificationLatencyMs)}
+                return (
+                  <div key={model.id} className="stack-item" data-testid="model-row-card">
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '1rem', alignItems: 'start' }}>
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                          <div>
+                            <div style={{ fontSize: '1.15rem', fontWeight: 600 }}>{shortName}</div>
+                            <div className="mono" style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                              {model.parameters && `${model.parameters} — `}{provider}
+                            </div>
+                          </div>
+                          <div className="chip-row">
+                            <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
+                            {runtime.activeNodes > 0 && <span className="badge">{runtime.activeNodes} DEPLOYMENT{runtime.activeNodes === 1 ? '' : 'S'}</span>}
+                            <span className={`badge ${verificationToneClass(runtime.verificationFreshness)}`}>{runtime.verificationLabel}</span>
+                            {runtime.degradedNodes > 0 && <span className="badge status-error">{runtime.degradedNodes} DEGRADED NODE{runtime.degradedNodes === 1 ? '' : 'S'}</span>}
+                          </div>
+                        </div>
+                        <div style={{ marginTop: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+                          <span className={`status-dot ${statusDotClass}`} />
+                          {statusLabel}
+                        </div>
+                        <div style={{ marginTop: '0.6rem', fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                          {overview.summary}
+                        </div>
+                        <div style={{ marginTop: '0.85rem' }}>
+                          <MetadataList
+                            items={[
+                              { label: 'QUANTIZATION', value: model.quantization || 'FP16' },
+                              { label: 'CONTEXT', value: model.max_context ? model.max_context.toLocaleString() : 'N/A', mono: true },
+                              { label: 'DEPLOY', value: deployState.summary },
+                              { label: 'SERVING', value: statusLabel },
+                            ]}
+                            columns={2}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gap: '0.55rem', justifyItems: 'end' }}>
+                        <button
+                          type="button"
+                          className="action-link"
+                          onClick={() => navigate(runtime.activeNodes > 0 ? deploymentsTarget : deployState.actionTarget)}
+                        >
+                          {runtime.activeNodes > 0 ? 'VIEW DEPLOYMENTS' : deployState.actionLabel}
+                        </button>
+                        {runtime.activeNodes > 0 ? (
+                          <button
+                            type="button"
+                            className={`action-link${overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? ' muted' : ''}`}
+                            disabled={verifyingModelID === model.id}
+                            onClick={() => overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh'
+                              ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)
+                              : handleVerifyServing(model)}
+                          >
+                            {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? 'DEPLOY MORE' : 'VERIFY NOW'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className={`action-link${deployState.state === 'capacity' ? ' muted' : ''}`}
+                            onClick={() => navigate('/instances')}
+                          >
+                            OPEN CLUSTERS
+                          </button>
+                        )}
+                        {runtime.degradedNodes > 0 && (
+                          <button
+                            type="button"
+                            className="action-link danger"
+                            onClick={() => navigate(degradedTarget)}
+                          >
+                            OPEN DEGRADED NODES
+                          </button>
+                        )}
+                        {hasVaultEntry && !isLoaded && !isDeploying && (
+                          <button
+                            type="button"
+                            className="action-link danger"
+                            onClick={() => handleRemove(model.id)}
+                          >
+                            REMOVE
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  )}
-                  {runtime.latestIssue && (
-                    <div style={{ marginTop: '0.45rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                      Latest issue: {runtime.latestIssue}
+
+                    <div style={{ marginTop: '1rem' }}>
+                      <CollapsibleSection
+                        title="SHOW DETAILS"
+                        description="Verification freshness, runtime issues, and extra registry metadata."
+                      >
+                        <MetadataList
+                          items={[
+                            { label: 'LAST VERIFY', value: formatVerificationMeta(overview.verifiedAt, overview.latestVerificationLatencyMs) || 'Never' },
+                            { label: 'VRAM NEED', value: model.vram_required ? `${Math.ceil(model.vram_required / 1024)}GB` : 'Not specified' },
+                            { label: 'LATEST ISSUE', value: runtime.latestIssue || 'None' },
+                            { label: 'PROVIDER', value: provider || 'Unknown' },
+                          ]}
+                          columns={2}
+                        />
+                        {model.tags && model.tags.length > 0 ? (
+                          <div className="chip-row" style={{ marginTop: '0.9rem' }}>
+                            {model.tags.map((tag) => (
+                              <span key={tag} className="tag">{tag}</span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </CollapsibleSection>
                     </div>
-                  )}
-                </div>
-                <div>
-                  <span className="badge">{model.quantization || 'FP16'}</span>
-                  {model.vram_required ? (
-                    <div style={{ marginTop: '0.5rem' }}>
-                      <span className="badge mono">{Math.ceil(model.vram_required / 1024)}GB VRAM</span>
-                    </div>
-                  ) : null}
-                </div>
-                <div className="mono" style={{ color: 'var(--text-secondary)' }}>
-                  {model.max_context ? model.max_context.toLocaleString() : 'N/A'}
-                </div>
-                <div style={{ display: 'flex', gap: '0.75rem' }}>
-                  <button
-                    type="button"
-                    className="action-link"
-                    onClick={() => navigate(runtime.activeNodes > 0 ? deploymentsTarget : deployState.actionTarget)}
-                  >
-                    {runtime.activeNodes > 0 ? 'VIEW DEPLOYMENTS' : deployState.actionLabel}
-                  </button>
-                  {runtime.activeNodes > 0 && (
-                    <button
-                      type="button"
-                      className={`action-link${overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? ' muted' : ''}`}
-                      disabled={verifyingModelID === model.id}
-                      onClick={() => overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh'
-                        ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)
-                        : handleVerifyServing(model)}
-                    >
-                      {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? 'DEPLOY MORE' : 'VERIFY NOW'}
-                    </button>
-                  )}
-                  {runtime.activeNodes === 0 && (
-                    <button
-                      type="button"
-                      className={`action-link${deployState.state === 'capacity' ? ' muted' : ''}`}
-                      onClick={() => navigate('/instances')}
-                    >
-                      OPEN CLUSTERS
-                    </button>
-                  )}
-                  {runtime.degradedNodes > 0 && (
-                    <button
-                      type="button"
-                      className="action-link danger"
-                      onClick={() => navigate(degradedTarget)}
-                    >
-                      OPEN DEGRADED NODES
-                    </button>
-                  )}
-                  {hasVaultEntry && !isLoaded && !isDeploying && (
-                    <button
-                      type="button"
-                      className="action-link danger"
-                      onClick={() => handleRemove(model.id)}
-                    >
-                      REMOVE
-                    </button>
-                  )}
-                </div>
-              </div>
-              );
-            })
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
-      </div>
       )}
 
-      {/* Footer */}
       <div className="grid-row" style={{ backgroundColor: 'var(--bg-accent)' }}>
         <div className="cell">
           <div className="label-text">REGISTRY MODELS</div>

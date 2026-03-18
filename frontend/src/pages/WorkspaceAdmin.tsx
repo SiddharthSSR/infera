@@ -27,6 +27,7 @@ import {
 } from '../lib/api';
 import type { ProviderCapabilities, ProviderStatus } from '../types';
 import { useAuthSession } from '../lib/auth-context';
+import { MetadataList } from '../components/MetadataList';
 import { inviteStatusMeta, memberStatusMeta, normalizeInviteStatus } from '../lib/workspaceLifecycle';
 import { buildWorkspaceActivityItems } from '../lib/workspaceActivity';
 
@@ -197,6 +198,7 @@ export function WorkspaceAdmin() {
   const [savingProviderConfig, setSavingProviderConfig] = useState(false);
   const [updatingMemberId, setUpdatingMemberId] = useState<string | null>(null);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
+  const [settingsTab, setSettingsTab] = useState<'usage' | 'providers' | 'service' | 'members' | 'invites'>('usage');
   const createdInviteLink = createdInviteToken && typeof window !== 'undefined'
     ? `${window.location.origin}/accept-invite?token=${encodeURIComponent(createdInviteToken)}`
     : null;
@@ -297,6 +299,19 @@ export function WorkspaceAdmin() {
     expired: invites.filter((invite) => normalizeInviteStatus(invite) === 'expired').length,
     revoked: invites.filter((invite) => normalizeInviteStatus(invite) === 'revoked').length,
   }), [invites, pendingInvites.length]);
+  const workspaceProfileItems = useMemo(
+    () => [
+      { label: 'MEMBERS', value: String(members.length), mono: true },
+      { label: 'PENDING INVITES', value: String(pendingInvites.length), mono: true },
+      { label: 'SERVICE ACCOUNTS', value: String(serviceAccounts.length), mono: true },
+      {
+        label: 'LIVE PROVIDERS',
+        value: String(providerHealthRows.filter((provider) => provider.liveState.label === 'CONNECTED').length),
+        mono: true,
+      },
+    ],
+    [members.length, pendingInvites.length, providerHealthRows, serviceAccounts.length],
+  );
   const workspaceActivity = useMemo(
     () => buildWorkspaceActivityItems({
       members,
@@ -644,7 +659,13 @@ export function WorkspaceAdmin() {
             <span className="badge">{session?.key?.principal_type === 'service_account' ? 'SERVICE ACCOUNT' : 'HUMAN'}</span>
             {session?.workspace?.slug && <span className="badge mono">{session.workspace.slug}</span>}
           </div>
-          <div style={{ marginTop: '1.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.6 }}>
+          <div style={{ marginTop: '1.1rem' }}>
+            <MetadataList
+              items={workspaceProfileItems}
+              columns={2}
+            />
+          </div>
+          <div style={{ marginTop: '1.1rem', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.6 }}>
             {member?.email
               ? `Signed in as ${member.email}.`
               : 'Signed in with a workspace-scoped key.'}
@@ -661,7 +682,7 @@ export function WorkspaceAdmin() {
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage quota</span><span className="mono">{canManageQuota ? 'YES' : 'NO'}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>View quota</span><span className="mono">{canViewQuota ? 'YES' : 'NO'}</span></div>
           </div>
-          <div className="help-callout" style={{ marginTop: '1.25rem' }}>
+          <div className="help-callout" style={{ marginTop: '1rem', padding: '0.95rem 1rem' }}>
             <div className="label-text">WORKSPACE ADMIN GUIDE</div>
             <div className="help-callout-copy">
               Invite creation still produces a manual share token or link, not an email. Service accounts are for automation in this workspace only. Provider states here mean: <strong>connected</strong> for healthy credentials and live status, <strong>degraded</strong> for reachable but unhealthy, and <strong>auth failed</strong> when the saved credentials are rejected.
@@ -670,6 +691,34 @@ export function WorkspaceAdmin() {
         </div>
       </div>
 
+      <div className="grid-row">
+        <div className="cell" style={{ gridColumn: 'span 4', paddingTop: '1.25rem', paddingBottom: '1.25rem' }}>
+          <div className="label-text">SETTINGS SECTIONS</div>
+          <div className="chip-row" style={{ marginTop: '0.85rem' }}>
+            {[
+              ['usage', 'Usage & Quota'],
+              ['providers', 'Providers'],
+              ['service', 'Service Accounts'],
+              ['members', 'Members'],
+              ['invites', 'Invites'],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={settingsTab === key ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setSettingsTab(key as typeof settingsTab)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop: '0.85rem', color: 'var(--text-secondary)', fontSize: '0.86rem', lineHeight: 1.6 }}>
+            Use the active section to focus the admin surface. This keeps usage, provider credentials, automation identity management, and access control from competing on one long page.
+          </div>
+        </div>
+      </div>
+
+      {settingsTab === 'usage' && (
       <div className="grid-row workspace-usage-row">
         <div className="cell workspace-usage-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>CURRENT MONTH USAGE</div>
@@ -766,7 +815,9 @@ export function WorkspaceAdmin() {
           )}
         </div>
       </div>
+      )}
 
+      {(settingsTab === 'providers' || settingsTab === 'service') && (
       <div className="grid-row workspace-ops-row">
         <div className="cell workspace-provider-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>PROVIDER CONFIGS</div>
@@ -1004,7 +1055,9 @@ export function WorkspaceAdmin() {
           )}
         </div>
       </div>
+      )}
 
+      {(settingsTab === 'members' || settingsTab === 'invites') && (
       <div className="grid-row workspace-members-row" style={{ alignItems: 'start' }}>
         <div className="cell workspace-members-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>MEMBERS</div>
@@ -1208,7 +1261,9 @@ export function WorkspaceAdmin() {
           )}
         </div>
       </div>
+      )}
 
+      {(settingsTab === 'members' || settingsTab === 'invites' || settingsTab === 'providers' || settingsTab === 'service') && (
       <div className="grid-row">
         <div className="cell workspace-activity-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>RECENT TEAM ACTIVITY</div>
@@ -1272,7 +1327,9 @@ export function WorkspaceAdmin() {
           )}
         </div>
       </div>
+      )}
 
+      {settingsTab === 'usage' && (
       <div className="grid-row">
         <div className="cell" style={{ gridColumn: 'span 4' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>TOP KEY ACTIVITY THIS MONTH</div>
@@ -1323,6 +1380,7 @@ export function WorkspaceAdmin() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
