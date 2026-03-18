@@ -29,6 +29,8 @@ type GatewayMetrics struct {
 	batchSize         *prometheus.HistogramVec
 	batchWait         *prometheus.HistogramVec
 	inferenceTokens   prometheus.Counter
+
+	workerQueueDepth *prometheus.GaugeVec
 }
 
 var inferenceDurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60}
@@ -92,6 +94,10 @@ func NewGatewayMetrics() *GatewayMetrics {
 			Name: "infera_gateway_inference_tokens_total",
 			Help: "Total number of tokens generated/used by inference requests.",
 		}),
+		workerQueueDepth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "infera_gateway_worker_queue_depth",
+			Help: "Current request queue depth per worker, as reported by the last heartbeat.",
+		}, []string{"worker_id"}),
 	}
 
 	registry.MustRegister(
@@ -108,6 +114,7 @@ func NewGatewayMetrics() *GatewayMetrics {
 		m.batchSize,
 		m.batchWait,
 		m.inferenceTokens,
+		m.workerQueueDepth,
 	)
 	m.gatewayInfo.WithLabelValues("gateway", inferaEnv(), inferaVersion()).Set(1)
 
@@ -163,6 +170,10 @@ func (m *GatewayMetrics) RecordTPOT(model string, stream bool, duration time.Dur
 		return
 	}
 	m.inferenceTPOT.WithLabelValues(strings.TrimSpace(model), strconv.FormatBool(stream)).Observe(duration.Seconds())
+}
+
+func (m *GatewayMetrics) RecordWorkerQueueDepth(workerID string, depth int) {
+	m.workerQueueDepth.WithLabelValues(strings.TrimSpace(workerID)).Set(float64(depth))
 }
 
 func (m *GatewayMetrics) RecordBatch(model string, size int, wait time.Duration) {

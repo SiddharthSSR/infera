@@ -60,7 +60,15 @@ class VLLMEngine(InferenceEngine):
             max_model_len=self.config.vllm_max_model_len,
             quantization=model_config.quantization,
             trust_remote_code=True,
+            enable_prefix_caching=self.config.vllm_enable_prefix_caching,
+            enable_chunked_prefill=self.config.vllm_enable_chunked_prefill,
         )
+
+        if self.config.vllm_max_num_batched_tokens is not None:
+            engine_kwargs["max_num_batched_tokens"] = self.config.vllm_max_num_batched_tokens
+
+        if self.config.vllm_num_scheduler_steps > 0:
+            engine_kwargs["num_scheduler_steps"] = self.config.vllm_num_scheduler_steps
 
         spec_model = self.config.vllm_speculative_model.strip()
         num_spec_tokens = self.config.vllm_num_speculative_tokens
@@ -128,19 +136,22 @@ class VLLMEngine(InferenceEngine):
         try:
             # Build prompt from messages
             prompt = self._build_prompt(request)
-            
+
             # Create sampling params
             sampling_params = SamplingParams(
                 **request.parameters.to_sampling_params()
             )
 
-            # Generate
+            # Generate — capture first-token time on the first iteration.
             results: list[RequestOutput] = []
+            first_token_time: datetime | None = None
             async for output in engine.generate(
                 prompt,
                 sampling_params,
                 request.request_id,
             ):
+                if first_token_time is None:
+                    first_token_time = datetime.now()
                 results.append(output)
 
             final_output = results[-1]
@@ -148,6 +159,7 @@ class VLLMEngine(InferenceEngine):
 
             end_time = datetime.now()
             latency_ms = int((end_time - start_time).total_seconds() * 1000)
+            ttft_ms = int((first_token_time - start_time).total_seconds() * 1000) if first_token_time else latency_ms
 
             return InferenceResponse(
                 request_id=request.request_id,
@@ -176,7 +188,7 @@ class VLLMEngine(InferenceEngine):
                     queue_ms=0,
                     inference_ms=latency_ms,
                     total_ms=latency_ms,
-                    time_to_first_token_ms=latency_ms // 2,  # Approximate
+                    time_to_first_token_ms=ttft_ms,
                 ),
             )
         finally:

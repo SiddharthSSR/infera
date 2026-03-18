@@ -38,6 +38,7 @@ class WorkerConfig(BaseSettings):
     
     # Health reporting
     health_report_interval_ms: int = Field(default=5000, description="Health report interval")
+    drain_timeout_s: int = Field(default=30, description="Seconds to wait for in-flight requests to finish on graceful shutdown")
     
     # Inference engine
     engine: str = Field(default="vllm", description="Inference engine: vllm, mlx, mock")
@@ -46,6 +47,12 @@ class WorkerConfig(BaseSettings):
     vllm_tensor_parallel_size: int = Field(default=1, description="Tensor parallel size")
     vllm_gpu_memory_utilization: float = Field(default=0.9, description="GPU memory utilization")
     vllm_max_model_len: int | None = Field(default=None, description="Max model length")
+
+    # vLLM performance flags
+    vllm_enable_prefix_caching: bool = Field(default=True, description="Enable automatic prefix caching (KV cache reuse)")
+    vllm_enable_chunked_prefill: bool = Field(default=True, description="Enable chunked prefill to avoid blocking decode batches")
+    vllm_max_num_batched_tokens: int | None = Field(default=None, description="Max tokens per prefill chunk (None = vLLM default)")
+    vllm_num_scheduler_steps: int = Field(default=0, description="Multi-step scheduling steps per iteration (0 = disabled)")
 
     # vLLM speculative decoding
     # Set to a HuggingFace model ID for draft-model mode, or "[ngram]" for ngram mode.
