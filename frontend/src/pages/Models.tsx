@@ -586,7 +586,7 @@ export function Models() {
   return (
     <div className="animate-fade-in">
       <div style={{
-        padding: '1rem 2rem',
+        padding: isMobile ? '0.95rem 1rem' : '1rem 2rem',
         display: 'flex',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
@@ -606,7 +606,7 @@ export function Models() {
               placeholder="Filter by model name or provider..."
               style={{
                 background: 'transparent', border: 'none', fontFamily: 'var(--font-main)',
-                fontSize: '0.9rem', width: 'min(320px, 70vw)', outline: 'none', color: 'var(--text-primary)',
+                fontSize: '0.9rem', width: isMobile ? 'min(100%, 92vw)' : 'min(320px, 70vw)', outline: 'none', color: 'var(--text-primary)',
               }}
             />
           </div>
@@ -729,13 +729,16 @@ export function Models() {
                       <div className="mobile-data-subtitle mono">
                         {model.parameters && `${model.parameters} — `}{provider}
                       </div>
+                      <div className="mobile-card-chip-row">
+                        <span className="mobile-status-inline">
+                          <span className={`status-dot ${statusDotClass}`} />
+                          {statusLabel}
+                        </span>
+                        <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
+                      </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                      <span className="mobile-status-inline">
-                        <span className={`status-dot ${statusDotClass}`} />
-                        {statusLabel}
-                      </span>
-                      <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <span className="badge mono">{runtime.activeNodes} node{runtime.activeNodes === 1 ? '' : 's'}</span>
                     </div>
                   </div>
 

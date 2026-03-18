@@ -317,7 +317,7 @@ export function ApiKeys() {
                     </div>
                     {key.status === 'active' && (
                       <div className="mobile-data-actions">
-                        <button className="action-btn destructive" onClick={() => handleRevoke(key.id)}>
+                        <button className="mobile-data-action danger" onClick={() => handleRevoke(key.id)}>
                           REVOKE
                         </button>
                       </div>

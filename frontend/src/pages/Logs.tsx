@@ -92,18 +92,18 @@ export function Logs() {
   };
 
   return (
-    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 160px)', overflow: 'hidden' }}>
+    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: isMobile ? 'calc(100vh - 124px)' : 'calc(100vh - 160px)', overflow: 'hidden' }}>
       {/* Filter Bar */}
       <div style={{
         backgroundColor: 'var(--bg-accent)',
-        padding: '0.9rem 1.25rem',
+        padding: isMobile ? '1rem' : '0.9rem 1.25rem',
         display: 'flex',
         gap: '1rem',
         flexWrap: 'wrap',
         alignItems: 'flex-end',
         borderBottom: 'var(--grid-line)',
       }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: isMobile ? '1 1 100%' : '0 0 auto' }}>
           <div className="label-text">SEARCH</div>
           <input
             type="text"
@@ -114,11 +114,11 @@ export function Logs() {
               background: 'transparent', border: 'none',
               borderBottom: '1px solid var(--text-primary)',
               fontFamily: 'var(--font-main)', fontSize: '0.85rem',
-              padding: '2px 0', width: 220, outline: 'none', color: 'var(--text-primary)',
+              padding: '2px 0', width: isMobile ? '100%' : 220, outline: 'none', color: 'var(--text-primary)',
             }}
           />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: isMobile ? '1 1 calc(50% - 0.5rem)' : '0 0 auto' }}>
           <div className="label-text">LOG LEVEL</div>
           <select className="filter-select" value={levelFilter} onChange={e => setLevelFilter(e.target.value)}>
             <option value="all">ALL LEVELS</option>
@@ -128,14 +128,14 @@ export function Logs() {
             <option value="debug">DEBUG</option>
           </select>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: isMobile ? '1 1 calc(50% - 0.5rem)' : '0 0 auto' }}>
           <div className="label-text">SOURCE</div>
           <select className="filter-select" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
             <option value="all">ALL SOURCES</option>
             {sources.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
-        <div style={{ marginLeft: isMobile ? 0 : 'auto', display: 'grid', gap: '0.35rem' }}>
+        <div style={{ marginLeft: isMobile ? 0 : 'auto', display: 'grid', gap: '0.35rem', minWidth: isMobile ? '100%' : undefined }}>
           <div className="label-text">VISIBLE</div>
           <div className="mono" style={{ fontSize: '0.8rem' }}>{filteredLogs.length} log lines</div>
         </div>
