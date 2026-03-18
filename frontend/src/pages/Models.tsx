@@ -77,7 +77,7 @@ function describeDeployReadiness(model: Model, offerings: GPUOffering[], provide
     return {
       state: 'deploying' as const,
       summary: 'Provisioning or model load is already in progress.',
-      actionLabel: 'VIEW CLUSTERS',
+      actionLabel: 'VIEW NODES',
       actionTarget: '/instances',
     };
   }
@@ -637,7 +637,7 @@ export function Models() {
               )}
               actions={(
                 <ActionGroup compact>
-                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
                   <button className="action-btn" onClick={() => navigate('/docs')}>READ API DOCS</button>
                 </ActionGroup>
               )}
@@ -701,7 +701,7 @@ export function Models() {
               {!searchQuery && (
                 <div className="help-actions" style={{ justifyContent: 'center' }}>
                   <button className="action-btn" onClick={() => setShowRegisterModal(true)}>ADD MODEL</button>
-                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
                   <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
                 </div>
               )}
@@ -824,7 +824,7 @@ export function Models() {
                 {!searchQuery && (
                   <div className="help-actions" style={{ justifyContent: 'center' }}>
                     <button className="action-btn" onClick={() => setShowRegisterModal(true)}>ADD MODEL</button>
-                    <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+                    <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
                     <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
                   </div>
                 )}
@@ -906,7 +906,7 @@ export function Models() {
                             className={`action-link${deployState.state === 'capacity' ? ' muted' : ''}`}
                             onClick={() => navigate('/instances')}
                           >
-                            OPEN CLUSTERS
+                            OPEN NODES
                           </button>
                         )}
                         {runtime.degradedNodes > 0 && (

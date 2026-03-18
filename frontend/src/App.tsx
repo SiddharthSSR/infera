@@ -202,7 +202,7 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
             </NavLink>
           </span>
         ))}
-        <span className="nav-diamond">&#9671;</span>
+        <span className="nav-group-divider" aria-hidden="true">|</span>
         <span className="nav-secondary-group">
           {secondaryNavItems.map((item, i) => (
             <span key={item.path} className="contents">

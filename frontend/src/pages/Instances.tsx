@@ -1276,7 +1276,7 @@ export function Instances() {
         <div className="cell" style={{ gridColumn: 'span 4' }}>
           <div className="help-callout" style={{ padding: '1rem 1.25rem' }}>
             <SectionHeader
-              eyebrow="CLUSTER STATUS GUIDE"
+              eyebrow="NODE STATUS GUIDE"
               title="Latest deployment first, history on demand"
               description={(
                 <>
@@ -1530,7 +1530,7 @@ export function Instances() {
         {/* Sidebar */}
         <div className="cell instances-sidebar-cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
           <SectionHeader
-            eyebrow="CLUSTER INFO"
+            eyebrow="NODE INFO"
             title="Summary modules"
             description="Keep node operations in the main list. Use these modules for provider posture, loaded models, and fleet health."
           />
@@ -1589,7 +1589,7 @@ export function Instances() {
             </CollapsibleSection>
 
             <CollapsibleSection
-              title="CLUSTER HEALTH"
+              title="NODE HEALTH"
               description="Quick status for the routing path."
             >
               <MetadataList

@@ -189,6 +189,14 @@ h1, h2, h3, h4 {
   color: var(--text-secondary);
 }
 
+.nav-group-divider {
+  color: var(--border-color);
+  font-size: 0.85rem;
+  font-weight: 300;
+  margin: 0 0.25rem;
+  user-select: none;
+}
+
 .nav-secondary-group {
   display: inline-flex;
   align-items: center;
@@ -2374,13 +2382,61 @@ input[type="range"]::-webkit-slider-thumb {
     max-width: min(10rem, 44vw);
   }
 
-  .nav-section-links,
-  .nav-section-links.secondary,
+  /* nav drawer keeps its own grid — 2-col for primary, 3-col for secondary */
+
   .metadata-list,
   .metadata-list.columns-2,
   .metadata-list.columns-3,
   .panel-grid.columns-2,
   .panel-grid.columns-3 {
+    grid-template-columns: 1fr;
+  }
+
+  /* Dashboard: keep metrics + serving rows 2-column so they don't collapse to a single stack */
+  .dashboard-metrics-row,
+  .dashboard-serving-row {
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr) !important;
+    flex-direction: unset !important;
+  }
+
+  .dashboard-metrics-row .cell,
+  .dashboard-serving-row .cell {
+    border-right: var(--grid-line);
+  }
+
+  .dashboard-metrics-row .cell:nth-child(2n),
+  .dashboard-serving-row .cell:nth-child(2n) {
+    border-right: none;
+  }
+
+  /* Live ops 4-column → 2-column on mobile */
+  .dashboard-live-ops-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  /* Reduce min-height on metric/serving cells at mobile */
+  .dashboard-serving-row .dashboard-serving-cell {
+    min-height: 9rem;
+  }
+
+  .dashboard-page .dashboard-metrics-row .cell {
+    min-height: 8rem;
+  }
+
+  /* Slightly smaller value-text on mobile to fit 2-column grid */
+  .value-text {
+    font-size: 1.25rem;
+  }
+
+  /* Metric chart bars — smaller on mobile */
+  .metric-chart {
+    margin-top: 0.5rem;
+    height: 2rem;
+  }
+
+  /* Onboarding grid: force 1 column on very small screens */
+  .dashboard-onboarding-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2414,8 +2470,26 @@ input[type="range"]::-webkit-slider-thumb {
   }
 
   .display-text {
-    font-size: 2.45rem;
-    padding: 1.2rem 0 1rem;
+    font-size: 2.2rem;
+    padding: 0.9rem 0 0.8rem;
+    letter-spacing: -0.03em;
+  }
+
+  /* Compact help callout on mobile — hide the long copy, keep actions */
+  .help-callout {
+    padding: 1rem 1.1rem;
+  }
+
+  .help-callout .help-callout-copy {
+    font-size: 0.8rem;
+    line-height: 1.55;
+    margin-top: 0.5rem;
+  }
+
+  /* Tighten dashboard summary text on mobile */
+  .dashboard-summary-text {
+    margin-top: 0.4rem;
+    font-size: 0.8rem;
   }
 
   .cluster-metric-row {

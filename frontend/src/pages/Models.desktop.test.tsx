@@ -85,7 +85,7 @@ describe('Models desktop layout', () => {
     );
 
     expect(screen.getByRole('button', { name: 'DEPLOY' })).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'OPEN CLUSTERS' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: 'OPEN NODES' }).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'REMOVE' })).toBeInTheDocument();
     expect(container.querySelector('.responsive-scroll-x')).not.toBeInTheDocument();
   });
