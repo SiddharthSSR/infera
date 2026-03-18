@@ -106,7 +106,7 @@ function describeDeployReadiness(model: Model, offerings: GPUOffering[], provide
     state: 'ready' as const,
     summary: `Ready on ${compatibleOfferings.length} GPU config${compatibleOfferings.length === 1 ? '' : 's'} via ${providerNames.join(', ')}${cheapest ? ` from $${cheapest.cost_per_hour.toFixed(2)}/hr` : ''}.`,
     actionLabel: 'DEPLOY',
-    actionTarget: `/instances?provision=true&model=${encodeURIComponent(model.id)}`,
+    actionTarget: `/instances?provision=true&model=${encodeURIComponent(model.id)}&from=models`,
   };
 }
 
@@ -766,7 +766,7 @@ export function Models() {
                         className={`mobile-data-action${overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? ' muted' : ''}`}
                         disabled={verifyingModelID === model.id}
                         onClick={() => overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh'
-                          ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)
+                          ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}&from=models`)
                           : handleVerifyServing(model)}
                       >
                         {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? 'DEPLOY MORE' : 'VERIFY NOW'}
@@ -895,7 +895,7 @@ export function Models() {
                             className={`action-link${overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? ' muted' : ''}`}
                             disabled={verifyingModelID === model.id}
                             onClick={() => overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh'
-                              ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}`)
+                              ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}&from=models`)
                               : handleVerifyServing(model)}
                           >
                             {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? 'DEPLOY MORE' : 'VERIFY NOW'}

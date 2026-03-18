@@ -425,7 +425,12 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 			existing.Status = refreshed.Status
 			existing.PublicIP = refreshed.PublicIP
 			existing.ErrorMessage = refreshed.ErrorMessage
-			existing.WorkerID = refreshed.WorkerID
+			// Only update WorkerID from provider if non-empty; providers don't
+			// track our worker process so a blank value from the refresh loop
+			// must not overwrite a link we established via heartbeat.
+			if refreshed.WorkerID != "" {
+				existing.WorkerID = refreshed.WorkerID
+			}
 		}
 		m.mu.Unlock()
 	}
