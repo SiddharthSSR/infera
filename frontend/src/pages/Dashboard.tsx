@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDeploymentAttempts, useWorkers, useStats, useInstances, useCosts, useModels, useProviders } from '../hooks/useApi';
 import { SkeletonCell } from '../components/Skeleton';
@@ -190,7 +190,7 @@ function buildOperationalAttentionQueue(
       severity: 'critical',
       title: 'Workers are not connected',
       detail: 'Compute nodes exist, but no worker is currently reporting healthy runtime state back to the gateway.',
-      actionLabel: 'OPEN CLUSTERS',
+      actionLabel: 'OPEN NODES',
       action: 'open_clusters',
     });
   }
@@ -211,7 +211,7 @@ function buildOperationalAttentionQueue(
           ? 'Latest deployment request failed'
           : 'Deployment needs intervention',
       detail: latestFailure.attempt.inference_verification?.error || latestFailure.readiness.detail,
-      actionLabel: remediation?.label || 'OPEN CLUSTERS',
+      actionLabel: remediation?.label || 'OPEN NODES',
       action: mapRemediationAction(remediation?.action),
       timestamp: latestFailure.attempt.updated_at || latestFailure.attempt.created_at,
     });
@@ -231,7 +231,7 @@ function buildOperationalAttentionQueue(
       severity: 'warning',
       title: 'Deployment appears stuck',
       detail: `${stuckPending.readiness.detail} This attempt has been pending longer than expected.`,
-      actionLabel: 'OPEN CLUSTERS',
+      actionLabel: 'OPEN NODES',
       action: 'open_clusters',
       timestamp: stuckPending.attempt.updated_at || stuckPending.attempt.created_at,
     });
@@ -300,7 +300,7 @@ function buildBillingAttentionQueue(
         severity: projectedDayFromCurrentHour >= costs.today_total * 3 ? 'critical' : 'warning',
         title: 'Current cost burn is elevated',
         detail: `At the current pace, hourly spend projects to about $${projectedDayFromCurrentHour.toFixed(2)} for the day versus $${costs.today_total.toFixed(2)} spent so far.`,
-        actionLabel: 'OPEN CLUSTERS',
+        actionLabel: 'OPEN NODES',
         action: 'open_clusters',
       });
     }
@@ -317,7 +317,7 @@ function buildBillingAttentionQueue(
           severity: 'info',
           title: 'Spend is concentrated on one provider',
           detail: `${topProvider[0]} accounts for ${Math.round(share * 100)}% of today’s spend. Check whether that concentration is intentional.`,
-          actionLabel: 'OPEN CLUSTERS',
+          actionLabel: 'OPEN NODES',
           action: 'open_clusters',
         });
       }
@@ -327,9 +327,16 @@ function buildBillingAttentionQueue(
   return items;
 }
 
+const GUIDE_DISMISSED_KEY = 'infera:dashboard-guide-dismissed';
+
 export function Dashboard() {
   const navigate = useNavigate();
   const { session } = useAuthSession();
+  const [guideDismissed, setGuideDismissed] = useState(() => sessionStorage.getItem(GUIDE_DISMISSED_KEY) === '1');
+  const dismissGuide = useCallback(() => {
+    sessionStorage.setItem(GUIDE_DISMISSED_KEY, '1');
+    setGuideDismissed(true);
+  }, []);
   const workspaceID = session?.workspace?.id;
   const role = session?.key?.role ?? 'user';
   const canViewQuota = role === 'owner' || role === 'admin' || role === 'billing' || role === 'read_only';
@@ -549,6 +556,11 @@ export function Dashboard() {
     }),
     [activeInstances.length, deploymentSummaries, modelServingStates, operationalAttentionQueue, workspaceMaturity.state],
   );
+  // Show checklist prominently before metrics when the workspace is brand-new
+  const isNewWorkspace = checklistCompletedCount < firstWorkspaceChecklist.length
+    && servingVerifiedCount === 0
+    && activeInstances.length === 0;
+
   const dashboardGuideCopy = liveWorkspaceOperations.show
     ? 'Use workspace state for the top-level health signal, live operations for day-two serving health, and the attention queue for what needs operator action right now.'
     : 'Serving verified means runtime state looks healthy and the latest worker heartbeat is fresh. Inference verified means a real chat-completions request succeeded. Use the attention queue for what needs action now, then use recent deployment activity to see what changed most recently.';
@@ -611,20 +623,33 @@ export function Dashboard() {
 
   return (
     <div className="dashboard-page animate-fade-in">
-      <div className="grid-row">
-        <div className="cell" style={{ gridColumn: 'span 4' }}>
-          <div className="help-callout">
-            <div className="label-text">HOW TO READ THIS DASHBOARD</div>
-            <div className="help-callout-copy">
-              <strong>Serving verified</strong> means runtime state looks healthy and the latest worker heartbeat is fresh. <strong>Inference verified</strong> means a real chat-completions request succeeded. {dashboardGuideCopy}
-            </div>
-            <div className="help-actions">
-              <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
-              <button className="action-btn" onClick={() => navigate('/docs')}>OPEN API DOCS</button>
+      {!guideDismissed && (
+        <div className="grid-row">
+          <div className="cell" style={{ gridColumn: 'span 4' }}>
+            <div className="help-callout" style={{ position: 'relative' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                <div className="label-text">HOW TO READ THIS DASHBOARD</div>
+                <button
+                  className="action-btn"
+                  onClick={dismissGuide}
+                  title="Dismiss"
+                  aria-label="Dismiss guide"
+                  style={{ fontSize: '0.65rem', opacity: 0.6 }}
+                >
+                  DISMISS
+                </button>
+              </div>
+              <div className="help-callout-copy">
+                <strong>Serving verified</strong> means runtime state looks healthy and the latest worker heartbeat is fresh. <strong>Inference verified</strong> means a real chat-completions request succeeded. {dashboardGuideCopy}
+              </div>
+              <div className="help-actions">
+                <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+                <button className="action-btn" onClick={() => navigate('/docs')}>OPEN API DOCS</button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="grid-row">
         <div className="cell dashboard-maturity-cell" style={{ gridColumn: 'span 4' }}>
@@ -652,6 +677,40 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      {isNewWorkspace && checklistCompletedCount < firstWorkspaceChecklist.length && (
+        <div className="grid-row">
+          <div className="cell" style={{ gridColumn: 'span 4' }}>
+            <div className="help-callout">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                <div>
+                  <div className="label-text">GET STARTED</div>
+                  <div className="help-callout-copy">
+                    Follow this sequence to get your first model serving. Each step unlocks the next.
+                  </div>
+                </div>
+                <span className="badge">{checklistCompletedCount} / {firstWorkspaceChecklist.length} COMPLETE</span>
+              </div>
+              <div className="dashboard-onboarding-grid" style={{ marginTop: '1rem' }}>
+                {firstWorkspaceChecklist.map((item) => (
+                  <div key={item.id} className="dashboard-onboarding-item">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: '0.92rem', fontWeight: 500 }}>{item.label}</div>
+                      <span className={`badge ${item.done ? '' : 'status-warning'}`}>{item.done ? 'DONE' : 'NEXT'}</span>
+                    </div>
+                    <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>{item.detail}</div>
+                    {!item.done && (
+                      <button className="action-btn" style={{ marginTop: '0.85rem' }} onClick={() => handleDashboardAction(item.action)}>
+                        {item.actionLabel}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {liveWorkspaceOperations.show && (
         <div className="grid-row">
@@ -718,22 +777,22 @@ export function Dashboard() {
               </div>
             )}
             <div className="dashboard-maturity-actions">
-              <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+              <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
               <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
             </div>
           </div>
         </div>
       )}
 
-      {checklistCompletedCount < firstWorkspaceChecklist.length && (
+      {!isNewWorkspace && checklistCompletedCount < firstWorkspaceChecklist.length && (
         <div className="grid-row">
           <div className="cell" style={{ gridColumn: 'span 4' }}>
             <div className="help-callout">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
                 <div>
-                  <div className="label-text">FIRST WORKSPACE CHECKLIST</div>
+                  <div className="label-text">SETUP CHECKLIST</div>
                   <div className="help-callout-copy">
-                    Use this sequence to finish the first real workspace setup. The checklist is derived from live workspace state, not a static wizard.
+                    Remaining steps to complete workspace setup. Derived from live workspace state.
                   </div>
                 </div>
                 <span className="badge">{checklistCompletedCount} / {firstWorkspaceChecklist.length} COMPLETE</span>
@@ -742,11 +801,11 @@ export function Dashboard() {
                 {firstWorkspaceChecklist.map((item) => (
                   <div key={item.id} className="dashboard-onboarding-item">
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
-                    <div style={{ fontSize: '0.92rem', fontWeight: 500 }}>{item.label}</div>
-                    <span className={`badge ${item.done ? '' : 'status-warning'}`}>{item.done ? 'DONE' : 'NEXT'}</span>
-                  </div>
-                  <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>{item.detail}</div>
-                  {!item.done && (
+                      <div style={{ fontSize: '0.92rem', fontWeight: 500 }}>{item.label}</div>
+                      <span className={`badge ${item.done ? '' : 'status-warning'}`}>{item.done ? 'DONE' : 'NEXT'}</span>
+                    </div>
+                    <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>{item.detail}</div>
+                    {!item.done && (
                       <button className="action-btn" style={{ marginTop: '0.85rem' }} onClick={() => handleDashboardAction(item.action)}>
                         {item.actionLabel}
                       </button>
@@ -828,13 +887,13 @@ export function Dashboard() {
           <div className="label-text">DEGRADED DEPLOYMENTS</div>
           <div className="value-text" style={{ marginTop: '0.85rem' }}>{degradedDeploymentCount}</div>
           <div className="dashboard-summary-text">Recent attempts that failed, lost their node, or are serving with an explicit error signal.</div>
-          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/instances')}>VIEW FAILED DEPLOYMENTS</button>
+          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/instances')}>VIEW FAILED NODES</button>
         </div>
         <div className="cell dashboard-serving-cell">
           <div className="label-text">PENDING DEPLOYMENTS</div>
           <div className="value-text" style={{ marginTop: '0.85rem' }}>{pendingDeploymentCount}</div>
           <div className="dashboard-summary-text">Nodes still provisioning, connecting a worker, or loading assigned models.</div>
-          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/instances')}>OPEN NODES</button>
         </div>
       </div>
 
@@ -1026,14 +1085,14 @@ export function Dashboard() {
 
           <div className="help-actions">
             <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY NEW MODEL</button>
-            <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+            <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
             <button className="action-btn" onClick={() => navigate('/getting-started')}>SEE ONBOARDING PATH</button>
           </div>
         </div>
 
         <div className="cell dashboard-overview-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
           <div style={{ marginBottom: '3rem' }}>
-            <div className="label-text">CLUSTER OVERVIEW</div>
+            <div className="label-text">NODE OVERVIEW</div>
             <h3 style={{ fontSize: '1.25rem', marginTop: '1rem', marginBottom: '1.5rem', fontWeight: 500 }}>
               Resource utilization
             </h3>
@@ -1122,9 +1181,9 @@ export function Dashboard() {
               </div>
             ) : (
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                No recent deployment activity yet. Provision capacity from Clusters to start tracking deployment health here.
+                No recent deployment activity yet. Provision capacity from Nodes to start tracking deployment health here.
                 <div className="help-actions">
-                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
                   <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
                 </div>
               </div>
@@ -1132,10 +1191,10 @@ export function Dashboard() {
           </div>
 
           <div className="dashboard-quick-actions">
-            <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+            <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
             <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
             {latestFailure && (
-              <button className="action-btn" onClick={() => navigate('/instances')}>VIEW FAILED DEPLOYMENTS</button>
+              <button className="action-btn" onClick={() => navigate('/instances')}>VIEW FAILED NODES</button>
             )}
             {latestVerification && (
               <button className="action-btn" onClick={() => navigate('/models')}>VERIFY SERVING</button>

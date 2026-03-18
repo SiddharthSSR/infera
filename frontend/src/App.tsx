@@ -35,26 +35,29 @@ const queryClient = new QueryClient({
   },
 });
 
-// Navigation items
-const navItems = [
+// Navigation items — primary (always visible) and secondary (utility)
+const primaryNavItems = [
   { path: '/', label: 'DASHBOARD' },
   { path: '/models', label: 'MODELS' },
-  { path: '/instances', label: 'CLUSTERS' },
+  { path: '/instances', label: 'NODES' },
   { path: '/playground', label: 'PLAYGROUND' },
+];
+
+const secondaryNavItems = [
   { path: '/logs', label: 'LOGS' },
   { path: '/api-keys', label: 'API KEYS' },
-  { path: '/workspace', label: 'WORKSPACE' },
+  { path: '/workspace', label: 'SETTINGS' },
 ];
 
 // Page display titles
 const pageTitles: Record<string, string> = {
   '/': 'INFERENCE',
   '/models': 'MODELS',
-  '/instances': 'INSTANCES',
+  '/instances': 'NODES',
   '/playground': 'PLAYGROUND',
-  '/logs': 'SYSTEM LOGS',
+  '/logs': 'LOGS',
   '/api-keys': 'API KEYS',
-  '/workspace': 'WORKSPACE',
+  '/workspace': 'SETTINGS',
 };
 
 // Top Navigation
@@ -69,7 +72,7 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
     <nav className="top-nav">
       <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
       <div className="nav-group nav-links-group">
-        {navItems.map((item, i) => (
+        {primaryNavItems.map((item, i) => (
           <span key={item.path} className="contents">
             {i > 0 && <span className="nav-diamond">&#9671;</span>}
             <NavLink
@@ -83,6 +86,23 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
             </NavLink>
           </span>
         ))}
+        <span className="nav-diamond">&#9671;</span>
+        <span className="nav-secondary-group">
+          {secondaryNavItems.map((item, i) => (
+            <span key={item.path} className="contents">
+              {i > 0 && <span className="nav-sep">·</span>}
+              <NavLink
+                to={item.path}
+                end={item.path === '/'}
+                className={({ isActive }) =>
+                  cn('nav-link nav-link-secondary', isActive && 'active')
+                }
+              >
+                {item.label}
+              </NavLink>
+            </span>
+          ))}
+        </span>
       </div>
       <div className="nav-group nav-auth-group" style={{ gap: '1rem' }}>
         {switchableWorkspaces && session?.workspace?.id ? (

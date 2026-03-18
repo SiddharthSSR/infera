@@ -5,13 +5,17 @@
   --bg-accent: #F4F2EE;
   --text-primary: #050505;
   --text-secondary: #555555;
+  --text-tertiary: #8a8886;
   --border-color: #D8D6D4;
   --color-success: #2E7D32;
   --color-warning: #F9A825;
   --color-error: #C62828;
+  --color-info: #1565C0;
   --grid-line: 1px solid var(--border-color);
   --font-main: "DM Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "Space Mono", monospace;
+  --shadow-sm: 0 1px 3px rgba(5,5,5,0.06), 0 1px 2px rgba(5,5,5,0.04);
+  --shadow-md: 0 4px 12px rgba(5,5,5,0.08), 0 2px 4px rgba(5,5,5,0.05);
 }
 
 @theme inline {
@@ -180,6 +184,31 @@ h1, h2, h3, h4 {
 .nav-diamond {
   font-size: 0.6rem;
   color: var(--text-secondary);
+}
+
+.nav-secondary-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.nav-sep {
+  color: var(--border-color);
+  font-size: 0.75rem;
+}
+
+.nav-link-secondary {
+  font-size: 0.65rem;
+  opacity: 0.7;
+}
+
+.nav-link-secondary:hover {
+  opacity: 1;
+}
+
+.nav-link-secondary.active {
+  opacity: 1;
+  border-bottom: 2px solid var(--text-primary);
 }
 
 .sr-only {
@@ -387,6 +416,52 @@ h1, h2, h3, h4 {
 
 .status-dot.inactive {
   background-color: var(--border-color);
+}
+
+.status-dot.neutral {
+  background-color: var(--text-tertiary);
+}
+
+.status-dot.info {
+  background-color: var(--color-info);
+}
+
+/* Status pill (inline badge with bg tint) */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0.2rem 0.5rem;
+  border-radius: 2px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.status-pill.success {
+  background: rgba(46, 125, 50, 0.08);
+  color: var(--color-success);
+}
+
+.status-pill.warning {
+  background: rgba(249, 168, 37, 0.1);
+  color: #b57a00;
+}
+
+.status-pill.error {
+  background: rgba(198, 40, 40, 0.08);
+  color: var(--color-error);
+}
+
+.status-pill.info {
+  background: rgba(21, 101, 192, 0.08);
+  color: var(--color-info);
+}
+
+.status-pill.neutral {
+  background: var(--bg-accent);
+  color: var(--text-secondary);
 }
 
 /* Buttons */
