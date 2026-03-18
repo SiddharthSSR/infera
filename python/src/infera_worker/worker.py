@@ -1,6 +1,7 @@
 """Main Infera Worker implementation."""
 
 import asyncio
+from collections import deque
 from collections.abc import AsyncGenerator
 from datetime import datetime
 import uuid
@@ -33,7 +34,7 @@ class Worker:
         self._request_count = 0
         self._error_count = 0
         self._total_latency_ms = 0.0
-        self._latencies: list[float] = []  # For percentile calculation
+        self._latencies: deque[float] = deque(maxlen=1000)
         self._started_at = datetime.now()
         self._active_requests = 0
         self._queued_requests = 0
@@ -74,13 +75,17 @@ class Worker:
         if graceful:
             self.state = WorkerState.DRAINING
             try:
-                await asyncio.wait_for(self._all_requests_idle.wait(), timeout=1)
+                await asyncio.wait_for(
+                    self._all_requests_idle.wait(),
+                    timeout=self.config.drain_timeout_s,
+                )
             except asyncio.TimeoutError:
                 logger.warning(
                     "Timed out waiting for in-flight requests to drain",
                     worker_id=self.worker_id,
                     active_requests=self._active_requests,
                     queued_requests=self._queued_requests,
+                    drain_timeout_s=self.config.drain_timeout_s,
                 )
         
         self.state = WorkerState.SHUTTING_DOWN
@@ -310,13 +315,10 @@ class Worker:
 
     def _record_latency(self, latency_ms: float) -> None:
         """Record a latency measurement."""
+        if len(self._latencies) == self._latencies.maxlen:
+            self._total_latency_ms -= self._latencies[0]
         self._total_latency_ms += latency_ms
         self._latencies.append(latency_ms)
-        
-        # Keep only last 1000 measurements
-        if len(self._latencies) > 1000:
-            removed = self._latencies.pop(0)
-            self._total_latency_ms -= removed
 
     def _percentile(self, p: int) -> float:
         """Calculate percentile of latencies."""

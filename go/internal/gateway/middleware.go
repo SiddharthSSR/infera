@@ -1,10 +1,14 @@
 package gateway
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,9 +18,46 @@ const (
 	// HeaderRequestID is the header for request ID propagation.
 	HeaderRequestID = "X-Request-ID"
 
+	// HeaderTraceparent is the W3C trace context header.
+	HeaderTraceparent = "traceparent"
+
 	// maxRequestBodyBytes is the maximum allowed request body size (1MB).
 	maxRequestBodyBytes = 1 << 20 // 1MB
 )
+
+type contextKey int
+
+const traceparentKey contextKey = iota
+
+// traceparentFromContext returns the traceparent stored in the context, or empty string.
+func traceparentFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(traceparentKey).(string)
+	return v
+}
+
+// generateTraceparent creates a new W3C traceparent header value.
+// Format: 00-{16-byte trace-id hex}-{8-byte parent-id hex}-01
+func generateTraceparent() string {
+	traceID := make([]byte, 16)
+	parentID := make([]byte, 8)
+	_, _ = rand.Read(traceID)
+	_, _ = rand.Read(parentID)
+	return fmt.Sprintf("00-%s-%s-01", hex.EncodeToString(traceID), hex.EncodeToString(parentID))
+}
+
+// traceparentMiddleware reads the incoming W3C traceparent header (or generates one)
+// and stores it in the request context for downstream propagation to workers.
+func traceparentMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tp := strings.TrimSpace(r.Header.Get(HeaderTraceparent))
+		if tp == "" {
+			tp = generateTraceparent()
+		}
+		ctx := context.WithValue(r.Context(), traceparentKey, tp)
+		w.Header().Set(HeaderTraceparent, tp)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 // recoveryMiddleware catches panics in handlers and returns 500 instead of crashing.
 func recoveryMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {

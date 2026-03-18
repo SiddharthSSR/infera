@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -37,8 +38,18 @@ func main() {
 
 	log.Info("Starting Infera Gateway...")
 
-	// Create router
+	// Create router — batcher tuning via env vars for zero-rebuild tuning in production.
 	routerConfig := router.DefaultConfig()
+	if v := strings.TrimSpace(os.Getenv("INFERA_MAX_BATCH_SIZE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			routerConfig.MaxBatchSize = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("INFERA_MAX_BATCH_WAIT_MS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			routerConfig.MaxBatchWaitMS = n
+		}
+	}
 	r := router.New(routerConfig)
 
 	// Create instance manager

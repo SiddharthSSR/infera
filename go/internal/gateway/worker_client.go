@@ -28,13 +28,24 @@ type WorkerClient struct {
 
 // NewWorkerClient creates a new worker client.
 func NewWorkerClient(address string) *WorkerClient {
+	// Shared transport keeps connections alive across requests to the same worker.
+	// MaxIdleConnsPerHost matches a typical max_concurrent_requests per worker (32).
+	transport := &http.Transport{
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	return &WorkerClient{
 		address: address,
 		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout:   120 * time.Second,
+			Transport: transport,
 		},
-		streamingHTTPClient: &http.Client{},
-		breaker:             NewCircuitBreaker(),
+		streamingHTTPClient: &http.Client{
+			Transport: transport,
+		},
+		breaker: NewCircuitBreaker(),
 	}
 }
 
@@ -139,6 +150,9 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set(HeaderRequestID, req.RequestID)
+	if tp := traceparentFromContext(ctx); tp != "" {
+		httpReq.Header.Set(HeaderTraceparent, tp)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -239,6 +253,9 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set(HeaderRequestID, req.RequestID)
+	if tp := traceparentFromContext(ctx); tp != "" {
+		httpReq.Header.Set(HeaderTraceparent, tp)
+	}
 
 	resp, err := c.streamingHTTPClient.Do(httpReq)
 	if err != nil {

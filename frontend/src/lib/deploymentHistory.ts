@@ -36,7 +36,7 @@ export type DeploymentAttemptSummary = {
 
 export type DeploymentTimelineStep = {
   label: string;
-  state: 'done' | 'active' | 'pending' | 'failed';
+  state: 'done' | 'active' | 'pending' | 'failed' | 'stopped' | 'terminated';
 };
 
 export type DeploymentRemediation = {
@@ -219,18 +219,30 @@ export function summarizeDeploymentAttempt(
   }
 
   if (!liveInstance) {
+    const inferenceVerified = attempt.inference_verification?.status === 'passed';
+    const nodeRan = inferenceVerified || Boolean(attempt.auto_verification_requested_at);
     return {
       attempt,
       instance: null,
       retryable: true,
-      readiness: {
-        label: 'INSTANCE NOT FOUND',
-        detail: 'The original node is no longer present in the current workspace inventory. Retry the same configuration if you still need capacity.',
-        tone: 'inactive',
-        serving: false,
-        verified: false,
-      },
-      inferenceVerified: false,
+      readiness: nodeRan
+        ? {
+            label: 'NODE TERMINATED',
+            detail: inferenceVerified
+              ? 'This node ran and served traffic successfully before being removed.'
+              : 'This node was running and reached a healthy state before being removed.',
+            tone: 'inactive',
+            serving: false,
+            verified: false,
+          }
+        : {
+            label: 'INSTANCE NOT FOUND',
+            detail: 'The original node is no longer present in the current workspace inventory. Retry the same configuration if you still need capacity.',
+            tone: 'inactive',
+            serving: false,
+            verified: false,
+          },
+      inferenceVerified,
       autoVerificationRequested: Boolean(attempt.auto_verification_requested_at),
     };
   }
@@ -282,7 +294,18 @@ export function getDeploymentTimeline(summary: DeploymentAttemptSummary): Deploy
   steps[1].state = 'done';
 
   if (!summary.instance) {
-    steps[2].state = 'failed';
+    // Node ran and was later removed — reflect how far it got before disappearing.
+    const inferenceVerified = summary.attempt.inference_verification?.status === 'passed';
+    const nodeRan = inferenceVerified || Boolean(summary.attempt.auto_verification_requested_at);
+    if (nodeRan) {
+      steps[2].state = 'terminated';
+      steps[3].state = 'done';
+      steps[4].state = 'done';
+      steps[5].state = inferenceVerified ? 'done' : 'done';
+      steps[6].state = inferenceVerified ? 'done' : 'pending';
+    } else {
+      steps[2].state = 'failed';
+    }
     return steps;
   }
 
@@ -295,9 +318,20 @@ export function getDeploymentTimeline(summary: DeploymentAttemptSummary): Deploy
       steps[2].state = 'failed';
       return steps;
     case 'stopped':
+    case 'stopping':
+      steps[2].state = 'stopped';
+      steps[3].state = 'done';
+      steps[4].state = 'done';
+      steps[5].state = summary.attempt.inference_verification?.status === 'passed' ? 'done' : 'pending';
+      steps[6].state = summary.attempt.inference_verification?.status === 'passed' ? 'done' : 'pending';
+      return steps;
     case 'terminating':
     case 'terminated':
-      steps[2].state = 'failed';
+      steps[2].state = 'terminated';
+      steps[3].state = 'done';
+      steps[4].state = 'done';
+      steps[5].state = summary.attempt.inference_verification?.status === 'passed' ? 'done' : 'pending';
+      steps[6].state = summary.attempt.inference_verification?.status === 'passed' ? 'done' : 'pending';
       return steps;
     case 'running':
       steps[2].state = 'done';
@@ -386,9 +420,34 @@ export function getDeploymentRemediation(summary: DeploymentAttemptSummary): Dep
   }
 
   if (!summary.instance) {
+    const nodeRan = summary.attempt.inference_verification?.status === 'passed'
+      || Boolean(summary.attempt.auto_verification_requested_at);
+    if (nodeRan) {
+      return {
+        label: 'PROVISION NEW NODE',
+        detail: 'This node ran successfully and has since been removed. Provision a new node with the same configuration if you need capacity again.',
+        action: 'retry_config',
+      };
+    }
     return {
       label: 'RETRY CONFIG',
       detail: 'The original node is no longer present. Reopen the previous configuration to reprovision it.',
+      action: 'retry_config',
+    };
+  }
+
+  const { instance } = summary;
+  if (instance.status === 'terminated' || instance.status === 'terminating') {
+    return {
+      label: 'PROVISION NEW NODE',
+      detail: 'This node has been terminated. Provision a new node with the same configuration if you need capacity again.',
+      action: 'retry_config',
+    };
+  }
+  if (instance.status === 'stopped' || instance.status === 'stopping') {
+    return {
+      label: 'PROVISION NEW NODE',
+      detail: 'This node is stopped. Provision a new node with the same configuration if you need capacity again.',
       action: 'retry_config',
     };
   }

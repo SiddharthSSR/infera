@@ -202,9 +202,18 @@ function timelineTone(state: DeploymentTimelineStep['state']) {
       return 'warning';
     case 'failed':
       return 'error';
+    case 'stopped':
+    case 'terminated':
+      return 'inactive';
     default:
       return 'inactive';
   }
+}
+
+function timelineLabel(state: DeploymentTimelineStep['state']) {
+  if (state === 'stopped') return 'STOPPED';
+  if (state === 'terminated') return 'TERMINATED';
+  return state.toUpperCase();
 }
 
 function DeploymentTimeline({ steps }: { steps: DeploymentTimelineStep[] }) {
@@ -214,7 +223,7 @@ function DeploymentTimeline({ steps }: { steps: DeploymentTimelineStep[] }) {
         <div key={step.label} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
           <span className={`status-dot ${timelineTone(step.state)}`} />
           <span style={{ fontSize: '0.8rem', minWidth: '8.5rem' }}>{step.label}</span>
-          <span className={`badge ${timelineTone(step.state) ? `status-${timelineTone(step.state)}` : ''}`}>{step.state.toUpperCase()}</span>
+          <span className={`badge ${timelineTone(step.state) ? `status-${timelineTone(step.state)}` : ''}`}>{timelineLabel(step.state)}</span>
         </div>
       ))}
     </div>

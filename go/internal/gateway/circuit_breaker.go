@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -21,16 +22,19 @@ var ErrCircuitOpen = errors.New("circuit breaker is open: worker unavailable")
 // Transitions:
 //
 //	CLOSED → OPEN: after failureThreshold consecutive failures
-//	OPEN → HALF-OPEN: after resetTimeout elapses
+//	OPEN → HALF-OPEN: after resetTimeout (+jitter) elapses
 //	HALF-OPEN → CLOSED: on success
 //	HALF-OPEN → OPEN: on failure
+//
+// Jitter (±20% of resetTimeout) prevents a thundering herd when multiple
+// workers trip at the same time and would otherwise all probe simultaneously.
 type CircuitBreaker struct {
 	mu                    sync.Mutex
 	state                 int
 	failures              int
 	failureThreshold      int
 	resetTimeout          time.Duration
-	lastFailure           time.Time
+	nextResetAt           time.Time
 	halfOpenProbeInFlight bool
 }
 
@@ -42,6 +46,12 @@ func NewCircuitBreaker() *CircuitBreaker {
 	}
 }
 
+// jitteredResetTimeout returns resetTimeout ±20% to stagger recovery probes.
+func (cb *CircuitBreaker) jitteredResetTimeout() time.Duration {
+	jitter := float64(cb.resetTimeout) * 0.2
+	return cb.resetTimeout + time.Duration((rand.Float64()*2-1)*jitter)
+}
+
 // Allow checks whether a request should be allowed through.
 func (cb *CircuitBreaker) Allow() bool {
 	cb.mu.Lock()
@@ -51,7 +61,7 @@ func (cb *CircuitBreaker) Allow() bool {
 	case circuitClosed:
 		return true
 	case circuitOpen:
-		if time.Since(cb.lastFailure) > cb.resetTimeout {
+		if time.Now().After(cb.nextResetAt) {
 			cb.state = circuitHalfOpen
 			cb.halfOpenProbeInFlight = true
 			return true
@@ -83,11 +93,11 @@ func (cb *CircuitBreaker) RecordFailure() {
 	defer cb.mu.Unlock()
 
 	cb.failures++
-	cb.lastFailure = time.Now()
 	cb.halfOpenProbeInFlight = false
 
 	if cb.failures >= cb.failureThreshold {
 		cb.state = circuitOpen
+		cb.nextResetAt = time.Now().Add(cb.jitteredResetTimeout())
 	}
 }
 

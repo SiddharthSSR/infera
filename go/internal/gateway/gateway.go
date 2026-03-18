@@ -213,6 +213,7 @@ func (g *Gateway) Start() error {
 		mux,
 		recoveryMiddleware(g.log),
 		requestIDMiddleware,
+		traceparentMiddleware,
 		bodySizeLimitMiddleware(maxRequestBodyBytes),
 	)
 	if g.metrics != nil {
@@ -1267,6 +1268,10 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 			"message":      "Worker not registered",
 		})
 		return
+	}
+
+	if g.metrics != nil {
+		g.metrics.RecordWorkerQueueDepth(req.WorkerID, req.Stats.QueueDepth)
 	}
 
 	if worker, found := g.router.GetWorker(req.WorkerID); found {

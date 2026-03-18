@@ -405,14 +405,22 @@ class HTTPServer:
                     elif response.status_code in (401, 403):
                         self._record_gateway_heartbeat("auth_rejected")
                         self._consecutive_auth_failures += 1
-                        logger.error(
+                        logger.warning(
                             "Heartbeat rejected by gateway auth",
                             status=response.status_code,
                             response=response.text,
                             gateway_url=gateway_url,
                             worker_id=self.worker.worker_id,
+                            consecutive_failures=self._consecutive_auth_failures,
                         )
-                        if self._consecutive_auth_failures >= 3:
+                        # Warn at halfway point so operators can act before shutdown.
+                        if self._consecutive_auth_failures == 5:
+                            logger.error(
+                                "Sustained heartbeat auth failures — worker will shut down after 10 consecutive failures",
+                                worker_id=self.worker.worker_id,
+                                gateway_url=gateway_url,
+                            )
+                        if self._consecutive_auth_failures >= 10:
                             logger.error(
                                 "Stopping heartbeat loop after repeated auth failures",
                                 worker_id=self.worker.worker_id,
