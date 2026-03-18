@@ -10,7 +10,7 @@ const prepCards = [
   },
   {
     label: 'Best workflow',
-    value: 'Call /v1/models first, then copy the exact id into /v1/chat/completions.',
+    value: 'Works with any OpenAI-compatible SDK. Set base_url to your gateway and use your inf_... key.',
   },
   {
     label: 'Success signal',
@@ -48,7 +48,7 @@ const chatRequest = `curl ${BASE_URL}/v1/chat/completions \\
   -H "Authorization: Bearer inf_..." \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
     "messages": [
       {"role": "user", "content": "Summarize what Infera does in one sentence."}
     ]
@@ -58,12 +58,42 @@ const streamRequest = `curl ${BASE_URL}/v1/chat/completions \\
   -H "Authorization: Bearer inf_..." \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
     "stream": true,
     "messages": [
       {"role": "user", "content": "Say hello in one short line."}
     ]
   }'`;
+
+const pythonSdkExample = `from openai import OpenAI
+
+client = OpenAI(
+    base_url="${BASE_URL}/v1",
+    api_key="inf_..."
+)
+
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[
+        {"role": "user", "content": "Summarize what Infera does in one sentence."}
+    ]
+)
+print(response.choices[0].message.content)`;
+
+const jsSdkExample = `import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "${BASE_URL}/v1",
+  apiKey: "inf_...",
+});
+
+const response = await client.chat.completions.create({
+  model: "Qwen/Qwen2.5-7B-Instruct",
+  messages: [
+    { role: "user", content: "Summarize what Infera does in one sentence." }
+  ],
+});
+console.log(response.choices[0].message.content);`;
 
 const failureChecks = [
   'The key is valid and sent as Authorization: Bearer ...',
@@ -123,6 +153,7 @@ export function GettingStarted() {
             <nav className="docs-sidebar-nav">
               <a className="docs-sidebar-link" href="#runbook">Runbook</a>
               <a className="docs-sidebar-link" href="#copy-run">Copy and run</a>
+              <a className="docs-sidebar-link" href="#sdk-examples">SDK examples</a>
               <a className="docs-sidebar-link" href="#streaming">Streaming</a>
               <a className="docs-sidebar-link" href="#failures">Failure checks</a>
             </nav>
@@ -180,6 +211,34 @@ export function GettingStarted() {
                     <span className="badge">UNARY</span>
                   </div>
                   <CodeExample code={chatRequest} language="shell" />
+                </div>
+              </div>
+            </section>
+
+            <section className="docs-section tone" id="sdk-examples">
+              <div className="docs-section-head">
+                <div>
+                  <div className="label-text">SDK EXAMPLES</div>
+                  <h2 className="docs-section-title">Drop-in with any OpenAI-compatible SDK.</h2>
+                </div>
+                <div className="docs-section-copy">
+                  Point your existing OpenAI SDK at your Infera gateway. Change <code className="docs-inline-code">base_url</code> and swap in your <code className="docs-inline-code">inf_...</code> key — nothing else needs to change.
+                </div>
+              </div>
+              <div className="docs-code-grid">
+                <div className="docs-code-panel">
+                  <div className="docs-code-toolbar">
+                    <div className="label-text">PYTHON</div>
+                    <span className="badge">openai SDK</span>
+                  </div>
+                  <CodeExample code={pythonSdkExample} language="python" />
+                </div>
+                <div className="docs-code-panel">
+                  <div className="docs-code-toolbar">
+                    <div className="label-text">JAVASCRIPT / NODE</div>
+                    <span className="badge">openai SDK</span>
+                  </div>
+                  <CodeExample code={jsSdkExample} language="typescript" />
                 </div>
               </div>
             </section>

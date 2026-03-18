@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { Dashboard } from './Dashboard'
 
 const mockNavigate = vi.fn()
@@ -146,7 +146,8 @@ describe('Dashboard', () => {
     expect(screen.getByText('100.0 r/s')).toBeInTheDocument()
     expect(screen.getByText('2 / 3')).toBeInTheDocument()
     expect(screen.getByText('$3.21')).toBeInTheDocument()
-    expect(screen.getByText('$12.34 today')).toBeInTheDocument()
+    expect(screen.getByText('TODAY TOTAL')).toBeInTheDocument()
+    expect(screen.getByText('$12.34')).toBeInTheDocument()
     expect(screen.getByText('7')).toBeInTheDocument()
   })
 
@@ -260,14 +261,15 @@ describe('Dashboard', () => {
     render(<Dashboard />)
 
     expect(screen.getByText('WORKSPACE STATE')).toBeInTheDocument()
-    expect(screen.getAllByText('ATTENTION REQUIRED').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Latest deployment request failed').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('SETUP IN PROGRESS').length).toBeGreaterThan(0)
+    expect(screen.queryByText('ATTENTION REQUIRED')).not.toBeInTheDocument()
+    expect(screen.getByText('Recent deployment retry failed')).toBeInTheDocument()
+    expect(screen.getByText(/Live serving is still available from the current deployment/i)).toBeInTheDocument()
     expect(screen.getAllByText('SERVING VERIFIED').length).toBeGreaterThan(0)
-    expect(screen.getByText('VERIFY PENDING')).toBeInTheDocument()
+    expect(screen.getAllByText('VERIFY PENDING').length).toBeGreaterThan(0)
     expect(screen.getByText('DEGRADED DEPLOYMENTS')).toBeInTheDocument()
     expect(screen.getByText('PENDING DEPLOYMENTS')).toBeInTheDocument()
     expect(screen.getByText('ATTENTION QUEUE')).toBeInTheDocument()
-    expect(screen.getAllByText('Latest deployment request failed').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Model A').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/provider auth failed/i).length).toBeGreaterThan(0)
   })
@@ -290,7 +292,7 @@ describe('Dashboard', () => {
 
     render(<Dashboard />)
 
-    expect(await screen.findByText('NEW WORKSPACE')).toBeInTheDocument()
+    expect((await screen.findAllByText('NEW WORKSPACE')).length).toBeGreaterThan(0)
     expect(await screen.findByText('FIRST WORKSPACE CHECKLIST')).toBeInTheDocument()
     expect(screen.getByText('Add provider access')).toBeInTheDocument()
     expect(screen.getByText('Register or confirm a model')).toBeInTheDocument()
@@ -540,9 +542,74 @@ describe('Dashboard', () => {
     expect(screen.getByText('DEPLOYMENT HISTORY')).toBeInTheDocument()
     expect(screen.getByText('VERIFICATION HISTORY')).toBeInTheDocument()
     expect(screen.getByText('USAGE TRAJECTORY')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /deployment history/i }))
     expect(screen.getAllByText('Model B').length).toBeGreaterThan(0)
     expect(await screen.findByText('450 req')).toBeInTheDocument()
     expect(screen.getByText('Latency 182ms')).toBeInTheDocument()
+  })
+
+  it('keeps deployment history collapsed until the user expands it', () => {
+    mocks.deploymentAttempts = { data: [
+      {
+        id: 'attempt_1',
+        created_at: '2026-03-15T09:00:00.000Z',
+        updated_at: '2026-03-15T09:01:00.000Z',
+        outcome: 'request_failed',
+        request: { gpu_type: 'H100', models: ['org/model-a'] },
+        selected_model_name: 'Model A',
+        failure_reason: 'provider auth failed',
+      },
+      {
+        id: 'attempt_2',
+        created_at: '2026-03-15T08:00:00.000Z',
+        updated_at: '2026-03-15T08:05:00.000Z',
+        outcome: 'provisioned',
+        request: { gpu_type: 'A100_40GB', models: ['org/model-b'] },
+        selected_model_name: 'Model B',
+        inference_verification: {
+          status: 'passed',
+          verified_at: '2026-03-15T08:05:00.000Z',
+          latency_ms: 110,
+          model: 'org/model-b',
+        },
+      },
+      {
+        id: 'attempt_3',
+        created_at: '2026-03-15T07:00:00.000Z',
+        updated_at: '2026-03-15T07:05:00.000Z',
+        outcome: 'provisioned',
+        request: { gpu_type: 'RTX_4090', models: ['org/model-c'] },
+        selected_model_name: 'Model C',
+      },
+      {
+        id: 'attempt_4',
+        created_at: '2026-03-15T06:00:00.000Z',
+        updated_at: '2026-03-15T06:05:00.000Z',
+        outcome: 'request_failed',
+        request: { gpu_type: 'RTX_4090', models: ['org/model-d'] },
+        selected_model_name: 'Model D',
+        failure_reason: 'capacity unavailable',
+      },
+      {
+        id: 'attempt_5',
+        created_at: '2026-03-15T05:00:00.000Z',
+        updated_at: '2026-03-15T05:05:00.000Z',
+        outcome: 'provisioned',
+        request: { gpu_type: 'L40S', models: ['org/model-e'] },
+        selected_model_name: 'Hidden Model',
+      },
+    ], isLoading: false }
+
+    render(<Dashboard />)
+
+    const toggle = screen.getByRole('button', { name: /deployment history/i })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Hidden Model')).not.toBeInTheDocument()
+
+    fireEvent.click(toggle)
+
+    expect(screen.getByRole('button', { name: /deployment history/i })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Hidden Model')).toBeInTheDocument()
   })
 
   it('navigates to provision flow from deploy button', () => {

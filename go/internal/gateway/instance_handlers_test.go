@@ -370,6 +370,14 @@ func TestHandleOfferings(t *testing.T) {
 		if len(offerings) == 0 {
 			t.Error("expected at least one offering")
 		}
+
+		first := offerings[0].(map[string]interface{})
+		if first["display_name"] == "" {
+			t.Error("expected display_name to be included in offering response")
+		}
+		if first["provider_gpu_type_id"] == "" {
+			t.Error("expected provider_gpu_type_id to be included in offering response")
+		}
 	})
 
 	t.Run("Method not allowed", func(t *testing.T) {
@@ -595,9 +603,9 @@ func TestHandleDeploymentVerificationUpdates(t *testing.T) {
 	h.SetDeploymentStore(store)
 
 	body := map[string]interface{}{
-		"name":     "test-worker",
-		"provider": "mock",
-		"gpu_type": "RTX_4090",
+		"name":      "test-worker",
+		"provider":  "mock",
+		"gpu_type":  "RTX_4090",
 		"gpu_count": 1,
 	}
 	bodyBytes, _ := json.Marshal(body)

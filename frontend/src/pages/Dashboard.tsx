@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDeploymentAttempts, useWorkers, useStats, useInstances, useCosts, useModels, useProviders } from '../hooks/useApi';
 import { SkeletonCell } from '../components/Skeleton';
+import { ActionGroup } from '../components/ActionGroup';
+import { CollapsibleSection } from '../components/CollapsibleSection';
+import { MetadataList } from '../components/MetadataList';
+import { SectionHeader } from '../components/SectionHeader';
 import { useAuthSession } from '../lib/auth-context';
 import {
   fetchAuditUsage,
@@ -15,6 +19,7 @@ import {
 } from '../lib/api';
 import {
   getDeploymentRemediation,
+  selectPrimaryDeploymentSummary,
   summarizeDeploymentAttempt,
   type DeploymentAttemptRecord,
   type DeploymentAttemptSummary,
@@ -172,6 +177,14 @@ function buildOperationalAttentionQueue(
   servingUnverifiedCount: number,
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
+  const primaryDeployment = selectPrimaryDeploymentSummary(deploymentSummaries);
+  const primaryDeploymentServing = Boolean(
+    primaryDeployment && (
+      primaryDeployment.inferenceVerified
+      || primaryDeployment.readiness.serving
+      || primaryDeployment.readiness.label === 'SERVING VERIFIED'
+    ),
+  );
 
   if (visibleProviders > 0 && connectedProviders === 0) {
     items.push({
@@ -190,7 +203,7 @@ function buildOperationalAttentionQueue(
       severity: 'critical',
       title: 'Workers are not connected',
       detail: 'Compute nodes exist, but no worker is currently reporting healthy runtime state back to the gateway.',
-      actionLabel: 'OPEN CLUSTERS',
+      actionLabel: 'OPEN NODES',
       action: 'open_clusters',
     });
   }
@@ -202,16 +215,29 @@ function buildOperationalAttentionQueue(
   ));
   if (latestFailure) {
     const remediation = getDeploymentRemediation(latestFailure);
+    const failureIsSecondaryToHealthyServing = Boolean(
+      primaryDeploymentServing
+      && primaryDeployment
+      && primaryDeployment.attempt.id !== latestFailure.attempt.id,
+    );
     items.push({
       id: `failure-${latestFailure.attempt.id}`,
-      severity: 'critical',
+      severity: failureIsSecondaryToHealthyServing ? 'info' : 'critical',
       title: latestFailure.attempt.inference_verification?.status === 'failed'
-        ? 'Inference verification failed'
+        ? failureIsSecondaryToHealthyServing
+          ? 'Recent deployment retry failed verification'
+          : 'Inference verification failed'
         : latestFailure.attempt.outcome === 'request_failed'
-          ? 'Latest deployment request failed'
-          : 'Deployment needs intervention',
-      detail: latestFailure.attempt.inference_verification?.error || latestFailure.readiness.detail,
-      actionLabel: remediation?.label || 'OPEN CLUSTERS',
+          ? failureIsSecondaryToHealthyServing
+            ? 'Recent deployment retry failed'
+            : 'Latest deployment request failed'
+          : failureIsSecondaryToHealthyServing
+            ? 'Recent deployment retry needs review'
+            : 'Deployment needs intervention',
+      detail: failureIsSecondaryToHealthyServing
+        ? `${latestFailure.attempt.inference_verification?.error || latestFailure.readiness.detail} Live serving is still available from the current deployment.`
+        : latestFailure.attempt.inference_verification?.error || latestFailure.readiness.detail,
+      actionLabel: remediation?.label || 'OPEN NODES',
       action: mapRemediationAction(remediation?.action),
       timestamp: latestFailure.attempt.updated_at || latestFailure.attempt.created_at,
     });
@@ -231,7 +257,7 @@ function buildOperationalAttentionQueue(
       severity: 'warning',
       title: 'Deployment appears stuck',
       detail: `${stuckPending.readiness.detail} This attempt has been pending longer than expected.`,
-      actionLabel: 'OPEN CLUSTERS',
+      actionLabel: 'OPEN NODES',
       action: 'open_clusters',
       timestamp: stuckPending.attempt.updated_at || stuckPending.attempt.created_at,
     });
@@ -300,7 +326,7 @@ function buildBillingAttentionQueue(
         severity: projectedDayFromCurrentHour >= costs.today_total * 3 ? 'critical' : 'warning',
         title: 'Current cost burn is elevated',
         detail: `At the current pace, hourly spend projects to about $${projectedDayFromCurrentHour.toFixed(2)} for the day versus $${costs.today_total.toFixed(2)} spent so far.`,
-        actionLabel: 'OPEN CLUSTERS',
+        actionLabel: 'OPEN NODES',
         action: 'open_clusters',
       });
     }
@@ -317,7 +343,7 @@ function buildBillingAttentionQueue(
           severity: 'info',
           title: 'Spend is concentrated on one provider',
           detail: `${topProvider[0]} accounts for ${Math.round(share * 100)}% of today’s spend. Check whether that concentration is intentional.`,
-          actionLabel: 'OPEN CLUSTERS',
+          actionLabel: 'OPEN NODES',
           action: 'open_clusters',
         });
       }
@@ -327,14 +353,21 @@ function buildBillingAttentionQueue(
   return items;
 }
 
+const GUIDE_DISMISSED_KEY = 'infera:dashboard-guide-dismissed';
+
 export function Dashboard() {
   const navigate = useNavigate();
   const { session } = useAuthSession();
+  const [guideDismissed, setGuideDismissed] = useState(() => sessionStorage.getItem(GUIDE_DISMISSED_KEY) === '1');
+  const dismissGuide = useCallback(() => {
+    sessionStorage.setItem(GUIDE_DISMISSED_KEY, '1');
+    setGuideDismissed(true);
+  }, []);
   const workspaceID = session?.workspace?.id;
   const role = session?.key?.role ?? 'user';
   const canViewQuota = role === 'owner' || role === 'admin' || role === 'billing' || role === 'read_only';
   const canViewUsage = canViewQuota;
-  const { data: workers, isLoading: loadingWorkers, isError: errorWorkers } = useWorkers();
+  const { data: workers, isLoading: loadingWorkers, isError: errorWorkers } = useWorkers(workspaceID);
   const { data: stats, isLoading: loadingStats, isError: errorStats } = useStats();
   const { data: instances, isLoading: loadingInstances } = useInstances();
   const { data: costs, isLoading: loadingCosts } = useCosts();
@@ -549,6 +582,11 @@ export function Dashboard() {
     }),
     [activeInstances.length, deploymentSummaries, modelServingStates, operationalAttentionQueue, workspaceMaturity.state],
   );
+  // Show checklist prominently before metrics when the workspace is brand-new
+  const isNewWorkspace = checklistCompletedCount < firstWorkspaceChecklist.length
+    && servingVerifiedCount === 0
+    && activeInstances.length === 0;
+
   const dashboardGuideCopy = liveWorkspaceOperations.show
     ? 'Use workspace state for the top-level health signal, live operations for day-two serving health, and the attention queue for what needs operator action right now.'
     : 'Serving verified means runtime state looks healthy and the latest worker heartbeat is fresh. Inference verified means a real chat-completions request succeeded. Use the attention queue for what needs action now, then use recent deployment activity to see what changed most recently.';
@@ -609,144 +647,149 @@ export function Dashboard() {
     );
   }
 
+  const deploymentHistoryPreview = deploymentTrend.recent.slice(0, 3);
+  const hiddenDeploymentHistoryCount = Math.max(deploymentTrend.recent.length - deploymentHistoryPreview.length, 0);
+  const recentActivity = deploymentSummaries.slice(0, 4);
+  const workspaceSnapshotItems = [
+    { label: 'ACTIVE NODES', value: activeInstances.length, mono: true },
+    { label: 'SERVING VERIFIED', value: servingVerifiedCount, mono: true },
+    { label: 'VERIFY PENDING', value: servingUnverifiedCount, mono: true },
+    { label: 'QUEUE DEPTH', value: stats?.requests?.queue_depth || 0, mono: true },
+    { label: 'CURRENT HOURLY', value: `$${costs?.current_hourly?.toFixed(2) || '0.00'}`, mono: true },
+    { label: 'TODAY TOTAL', value: `$${costs?.today_total?.toFixed(2) || '0.00'}`, mono: true },
+  ] as const;
+  const liveOperationsItems = [
+    { label: 'ACTIVE SERVING MODELS', value: liveWorkspaceOperations.activeServingModels, mono: true },
+    { label: 'ACTIVE NODES', value: liveWorkspaceOperations.activeNodes, mono: true },
+    { label: 'VERIFICATION', value: liveWorkspaceOperations.verificationLabel },
+    { label: 'DEGRADED RUNTIME', value: liveWorkspaceOperations.degradedRuntimeCount, mono: true },
+  ] as const;
+
   return (
     <div className="dashboard-page animate-fade-in">
-      <div className="grid-row">
-        <div className="cell" style={{ gridColumn: 'span 4' }}>
-          <div className="help-callout">
-            <div className="label-text">HOW TO READ THIS DASHBOARD</div>
-            <div className="help-callout-copy">
-              <strong>Serving verified</strong> means runtime state looks healthy and the latest worker heartbeat is fresh. <strong>Inference verified</strong> means a real chat-completions request succeeded. {dashboardGuideCopy}
-            </div>
-            <div className="help-actions">
-              <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
-              <button className="action-btn" onClick={() => navigate('/docs')}>OPEN API DOCS</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid-row">
-        <div className="cell dashboard-maturity-cell" style={{ gridColumn: 'span 4' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-            <div>
-              <div className="label-text">WORKSPACE STATE</div>
-              <div style={{ fontSize: '1.15rem', fontWeight: 600, marginTop: '0.75rem', letterSpacing: '-0.02em' }}>
-                {workspaceMaturity.headline}
-              </div>
-              <div className="dashboard-summary-text" style={{ marginTop: '0.55rem', maxWidth: '60rem' }}>
-                {workspaceMaturity.detail}
-              </div>
-            </div>
-            <span className={`badge ${getSummaryToneClass(workspaceMaturity.tone)}`}>{workspaceMaturity.label}</span>
-          </div>
-          <div className="dashboard-maturity-actions">
-            <button className="action-btn" onClick={() => handleDashboardAction(workspaceMaturity.action)}>
-              {workspaceMaturity.actionLabel}
-            </button>
-            {workspaceMaturity.state !== 'serving_verified' && (
-              <button className="action-btn" onClick={() => navigate('/workspace')}>
-                OPEN WORKSPACE
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {liveWorkspaceOperations.show && (
+      {!guideDismissed && (
         <div className="grid-row">
-          <div className="cell dashboard-live-ops-cell" style={{ gridColumn: 'span 4' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-              <div>
-                <div className="label-text">LIVE OPERATIONS</div>
-                <div style={{ fontSize: '1.05rem', fontWeight: 600, marginTop: '0.75rem', letterSpacing: '-0.02em' }}>
-                  {liveWorkspaceOperations.headline}
-                </div>
-                <div className="dashboard-summary-text" style={{ marginTop: '0.55rem', maxWidth: '60rem' }}>
-                  {liveWorkspaceOperations.detail}
-                </div>
-              </div>
-              <span className={`badge ${
-                liveWorkspaceOperations.verificationFreshness === 'fresh'
-                  ? ''
-                  : liveWorkspaceOperations.verificationFreshness === 'recent'
-                    ? 'status-inactive'
-                    : 'status-warning'
-              }`}>
-                {liveWorkspaceOperations.verificationLabel}
-              </span>
-            </div>
-            <div className="dashboard-live-ops-grid">
-              <div className="dashboard-live-ops-item">
-                <div className="label-text">ACTIVE SERVING MODELS</div>
-                <div className="value-text" style={{ marginTop: '0.7rem' }}>{liveWorkspaceOperations.activeServingModels}</div>
-                <div className="dashboard-summary-text">Models currently serving or awaiting a fresh verification result.</div>
-              </div>
-              <div className="dashboard-live-ops-item">
-                <div className="label-text">ACTIVE NODES</div>
-                <div className="value-text" style={{ marginTop: '0.7rem' }}>{liveWorkspaceOperations.activeNodes}</div>
-                <div className="dashboard-summary-text">Running compute nodes attached to the active workspace.</div>
-              </div>
-              <div className="dashboard-live-ops-item">
-                <div className="label-text">VERIFICATION FRESHNESS</div>
-                <div style={{ marginTop: '0.85rem' }}>
-                  <span className={`badge ${
-                    liveWorkspaceOperations.verificationFreshness === 'fresh'
-                      ? ''
-                      : liveWorkspaceOperations.verificationFreshness === 'recent'
-                        ? 'status-inactive'
-                        : 'status-warning'
-                  }`}>
-                    {liveWorkspaceOperations.verificationLabel}
-                  </span>
-                </div>
-                <div className="dashboard-summary-text" style={{ marginTop: '0.85rem' }}>Freshness of the latest successful live inference verification.</div>
-              </div>
-              <div className="dashboard-live-ops-item">
-                <div className="label-text">DEGRADED RUNTIME</div>
-                <div className="value-text" style={{ marginTop: '0.7rem' }}>{liveWorkspaceOperations.degradedRuntimeCount}</div>
-                <div className="dashboard-summary-text">Models with degraded or failed serving state in the active workspace.</div>
-              </div>
-            </div>
-            {liveWorkspaceOperations.operatorIssueTitle && (
-              <div className="dashboard-live-ops-issue">
-                <div className="dashboard-alert-title-row">
-                  <span className="badge status-warning">LATEST ISSUE</span>
-                  <span style={{ fontSize: '0.95rem', fontWeight: 500 }}>{liveWorkspaceOperations.operatorIssueTitle}</span>
-                </div>
-                <div className="dashboard-summary-text">{liveWorkspaceOperations.operatorIssueDetail}</div>
-              </div>
-            )}
-            <div className="dashboard-maturity-actions">
-              <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
-              <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
+          <div className="cell" style={{ gridColumn: 'span 4' }}>
+            <div className="help-callout" style={{ position: 'relative', padding: '1rem 1.25rem' }}>
+              <SectionHeader
+                eyebrow="HOW TO READ THIS DASHBOARD"
+                title="Progressive operator view"
+                description={(
+                  <>
+                    <strong>Serving verified</strong> means runtime state looks healthy and the latest worker heartbeat is fresh. <strong>Inference verified</strong> means a real chat-completions request succeeded. {dashboardGuideCopy}
+                  </>
+                )}
+                actions={(
+                  <ActionGroup compact>
+                    <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+                    <button className="action-btn" onClick={() => navigate('/docs')}>OPEN API DOCS</button>
+                    <button
+                      className="action-btn"
+                      onClick={dismissGuide}
+                      title="Dismiss"
+                      aria-label="Dismiss guide"
+                    >
+                      DISMISS
+                    </button>
+                  </ActionGroup>
+                )}
+              />
             </div>
           </div>
         </div>
       )}
 
-      {checklistCompletedCount < firstWorkspaceChecklist.length && (
-        <div className="grid-row">
-          <div className="cell" style={{ gridColumn: 'span 4' }}>
-            <div className="help-callout">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                <div>
-                  <div className="label-text">FIRST WORKSPACE CHECKLIST</div>
-                  <div className="help-callout-copy">
-                    Use this sequence to finish the first real workspace setup. The checklist is derived from live workspace state, not a static wizard.
+      <div className="grid-row">
+        <div className="cell dashboard-maturity-cell" style={{ gridColumn: 'span 2' }}>
+          <SectionHeader
+            eyebrow="WORKSPACE STATE"
+            title={workspaceMaturity.headline}
+            description={workspaceMaturity.detail}
+            badge={<span className={`badge ${getSummaryToneClass(workspaceMaturity.tone)}`}>{workspaceMaturity.label}</span>}
+            actions={(
+              <ActionGroup compact>
+                <button className="action-btn" onClick={() => handleDashboardAction(workspaceMaturity.action)}>
+                  {workspaceMaturity.actionLabel}
+                </button>
+                {workspaceMaturity.state !== 'serving_verified' && (
+                  <button className="action-btn" onClick={() => navigate('/workspace')}>
+                    OPEN WORKSPACE
+                  </button>
+                )}
+              </ActionGroup>
+            )}
+          />
+          <div style={{ marginTop: '1.25rem' }}>
+            <MetadataList
+              items={workspaceSnapshotItems.map((item) => ({ ...item, value: String(item.value) }))}
+              columns={3}
+            />
+          </div>
+        </div>
+        <div className="cell dashboard-live-ops-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
+          {liveWorkspaceOperations.show ? (
+            <>
+              <SectionHeader
+                eyebrow="LIVE OPERATIONS"
+                title={liveWorkspaceOperations.headline}
+                description={liveWorkspaceOperations.detail}
+                badge={(
+                  <span
+                    className={`badge ${
+                      liveWorkspaceOperations.verificationFreshness === 'fresh'
+                        ? ''
+                        : liveWorkspaceOperations.verificationFreshness === 'recent'
+                          ? 'status-inactive'
+                          : 'status-warning'
+                    }`}
+                  >
+                    {liveWorkspaceOperations.verificationLabel}
+                  </span>
+                )}
+                actions={(
+                  <ActionGroup compact>
+                    <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
+                    <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
+                  </ActionGroup>
+                )}
+              />
+              <div style={{ marginTop: '1.25rem' }}>
+                <MetadataList
+                  items={liveOperationsItems.map((item) => ({ ...item, value: String(item.value) }))}
+                  columns={2}
+                />
+              </div>
+              {liveWorkspaceOperations.operatorIssueTitle && (
+                <div className="overview-card accent" style={{ marginTop: '1.25rem' }}>
+                  <div className="label-text">LATEST ISSUE</div>
+                  <div style={{ fontSize: '0.98rem', fontWeight: 600, marginTop: '0.5rem' }}>
+                    {liveWorkspaceOperations.operatorIssueTitle}
+                  </div>
+                  <div className="dashboard-summary-text" style={{ marginTop: '0.4rem' }}>
+                    {liveWorkspaceOperations.operatorIssueDetail}
                   </div>
                 </div>
-                <span className="badge">{checklistCompletedCount} / {firstWorkspaceChecklist.length} COMPLETE</span>
-              </div>
+              )}
+            </>
+          ) : (
+            <>
+              <SectionHeader
+                eyebrow={isNewWorkspace ? 'NEW WORKSPACE' : 'SETUP CHECKLIST'}
+                title={isNewWorkspace ? 'FIRST WORKSPACE CHECKLIST' : 'Remaining setup work'}
+                description={isNewWorkspace
+                  ? 'Follow this sequence to get the first model serving. Each step unlocks the next.'
+                  : 'Remaining steps to complete workspace setup. Derived from live workspace state.'}
+                badge={<span className="badge">{checklistCompletedCount} / {firstWorkspaceChecklist.length} COMPLETE</span>}
+              />
               <div className="dashboard-onboarding-grid" style={{ marginTop: '1rem' }}>
                 {firstWorkspaceChecklist.map((item) => (
                   <div key={item.id} className="dashboard-onboarding-item">
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
-                    <div style={{ fontSize: '0.92rem', fontWeight: 500 }}>{item.label}</div>
-                    <span className={`badge ${item.done ? '' : 'status-warning'}`}>{item.done ? 'DONE' : 'NEXT'}</span>
-                  </div>
-                  <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>{item.detail}</div>
-                  {!item.done && (
+                      <div style={{ fontSize: '0.92rem', fontWeight: 500 }}>{item.label}</div>
+                      <span className={`badge ${item.done ? '' : 'status-warning'}`}>{item.done ? 'DONE' : 'NEXT'}</span>
+                    </div>
+                    <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>{item.detail}</div>
+                    {!item.done && (
                       <button className="action-btn" style={{ marginTop: '0.85rem' }} onClick={() => handleDashboardAction(item.action)}>
                         {item.actionLabel}
                       </button>
@@ -754,10 +797,10 @@ export function Dashboard() {
                   </div>
                 ))}
               </div>
-            </div>
-          </div>
+            </>
+          )}
         </div>
-      )}
+      </div>
 
       <div className="grid-row dashboard-metrics-row">
         <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
@@ -828,30 +871,27 @@ export function Dashboard() {
           <div className="label-text">DEGRADED DEPLOYMENTS</div>
           <div className="value-text" style={{ marginTop: '0.85rem' }}>{degradedDeploymentCount}</div>
           <div className="dashboard-summary-text">Recent attempts that failed, lost their node, or are serving with an explicit error signal.</div>
-          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/instances')}>VIEW FAILED DEPLOYMENTS</button>
+          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/instances')}>VIEW FAILED NODES</button>
         </div>
         <div className="cell dashboard-serving-cell">
           <div className="label-text">PENDING DEPLOYMENTS</div>
           <div className="value-text" style={{ marginTop: '0.85rem' }}>{pendingDeploymentCount}</div>
           <div className="dashboard-summary-text">Nodes still provisioning, connecting a worker, or loading assigned models.</div>
-          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
+          <button className="action-btn" style={{ marginTop: '1rem' }} onClick={() => navigate('/instances')}>OPEN NODES</button>
         </div>
       </div>
 
       <div className="grid-row dashboard-alerts-row">
         <div className="cell dashboard-alerts-cell" style={{ gridColumn: 'span 4' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.4rem' }}>
-            <div>
-              <div className="label-text">ATTENTION QUEUE</div>
-              <div className="dashboard-summary-text" style={{ marginTop: '0.45rem' }}>
-                The next operational issues that need action now.
-              </div>
-            </div>
-            <div className="badge status-inactive">{attentionQueue.length} OPEN</div>
-          </div>
+          <SectionHeader
+            eyebrow="ATTENTION QUEUE"
+            title="Priority actions"
+            description="The next operational issues that need action now."
+            badge={<div className="badge status-inactive">{attentionQueue.length} OPEN</div>}
+          />
 
           {attentionQueue.length > 0 ? (
-            <div className="dashboard-alert-list">
+            <div className="dashboard-alert-list" style={{ marginTop: '1.4rem' }}>
               {attentionQueue.map((item) => (
                 <div key={item.id} className={`dashboard-alert-item ${getAttentionSeverityClass(item.severity)}`}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
@@ -890,31 +930,50 @@ export function Dashboard() {
 
       <div className="grid-row dashboard-trends-row">
         <div className="cell dashboard-trend-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text" style={{ marginBottom: '1rem' }}>DEPLOYMENT HISTORY</div>
-          <div className="dashboard-trend-summary">
-            <span>{deploymentTrend.stable} stable</span>
-            <span>{deploymentTrend.pending} pending</span>
-            <span>{deploymentTrend.failed} failed</span>
-          </div>
-          {deploymentTrend.recent.length > 0 ? (
-            <div className="dashboard-trend-list">
-              {deploymentTrend.recent.map((summary) => (
-                <div key={summary.attempt.id} className="dashboard-trend-item">
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
-                    <div style={{ fontSize: '0.88rem', fontWeight: 500 }}>
-                      {summary.attempt.selected_model_name || summary.attempt.request.models?.[0]?.split('/').pop() || summary.instance?.name || 'Deployment attempt'}
+          <div className="label-text" style={{ marginBottom: '1rem' }}>RECENT CHANGES</div>
+          <CollapsibleSection
+            title="DEPLOYMENT HISTORY"
+            description="Latest provisioning attempts. Open the full history only when you need the details."
+            summary={(
+              <div className="dashboard-trend-summary">
+                <span>{deploymentTrend.stable} stable</span>
+                <span>{deploymentTrend.pending} pending</span>
+                <span>{deploymentTrend.failed} failed</span>
+                {hiddenDeploymentHistoryCount > 0 ? <span>+{hiddenDeploymentHistoryCount} hidden</span> : null}
+              </div>
+            )}
+          >
+            {deploymentTrend.recent.length > 0 ? (
+              <div className="dashboard-trend-list">
+                {deploymentHistoryPreview.map((summary) => (
+                  <div key={summary.attempt.id} className="dashboard-trend-item">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                      <div style={{ fontSize: '0.88rem', fontWeight: 500 }}>
+                        {summary.attempt.selected_model_name || summary.attempt.request.models?.[0]?.split('/').pop() || summary.instance?.name || 'Deployment attempt'}
+                      </div>
+                      <span className={`badge ${getSummaryToneClass(getAttemptTone(summary))}`}>{summary.readiness.label}</span>
                     </div>
-                    <span className={`badge ${getSummaryToneClass(getAttemptTone(summary))}`}>{summary.readiness.label}</span>
+                    <div className="dashboard-summary-text" style={{ marginTop: '0.35rem' }}>{summary.readiness.detail}</div>
                   </div>
-                  <div className="dashboard-summary-text" style={{ marginTop: '0.35rem' }}>{summary.readiness.detail}</div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              No deployment attempts recorded yet.
-            </div>
-          )}
+                ))}
+                {hiddenDeploymentHistoryCount > 0 && deploymentTrend.recent.slice(3).map((summary) => (
+                  <div key={summary.attempt.id} className="dashboard-trend-item">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                      <div style={{ fontSize: '0.88rem', fontWeight: 500 }}>
+                        {summary.attempt.selected_model_name || summary.attempt.request.models?.[0]?.split('/').pop() || summary.instance?.name || 'Deployment attempt'}
+                      </div>
+                      <span className={`badge ${getSummaryToneClass(getAttemptTone(summary))}`}>{summary.readiness.label}</span>
+                    </div>
+                    <div className="dashboard-summary-text" style={{ marginTop: '0.35rem' }}>{summary.readiness.detail}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                No deployment attempts recorded yet.
+              </div>
+            )}
+          </CollapsibleSection>
         </div>
 
         <div className="cell dashboard-trend-cell">
@@ -993,11 +1052,23 @@ export function Dashboard() {
 
       <div className="grid-row dashboard-main-row" style={{ flexGrow: 1 }}>
         <div className="cell dashboard-models-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text" style={{ marginBottom: '2rem' }}>DEPLOYED MODELS</div>
+          <SectionHeader
+            eyebrow="SECONDARY DETAIL"
+            title="DEPLOYED MODELS"
+            description="Keep the top of the dashboard focused on what changed. Use this section when you need the serving inventory."
+            actions={(
+              <ActionGroup compact>
+                <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY NEW MODEL</button>
+                <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
+                <button className="action-btn" onClick={() => navigate('/getting-started')}>SEE ONBOARDING PATH</button>
+              </ActionGroup>
+            )}
+          />
 
           {loadedModels.length > 0 ? (
-            loadedModels.slice(0, 3).map((model) => (
-              <div key={model.id} style={{ marginBottom: '3rem' }}>
+            <div className="stack-list" style={{ marginTop: '1.75rem' }}>
+              {loadedModels.slice(0, 3).map((model) => (
+              <div key={model.id} className="stack-item">
                 <div className="label-text">
                   <span className="nav-diamond">&#9671;</span>
                   {model.family?.toUpperCase() || 'MODEL'}
@@ -1017,154 +1088,158 @@ export function Dashboard() {
                   </div>
                 )}
               </div>
-            ))
+            ))}
+            </div>
           ) : (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '1.75rem' }}>
               No models deployed yet. Provision an instance to get started.
             </div>
           )}
-
-          <div className="help-actions">
-            <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY NEW MODEL</button>
-            <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
-            <button className="action-btn" onClick={() => navigate('/getting-started')}>SEE ONBOARDING PATH</button>
-          </div>
         </div>
 
         <div className="cell dashboard-overview-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
-          <div style={{ marginBottom: '3rem' }}>
-            <div className="label-text">CLUSTER OVERVIEW</div>
-            <h3 style={{ fontSize: '1.25rem', marginTop: '1rem', marginBottom: '1.5rem', fontWeight: 500 }}>
-              Resource utilization
-            </h3>
-
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <div className="cluster-metric-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
-                <div style={{ fontSize: '0.9rem' }}>Active Instances</div>
-                <div className="mono">{activeInstances.length}</div>
-                <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  {instances?.length || 0} total
-                </div>
-              </div>
-              <div className="cluster-metric-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
-                <div style={{ fontSize: '0.9rem' }}>Cost / Hour</div>
-                <div className="mono">${costs?.current_hourly?.toFixed(2) || '0.00'}</div>
-                <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  ${costs?.today_total?.toFixed(2) || '0.00'} today
-                </div>
-              </div>
-              <div className="cluster-metric-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
-                <div style={{ fontSize: '0.9rem' }}>Queue Depth</div>
-                <div className="mono">{stats?.requests?.queue_depth || 0}</div>
-                <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>pending</div>
-              </div>
-              <div className="cluster-metric-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
-                <div style={{ fontSize: '0.9rem' }}>Avg GPU Util</div>
-                <div className="mono">{stats?.gpu?.avg_utilization != null ? `${Math.round(stats.gpu.avg_utilization)}%` : '-'}</div>
-                <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>across workers</div>
-              </div>
-              <div className="cluster-metric-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
-                <div style={{ fontSize: '0.9rem' }}>Memory Usage</div>
-                <div className="mono">{stats?.memory?.total_bytes ? `${((stats.memory.used_bytes / stats.memory.total_bytes) * 100).toFixed(0)}%` : '-'}</div>
-                <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  {stats?.memory?.total_bytes ? `${(stats.memory.used_bytes / (1024 ** 3)).toFixed(1)} / ${(stats.memory.total_bytes / (1024 ** 3)).toFixed(1)} GB` : '-'}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ marginBottom: '2.25rem' }}>
-            <div className="label-text" style={{ marginBottom: '1rem' }}>RECENT DEPLOYMENT ACTIVITY</div>
-            {deploymentSummaries.length > 0 ? (
-              <div className="dashboard-activity-list">
-                {deploymentSummaries.slice(0, 4).map((summary) => {
-                  const remediation = getDeploymentRemediation(summary);
-                  const toneClass = getSummaryToneClass(getAttemptTone(summary));
-                  return (
-                    <div key={summary.attempt.id} className="dashboard-activity-item">
-                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
-                        <div>
-                          <div style={{ fontSize: '0.88rem', fontWeight: 500 }}>
-                            {summary.attempt.selected_model_name || summary.attempt.request.models?.[0]?.split('/').pop() || summary.instance?.name || 'Deployment attempt'}
-                          </div>
-                          <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                            {summary.readiness.detail}
-                          </div>
-                        </div>
-                        <span className={`badge ${toneClass}`}>{summary.readiness.label}</span>
-                      </div>
-                      <div className="dashboard-activity-meta">
-                        <span>{summary.instance?.provider?.toUpperCase() || 'REQUEST'}</span>
-                        <span>{formatAttemptTime(summary.attempt.updated_at || summary.attempt.created_at)}</span>
-                        {summary.attempt.inference_verification?.status === 'passed' && (
-                          <span>{summary.attempt.inference_verification.latency_ms != null ? `${summary.attempt.inference_verification.latency_ms}ms` : 'verified'}</span>
-                        )}
-                        {summary.attempt.inference_verification?.status === 'failed' && (
-                          <span>verification failed</span>
-                        )}
-                      </div>
-                      {remediation && (
-                        <button
-                          className="action-btn"
-                          style={{ marginTop: '0.85rem' }}
-                          onClick={() => {
-                            if (remediation.action === 'open_workspace') navigate('/workspace');
-                            else if (remediation.action === 'verify_inference') navigate('/models');
-                            else navigate('/instances');
-                          }}
-                        >
-                          {remediation.label}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                No recent deployment activity yet. Provision capacity from Clusters to start tracking deployment health here.
-                <div className="help-actions">
-                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
-                  <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
-                </div>
-              </div>
+          <SectionHeader
+            eyebrow="SECONDARY DETAIL"
+            title="Operational drilldown"
+            description="Dense operational detail lives here so the top of the page stays readable."
+            actions={(
+              <ActionGroup compact>
+                <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
+                <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
+                {latestFailure ? <button className="action-btn" onClick={() => navigate('/instances')}>VIEW FAILED NODES</button> : null}
+                {latestVerification ? <button className="action-btn" onClick={() => navigate('/models')}>VERIFY SERVING</button> : null}
+                {billingAttention.length > 0 ? <button className="action-btn" onClick={() => navigate('/workspace')}>VIEW USAGE</button> : null}
+              </ActionGroup>
             )}
-          </div>
+          />
 
-          <div className="dashboard-quick-actions">
-            <button className="action-btn" onClick={() => navigate('/instances')}>OPEN CLUSTERS</button>
-            <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
-            {latestFailure && (
-              <button className="action-btn" onClick={() => navigate('/instances')}>VIEW FAILED DEPLOYMENTS</button>
-            )}
-            {latestVerification && (
-              <button className="action-btn" onClick={() => navigate('/models')}>VERIFY SERVING</button>
-            )}
-            {billingAttention.length > 0 && (
-              <button className="action-btn" onClick={() => navigate('/workspace')}>VIEW USAGE</button>
-            )}
-          </div>
-
-          <div style={{ marginTop: '2.25rem' }}>
-            <div className="label-text" style={{ marginBottom: '1.5rem' }}>WORKER STATUS</div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-              {healthyWorkers.length > 0 ? (
-                healthyWorkers.slice(0, 4).map(worker => (
-                  <div className="worker-status-row" key={worker.worker_id} style={{ borderBottom: '1px solid #F0F0F0', padding: '0.5rem 0', display: 'flex', gap: '1rem' }}>
-                    <span style={{ color: 'var(--text-primary)', minWidth: 80 }}>
-                      {worker.worker_id.slice(0, 8)}
-                    </span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span className="status-dot" style={{ width: 6, height: 6 }} />
-                      GPU {worker.gpu_utilization}%
-                    </span>
-                    <span>{worker.models?.[0]?.split('/').pop() || '-'}</span>
+          <div className="stack-list" style={{ marginTop: '1.5rem' }}>
+            <CollapsibleSection
+              title="NODE OVERVIEW"
+              description="Resource utilization and cost posture for the active workspace."
+            >
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <div className="cluster-metric-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
+                  <div style={{ fontSize: '0.9rem' }}>Active Instances</div>
+                  <div className="mono">{activeInstances.length}</div>
+                  <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    {instances?.length || 0} total
                   </div>
-                ))
+                </div>
+                <div className="cluster-metric-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
+                  <div style={{ fontSize: '0.9rem' }}>Cost / Hour</div>
+                  <div className="mono">${costs?.current_hourly?.toFixed(2) || '0.00'}</div>
+                  <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    ${costs?.today_total?.toFixed(2) || '0.00'} today
+                  </div>
+                </div>
+                <div className="cluster-metric-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
+                  <div style={{ fontSize: '0.9rem' }}>Queue Depth</div>
+                  <div className="mono">{stats?.requests?.queue_depth || 0}</div>
+                  <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>pending</div>
+                </div>
+                <div className="cluster-metric-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', borderBottom: '1px solid #EEEEEC', alignItems: 'center' }}>
+                  <div style={{ fontSize: '0.9rem' }}>Avg GPU Util</div>
+                  <div className="mono">{stats?.gpu?.avg_utilization != null ? `${Math.round(stats.gpu.avg_utilization)}%` : '-'}</div>
+                  <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>across workers</div>
+                </div>
+                <div className="cluster-metric-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', padding: '1rem 0', alignItems: 'center' }}>
+                  <div style={{ fontSize: '0.9rem' }}>Memory Usage</div>
+                  <div className="mono">{stats?.memory?.total_bytes ? `${((stats.memory.used_bytes / stats.memory.total_bytes) * 100).toFixed(0)}%` : '-'}</div>
+                  <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    {stats?.memory?.total_bytes ? `${(stats.memory.used_bytes / (1024 ** 3)).toFixed(1)} / ${(stats.memory.total_bytes / (1024 ** 3)).toFixed(1)} GB` : '-'}
+                  </div>
+                </div>
+              </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="RECENT DEPLOYMENT ACTIVITY"
+              description="Primary sentence first. Expand only when you need remediation context."
+              defaultExpanded
+            >
+              {recentActivity.length > 0 ? (
+                <div className="dashboard-activity-list">
+                  {recentActivity.map((summary) => {
+                    const remediation = getDeploymentRemediation(summary);
+                    const toneClass = getSummaryToneClass(getAttemptTone(summary));
+                    const modelName = summary.attempt.selected_model_name || summary.attempt.request.models?.[0]?.split('/').pop() || summary.instance?.name || 'Deployment attempt';
+                    const primarySentence = summary.attempt.inference_verification?.status === 'failed'
+                      ? `${modelName} failed live inference verification.`
+                      : summary.readiness.label === 'SERVING VERIFIED'
+                        ? `${modelName} is serving and recently verified.`
+                        : `${modelName} is ${summary.readiness.label.toLowerCase()}.`;
+                    return (
+                      <div key={summary.attempt.id} className="dashboard-activity-item">
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+                          <div>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{primarySentence}</div>
+                            <div className="chip-row" style={{ marginTop: '0.55rem' }}>
+                              <span className={`badge ${toneClass}`}>{summary.readiness.label}</span>
+                              <span className="badge">{summary.instance?.provider?.toUpperCase() || 'REQUEST'}</span>
+                              <span className="badge">{formatAttemptTime(summary.attempt.updated_at || summary.attempt.created_at)}</span>
+                              {summary.attempt.inference_verification?.status === 'passed' && (
+                                <span className="badge">{summary.attempt.inference_verification.latency_ms != null ? `${summary.attempt.inference_verification.latency_ms}ms` : 'verified'}</span>
+                              )}
+                              {summary.attempt.inference_verification?.status === 'failed' && (
+                                <span className="badge status-error">verification failed</span>
+                              )}
+                            </div>
+                            <div className="dashboard-summary-text" style={{ marginTop: '0.55rem' }}>
+                              {summary.readiness.detail}
+                            </div>
+                          </div>
+                          {remediation ? (
+                            <button
+                              className="action-btn"
+                              onClick={() => {
+                                if (remediation.action === 'open_workspace') navigate('/workspace');
+                                else if (remediation.action === 'verify_inference') navigate('/models');
+                                else navigate('/instances');
+                              }}
+                            >
+                              {remediation.label}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
-                <div style={{ padding: '0.5rem 0' }}>No workers connected.</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  No recent deployment activity yet. Provision capacity from Nodes to start tracking deployment health here.
+                  <div className="help-actions">
+                    <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
+                    <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+                  </div>
+                </div>
               )}
-            </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="WORKER STATUS"
+              description="Worker heartbeats and active model assignment."
+            >
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                {healthyWorkers.length > 0 ? (
+                  healthyWorkers.slice(0, 4).map(worker => (
+                    <div className="worker-status-row" key={worker.worker_id} style={{ borderBottom: '1px solid #F0F0F0', padding: '0.5rem 0', display: 'flex', gap: '1rem' }}>
+                      <span style={{ color: 'var(--text-primary)', minWidth: 80 }}>
+                        {worker.worker_id.slice(0, 8)}
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span className="status-dot" style={{ width: 6, height: 6 }} />
+                        GPU {worker.gpu_utilization}%
+                      </span>
+                      <span>{worker.models?.[0]?.split('/').pop() || '-'}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ padding: '0.5rem 0' }}>No workers connected.</div>
+                )}
+              </div>
+            </CollapsibleSection>
           </div>
         </div>
       </div>

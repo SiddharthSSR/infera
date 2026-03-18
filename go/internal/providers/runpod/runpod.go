@@ -95,10 +95,7 @@ type graphQLResponse struct {
 // Provision creates a new GPU pod.
 func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionRequest) (*providers.Instance, error) {
 	// Map our GPU types to RunPod GPU IDs
-	gpuTypeID := strings.TrimSpace(req.ProviderGPUTypeID)
-	if gpuTypeID == "" {
-		gpuTypeID = mapGPUType(req.GPUType)
-	}
+	gpuTypeID := resolveRunPodGPUTypeID(req)
 	if gpuTypeID == "" {
 		return nil, &providers.ProviderError{
 			Provider: providers.ProviderRunPod,
@@ -994,6 +991,27 @@ func mapGPUType(gpuType providers.GPUType) string {
 	default:
 		return ""
 	}
+}
+
+func resolveRunPodGPUTypeID(req *providers.ProvisionRequest) string {
+	if req == nil {
+		return ""
+	}
+
+	if providerGPUTypeID := strings.TrimSpace(req.ProviderGPUTypeID); providerGPUTypeID != "" {
+		return providerGPUTypeID
+	}
+
+	if mappedGPUType := mapGPUType(req.GPUType); mappedGPUType != "" {
+		return mappedGPUType
+	}
+
+	rawGPUType := strings.TrimSpace(string(req.GPUType))
+	if strings.Contains(rawGPUType, " ") {
+		return rawGPUType
+	}
+
+	return ""
 }
 
 func mapDisplayNameToGPUType(displayName string) (providers.GPUType, bool) {

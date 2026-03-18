@@ -57,4 +57,29 @@ describe('InstanceMobileCard', () => {
     expect(screen.getByText('INFERENCE CHECK FAILED')).toBeInTheDocument();
     expect(screen.getByText('Latest verification request failed against the deployed model.')).toBeInTheDocument();
   });
+
+  it('hides duplicate incident details when they match readiness exactly', () => {
+    render(
+      <InstanceMobileCard
+        instance={{
+          id: 'inst_duplicate',
+          name: 'edge-node-3',
+          status: 'running',
+          gpu_count: 1,
+          gpu_type: 'A100_80GB',
+          cost_per_hour: 3.1,
+          public_ip: null,
+          provider: 'runpod',
+          models: ['org/test-model'],
+        }}
+        statusClass=""
+        statusLabel="Running"
+        readiness={{ label: 'WORKER NOT CONNECTED', detail: 'Node has been running for 11 minutes without a worker connection.', tone: 'error' }}
+        incident={{ title: 'WORKER NOT CONNECTED', detail: 'Node has been running for 11 minutes without a worker connection.', tone: 'error' }}
+      />,
+    );
+
+    expect(screen.queryByText('INCIDENT')).not.toBeInTheDocument();
+    expect(screen.getAllByText('WORKER NOT CONNECTED')).toHaveLength(1);
+  });
 });

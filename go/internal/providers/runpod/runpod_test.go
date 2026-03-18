@@ -297,7 +297,7 @@ func TestProvisionRejectsUnsupportedGPUType(t *testing.T) {
 
 	_, err = provider.Provision(context.Background(), &providers.ProvisionRequest{
 		Name:    "worker",
-		GPUType: providers.GPUType("UNKNOWN_GPU"),
+		GPUType: providers.GPUType(""),
 	})
 	if err == nil {
 		t.Fatal("expected unsupported GPU type error")
@@ -309,6 +309,43 @@ func TestProvisionRejectsUnsupportedGPUType(t *testing.T) {
 	}
 	if providerErr.Code != "invalid_gpu_type" {
 		t.Fatalf("expected invalid_gpu_type, got %q", providerErr.Code)
+	}
+}
+
+func TestProvisionPassesThroughUnknownLiveGPUDisplayName(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var captured graphQLRequest
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-h200","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA H200 SXM"}}}}`), nil
+	})
+
+	_, err = provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:        "worker",
+		GPUType:     providers.GPUType("H200 SXM"),
+		GPUCount:    1,
+		DockerImage: "custom/worker:v1",
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	input, ok := captured.Variables["input"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graphql input variables, got %#v", captured.Variables)
+	}
+	if got := input["gpuTypeId"]; got != "H200 SXM" {
+		t.Fatalf("expected raw gpuTypeId passthrough, got %#v", got)
 	}
 }
 

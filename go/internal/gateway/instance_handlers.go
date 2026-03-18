@@ -373,6 +373,7 @@ func (h *InstanceHandlers) handleOfferings(w http.ResponseWriter, r *http.Reques
 	for _, o := range offerings {
 		response = append(response, map[string]interface{}{
 			"provider": o.Provider, "gpu_type": o.GPUType, "gpu_count": o.GPUCount,
+			"display_name": o.DisplayName, "provider_gpu_type_id": o.ProviderGPUTypeID,
 			"vcpu": o.VCPU, "memory_gb": o.MemoryGB, "storage_gb": o.StorageGB,
 			"cost_per_hour": o.CostPerHour, "spot_price": o.SpotPrice,
 			"region": o.Region, "available": o.Available,

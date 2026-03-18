@@ -9,11 +9,12 @@ import {
 } from '../lib/api';
 import type { ProvisionRequest, VaultModelFilter, CreateVaultModelInput } from '../types';
 import type { DeploymentAttemptRecord } from '../lib/deploymentHistory';
+import { stabilizeWorkerSnapshot } from '../lib/stableWorkers';
 
-export function useWorkers() {
+export function useWorkers(workspaceID?: string) {
   return useQuery({
-    queryKey: ['workers'],
-    queryFn: fetchWorkers,
+    queryKey: ['workers', workspaceID],
+    queryFn: async () => stabilizeWorkerSnapshot(await fetchWorkers(), workspaceID),
     refetchInterval: 5000,
   });
 }

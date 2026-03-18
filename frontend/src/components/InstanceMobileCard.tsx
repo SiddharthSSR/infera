@@ -18,6 +18,15 @@ export function InstanceMobileCard({
   incident?: { title: string; detail: string; tone?: string };
   actions?: ReactNode;
 }) {
+  const showIncident = Boolean(
+    incident
+    && (
+      !readiness
+      || incident.title !== readiness.label
+      || incident.detail !== readiness.detail
+    ),
+  );
+
   return (
     <div id={anchorId} className="mobile-data-card">
       <div className="mobile-data-card-header">
@@ -47,7 +56,7 @@ export function InstanceMobileCard({
             <div style={{ marginTop: '0.35rem', lineHeight: 1.5 }}>{readiness.detail}</div>
           </div>
         )}
-        {incident && (
+        {showIncident && incident && (
           <div>
             <span className="label-text">INCIDENT</span>{' '}
             <span className={`badge ${incident.tone ? `status-${incident.tone}` : ''}`}>{incident.title}</span>
