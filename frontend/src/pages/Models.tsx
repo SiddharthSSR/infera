@@ -447,7 +447,7 @@ export function Models() {
   const { data: offerings } = useOfferings();
   const { data: providers } = useProviders();
   const { data: instances } = useInstances();
-  const { data: workers } = useWorkers();
+  const { data: workers } = useWorkers(workspaceID);
   const deleteMutation = useDeleteVaultModel();
   const [searchQuery, setSearchQuery] = useState('');
   const [showRegisterModal, setShowRegisterModal] = useState(false);

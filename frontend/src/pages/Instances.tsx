@@ -6,6 +6,7 @@ import { fetchWorkspaceProviderConfigs, sendChatCompletion } from '../lib/api';
 import {
   getDeploymentRemediation,
   getDeploymentTimeline,
+  selectPrimaryDeploymentSummary,
   summarizeDeploymentAttempt,
   type DeploymentAttemptRecord,
   type DeploymentAttemptSummary,
@@ -303,6 +304,14 @@ function deriveNodeIncident(
   }
 }
 
+function shouldDisplayDistinctIncident(
+  readiness: { label: string; detail: string },
+  incident?: NodeIncident | null,
+) {
+  if (!incident) return false;
+  return incident.title !== readiness.label || incident.detail !== readiness.detail;
+}
+
 function useInstanceActions(instance: Instance) {
   const terminateMutation = useTerminateInstance();
   const startMutation = useStartInstance();
@@ -394,6 +403,7 @@ function InstanceRow({
   const statusClass = getStatusClass(instance.status);
   const statusLabel = getStatusLabel(instance.status);
   const readiness = getInstanceReadiness(instance, workers);
+  const displayIncident = shouldDisplayDistinctIncident(readiness, incident) ? incident : null;
 
   return (
     <tr id={`instance-row-${instance.id}`} style={{ borderBottom: '1px solid #EEEEEC', background: highlighted ? 'rgba(244, 242, 238, 0.7)' : 'transparent' }}>
@@ -417,11 +427,11 @@ function InstanceRow({
         <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5, maxWidth: '22rem' }}>
           {readiness.detail}
         </div>
-        {incident && (
+        {displayIncident && (
           <div style={{ marginTop: '0.65rem', maxWidth: '22rem' }}>
-            <span className={`badge ${incident.tone ? `status-${incident.tone}` : ''}`}>{incident.title}</span>
+            <span className={`badge ${displayIncident.tone ? `status-${displayIncident.tone}` : ''}`}>{displayIncident.title}</span>
             <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-              {incident.detail}
+              {displayIncident.detail}
             </div>
           </div>
         )}
@@ -914,7 +924,7 @@ export function Instances() {
   const { data: instances, isLoading } = useInstances();
   const { data: offerings } = useOfferings();
   const { data: providers } = useProviders();
-  const { data: workers } = useWorkers();
+  const { data: workers } = useWorkers(workspaceID);
   const { data: deploymentAttempts = [] } = useDeploymentAttempts(workspaceID);
   const updateDeploymentVerification = useUpdateDeploymentVerification(workspaceID);
   const markAutoVerificationRequested = useMarkDeploymentAutoVerificationRequested(workspaceID);
@@ -960,15 +970,33 @@ export function Instances() {
     () => deploymentAttempts.map((attempt) => summarizeDeploymentAttempt(attempt, instances, workers)),
     [deploymentAttempts, instances, workers],
   );
-  const latestDeployment = deploymentHistory[0] || null;
-  const latestTimeline = latestDeployment ? getDeploymentTimeline(latestDeployment) : [];
-  const latestRemediation = latestDeployment ? getDeploymentRemediation(latestDeployment) : null;
+  const latestAttemptSummary = deploymentHistory[0] || null;
+  const primaryDeployment = useMemo(
+    () => selectPrimaryDeploymentSummary(deploymentHistory),
+    [deploymentHistory],
+  );
+  const primaryTimeline = primaryDeployment ? getDeploymentTimeline(primaryDeployment) : [];
+  const primaryRemediation = primaryDeployment ? getDeploymentRemediation(primaryDeployment) : null;
+  const primaryDeploymentIsLatestAttempt = primaryDeployment?.attempt.id === latestAttemptSummary?.attempt.id;
   const deploymentSummaryByInstanceID = useMemo(
-    () => new Map(
-      deploymentHistory
-        .filter((summary): summary is DeploymentAttemptSummary & { instance: Instance } => Boolean(summary.instance?.id))
-        .map((summary) => [summary.instance.id, summary]),
-    ),
+    () => {
+      const grouped = new Map<string, DeploymentAttemptSummary[]>();
+
+      for (const summary of deploymentHistory) {
+        if (!summary.instance?.id) continue;
+        const existing = grouped.get(summary.instance.id) || [];
+        existing.push(summary);
+        grouped.set(summary.instance.id, existing);
+      }
+
+      const selected = new Map<string, DeploymentAttemptSummary>();
+      for (const [instanceID, summaries] of grouped.entries()) {
+        const primarySummary = selectPrimaryDeploymentSummary(summaries);
+        if (primarySummary) selected.set(instanceID, primarySummary);
+      }
+
+      return selected;
+    },
     [deploymentHistory],
   );
   const incidentRows = useMemo(
@@ -1134,26 +1162,26 @@ export function Instances() {
     }
 
     if (
-      !latestDeployment
-      || latestDeployment.readiness.label !== 'SERVING VERIFIED'
-      || latestDeployment.inferenceVerified
-      || latestDeployment.autoVerificationRequested
-      || latestDeployment.attempt.inference_verification?.status === 'failed'
+      !primaryDeployment
+      || primaryDeployment.readiness.label !== 'SERVING VERIFIED'
+      || primaryDeployment.inferenceVerified
+      || primaryDeployment.autoVerificationRequested
+      || primaryDeployment.attempt.inference_verification?.status === 'failed'
       || verifyingAttemptID
     ) {
       return;
     }
 
     void markAutoVerificationRequested.mutateAsync({
-      attemptId: latestDeployment.attempt.id,
+      attemptId: primaryDeployment.attempt.id,
       requestedAt: new Date().toISOString(),
     });
     autoVerifyTimerRef.current = window.setTimeout(() => {
       void runInferenceVerification({
-        ...latestDeployment,
+        ...primaryDeployment,
         autoVerificationRequested: true,
         attempt: {
-          ...latestDeployment.attempt,
+          ...primaryDeployment.attempt,
           auto_verification_requested_at: new Date().toISOString(),
         },
       });
@@ -1165,70 +1193,77 @@ export function Instances() {
         autoVerifyTimerRef.current = null;
       }
     };
-  }, [latestDeployment, markAutoVerificationRequested, runInferenceVerification, verifyingAttemptID]);
+  }, [markAutoVerificationRequested, primaryDeployment, runInferenceVerification, verifyingAttemptID]);
 
   return (
     <div className="instances-page animate-fade-in">
-      {latestDeployment && (
+      {primaryDeployment && (
         <div style={{ padding: '1.25rem 2rem', borderBottom: 'var(--grid-line)', background: 'rgba(255, 255, 255, 0.82)' }}>
-          <div className="label-text" style={{ marginBottom: '0.5rem' }}>LATEST DEPLOYMENT</div>
+          <div className="label-text" style={{ marginBottom: '0.5rem' }}>
+            {primaryDeploymentIsLatestAttempt ? 'LATEST DEPLOYMENT' : 'CURRENT DEPLOYMENT'}
+          </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: '1rem', fontWeight: 600 }}>
-                {latestDeployment.attempt.selected_model_name
-                  || latestDeployment.attempt.instance_name
-                  || latestDeployment.attempt.request.name
-                  || latestDeployment.attempt.instance_id?.slice(0, 16)
+                {primaryDeployment.attempt.selected_model_name
+                  || primaryDeployment.attempt.instance_name
+                  || primaryDeployment.attempt.request.name
+                  || primaryDeployment.attempt.instance_id?.slice(0, 16)
                   || 'Recent deployment'}
               </div>
               <div style={{ marginTop: '0.4rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '44rem' }}>
-                {latestDeployment.readiness.detail}
+                {primaryDeployment.readiness.detail}
               </div>
               <div style={{ marginTop: '0.6rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                {formatAttemptTime(latestDeployment.attempt.updated_at)}
+                {formatAttemptTime(primaryDeployment.attempt.updated_at)}
               </div>
-              {latestDeployment.attempt.inference_verification && (
-                <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '44rem' }}>
-                  <div className="label-text" style={{ marginBottom: '0.35rem' }}>FIRST INFERENCE</div>
-                  {latestDeployment.attempt.inference_verification.status === 'passed'
-                    ? `Verified on ${formatAttemptTime(latestDeployment.attempt.inference_verification.verified_at)}${latestDeployment.attempt.inference_verification.latency_ms != null ? ` in ${formatVerificationLatency(latestDeployment.attempt.inference_verification.latency_ms)}` : ''}${latestDeployment.attempt.inference_verification.response_preview ? `. Response: ${latestDeployment.attempt.inference_verification.response_preview}` : '.'}`
-                    : `Inference check failed on ${formatAttemptTime(latestDeployment.attempt.inference_verification.verified_at)}${latestDeployment.attempt.inference_verification.error ? `: ${latestDeployment.attempt.inference_verification.error}` : '.'}`}
+              {!primaryDeploymentIsLatestAttempt && latestAttemptSummary && (
+                <div style={{ marginTop: '0.55rem', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  A newer retry from {formatAttemptTime(latestAttemptSummary.attempt.updated_at)} is listed in Recent attempts below.
                 </div>
               )}
-              <DeploymentTimeline steps={latestTimeline} />
-              {latestRemediation && (
+              {primaryDeployment.attempt.inference_verification && (
+                <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '44rem' }}>
+                  <div className="label-text" style={{ marginBottom: '0.35rem' }}>FIRST INFERENCE</div>
+                  {primaryDeployment.attempt.inference_verification.status === 'passed'
+                    ? `Verified on ${formatAttemptTime(primaryDeployment.attempt.inference_verification.verified_at)}${primaryDeployment.attempt.inference_verification.latency_ms != null ? ` in ${formatVerificationLatency(primaryDeployment.attempt.inference_verification.latency_ms)}` : ''}${primaryDeployment.attempt.inference_verification.response_preview ? `. Response: ${primaryDeployment.attempt.inference_verification.response_preview}` : '.'}`
+                    : `Inference check failed on ${formatAttemptTime(primaryDeployment.attempt.inference_verification.verified_at)}${primaryDeployment.attempt.inference_verification.error ? `: ${primaryDeployment.attempt.inference_verification.error}` : '.'}`}
+                </div>
+              )}
+              <DeploymentTimeline steps={primaryTimeline} />
+              {primaryRemediation && (
                 <div style={{ marginTop: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '44rem' }}>
-                  {latestRemediation.detail}
+                  {primaryRemediation.detail}
                 </div>
               )}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              <span className={`badge ${latestDeployment.readiness.tone ? `status-${latestDeployment.readiness.tone}` : ''}`}>{latestDeployment.readiness.label}</span>
-              {latestDeployment.instance && (
-                <span className="badge">{getStatusLabel(latestDeployment.instance.status).toUpperCase()}</span>
+              <span className={`badge ${primaryDeployment.readiness.tone ? `status-${primaryDeployment.readiness.tone}` : ''}`}>{primaryDeployment.readiness.label}</span>
+              {primaryDeployment.instance && (
+                <span className="badge">{getStatusLabel(primaryDeployment.instance.status).toUpperCase()}</span>
               )}
-              {latestRemediation && (
+              {primaryRemediation && (
                 <button
                   className="action-btn"
-                  disabled={latestRemediation.action === 'verify_inference' && verifyingAttemptID === latestDeployment.attempt.id}
-                  onClick={() => handleRemediation(latestDeployment, latestRemediation)}
+                  disabled={primaryRemediation.action === 'verify_inference' && verifyingAttemptID === primaryDeployment.attempt.id}
+                  onClick={() => handleRemediation(primaryDeployment, primaryRemediation)}
                 >
-                  {latestRemediation.action === 'verify_inference' && verifyingAttemptID === latestDeployment.attempt.id
+                  {primaryRemediation.action === 'verify_inference' && verifyingAttemptID === primaryDeployment.attempt.id
                     ? 'VERIFYING...'
-                    : latestRemediation.label}
+                    : primaryRemediation.label}
                 </button>
               )}
-              {latestDeployment.inferenceVerified && <span className="badge">INFERENCE VERIFIED</span>}
-              {latestDeployment.attempt.inference_verification?.status === 'failed' && (
+              {primaryDeployment.inferenceVerified && <span className="badge">INFERENCE VERIFIED</span>}
+              {primaryDeployment.attempt.inference_verification?.status === 'failed' && (
                 <span className="badge status-error">INFERENCE FAILED</span>
               )}
-              {!latestDeployment.attempt.inference_verification && latestDeployment.autoVerificationRequested && (
+              {!primaryDeployment.attempt.inference_verification && primaryDeployment.autoVerificationRequested && (
                 <span className="badge status-warning">
-                  {verifyingAttemptID === latestDeployment.attempt.id ? 'AUTO VERIFYING' : 'AUTO VERIFY QUEUED'}
+                  {verifyingAttemptID === primaryDeployment.attempt.id ? 'AUTO VERIFYING' : 'AUTO VERIFY QUEUED'}
                 </span>
               )}
-              {latestDeployment.retryable && latestRemediation?.action !== 'retry_config' && (
-                <button className="action-btn" onClick={() => openRetryModal(latestDeployment.attempt)}>
+              {primaryDeployment.retryable && primaryRemediation?.action !== 'retry_config' && (
+                <button className="action-btn" onClick={() => openRetryModal(primaryDeployment.attempt)}>
                   RETRY CONFIG
                 </button>
               )}
@@ -1245,7 +1280,7 @@ export function Instances() {
               title="Latest deployment first, history on demand"
               description={(
                 <>
-                  <strong>Connected provider</strong> means the workspace credentials are valid and the provider can return live status. <strong>Serving verified</strong> means the worker heartbeat is fresh and runtime looks ready. <strong>Inference verified</strong> means a real chat-completions request passed. Treat the latest deployment banner as the fastest path from provisioned node to confirmed serving.
+                  <strong>Connected provider</strong> means the workspace credentials are valid and the provider can return live status. <strong>Serving verified</strong> means the worker heartbeat is fresh and runtime looks ready. <strong>Inference verified</strong> means a real chat-completions request passed. Treat the current deployment banner as the fastest path from provisioned node to confirmed serving, then use Recent attempts for newer retries and failures.
                 </>
               )}
               actions={(
@@ -1440,6 +1475,8 @@ export function Instances() {
             <div className="mobile-data-list">
               {filteredInstances.map(instance => {
                 const summary = deploymentSummaryByInstanceID.get(instance.id) || null;
+                const readiness = getInstanceReadiness(instance, workers);
+                const incident = deriveNodeIncident(instance, workers, summary);
                 return (
                   <InstanceMobileCard
                     key={instance.id}
@@ -1447,8 +1484,8 @@ export function Instances() {
                     instance={instance}
                     statusClass={getStatusClass(instance.status)}
                     statusLabel={getStatusLabel(instance.status)}
-                    readiness={getInstanceReadiness(instance, workers)}
-                    incident={deriveNodeIncident(instance, workers, summary) || undefined}
+                    readiness={readiness}
+                    incident={shouldDisplayDistinctIncident(readiness, incident) ? incident || undefined : undefined}
                     actions={<InstanceActions instance={instance} compact incidentActions={renderIncidentActions(instance, summary, true)} />}
                   />
                 );
@@ -1474,7 +1511,7 @@ export function Instances() {
                         key={instance.id}
                         instance={instance}
                         workers={workers}
-                        highlighted={instance.id === latestDeployment?.attempt.instance_id}
+                        highlighted={instance.id === primaryDeployment?.attempt.instance_id}
                         incident={deriveNodeIncident(instance, workers, summary)}
                         incidentActions={renderIncidentActions(instance, summary)}
                       />
@@ -1575,7 +1612,7 @@ export function Instances() {
             <SectionHeader
               eyebrow="DEPLOYMENT HISTORY"
               title="Recent attempts"
-              description="The latest deployment remains pinned above. Expand history entries only when you need the timeline and remediation detail."
+              description="The current deployment remains pinned above. Expand history entries only when you need the timeline and remediation detail."
               actions={(
                 <ActionGroup compact>
                   <button className="action-btn" onClick={openFreshProvisionModal}>NEW ATTEMPT</button>
@@ -1598,7 +1635,7 @@ export function Instances() {
                   <div
                     key={attempt.id}
                     style={{
-                      background: latestDeployment?.attempt.id === attempt.id ? 'rgba(244, 242, 238, 0.7)' : 'transparent',
+                      background: primaryDeployment?.attempt.id === attempt.id ? 'rgba(244, 242, 238, 0.7)' : 'transparent',
                     }}
                   >
                     <CollapsibleSection

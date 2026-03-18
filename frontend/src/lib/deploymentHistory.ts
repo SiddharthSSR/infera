@@ -45,6 +45,16 @@ export type DeploymentRemediation = {
   action: 'open_workspace' | 'view_capacity' | 'retry_config' | 'focus_instance' | 'verify_inference';
 };
 
+function deploymentPriority(summary: DeploymentAttemptSummary): number {
+  if (summary.inferenceVerified) return 6;
+  if (summary.readiness.label === 'SERVING VERIFIED') return 5;
+  if (summary.readiness.serving) return 4;
+  if (summary.instance?.status === 'running') return 3;
+  if (summary.instance) return 2;
+  if (summary.attempt.outcome === 'request_failed') return 0;
+  return 1;
+}
+
 function storageKey(workspaceID: string) {
   return `${STORAGE_PREFIX}${workspaceID}`;
 }
@@ -234,6 +244,18 @@ export function summarizeDeploymentAttempt(
     inferenceVerified: attempt.inference_verification?.status === 'passed',
     autoVerificationRequested: Boolean(attempt.auto_verification_requested_at),
   };
+}
+
+export function selectPrimaryDeploymentSummary(
+  summaries: DeploymentAttemptSummary[],
+): DeploymentAttemptSummary | null {
+  if (summaries.length === 0) return null;
+
+  return [...summaries].sort((left, right) => {
+    const priorityDelta = deploymentPriority(right) - deploymentPriority(left);
+    if (priorityDelta !== 0) return priorityDelta;
+    return Date.parse(right.attempt.updated_at) - Date.parse(left.attempt.updated_at);
+  })[0] || null;
 }
 
 function hasReason(reason: string | undefined, ...patterns: string[]) {

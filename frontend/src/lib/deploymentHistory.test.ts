@@ -9,6 +9,7 @@ import {
   readDeploymentAttempts,
   recordFailedAttempt,
   recordProvisionedAttempt,
+  selectPrimaryDeploymentSummary,
   summarizeDeploymentAttempt,
 } from './deploymentHistory';
 
@@ -190,5 +191,49 @@ describe('deploymentHistory', () => {
 
     expect(summary.autoVerificationRequested).toBe(true);
     expect(getDeploymentRemediation(summary)?.label).toBe('VERIFY NOW');
+  });
+
+  it('prefers a live serving deployment over a newer failed request for the primary summary', () => {
+    const [servingAttempt] = recordProvisionedAttempt(
+      workspaceID,
+      { name: 'worker-1', provider: 'runpod', gpu_type: 'A100_80GB', gpu_count: 1, models: ['org/model-a'] },
+      baseInstance,
+      'Model A',
+    );
+    const [failedAttempt] = recordFailedAttempt(
+      workspaceID,
+      { provider: 'runpod', gpu_type: 'H100', gpu_count: 8 },
+      'unsupported GPU type',
+    );
+
+    const servingSummary = summarizeDeploymentAttempt(
+      {
+        ...servingAttempt,
+        updated_at: '2026-03-18T08:00:00.000Z',
+        inference_verification: {
+          status: 'passed',
+          verified_at: '2026-03-18T08:00:00.000Z',
+          latency_ms: 210,
+          model: 'org/model-a',
+        },
+      },
+      [baseInstance],
+      [{ ...healthyWorker, last_heartbeat: '2026-03-18T08:00:30.000Z' }],
+      new Date('2026-03-18T08:01:00.000Z'),
+    );
+    const failedSummary = summarizeDeploymentAttempt(
+      {
+        ...failedAttempt,
+        updated_at: '2026-03-18T08:05:00.000Z',
+      },
+      [],
+      [],
+      new Date('2026-03-18T08:06:00.000Z'),
+    );
+
+    const primary = selectPrimaryDeploymentSummary([failedSummary, servingSummary]);
+
+    expect(primary?.attempt.id).toBe(servingSummary.attempt.id);
+    expect(primary?.readiness.label).toBe('SERVING VERIFIED');
   });
 });

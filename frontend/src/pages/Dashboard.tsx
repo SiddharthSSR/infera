@@ -19,6 +19,7 @@ import {
 } from '../lib/api';
 import {
   getDeploymentRemediation,
+  selectPrimaryDeploymentSummary,
   summarizeDeploymentAttempt,
   type DeploymentAttemptRecord,
   type DeploymentAttemptSummary,
@@ -176,6 +177,14 @@ function buildOperationalAttentionQueue(
   servingUnverifiedCount: number,
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
+  const primaryDeployment = selectPrimaryDeploymentSummary(deploymentSummaries);
+  const primaryDeploymentServing = Boolean(
+    primaryDeployment && (
+      primaryDeployment.inferenceVerified
+      || primaryDeployment.readiness.serving
+      || primaryDeployment.readiness.label === 'SERVING VERIFIED'
+    ),
+  );
 
   if (visibleProviders > 0 && connectedProviders === 0) {
     items.push({
@@ -206,15 +215,28 @@ function buildOperationalAttentionQueue(
   ));
   if (latestFailure) {
     const remediation = getDeploymentRemediation(latestFailure);
+    const failureIsSecondaryToHealthyServing = Boolean(
+      primaryDeploymentServing
+      && primaryDeployment
+      && primaryDeployment.attempt.id !== latestFailure.attempt.id,
+    );
     items.push({
       id: `failure-${latestFailure.attempt.id}`,
-      severity: 'critical',
+      severity: failureIsSecondaryToHealthyServing ? 'info' : 'critical',
       title: latestFailure.attempt.inference_verification?.status === 'failed'
-        ? 'Inference verification failed'
+        ? failureIsSecondaryToHealthyServing
+          ? 'Recent deployment retry failed verification'
+          : 'Inference verification failed'
         : latestFailure.attempt.outcome === 'request_failed'
-          ? 'Latest deployment request failed'
-          : 'Deployment needs intervention',
-      detail: latestFailure.attempt.inference_verification?.error || latestFailure.readiness.detail,
+          ? failureIsSecondaryToHealthyServing
+            ? 'Recent deployment retry failed'
+            : 'Latest deployment request failed'
+          : failureIsSecondaryToHealthyServing
+            ? 'Recent deployment retry needs review'
+            : 'Deployment needs intervention',
+      detail: failureIsSecondaryToHealthyServing
+        ? `${latestFailure.attempt.inference_verification?.error || latestFailure.readiness.detail} Live serving is still available from the current deployment.`
+        : latestFailure.attempt.inference_verification?.error || latestFailure.readiness.detail,
       actionLabel: remediation?.label || 'OPEN NODES',
       action: mapRemediationAction(remediation?.action),
       timestamp: latestFailure.attempt.updated_at || latestFailure.attempt.created_at,
@@ -345,7 +367,7 @@ export function Dashboard() {
   const role = session?.key?.role ?? 'user';
   const canViewQuota = role === 'owner' || role === 'admin' || role === 'billing' || role === 'read_only';
   const canViewUsage = canViewQuota;
-  const { data: workers, isLoading: loadingWorkers, isError: errorWorkers } = useWorkers();
+  const { data: workers, isLoading: loadingWorkers, isError: errorWorkers } = useWorkers(workspaceID);
   const { data: stats, isLoading: loadingStats, isError: errorStats } = useStats();
   const { data: instances, isLoading: loadingInstances } = useInstances();
   const { data: costs, isLoading: loadingCosts } = useCosts();
