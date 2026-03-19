@@ -90,3 +90,177 @@ func TestRouteBatchedRequestsWaitForDispatchAndShareBatch(t *testing.T) {
 		t.Fatalf("expected batched requests to route to worker-1, got %q and %q", routed[0].WorkerID, routed[1].WorkerID)
 	}
 }
+
+func TestRoutePrefersAffinityWorkerWhenHealthy(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableBatching = false
+
+	r := New(cfg)
+	defer r.Stop()
+
+	worker1 := &types.WorkerInfo{
+		WorkerID: "worker-1",
+		Address:  "worker-1:8081",
+		Status:   types.WorkerStatusHealthy,
+		LoadedModels: []types.LoadedModel{
+			{ModelID: "model-1"},
+		},
+		Stats: types.WorkerStats{
+			GPUUtilization:   0.20,
+			MemoryTotalBytes: 100,
+			MemoryUsedBytes:  20,
+		},
+	}
+	worker2 := &types.WorkerInfo{
+		WorkerID: "worker-2",
+		Address:  "worker-2:8081",
+		Status:   types.WorkerStatusHealthy,
+		LoadedModels: []types.LoadedModel{
+			{ModelID: "model-1"},
+		},
+		Stats: types.WorkerStats{
+			GPUUtilization:   0.60,
+			MemoryTotalBytes: 100,
+			MemoryUsedBytes:  50,
+		},
+	}
+
+	if err := r.RegisterWorker(worker1); err != nil {
+		t.Fatalf("register worker1: %v", err)
+	}
+	if err := r.RegisterWorker(worker2); err != nil {
+		t.Fatalf("register worker2: %v", err)
+	}
+
+	first, err := r.Route(context.Background(), &types.InferenceRequest{
+		RequestID: "req-1",
+		ModelID:   "model-1",
+		Messages:  []types.Message{{Role: types.RoleUser, Content: "hello"}},
+		Priority:  types.PriorityNormal,
+		Metadata: map[string]string{
+			types.MetadataAffinityKey: "affinity-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("first route: %v", err)
+	}
+	if first.WorkerID != "worker-1" {
+		t.Fatalf("expected first request to choose worker-1, got %s", first.WorkerID)
+	}
+
+	if err := r.UpdateWorkerStats("worker-1", types.WorkerStats{
+		GPUUtilization:   0.70,
+		MemoryTotalBytes: 100,
+		MemoryUsedBytes:  70,
+	}); err != nil {
+		t.Fatalf("update worker1 stats: %v", err)
+	}
+	if err := r.UpdateWorkerStats("worker-2", types.WorkerStats{
+		GPUUtilization:   0.05,
+		MemoryTotalBytes: 100,
+		MemoryUsedBytes:  10,
+	}); err != nil {
+		t.Fatalf("update worker2 stats: %v", err)
+	}
+
+	second, err := r.Route(context.Background(), &types.InferenceRequest{
+		RequestID: "req-2",
+		ModelID:   "model-1",
+		Messages:  []types.Message{{Role: types.RoleUser, Content: "hello again"}},
+		Priority:  types.PriorityNormal,
+		Metadata: map[string]string{
+			types.MetadataAffinityKey: "affinity-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("second route: %v", err)
+	}
+	if second.WorkerID != "worker-1" {
+		t.Fatalf("expected affinity to keep worker-1, got %s", second.WorkerID)
+	}
+	if second.RoutingDecision.Strategy != types.StrategyAffinity {
+		t.Fatalf("expected affinity strategy, got %s", second.RoutingDecision.Strategy)
+	}
+}
+
+func TestRouteFallsBackWhenAffinityWorkerLosesCapacity(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableBatching = false
+
+	r := New(cfg)
+	defer r.Stop()
+
+	for _, worker := range []*types.WorkerInfo{
+		{
+			WorkerID: "worker-1",
+			Address:  "worker-1:8081",
+			Status:   types.WorkerStatusHealthy,
+			LoadedModels: []types.LoadedModel{
+				{ModelID: "model-1"},
+			},
+			Stats: types.WorkerStats{
+				GPUUtilization:   0.10,
+				MemoryTotalBytes: 100,
+				MemoryUsedBytes:  10,
+			},
+		},
+		{
+			WorkerID: "worker-2",
+			Address:  "worker-2:8081",
+			Status:   types.WorkerStatusHealthy,
+			LoadedModels: []types.LoadedModel{
+				{ModelID: "model-1"},
+			},
+			Stats: types.WorkerStats{
+				GPUUtilization:   0.20,
+				MemoryTotalBytes: 100,
+				MemoryUsedBytes:  20,
+			},
+		},
+	} {
+		if err := r.RegisterWorker(worker); err != nil {
+			t.Fatalf("register worker %s: %v", worker.WorkerID, err)
+		}
+	}
+
+	first, err := r.Route(context.Background(), &types.InferenceRequest{
+		RequestID: "req-1",
+		ModelID:   "model-1",
+		Messages:  []types.Message{{Role: types.RoleUser, Content: "hello"}},
+		Priority:  types.PriorityNormal,
+		Metadata: map[string]string{
+			types.MetadataAffinityKey: "affinity-2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("first route: %v", err)
+	}
+	if first.WorkerID != "worker-1" {
+		t.Fatalf("expected worker-1, got %s", first.WorkerID)
+	}
+
+	if err := r.UpdateWorkerStats("worker-1", types.WorkerStats{
+		QueueDepth:       500,
+		GPUUtilization:   0.95,
+		MemoryTotalBytes: 100,
+		MemoryUsedBytes:  95,
+	}); err != nil {
+		t.Fatalf("update worker1 overloaded stats: %v", err)
+	}
+
+	second, err := r.Route(context.Background(), &types.InferenceRequest{
+		RequestID: "req-2",
+		ModelID:   "model-1",
+		Messages:  []types.Message{{Role: types.RoleUser, Content: "hello retry"}},
+		Priority:  types.PriorityNormal,
+		Metadata: map[string]string{
+			types.MetadataAffinityKey: "affinity-2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("second route: %v", err)
+	}
+	if second.WorkerID != "worker-2" {
+		t.Fatalf("expected fallback to worker-2, got %s", second.WorkerID)
+	}
+}
