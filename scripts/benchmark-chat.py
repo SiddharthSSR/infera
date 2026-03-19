@@ -121,10 +121,26 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional path to write full benchmark JSON",
     )
+    parser.add_argument(
+        "--header",
+        action="append",
+        default=[],
+        help="Optional extra HTTP header in 'Name: Value' form. Can be repeated.",
+    )
     return parser.parse_args()
 
 
-def build_headers(api_key: str | None, stream: bool) -> dict[str, str]:
+def parse_extra_headers(raw_headers: list[str]) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for raw_header in raw_headers:
+        name, sep, value = raw_header.partition(":")
+        if sep == "" or not name.strip():
+            raise ValueError(f"invalid header {raw_header!r}; expected 'Name: Value'")
+        headers[name.strip()] = value.strip()
+    return headers
+
+
+def build_headers(api_key: str | None, stream: bool, extra_headers: dict[str, str] | None = None) -> dict[str, str]:
     headers = {
         "Content-Type": "application/json",
     }
@@ -132,6 +148,8 @@ def build_headers(api_key: str | None, stream: bool) -> dict[str, str]:
         headers["Accept"] = "text/event-stream"
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    if extra_headers:
+        headers.update(extra_headers)
     return headers
 
 
@@ -155,11 +173,12 @@ def run_non_stream(
     max_tokens: int,
     temperature: float,
     timeout: int,
+    extra_headers: dict[str, str] | None,
 ) -> NonStreamResult:
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}/v1/chat/completions",
         data=build_payload(model, prompt, max_tokens, temperature, stream=False),
-        headers=build_headers(api_key, stream=False),
+        headers=build_headers(api_key, stream=False, extra_headers=extra_headers),
         method="POST",
     )
     started = time.perf_counter()
@@ -187,11 +206,12 @@ def run_stream(
     max_tokens: int,
     temperature: float,
     timeout: int,
+    extra_headers: dict[str, str] | None,
 ) -> StreamResult:
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}/v1/chat/completions",
         data=build_payload(model, prompt, max_tokens, temperature, stream=True),
-        headers=build_headers(api_key, stream=True),
+        headers=build_headers(api_key, stream=True, extra_headers=extra_headers),
         method="POST",
     )
     started = time.perf_counter()
@@ -328,6 +348,11 @@ def write_json_output(path: str, payload: dict[str, object]) -> Path:
 
 def main() -> int:
     args = parse_args()
+    try:
+        extra_headers = parse_extra_headers(args.header)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     presets = list(PROMPTS) if args.preset == "all" else [args.preset]
     results: dict[str, list[dict[str, float | int | str]]] = {}
 
@@ -345,6 +370,7 @@ def main() -> int:
                     args.max_tokens,
                     args.temperature,
                     args.timeout,
+                    extra_headers,
                 )
                 stream = run_stream(
                     args.base_url,
@@ -354,6 +380,7 @@ def main() -> int:
                     args.max_tokens,
                     args.temperature,
                     args.timeout,
+                    extra_headers,
                 )
             except urllib.error.HTTPError as exc:
                 print(f"run {run_index}: HTTP {exc.code} {exc.reason}", file=sys.stderr)
