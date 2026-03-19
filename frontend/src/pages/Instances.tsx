@@ -1212,7 +1212,7 @@ export function Instances() {
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
               <span className={`badge ${latestDeployment.readiness.tone ? `status-${latestDeployment.readiness.tone}` : ''}`}>{latestDeployment.readiness.label}</span>
-              {latestDeployment.instance && (
+              {latestDeployment.instance && getStatusLabel(latestDeployment.instance.status).toUpperCase() !== latestDeployment.readiness.label && (
                 <span className="badge">{getStatusLabel(latestDeployment.instance.status).toUpperCase()}</span>
               )}
               {latestRemediation && (
@@ -1601,7 +1601,7 @@ export function Instances() {
                               || 'Provisioning attempt'}
                           </div>
                           <span className={`badge ${readiness.tone ? `status-${readiness.tone}` : ''}`}>{readiness.label}</span>
-                          {instance && <span className="badge">{getStatusLabel(instance.status).toUpperCase()}</span>}
+                          {instance && getStatusLabel(instance.status).toUpperCase() !== readiness.label && <span className="badge">{getStatusLabel(instance.status).toUpperCase()}</span>}
                         </div>
                         <div style={{ marginTop: '0.45rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
                           {readiness.detail}
