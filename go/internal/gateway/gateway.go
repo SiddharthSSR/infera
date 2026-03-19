@@ -77,6 +77,8 @@ type Config struct {
 	AllowedOrigins    []string
 	WorkerSharedToken string
 	RequestTimeoutMS  int
+	RateLimiter       *RateLimiterConfig
+	MaxInFlight       int64
 }
 
 // DefaultConfig returns sensible defaults.
@@ -95,13 +97,27 @@ func DefaultConfig() Config {
 
 // New creates a new gateway.
 func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gateway {
+	rateLimiter := NewRateLimiter(DefaultRateLimiterConfig())
+	if config.RateLimiter != nil {
+		if config.RateLimiter.RequestsPerMinute > 0 {
+			rateLimiter = NewRateLimiter(*config.RateLimiter)
+		} else {
+			rateLimiter = nil
+		}
+	}
+
+	maxInFlight := int64(100)
+	if config.MaxInFlight > 0 {
+		maxInFlight = config.MaxInFlight
+	}
+
 	gw := &Gateway{
 		router:             r,
 		config:             config,
 		instanceManager:    instanceMgr,
-		rateLimiter:        NewRateLimiter(DefaultRateLimiterConfig()),
+		rateLimiter:        rateLimiter,
 		metrics:            NewGatewayMetrics(),
-		maxInFlightDefault: 100,
+		maxInFlightDefault: maxInFlight,
 		log:                NewLogger(),
 		workerClients:      make(map[string]*WorkerClient),
 		startedAt:          time.Now(),

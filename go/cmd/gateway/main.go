@@ -40,6 +40,9 @@ func main() {
 
 	// Create router — batcher tuning via env vars for zero-rebuild tuning in production.
 	routerConfig := router.DefaultConfig()
+	if v := strings.TrimSpace(os.Getenv("INFERA_ENABLE_BATCHING")); v != "" {
+		routerConfig.EnableBatching = parseBoolEnv(v, routerConfig.EnableBatching)
+	}
 	if v := strings.TrimSpace(os.Getenv("INFERA_MAX_BATCH_SIZE")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			routerConfig.MaxBatchSize = n
@@ -121,6 +124,12 @@ func main() {
 	gatewayConfig := gateway.DefaultConfig()
 	gatewayConfig.HTTPPort = *httpPort
 	gatewayConfig.WorkerSharedToken = strings.TrimSpace(os.Getenv("INFERA_WORKER_SHARED_TOKEN"))
+	gatewayConfig.RateLimiter = parseRateLimiterConfigFromEnv()
+	if v := strings.TrimSpace(os.Getenv("INFERA_MAX_IN_FLIGHT_REQUESTS")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			gatewayConfig.MaxInFlight = n
+		}
+	}
 	if gatewayConfig.WorkerSharedToken == "" {
 		log.Error("INFERA_WORKER_SHARED_TOKEN is required and cannot be empty")
 		os.Exit(1)
@@ -282,6 +291,40 @@ func parseAllowedOrigins(raw string) []string {
 		}
 	}
 	return out
+}
+
+func parseBoolEnv(raw string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func parseRateLimiterConfigFromEnv() *gateway.RateLimiterConfig {
+	cfg := gateway.DefaultRateLimiterConfig()
+	changed := false
+
+	if v := strings.TrimSpace(os.Getenv("INFERA_RATE_LIMIT_REQUESTS_PER_MINUTE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.RequestsPerMinute = n
+			changed = true
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("INFERA_RATE_LIMIT_BURST_SIZE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.BurstSize = n
+			changed = true
+		}
+	}
+
+	if changed {
+		return &cfg
+	}
+	return nil
 }
 
 func persistBootstrapAdminKey(path, fullKey string) error {

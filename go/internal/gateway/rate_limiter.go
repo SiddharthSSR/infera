@@ -162,6 +162,9 @@ func (rl *RateLimiter) cleanup() {
 // It extracts the key from Authorization or X-API-Key headers.
 func RateLimitMiddleware(rl *RateLimiter) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
+		if rl == nil {
+			return next
+		}
 		return func(w http.ResponseWriter, r *http.Request) {
 			// Extract key identifier for rate limiting
 			key := r.Header.Get("Authorization")

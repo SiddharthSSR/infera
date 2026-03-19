@@ -17,6 +17,12 @@ func TestApplyRuntimeDefaultsForKnownModel(t *testing.T) {
 	if got := req.Options[OptionVLLMGPUMemoryUtilization]; got != "0.94" {
 		t.Fatalf("expected gpu memory utilization 0.94, got %q", got)
 	}
+	if got := req.Options[OptionVLLMEnableChunkedPrefill]; got != "true" {
+		t.Fatalf("expected chunked prefill true, got %q", got)
+	}
+	if got := req.Options[OptionVLLMMaxNumBatchedTokens]; got != "2048" {
+		t.Fatalf("expected max num batched tokens 2048, got %q", got)
+	}
 }
 
 func TestApplyRuntimeDefaultsPreservesExplicitOverrides(t *testing.T) {
@@ -27,6 +33,9 @@ func TestApplyRuntimeDefaultsPreservesExplicitOverrides(t *testing.T) {
 		Options: map[string]string{
 			OptionVLLMMaxModelLen:          "8192",
 			OptionVLLMGPUMemoryUtilization: "0.90",
+			OptionVLLMEnableChunkedPrefill: "false",
+			OptionVLLMMaxNumBatchedTokens:  "1024",
+			OptionVLLMNumSchedulerSteps:    "3",
 		},
 	}
 
@@ -37,6 +46,15 @@ func TestApplyRuntimeDefaultsPreservesExplicitOverrides(t *testing.T) {
 	}
 	if got := req.Options[OptionVLLMGPUMemoryUtilization]; got != "0.90" {
 		t.Fatalf("expected explicit gpu memory utilization to remain 0.90, got %q", got)
+	}
+	if got := req.Options[OptionVLLMEnableChunkedPrefill]; got != "false" {
+		t.Fatalf("expected explicit chunked prefill override to remain false, got %q", got)
+	}
+	if got := req.Options[OptionVLLMMaxNumBatchedTokens]; got != "1024" {
+		t.Fatalf("expected explicit max num batched tokens override to remain 1024, got %q", got)
+	}
+	if got := req.Options[OptionVLLMNumSchedulerSteps]; got != "3" {
+		t.Fatalf("expected explicit scheduler steps override to remain 3, got %q", got)
 	}
 }
 
@@ -167,5 +185,26 @@ func TestValidateWorkerImageRef(t *testing.T) {
 				t.Fatalf("expected no error for %q, got %v", tc.image, err)
 			}
 		})
+	}
+}
+
+func TestWorkerRuntimeEnvIncludesChunkedPrefillTunables(t *testing.T) {
+	req := &ProvisionRequest{
+		Options: map[string]string{
+			OptionVLLMEnableChunkedPrefill: "true",
+			OptionVLLMMaxNumBatchedTokens:  "2048",
+			OptionVLLMNumSchedulerSteps:    "8",
+		},
+	}
+
+	env := WorkerRuntimeEnv(req)
+	if got := env[OptionVLLMEnableChunkedPrefill]; got != "true" {
+		t.Fatalf("expected chunked prefill env true, got %q", got)
+	}
+	if got := env[OptionVLLMMaxNumBatchedTokens]; got != "2048" {
+		t.Fatalf("expected max num batched tokens env 2048, got %q", got)
+	}
+	if got := env[OptionVLLMNumSchedulerSteps]; got != "8" {
+		t.Fatalf("expected num scheduler steps env 8, got %q", got)
 	}
 }

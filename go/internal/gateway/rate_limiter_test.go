@@ -182,3 +182,17 @@ func TestDefaultRateLimiterConfig(t *testing.T) {
 		t.Errorf("expected burst 10, got %d", cfg.BurstSize)
 	}
 }
+
+func TestRateLimitMiddlewareAllowsNilLimiter(t *testing.T) {
+	handler := RateLimitMiddleware(nil)(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected nil limiter to pass through, got %d", rec.Code)
+	}
+}

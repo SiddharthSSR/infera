@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import statistics
 import sys
 import time
@@ -329,7 +330,9 @@ def main() -> int:
         print_summary(preset, rows)
 
     if args.json_output:
-        with open(args.json_output, "w", encoding="utf-8") as fh:
+        output_path = Path(args.json_output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as fh:
             json.dump(
                 {
                     "base_url": args.base_url,
@@ -341,7 +344,7 @@ def main() -> int:
                 fh,
                 indent=2,
             )
-        print(f"\nWrote JSON results to {args.json_output}")
+        print(f"\nWrote JSON results to {output_path}")
 
     return 0
 

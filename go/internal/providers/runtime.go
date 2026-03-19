@@ -8,6 +8,9 @@ import (
 const (
 	OptionVLLMMaxModelLen          = "INFERA_VLLM_MAX_MODEL_LEN"
 	OptionVLLMGPUMemoryUtilization = "INFERA_VLLM_GPU_MEMORY_UTILIZATION"
+	OptionVLLMEnableChunkedPrefill = "INFERA_VLLM_ENABLE_CHUNKED_PREFILL"
+	OptionVLLMMaxNumBatchedTokens  = "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS"
+	OptionVLLMNumSchedulerSteps    = "INFERA_VLLM_NUM_SCHEDULER_STEPS"
 	OptionVLLMSpeculativeModel     = "INFERA_VLLM_SPECULATIVE_MODEL"
 	OptionVLLMNumSpecTokens        = "INFERA_VLLM_NUM_SPECULATIVE_TOKENS"
 	OptionVLLMNgramLookup          = "INFERA_VLLM_NGRAM_PROMPT_LOOKUP_NUM_TOKENS"
@@ -20,6 +23,9 @@ const (
 type modelRuntimePreset struct {
 	MaxModelLen          int
 	GPUMemoryUtilization string
+	EnableChunkedPrefill *bool
+	MaxNumBatchedTokens  int
+	NumSchedulerSteps    int
 }
 
 // specDecodingConfig defines speculative decoding for a model on large GPUs.
@@ -54,6 +60,15 @@ func ApplyRuntimeDefaults(req *ProvisionRequest) {
 	}
 	if strings.TrimSpace(req.Options[OptionVLLMGPUMemoryUtilization]) == "" && preset.GPUMemoryUtilization != "" {
 		req.Options[OptionVLLMGPUMemoryUtilization] = preset.GPUMemoryUtilization
+	}
+	if strings.TrimSpace(req.Options[OptionVLLMEnableChunkedPrefill]) == "" && preset.EnableChunkedPrefill != nil {
+		req.Options[OptionVLLMEnableChunkedPrefill] = fmt.Sprintf("%t", *preset.EnableChunkedPrefill)
+	}
+	if strings.TrimSpace(req.Options[OptionVLLMMaxNumBatchedTokens]) == "" && preset.MaxNumBatchedTokens > 0 {
+		req.Options[OptionVLLMMaxNumBatchedTokens] = fmt.Sprintf("%d", preset.MaxNumBatchedTokens)
+	}
+	if strings.TrimSpace(req.Options[OptionVLLMNumSchedulerSteps]) == "" && preset.NumSchedulerSteps > 0 {
+		req.Options[OptionVLLMNumSchedulerSteps] = fmt.Sprintf("%d", preset.NumSchedulerSteps)
 	}
 
 	applySpecDecodingDefaults(req, entry.SpecDecoding)
@@ -101,6 +116,9 @@ func WorkerRuntimeEnv(req *ProvisionRequest) map[string]string {
 	for _, key := range []string{
 		OptionVLLMMaxModelLen,
 		OptionVLLMGPUMemoryUtilization,
+		OptionVLLMEnableChunkedPrefill,
+		OptionVLLMMaxNumBatchedTokens,
+		OptionVLLMNumSchedulerSteps,
 		OptionVLLMSpeculativeModel,
 		OptionVLLMNumSpecTokens,
 		OptionVLLMNgramLookup,
@@ -161,7 +179,12 @@ type modelRuntimePresetEntry struct {
 // Use DraftModel="" for ngram mode when no architecture-compatible draft exists.
 var modelRuntimePresets = map[string]modelRuntimePresetEntry{
 	"Qwen/Qwen2.5-7B-Instruct": {
-		Base: modelRuntimePreset{MaxModelLen: 32768, GPUMemoryUtilization: "0.94"},
+		Base: modelRuntimePreset{
+			MaxModelLen:          32768,
+			GPUMemoryUtilization: "0.94",
+			EnableChunkedPrefill: boolPtr(true),
+			MaxNumBatchedTokens:  2048,
+		},
 		// Qwen2.5-0.5B shares the same tokenizer and architecture family.
 		SpecDecoding: &specDecodingConfig{
 			DraftModel:    "Qwen/Qwen2.5-0.5B-Instruct",
@@ -169,7 +192,12 @@ var modelRuntimePresets = map[string]modelRuntimePresetEntry{
 		},
 	},
 	"Qwen/Qwen3-4B-Thinking-2507": {
-		Base: modelRuntimePreset{MaxModelLen: 65536, GPUMemoryUtilization: "0.94"},
+		Base: modelRuntimePreset{
+			MaxModelLen:          65536,
+			GPUMemoryUtilization: "0.94",
+			EnableChunkedPrefill: boolPtr(true),
+			MaxNumBatchedTokens:  2048,
+		},
 		// No confirmed Qwen3 draft model yet; use ngram drafting as a safe fallback.
 		SpecDecoding: &specDecodingConfig{
 			DraftModel:    "",
@@ -178,7 +206,12 @@ var modelRuntimePresets = map[string]modelRuntimePresetEntry{
 		},
 	},
 	"moonshotai/Kimi-K2.5-Instruct": {
-		Base: modelRuntimePreset{MaxModelLen: 16384, GPUMemoryUtilization: "0.95"},
+		Base: modelRuntimePreset{
+			MaxModelLen:          16384,
+			GPUMemoryUtilization: "0.95",
+			EnableChunkedPrefill: boolPtr(true),
+			MaxNumBatchedTokens:  2048,
+		},
 		Override: &struct {
 			GPUType     GPUType
 			GPUMinCount int
@@ -186,7 +219,13 @@ var modelRuntimePresets = map[string]modelRuntimePresetEntry{
 		}{
 			GPUType:     GPUH100,
 			GPUMinCount: 8,
-			Preset:      modelRuntimePreset{MaxModelLen: 32768, GPUMemoryUtilization: "0.95"},
+			Preset: modelRuntimePreset{
+				MaxModelLen:          32768,
+				GPUMemoryUtilization: "0.95",
+				EnableChunkedPrefill: boolPtr(true),
+				MaxNumBatchedTokens:  4096,
+				NumSchedulerSteps:    8,
+			},
 		},
 		// No public draft model; ngram drafting only.
 		SpecDecoding: &specDecodingConfig{
@@ -211,4 +250,8 @@ func runtimePresetForRequest(req *ProvisionRequest) (modelRuntimePreset, bool) {
 		return entry.Override.Preset, true
 	}
 	return entry.Base, true
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
