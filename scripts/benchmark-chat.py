@@ -22,8 +22,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
-
-DEFAULT_BASE_URL = "http://localhost:8080"
+DEFAULT_BASE_URL = "https://inferai.co.in"
 
 PROMPTS = {
     "short": "What is the capital of France? Answer in one short sentence.",
@@ -238,29 +237,93 @@ def pct(values: list[float], percentile: float) -> float:
     return sorted_values[index]
 
 
-def print_summary(name: str, rows: list[dict[str, float | int | str]]) -> None:
+def summarize_rows(rows: list[dict[str, float | int | str]]) -> dict[str, float]:
     ttft_values = [float(row["ttft_ms"]) for row in rows]
     stream_total_values = [float(row["stream_total_ms"]) for row in rows]
     non_stream_values = [float(row["non_stream_total_ms"]) for row in rows]
     decode_values = [float(row["decode_tok_s"]) for row in rows if float(row["decode_tok_s"]) > 0]
+    return {
+        "ttft_p50_ms": median(ttft_values),
+        "ttft_p95_ms": pct(ttft_values, 0.95),
+        "ttft_avg_ms": mean(ttft_values),
+        "stream_total_p50_ms": median(stream_total_values),
+        "non_stream_total_p50_ms": median(non_stream_values),
+        "decode_tok_s_p50": median(decode_values),
+        "decode_tok_s_p95": pct(decode_values, 0.95),
+    }
+
+
+def print_summary(name: str, rows: list[dict[str, float | int | str]]) -> None:
+    summary = summarize_rows(rows)
     print(f"\n[{name}]")
     print(
         "  "
-        f"TTFT p50={median(ttft_values):.1f}ms "
-        f"p95={pct(ttft_values, 0.95):.1f}ms "
-        f"avg={mean(ttft_values):.1f}ms"
+        f"TTFT p50={summary['ttft_p50_ms']:.1f}ms "
+        f"p95={summary['ttft_p95_ms']:.1f}ms "
+        f"avg={summary['ttft_avg_ms']:.1f}ms"
     )
     print(
         "  "
-        f"stream_total p50={median(stream_total_values):.1f}ms "
-        f"non_stream_total p50={median(non_stream_values):.1f}ms"
+        f"stream_total p50={summary['stream_total_p50_ms']:.1f}ms "
+        f"non_stream_total p50={summary['non_stream_total_p50_ms']:.1f}ms"
     )
-    if decode_values:
+    if summary["decode_tok_s_p50"] > 0:
         print(
             "  "
-            f"decode_tok/s p50={median(decode_values):.2f} "
-            f"p95={pct(decode_values, 0.95):.2f}"
+            f"decode_tok/s p50={summary['decode_tok_s_p50']:.2f} "
+            f"p95={summary['decode_tok_s_p95']:.2f}"
         )
+
+
+def build_result_row(
+    run_index: int,
+    stream: StreamResult,
+    non_stream: NonStreamResult,
+    cost_per_hour: float | None,
+) -> dict[str, float | int | str]:
+    decode_window_s = max((stream.total_ms - stream.ttft_ms) / 1000.0, 0.001)
+    decode_tok_s = non_stream.completion_tokens / decode_window_s if non_stream.completion_tokens else 0.0
+    total_tok_s = non_stream.total_tokens / max(non_stream.total_ms / 1000.0, 0.001) if non_stream.total_tokens else 0.0
+    row: dict[str, float | int | str] = {
+        "run": run_index,
+        "ttft_ms": round(stream.ttft_ms, 2),
+        "stream_total_ms": round(stream.total_ms, 2),
+        "non_stream_total_ms": round(non_stream.total_ms, 2),
+        "prompt_tokens": non_stream.prompt_tokens,
+        "completion_tokens": non_stream.completion_tokens,
+        "total_tokens": non_stream.total_tokens,
+        "decode_tok_s": round(decode_tok_s, 4),
+        "total_tok_s": round(total_tok_s, 4),
+    }
+    if cost_per_hour is not None:
+        query_cost = cost_per_hour * (non_stream.total_ms / 1000.0) / 3600.0
+        row["cost_query_usd"] = round(query_cost, 8)
+        row["decode_tok_s_per_dollar_hour"] = round(decode_tok_s / cost_per_hour, 4) if cost_per_hour > 0 else 0.0
+    return row
+
+
+def build_output_payload(
+    base_url: str,
+    model: str,
+    runs: int,
+    results: dict[str, list[dict[str, float | int | str]]],
+    cost_per_hour: float | None,
+) -> dict[str, object]:
+    return {
+        "base_url": base_url,
+        "model": model,
+        "runs": runs,
+        "presets": results,
+        "cost_per_hour": cost_per_hour,
+    }
+
+
+def write_json_output(path: str, payload: dict[str, object]) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+    return output_path
 
 
 def main() -> int:
@@ -299,24 +362,7 @@ def main() -> int:
                 print(f"run {run_index}: request failed: {exc}", file=sys.stderr)
                 return 1
 
-            decode_window_s = max((stream.total_ms - stream.ttft_ms) / 1000.0, 0.001)
-            decode_tok_s = non_stream.completion_tokens / decode_window_s if non_stream.completion_tokens else 0.0
-            total_tok_s = non_stream.total_tokens / max(non_stream.total_ms / 1000.0, 0.001) if non_stream.total_tokens else 0.0
-            row: dict[str, float | int | str] = {
-                "run": run_index,
-                "ttft_ms": round(stream.ttft_ms, 2),
-                "stream_total_ms": round(stream.total_ms, 2),
-                "non_stream_total_ms": round(non_stream.total_ms, 2),
-                "prompt_tokens": non_stream.prompt_tokens,
-                "completion_tokens": non_stream.completion_tokens,
-                "total_tokens": non_stream.total_tokens,
-                "decode_tok_s": round(decode_tok_s, 4),
-                "total_tok_s": round(total_tok_s, 4),
-            }
-            if args.cost_per_hour is not None:
-                query_cost = args.cost_per_hour * (non_stream.total_ms / 1000.0) / 3600.0
-                row["cost_query_usd"] = round(query_cost, 8)
-                row["decode_tok_s_per_dollar_hour"] = round(decode_tok_s / args.cost_per_hour, 4) if args.cost_per_hour > 0 else 0.0
+            row = build_result_row(run_index, stream, non_stream, args.cost_per_hour)
             rows.append(row)
             print(
                 "  "
@@ -330,20 +376,16 @@ def main() -> int:
         print_summary(preset, rows)
 
     if args.json_output:
-        output_path = Path(args.json_output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with output_path.open("w", encoding="utf-8") as fh:
-            json.dump(
-                {
-                    "base_url": args.base_url,
-                    "model": args.model,
-                    "runs": args.runs,
-                    "presets": results,
-                    "cost_per_hour": args.cost_per_hour,
-                },
-                fh,
-                indent=2,
-            )
+        output_path = write_json_output(
+            args.json_output,
+            build_output_payload(
+                args.base_url,
+                args.model,
+                args.runs,
+                results,
+                args.cost_per_hour,
+            ),
+        )
         print(f"\nWrote JSON results to {output_path}")
 
     return 0
