@@ -52,6 +52,15 @@ const (
 	PriorityHigh   Priority = 3
 )
 
+const (
+	MetadataAffinityKey      = "affinity_key"
+	MetadataAffinitySource   = "affinity_source"
+	MetadataPromptPrefixHash = "prompt_prefix_hash"
+	MetadataExplicitAffinity = "explicit"
+	MetadataSessionAffinity  = "session_prefix"
+	MetadataAPIKeyAffinity   = "api_key_prefix"
+)
+
 // InferenceRequest represents a request for model inference.
 type InferenceRequest struct {
 	RequestID  string              `json:"request_id"`

@@ -77,6 +77,8 @@ type Config struct {
 	AllowedOrigins    []string
 	WorkerSharedToken string
 	RequestTimeoutMS  int
+	RateLimiter       *RateLimiterConfig
+	MaxInFlight       int64
 }
 
 // DefaultConfig returns sensible defaults.
@@ -95,13 +97,27 @@ func DefaultConfig() Config {
 
 // New creates a new gateway.
 func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gateway {
+	rateLimiter := NewRateLimiter(DefaultRateLimiterConfig())
+	if config.RateLimiter != nil {
+		if config.RateLimiter.RequestsPerMinute > 0 {
+			rateLimiter = NewRateLimiter(*config.RateLimiter)
+		} else {
+			rateLimiter = nil
+		}
+	}
+
+	maxInFlight := int64(100)
+	if config.MaxInFlight > 0 {
+		maxInFlight = config.MaxInFlight
+	}
+
 	gw := &Gateway{
 		router:             r,
 		config:             config,
 		instanceManager:    instanceMgr,
-		rateLimiter:        NewRateLimiter(DefaultRateLimiterConfig()),
+		rateLimiter:        rateLimiter,
 		metrics:            NewGatewayMetrics(),
-		maxInFlightDefault: 100,
+		maxInFlightDefault: maxInFlight,
 		log:                NewLogger(),
 		workerClients:      make(map[string]*WorkerClient),
 		startedAt:          time.Now(),
@@ -430,6 +446,74 @@ func hashPrompt(messages []ChatMessage) string {
 	return sum
 }
 
+func hashPromptPrefix(messages []ChatMessage, maxBytes int) string {
+	if len(messages) == 0 || maxBytes <= 0 {
+		return ""
+	}
+
+	hasher := sha256.New()
+	remaining := maxBytes
+	for _, msg := range messages {
+		parts := []string{msg.Role, msg.Name, msg.Content}
+		for _, part := range parts {
+			if remaining <= 0 {
+				break
+			}
+			chunk := part
+			if len(chunk) > remaining {
+				chunk = chunk[:remaining]
+			}
+			_, _ = hasher.Write([]byte(chunk))
+			_, _ = hasher.Write([]byte{0})
+			remaining -= len(chunk)
+		}
+		if remaining <= 0 {
+			break
+		}
+	}
+
+	sum := hex.EncodeToString(hasher.Sum(nil))
+	if len(sum) > 16 {
+		return sum[:16]
+	}
+	return sum
+}
+
+func buildAffinityMetadata(r *http.Request, req *ChatCompletionRequest) map[string]string {
+	const prefixHashBytes = 1024
+
+	explicitAffinity := strings.TrimSpace(r.Header.Get("X-Infera-Affinity-Key"))
+	prefixHash := hashPromptPrefix(req.Messages, prefixHashBytes)
+	modelID := strings.TrimSpace(req.Model)
+	if modelID == "" {
+		modelID = "unknown-model"
+	}
+
+	metadata := map[string]string{}
+	if prefixHash != "" {
+		metadata[types.MetadataPromptPrefixHash] = prefixHash
+	}
+
+	switch {
+	case explicitAffinity != "":
+		metadata[types.MetadataAffinityKey] = fmt.Sprintf("explicit:%s:%s", modelID, explicitAffinity)
+		metadata[types.MetadataAffinitySource] = types.MetadataExplicitAffinity
+	case auth.SessionFromContext(r.Context()) != nil:
+		session := auth.SessionFromContext(r.Context())
+		metadata[types.MetadataAffinityKey] = fmt.Sprintf("session:%s:%s:%s", session.ID, modelID, prefixHash)
+		metadata[types.MetadataAffinitySource] = types.MetadataSessionAffinity
+	case auth.KeyFromContext(r.Context()) != nil:
+		key := auth.KeyFromContext(r.Context())
+		metadata[types.MetadataAffinityKey] = fmt.Sprintf("key:%s:%s:%s", key.ID, modelID, prefixHash)
+		metadata[types.MetadataAffinitySource] = types.MetadataAPIKeyAffinity
+	}
+
+	if len(metadata) == 0 || metadata[types.MetadataAffinityKey] == "" {
+		return nil
+	}
+	return metadata
+}
+
 func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed")
@@ -531,7 +615,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	r = r.WithContext(ctx)
 
 	// Convert to internal format
-	inferenceReq := g.toInferenceRequest(&req)
+	inferenceReq := g.toInferenceRequest(r, &req)
 	if !g.enforceWorkspaceQuota(w, r, inferenceReq) {
 		return
 	}
@@ -1587,7 +1671,7 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 // Helper Methods
 // ============================================================================
 
-func (g *Gateway) toInferenceRequest(req *ChatCompletionRequest) *types.InferenceRequest {
+func (g *Gateway) toInferenceRequest(r *http.Request, req *ChatCompletionRequest) *types.InferenceRequest {
 	messages := make([]types.Message, len(req.Messages))
 	for i, msg := range req.Messages {
 		messages[i] = types.Message{
@@ -1627,6 +1711,7 @@ func (g *Gateway) toInferenceRequest(req *ChatCompletionRequest) *types.Inferenc
 		Parameters: params,
 		Stream:     req.Stream,
 		Priority:   types.PriorityNormal,
+		Metadata:   buildAffinityMetadata(r, req),
 		CreatedAt:  time.Now(),
 	}
 }
