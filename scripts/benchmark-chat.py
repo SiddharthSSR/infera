@@ -43,6 +43,32 @@ PROMPTS = {
         )
         + " Summarize the three most important optimization priorities in 120 words."
     ),
+    "conversation": (
+        "System context: You are assisting an inference-platform team that is optimizing TTFT, "
+        "decode throughput, batching, cache locality, and warm-start behavior. "
+        + " ".join(
+            [
+                (
+                    "The platform provisions GPU workers, routes OpenAI-compatible chat requests, "
+                    "tracks worker queue depth, and wants session affinity for cache reuse."
+                )
+                for _ in range(80)
+            ]
+        )
+        + " Prior messages in the same conversation:\n"
+        + "\n".join(
+            [
+                "User: We saw TTFT spikes under concurrent chat load.",
+                "Assistant: That usually points to queueing, prefill contention, or poor cache locality.",
+                "User: We enabled chunked prefill and reduced batch wait.",
+                "Assistant: Good. Now compare no-affinity traffic against session-sticky traffic.",
+                "User: The same users ask follow-up questions over the same shared context.",
+                "Assistant: Then routing stability matters because repeated prompts can reuse cached prefixes.",
+                "User: We want the next measurement to focus on real multi-turn behavior, not one-off prompts.",
+            ]
+        )
+        + "\nLatest user turn: Based on this conversation, give three practical next steps to improve latency without changing hardware. Keep it under 150 words."
+    ),
 }
 
 
@@ -82,7 +108,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--preset",
-        choices=["short", "medium", "long", "all"],
+        choices=["short", "medium", "long", "conversation", "all"],
         default="all",
         help="Prompt preset to run (default: %(default)s)",
     )

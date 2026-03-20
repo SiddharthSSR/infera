@@ -30,6 +30,18 @@ def test_parse_args_defaults_to_inferai(monkeypatch):
     assert args.preset == "all"
 
 
+def test_conversation_preset_is_available(monkeypatch):
+    module = load_benchmark_chat_module()
+    monkeypatch.setattr(
+        "sys.argv",
+        ["benchmark-chat.py", "--model", "Qwen/Qwen2.5-7B-Instruct", "--preset", "conversation"],
+    )
+    args = module.parse_args()
+    assert args.preset == "conversation"
+    assert "conversation" in module.PROMPTS
+    assert "Latest user turn" in module.PROMPTS["conversation"]
+
+
 def test_parse_args_accepts_repeatable_headers(monkeypatch):
     module = load_benchmark_chat_module()
     monkeypatch.setattr(
