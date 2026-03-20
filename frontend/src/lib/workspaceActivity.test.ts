@@ -1,7 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildWorkspaceActivityItems } from './workspaceActivity';
 
 describe('buildWorkspaceActivityItems', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-12T12:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('builds recent team and access activity in reverse chronological order', () => {
     const items = buildWorkspaceActivityItems({
       members: [
