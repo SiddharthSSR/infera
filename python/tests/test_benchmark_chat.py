@@ -30,6 +30,64 @@ def test_parse_args_defaults_to_inferai(monkeypatch):
     assert args.preset == "all"
 
 
+def test_conversation_preset_is_available(monkeypatch):
+    module = load_benchmark_chat_module()
+    monkeypatch.setattr(
+        "sys.argv",
+        ["benchmark-chat.py", "--model", "Qwen/Qwen2.5-7B-Instruct", "--preset", "conversation"],
+    )
+    args = module.parse_args()
+    assert args.preset == "conversation"
+    assert "conversation" in module.PROMPTS
+    assert "Latest user turn" in module.PROMPTS["conversation"]
+
+
+def test_parse_args_accepts_repeatable_headers(monkeypatch):
+    module = load_benchmark_chat_module()
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "benchmark-chat.py",
+            "--model",
+            "Qwen/Qwen2.5-7B-Instruct",
+            "--header",
+            "X-Infera-Affinity-Key: chat-123",
+            "--header",
+            "X-Debug: on",
+        ],
+    )
+    args = module.parse_args()
+    assert args.header == ["X-Infera-Affinity-Key: chat-123", "X-Debug: on"]
+
+
+def test_parse_extra_headers_parses_and_normalizes_values():
+    module = load_benchmark_chat_module()
+    headers = module.parse_extra_headers(["X-Infera-Affinity-Key: chat-123", "X-Debug: on"])
+    assert headers == {"X-Infera-Affinity-Key": "chat-123", "X-Debug": "on"}
+
+
+def test_parse_extra_headers_rejects_invalid_format():
+    module = load_benchmark_chat_module()
+    try:
+        module.parse_extra_headers(["not-a-header"])
+    except ValueError as exc:
+        assert "expected 'Name: Value'" in str(exc)
+    else:
+        raise AssertionError("expected invalid header to raise ValueError")
+
+
+def test_build_headers_merges_extra_headers():
+    module = load_benchmark_chat_module()
+    headers = module.build_headers(
+        "test-key",
+        stream=True,
+        extra_headers={"X-Infera-Affinity-Key": "chat-123"},
+    )
+    assert headers["Authorization"] == "Bearer test-key"
+    assert headers["Accept"] == "text/event-stream"
+    assert headers["X-Infera-Affinity-Key"] == "chat-123"
+
+
 def test_build_result_row_computes_cost_and_throughput():
     module = load_benchmark_chat_module()
     stream = module.StreamResult(ttft_ms=500.0, total_ms=2500.0, content="hello")

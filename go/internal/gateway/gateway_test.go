@@ -229,6 +229,57 @@ func TestHandleWorkerHeartbeatRepairsMissingInstanceLink(t *testing.T) {
 	}
 }
 
+func TestToInferenceRequestBuildsExplicitAffinityMetadata(t *testing.T) {
+	g := New(DefaultConfig(), nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("X-Infera-Affinity-Key", "chat-123")
+	inferenceReq := g.toInferenceRequest(req, &ChatCompletionRequest{
+		Model: "Qwen/Qwen2.5-7B-Instruct",
+		Messages: []ChatMessage{
+			{Role: "system", Content: "You are helpful."},
+			{Role: "user", Content: "Hello"},
+		},
+		Stream: true,
+	})
+
+	if inferenceReq.Metadata == nil {
+		t.Fatal("expected affinity metadata")
+	}
+	if got := inferenceReq.Metadata[types.MetadataAffinitySource]; got != types.MetadataExplicitAffinity {
+		t.Fatalf("expected explicit affinity source, got %q", got)
+	}
+	if got := inferenceReq.Metadata[types.MetadataAffinityKey]; !strings.Contains(got, "explicit:Qwen/Qwen2.5-7B-Instruct:chat-123") {
+		t.Fatalf("expected explicit affinity key, got %q", got)
+	}
+	if got := inferenceReq.Metadata[types.MetadataPromptPrefixHash]; got == "" {
+		t.Fatal("expected prompt prefix hash metadata")
+	}
+}
+
+func TestToInferenceRequestBuildsAPIKeyAffinityMetadata(t *testing.T) {
+	g := New(DefaultConfig(), nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req = req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{ID: "key-42"}))
+	inferenceReq := g.toInferenceRequest(req, &ChatCompletionRequest{
+		Model: "Qwen/Qwen2.5-7B-Instruct",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Explain caching."},
+		},
+	})
+
+	if inferenceReq.Metadata == nil {
+		t.Fatal("expected affinity metadata")
+	}
+	if got := inferenceReq.Metadata[types.MetadataAffinitySource]; got != types.MetadataAPIKeyAffinity {
+		t.Fatalf("expected api-key affinity source, got %q", got)
+	}
+	if got := inferenceReq.Metadata[types.MetadataAffinityKey]; !strings.Contains(got, "key:key-42") {
+		t.Fatalf("expected api-key affinity key, got %q", got)
+	}
+}
+
 func TestHandlePrometheusWorkerTargets(t *testing.T) {
 	r := router.New(router.DefaultConfig())
 	defer r.Stop()

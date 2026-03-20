@@ -53,6 +53,15 @@ func main() {
 			routerConfig.MaxBatchWaitMS = n
 		}
 	}
+	if v := strings.TrimSpace(os.Getenv("INFERA_AFFINITY_TTL_SECONDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			if n <= 0 {
+				routerConfig.AffinityTTL = 0
+			} else {
+				routerConfig.AffinityTTL = time.Duration(n) * time.Second
+			}
+		}
+	}
 	r := router.New(routerConfig)
 
 	// Create instance manager

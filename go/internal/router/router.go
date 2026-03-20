@@ -20,6 +20,7 @@ type Config struct {
 	EnableBatching   bool
 	MaxBatchSize     int
 	MaxBatchWaitMS   int
+	AffinityTTL      time.Duration
 	RequestTimeoutMS int
 	MaxRetries       int
 }
@@ -31,6 +32,7 @@ func DefaultConfig() Config {
 		EnableBatching:   true,
 		MaxBatchSize:     8,
 		MaxBatchWaitMS:   50,
+		AffinityTTL:      10 * time.Minute,
 		RequestTimeoutMS: 30000,
 		MaxRetries:       3,
 	}
@@ -47,6 +49,8 @@ type Router struct {
 	trackersMu      sync.RWMutex
 	batchWaiters    map[string]chan batchRouteResult
 	batchWaitersMu  sync.Mutex
+	affinity        map[string]affinityBinding
+	affinityMu      sync.RWMutex
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
@@ -54,6 +58,11 @@ type Router struct {
 type batchRouteResult struct {
 	routed *types.RoutedRequest
 	err    error
+}
+
+type affinityBinding struct {
+	WorkerID  string
+	ExpiresAt time.Time
 }
 
 // New creates a new router.
@@ -72,6 +81,7 @@ func New(config Config) *Router {
 		}),
 		trackers:     make(map[string]*types.RequestTracker),
 		batchWaiters: make(map[string]chan batchRouteResult),
+		affinity:     make(map[string]affinityBinding),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -143,6 +153,8 @@ func (r *Router) HandleFailure(request *types.RoutedRequest, err error) (*types.
 	if tracker != nil {
 		tracker.Transition(types.RequestStateFailed, err.Error())
 	}
+
+	r.clearAffinityForFailure(request)
 
 	if !request.IsRetriable() || request.IsExpired() {
 		return nil, types.NewInferaError(types.ErrorCodeInternalError,
@@ -349,6 +361,10 @@ func (r *Router) selectWorker(request *types.InferenceRequest) (*strategy.Select
 		return nil, err
 	}
 
+	if selection, ok := r.selectAffinityWorker(request); ok {
+		return selection, nil
+	}
+
 	candidates := r.registry.GetHealthyWorkersForModel(request.ModelID)
 	selection, err := r.strategyEngine.SelectWorker(request, candidates)
 	if err != nil {
@@ -357,6 +373,7 @@ func (r *Router) selectWorker(request *types.InferenceRequest) (*strategy.Select
 			fmt.Sprintf("failed to select worker: %v", err),
 		).WithRequestID(request.RequestID)
 	}
+	r.rememberAffinity(request, selection.Worker.WorkerID)
 	return selection, nil
 }
 
@@ -395,4 +412,87 @@ func (r *Router) GetStats() Stats {
 		TotalQueueDepth: r.GetQueueDepth(),
 		ModelsAvailable: len(modelSet),
 	}
+}
+
+func (r *Router) affinityKey(request *types.InferenceRequest) string {
+	if request == nil || request.Metadata == nil {
+		return ""
+	}
+	return request.Metadata[types.MetadataAffinityKey]
+}
+
+func (r *Router) selectAffinityWorker(request *types.InferenceRequest) (*strategy.Selection, bool) {
+	key := r.affinityKey(request)
+	if key == "" || r.config.AffinityTTL <= 0 {
+		return nil, false
+	}
+
+	r.affinityMu.RLock()
+	binding, ok := r.affinity[key]
+	r.affinityMu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(binding.ExpiresAt) {
+		r.clearAffinity(key)
+		return nil, false
+	}
+
+	worker, ok := r.registry.Get(binding.WorkerID)
+	if !ok || !worker.IsHealthy() || !worker.HasCapacity() || !worker.HasModel(request.ModelID) {
+		r.clearAffinity(key)
+		return nil, false
+	}
+
+	score := 1.0 - worker.CurrentLoad()
+	return &strategy.Selection{
+		Worker: worker,
+		Score:  score,
+		Decision: types.RoutingDecision{
+			Strategy:            types.StrategyAffinity,
+			Reason:              "selected sticky worker for affinity key",
+			CandidatesEvaluated: 1,
+			SelectedWorkerScore: score,
+		},
+	}, true
+}
+
+func (r *Router) rememberAffinity(request *types.InferenceRequest, workerID string) {
+	key := r.affinityKey(request)
+	if key == "" || workerID == "" || r.config.AffinityTTL <= 0 {
+		return
+	}
+
+	r.affinityMu.Lock()
+	r.affinity[key] = affinityBinding{
+		WorkerID:  workerID,
+		ExpiresAt: time.Now().Add(r.config.AffinityTTL),
+	}
+	r.affinityMu.Unlock()
+}
+
+func (r *Router) clearAffinityForFailure(request *types.RoutedRequest) {
+	if request == nil || request.Request == nil {
+		return
+	}
+	key := r.affinityKey(request.Request)
+	if key == "" {
+		return
+	}
+
+	r.affinityMu.Lock()
+	binding, ok := r.affinity[key]
+	if ok && binding.WorkerID == request.WorkerID {
+		delete(r.affinity, key)
+	}
+	r.affinityMu.Unlock()
+}
+
+func (r *Router) clearAffinity(key string) {
+	if key == "" {
+		return
+	}
+	r.affinityMu.Lock()
+	delete(r.affinity, key)
+	r.affinityMu.Unlock()
 }
