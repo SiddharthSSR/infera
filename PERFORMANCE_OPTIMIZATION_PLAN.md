@@ -25,26 +25,47 @@
 
 ## 1. Inference Throughput
 
-- [ ] **T1-01: Add missing vLLM tuning knobs to worker config and provider runtime env**
+- [x] **T1-01: Add missing vLLM tuning knobs to worker config and provider runtime env**
   - **What**: Expose `max_num_seqs`, `swap_space`, `enforce_eager`, and runtime-controlled tensor parallelism in the worker and provider preset layer.
   - **Why**: High impact. The current code only exposes part of the vLLM tuning surface, which blocks per-GPU throughput tuning and makes A40/A100/L40S comparisons noisy.
   - **How**: Add new fields to `python/src/infera_worker/config.py`; pass them through `python/src/infera_worker/engines/vllm_engine.py`; add matching env options and preset plumbing in `go/internal/providers/runtime.go`; ensure RunPod and Vast.ai propagate the new env vars.
   - **Measure**: Verify env-to-engine wiring in unit tests, then benchmark `decode tok/s`, TTFT, and GPU memory usage on L40S and A100 before/after.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
-- [ ] **T1-02: Move scheduler-step and batching-token tuning into per-model / per-GPU runtime presets**
+- [x] **T1-02: Move scheduler-step and batching-token tuning into per-model / per-GPU runtime presets**
   - **What**: Tune `num_scheduler_steps`, `max_num_batched_tokens`, and `gpu_memory_utilization` through `runtime.go` presets instead of changing the global worker defaults.
   - **Why**: High impact. Global defaults are too blunt; some GPUs benefit from more aggressive decode amortization while others pay TTFT regression for little gain.
   - **How**: Keep `python/src/infera_worker/config.py` defaults conservative; extend `go/internal/providers/runtime.go` presets for hot models and GPU tiers; document before/after values in this file as changes land.
   - **Measure**: For each preset, record TTFT p50/p95, decode tok/s p50/p95, and peak memory on warm runs.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
-- [ ] **T1-03: Add `max_num_seqs` and KV-cache tuning by GPU tier**
+- [x] **T1-03: Add `max_num_seqs` and KV-cache tuning by GPU tier**
   - **What**: Tune sequence concurrency and KV-cache pressure for RunPod GPU SKUs we actually use.
   - **Why**: High impact on throughput stability. vLLM defaults can overcommit KV cache on single-GPU pods and cause throughput collapse or memory pressure.
   - **How**: Add `vllm_max_num_seqs`; define starting values by model family and GPU tier in `go/internal/providers/runtime.go`; document A40/L40S/A100 recommended ranges and when to raise or lower them.
   - **Measure**: Track tokens/sec, OOM rate, memory used/total, and latency tail under 2x, 4x, and 8x concurrency.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
+
+### Current Runtime Preset Snapshot
+
+| Model / GPU tier | `max_num_batched_tokens` before | `max_num_batched_tokens` after | `num_scheduler_steps` before | `num_scheduler_steps` after | `max_num_seqs` before | `max_num_seqs` after |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen2.5-7B on L40S | 2048 | 2048 | unset | unset | unset | 16 |
+| Qwen2.5-7B on A100 40GB | 2048 | 4096 | unset | 4 | unset | 32 |
+| Qwen2.5-7B on A100 80GB | 2048 | 8192 | unset | 6 | unset | 48 |
+| Qwen2.5-7B on H100 | 2048 | 8192 | unset | 8 | unset | 64 |
+| Qwen3-4B on L40S | 2048 | 2048 | unset | unset | unset | 16 |
+| Qwen3-4B on A100 40GB | 2048 | 4096 | unset | 4 | unset | 32 |
+| Qwen3-4B on A100 80GB | 2048 | 8192 | unset | 6 | unset | 48 |
+| Qwen3-4B on H100 | 2048 | 8192 | unset | 8 | unset | 64 |
+| Kimi-K2.5 on 8xH100 | 4096 | 4096 | 8 | 8 | unset | 16 |
+
+Range notes:
+
+- Unknown OSS models now inherit the GPU-tier fallback preset instead of receiving no runtime tuning at all.
+- Treat `A40` like the `L40S` tier for initial `max_num_seqs` experiments until it is added as a first-class GPU type.
+- Raise `max_num_seqs` only when warm-run memory headroom is stable and TTFT does not regress materially at 4x concurrency.
+- Lower `max_num_seqs` first if OOMs, swap thrash, or P95/P99 latency spikes appear before decode throughput improves.
 
 - [ ] **T1-04: Benchmark quantized variants for hot models**
   - **What**: Create a benchmark matrix for FP16/BF16 versus AWQ/GPTQ/INT4/INT8 variants of the top deployed models.
@@ -212,7 +233,7 @@
 - [ ] **B5-04: Establish a committed benchmark baseline before any runtime-default changes**
   - **What**: Capture a baseline for the current branch using the current production-like image, model, GPU, and routing strategy.
   - **Why**: High impact. Runtime tuning without a committed baseline makes regressions impossible to prove.
-  - **How**: Run the benchmark harness against one standard model/GPU matrix and store the summarized results in this file or an adjacent benchmark doc.
+  - **How**: Run the benchmark harness against one standard model/GPU matrix and store the summarized results in this file or an adjacent benchmark doc such as `docs/BENCHMARK_BASELINE_CURRENT.md`.
   - **Measure**: Baseline must include TTFT p50/p95/p99, decode tok/s p50/p95, cold-start timing, and cost/query.
   - **Status**: `[ ]` not started
 

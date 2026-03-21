@@ -67,6 +67,15 @@ class VLLMEngine(InferenceEngine):
         if self.config.vllm_max_num_batched_tokens is not None:
             engine_kwargs["max_num_batched_tokens"] = self.config.vllm_max_num_batched_tokens
 
+        if self.config.vllm_max_num_seqs is not None:
+            engine_kwargs["max_num_seqs"] = self.config.vllm_max_num_seqs
+
+        if self.config.vllm_swap_space is not None:
+            engine_kwargs["swap_space"] = self.config.vllm_swap_space
+
+        if self.config.vllm_enforce_eager:
+            engine_kwargs["enforce_eager"] = True
+
         if self.config.vllm_num_scheduler_steps > 0:
             engine_kwargs["num_scheduler_steps"] = self.config.vllm_num_scheduler_steps
 

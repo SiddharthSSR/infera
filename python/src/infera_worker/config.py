@@ -52,6 +52,9 @@ class WorkerConfig(BaseSettings):
     vllm_enable_prefix_caching: bool = Field(default=True, description="Enable automatic prefix caching (KV cache reuse)")
     vllm_enable_chunked_prefill: bool = Field(default=True, description="Enable chunked prefill to avoid blocking decode batches")
     vllm_max_num_batched_tokens: int | None = Field(default=None, description="Max tokens per prefill chunk (None = vLLM default)")
+    vllm_max_num_seqs: int | None = Field(default=None, description="Max concurrent sequences per iteration (None = vLLM default)")
+    vllm_swap_space: float | None = Field(default=None, description="CPU swap space for KV spill in GiB (None = vLLM default)")
+    vllm_enforce_eager: bool = Field(default=False, description="Disable CUDA graphs and force eager execution")
     vllm_num_scheduler_steps: int = Field(default=0, description="Multi-step scheduling steps per iteration (0 = disabled)")
 
     # vLLM speculative decoding
