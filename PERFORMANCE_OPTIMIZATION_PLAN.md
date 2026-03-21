@@ -71,7 +71,7 @@ Range notes:
 - [ ] **T1-04: Benchmark quantized variants for hot models**
   - **What**: Create a benchmark matrix for FP16/BF16 versus AWQ/GPTQ/INT4/INT8 variants of the top deployed models.
   - **Why**: Medium to high impact on cost and throughput. Quantization may unlock smaller GPUs or higher concurrency, but only if TTFT and output quality remain acceptable.
-  - **How**: Add candidate quantized model IDs to docs and runtime presets where appropriate; benchmark via `scripts/benchmark-chat.py`; only promote variants that pass latency and quality smoke checks.
+  - **How**: Add candidate quantized model IDs to docs and runtime presets where appropriate; benchmark via `scripts/benchmark-chat.py`; only promote variants that pass latency and quality smoke checks. Track the candidate and result matrix in `docs/QUANTIZATION_BENCHMARK_MATRIX.md`.
   - **Measure**: Compare TTFT, decode tok/s, memory footprint, and cost/query for each quantized candidate against the base model.
   - **Status**: `[ ]` not started
 
