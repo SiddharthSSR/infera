@@ -188,26 +188,26 @@
 
 ## 5. Benchmarking Harness
 
-- [ ] **B5-01: Add concurrent load mode to the benchmark script**
+- [x] **B5-01: Add concurrent load mode to the benchmark script**
   - **What**: Support multi-client concurrent load instead of only sequential runs.
   - **Why**: High impact. Sequential runs hide the queueing and prefill/decode contention that matter in production.
   - **How**: Extend `scripts/benchmark-chat.py` with `--concurrency N` and asynchronous request execution for streaming and non-streaming runs.
   - **Measure**: Report TTFT p50/p95/p99, aggregate throughput, and per-request latency under 2x, 4x, and 8x concurrency.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
-- [ ] **B5-02: Add warmup and cache-reuse modes**
+- [x] **B5-02: Add warmup and cache-reuse modes**
   - **What**: Support warmup runs and repeated-prefix scenarios in the benchmark harness.
   - **Why**: High impact on measurement quality. Prefix caching and warm KV/cache behavior cannot be reasoned about from one cold request at a time.
   - **How**: Add `--warmup N` and a cache-reuse mode to `scripts/benchmark-chat.py`; update `docs/BENCHMARK_BASELINE_TEMPLATE.md` to capture warm versus cold conditions explicitly.
   - **Measure**: Record TTFT deltas between first-run and warmed or repeated-prefix runs.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
-- [ ] **B5-03: Add cold-start benchmark workflow**
+- [x] **B5-03: Add cold-start benchmark workflow**
   - **What**: Standardize how cold-start time is measured for fresh provision, stop/start reuse, and reused stopped-instance flows.
   - **Why**: High impact. Cold-start improvement work is not actionable without a repeatable measurement path.
   - **How**: Expand `docs/BENCHMARK_BASELINE_TEMPLATE.md` and, if helpful, add a helper script that timestamps provision request, first health, registration, and first successful inference.
   - **Measure**: Record provision-to-health, provision-to-ready, and provision-to-first-successful-completion for each provider path.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
 - [ ] **B5-04: Establish a committed benchmark baseline before any runtime-default changes**
   - **What**: Capture a baseline for the current branch using the current production-like image, model, GPU, and routing strategy.

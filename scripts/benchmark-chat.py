@@ -13,6 +13,7 @@ Measures:
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import statistics
@@ -119,6 +120,29 @@ def parse_args() -> argparse.Namespace:
         help="Number of repetitions per preset (default: %(default)s)",
     )
     parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of concurrent clients per run group (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--warmup",
+        type=int,
+        default=0,
+        help="Number of warmup run groups to execute and discard before measuring (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--cache-reuse-mode",
+        choices=["none", "affinity"],
+        default="none",
+        help="How to preserve repeated-prefix routing across runs (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--cache-key-prefix",
+        default="benchmark",
+        help="Prefix used when generating synthetic cache-reuse keys (default: %(default)s)",
+    )
+    parser.add_argument(
         "--max-tokens",
         type=int,
         default=256,
@@ -177,6 +201,20 @@ def build_headers(api_key: str | None, stream: bool, extra_headers: dict[str, st
     if extra_headers:
         headers.update(extra_headers)
     return headers
+
+
+def build_request_headers(
+    extra_headers: dict[str, str] | None,
+    cache_reuse_mode: str,
+    cache_key_prefix: str,
+    preset: str,
+    client_index: int,
+) -> dict[str, str] | None:
+    headers = dict(extra_headers or {})
+    if cache_reuse_mode == "affinity":
+        affinity_prefix = headers.get("X-Infera-Affinity-Key", f"{cache_key_prefix}:{preset}")
+        headers["X-Infera-Affinity-Key"] = f"{affinity_prefix}:client-{client_index}"
+    return headers or None
 
 
 def build_payload(model: str, prompt: str, max_tokens: int, temperature: float, stream: bool) -> bytes:
@@ -283,19 +321,50 @@ def pct(values: list[float], percentile: float) -> float:
     return sorted_values[index]
 
 
+def _group_representatives(rows: list[dict[str, float | int | str]]) -> list[dict[str, float | int | str]]:
+    groups: dict[int, dict[str, float | int | str]] = {}
+    for row in rows:
+        group_run = row.get("group_run")
+        if group_run is None:
+            group_run = row.get("run", 0)
+        groups.setdefault(int(group_run), row)
+    return list(groups.values())
+
+
 def summarize_rows(rows: list[dict[str, float | int | str]]) -> dict[str, float]:
     ttft_values = [float(row["ttft_ms"]) for row in rows]
     stream_total_values = [float(row["stream_total_ms"]) for row in rows]
     non_stream_values = [float(row["non_stream_total_ms"]) for row in rows]
     decode_values = [float(row["decode_tok_s"]) for row in rows if float(row["decode_tok_s"]) > 0]
+    group_rows = _group_representatives(rows)
+    aggregate_decode_values = [
+        float(row["aggregate_decode_tok_s"])
+        for row in group_rows
+        if float(row.get("aggregate_decode_tok_s", 0.0)) > 0
+    ]
+    aggregate_total_values = [
+        float(row["aggregate_total_tok_s"])
+        for row in group_rows
+        if float(row.get("aggregate_total_tok_s", 0.0)) > 0
+    ]
+    contention_values = [
+        float(row["contention_ratio"])
+        for row in group_rows
+        if float(row.get("contention_ratio", 0.0)) > 0
+    ]
     return {
         "ttft_p50_ms": median(ttft_values),
         "ttft_p95_ms": pct(ttft_values, 0.95),
+        "ttft_p99_ms": pct(ttft_values, 0.99),
         "ttft_avg_ms": mean(ttft_values),
         "stream_total_p50_ms": median(stream_total_values),
         "non_stream_total_p50_ms": median(non_stream_values),
         "decode_tok_s_p50": median(decode_values),
         "decode_tok_s_p95": pct(decode_values, 0.95),
+        "aggregate_decode_tok_s_p50": median(aggregate_decode_values),
+        "aggregate_decode_tok_s_p95": pct(aggregate_decode_values, 0.95),
+        "aggregate_total_tok_s_p50": median(aggregate_total_values),
+        "contention_ratio_p50": median(contention_values),
     }
 
 
@@ -306,6 +375,7 @@ def print_summary(name: str, rows: list[dict[str, float | int | str]]) -> None:
         "  "
         f"TTFT p50={summary['ttft_p50_ms']:.1f}ms "
         f"p95={summary['ttft_p95_ms']:.1f}ms "
+        f"p99={summary['ttft_p99_ms']:.1f}ms "
         f"avg={summary['ttft_avg_ms']:.1f}ms"
     )
     print(
@@ -319,10 +389,20 @@ def print_summary(name: str, rows: list[dict[str, float | int | str]]) -> None:
             f"decode_tok/s p50={summary['decode_tok_s_p50']:.2f} "
             f"p95={summary['decode_tok_s_p95']:.2f}"
         )
+    if summary["aggregate_decode_tok_s_p50"] > 0:
+        print(
+            "  "
+            f"aggregate_decode_tok/s p50={summary['aggregate_decode_tok_s_p50']:.2f} "
+            f"p95={summary['aggregate_decode_tok_s_p95']:.2f} "
+            f"aggregate_total_tok/s p50={summary['aggregate_total_tok_s_p50']:.2f} "
+            f"contention_ratio p50={summary['contention_ratio_p50']:.3f}"
+        )
 
 
 def build_result_row(
     run_index: int,
+    client_index: int,
+    concurrency: int,
     stream: StreamResult,
     non_stream: NonStreamResult,
     cost_per_hour: float | None,
@@ -332,6 +412,9 @@ def build_result_row(
     total_tok_s = non_stream.total_tokens / max(non_stream.total_ms / 1000.0, 0.001) if non_stream.total_tokens else 0.0
     row: dict[str, float | int | str] = {
         "run": run_index,
+        "group_run": run_index,
+        "client_index": client_index,
+        "concurrency": concurrency,
         "ttft_ms": round(stream.ttft_ms, 2),
         "stream_total_ms": round(stream.total_ms, 2),
         "non_stream_total_ms": round(non_stream.total_ms, 2),
@@ -348,10 +431,134 @@ def build_result_row(
     return row
 
 
+def _run_phase_concurrently(
+    runner,
+    concurrency: int,
+    base_url: str,
+    api_key: str | None,
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+    timeout: int,
+    extra_headers: dict[str, str] | None,
+    cache_reuse_mode: str,
+    cache_key_prefix: str,
+    preset: str,
+):
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [
+            (
+                client_index,
+                executor.submit(
+                    runner,
+                    base_url,
+                    api_key,
+                    model,
+                    prompt,
+                    max_tokens,
+                    temperature,
+                    timeout,
+                    build_request_headers(
+                        extra_headers,
+                        cache_reuse_mode,
+                        cache_key_prefix,
+                        preset,
+                        client_index,
+                    ),
+                ),
+            )
+            for client_index in range(1, concurrency + 1)
+        ]
+        return [(client_index, future.result()) for client_index, future in futures]
+
+
+def annotate_group_metrics(rows: list[dict[str, float | int | str]]) -> None:
+    if not rows:
+        return
+    aggregate_decode_tok_s = sum(float(row["completion_tokens"]) for row in rows) / max(
+        max((float(row["stream_total_ms"]) - float(row["ttft_ms"])) / 1000.0, 0.001) for row in rows
+    )
+    aggregate_total_tok_s = sum(float(row["total_tokens"]) for row in rows) / max(
+        max(float(row["non_stream_total_ms"]) / 1000.0, 0.001) for row in rows
+    )
+    isolated_decode_tok_s = sum(float(row["decode_tok_s"]) for row in rows)
+    contention_ratio = aggregate_decode_tok_s / isolated_decode_tok_s if isolated_decode_tok_s > 0 else 0.0
+    for row in rows:
+        row["aggregate_decode_tok_s"] = round(aggregate_decode_tok_s, 4)
+        row["aggregate_total_tok_s"] = round(aggregate_total_tok_s, 4)
+        row["contention_ratio"] = round(contention_ratio, 4)
+
+
+def run_benchmark_group(
+    run_index: int,
+    concurrency: int,
+    base_url: str,
+    api_key: str | None,
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+    timeout: int,
+    extra_headers: dict[str, str] | None,
+    cache_reuse_mode: str,
+    cache_key_prefix: str,
+    preset: str,
+    cost_per_hour: float | None,
+) -> list[dict[str, float | int | str]]:
+    non_stream_results = _run_phase_concurrently(
+        run_non_stream,
+        concurrency,
+        base_url,
+        api_key,
+        model,
+        prompt,
+        max_tokens,
+        temperature,
+        timeout,
+        extra_headers,
+        cache_reuse_mode,
+        cache_key_prefix,
+        preset,
+    )
+    stream_results = _run_phase_concurrently(
+        run_stream,
+        concurrency,
+        base_url,
+        api_key,
+        model,
+        prompt,
+        max_tokens,
+        temperature,
+        timeout,
+        extra_headers,
+        cache_reuse_mode,
+        cache_key_prefix,
+        preset,
+    )
+    stream_by_client = {client_index: result for client_index, result in stream_results}
+    rows = [
+        build_result_row(
+            run_index,
+            client_index,
+            concurrency,
+            stream_by_client[client_index],
+            non_stream_result,
+            cost_per_hour,
+        )
+        for client_index, non_stream_result in non_stream_results
+    ]
+    annotate_group_metrics(rows)
+    return rows
+
+
 def build_output_payload(
     base_url: str,
     model: str,
     runs: int,
+    concurrency: int,
+    warmup: int,
+    cache_reuse_mode: str,
     results: dict[str, list[dict[str, float | int | str]]],
     cost_per_hour: float | None,
 ) -> dict[str, object]:
@@ -359,6 +566,9 @@ def build_output_payload(
         "base_url": base_url,
         "model": model,
         "runs": runs,
+        "concurrency": concurrency,
+        "warmup": warmup,
+        "cache_reuse_mode": cache_reuse_mode,
         "presets": results,
         "cost_per_hour": cost_per_hour,
     }
@@ -385,10 +595,40 @@ def main() -> int:
     for preset in presets:
         prompt = PROMPTS[preset]
         rows: list[dict[str, float | int | str]] = []
-        print(f"Running preset={preset} runs={args.runs} model={args.model}")
+        print(
+            f"Running preset={preset} runs={args.runs} warmup={args.warmup} "
+            f"concurrency={args.concurrency} cache_reuse_mode={args.cache_reuse_mode} model={args.model}"
+        )
+        for warmup_index in range(1, args.warmup + 1):
+            try:
+                run_benchmark_group(
+                    warmup_index,
+                    args.concurrency,
+                    args.base_url,
+                    args.api_key,
+                    args.model,
+                    prompt,
+                    args.max_tokens,
+                    args.temperature,
+                    args.timeout,
+                    extra_headers,
+                    args.cache_reuse_mode,
+                    args.cache_key_prefix,
+                    preset,
+                    args.cost_per_hour,
+                )
+            except urllib.error.HTTPError as exc:
+                print(f"warmup {warmup_index}: HTTP {exc.code} {exc.reason}", file=sys.stderr)
+                return 1
+            except urllib.error.URLError as exc:
+                print(f"warmup {warmup_index}: request failed: {exc}", file=sys.stderr)
+                return 1
+            print(f"  warmup={warmup_index}/{args.warmup} complete")
         for run_index in range(1, args.runs + 1):
             try:
-                non_stream = run_non_stream(
+                group_rows = run_benchmark_group(
+                    run_index,
+                    args.concurrency,
                     args.base_url,
                     args.api_key,
                     args.model,
@@ -397,16 +637,10 @@ def main() -> int:
                     args.temperature,
                     args.timeout,
                     extra_headers,
-                )
-                stream = run_stream(
-                    args.base_url,
-                    args.api_key,
-                    args.model,
-                    prompt,
-                    args.max_tokens,
-                    args.temperature,
-                    args.timeout,
-                    extra_headers,
+                    args.cache_reuse_mode,
+                    args.cache_key_prefix,
+                    preset,
+                    args.cost_per_hour,
                 )
             except urllib.error.HTTPError as exc:
                 print(f"run {run_index}: HTTP {exc.code} {exc.reason}", file=sys.stderr)
@@ -415,16 +649,27 @@ def main() -> int:
                 print(f"run {run_index}: request failed: {exc}", file=sys.stderr)
                 return 1
 
-            row = build_result_row(run_index, stream, non_stream, args.cost_per_hour)
-            rows.append(row)
-            print(
-                "  "
-                f"run={run_index} ttft={row['ttft_ms']}ms "
-                f"stream_total={row['stream_total_ms']}ms "
-                f"non_stream_total={row['non_stream_total_ms']}ms "
-                f"completion_tokens={row['completion_tokens']} "
-                f"decode_tok/s={row['decode_tok_s']}"
-            )
+            rows.extend(group_rows)
+            if args.concurrency == 1:
+                row = group_rows[0]
+                print(
+                    "  "
+                    f"run={run_index} ttft={row['ttft_ms']}ms "
+                    f"stream_total={row['stream_total_ms']}ms "
+                    f"non_stream_total={row['non_stream_total_ms']}ms "
+                    f"completion_tokens={row['completion_tokens']} "
+                    f"decode_tok/s={row['decode_tok_s']}"
+                )
+            else:
+                group_summary = summarize_rows(group_rows)
+                print(
+                    "  "
+                    f"group={run_index} clients={args.concurrency} "
+                    f"ttft_p50={group_summary['ttft_p50_ms']:.1f}ms "
+                    f"ttft_p95={group_summary['ttft_p95_ms']:.1f}ms "
+                    f"aggregate_decode_tok/s={group_summary['aggregate_decode_tok_s_p50']:.2f} "
+                    f"aggregate_total_tok/s={group_summary['aggregate_total_tok_s_p50']:.2f}"
+                )
         results[preset] = rows
         print_summary(preset, rows)
 
@@ -435,6 +680,9 @@ def main() -> int:
                 args.base_url,
                 args.model,
                 args.runs,
+                args.concurrency,
+                args.warmup,
+                args.cache_reuse_mode,
                 results,
                 args.cost_per_hour,
             ),
