@@ -33,13 +33,13 @@ func TestApplyRuntimeDefaultsForKnownModel(t *testing.T) {
 
 func TestApplyRuntimeDefaultsUsesGPUOverrides(t *testing.T) {
 	cases := []struct {
-		name                string
-		model               string
-		gpuType             GPUType
-		gpuCount            int
-		wantBatchedTokens   string
-		wantMaxNumSeqs      string
-		wantSchedulerSteps  string
+		name               string
+		model              string
+		gpuType            GPUType
+		gpuCount           int
+		wantBatchedTokens  string
+		wantMaxNumSeqs     string
+		wantSchedulerSteps string
 	}{
 		{
 			name:               "Qwen2.5-7B on A100-40",
@@ -98,6 +98,67 @@ func TestApplyRuntimeDefaultsUsesGPUOverrides(t *testing.T) {
 				t.Fatalf("expected scheduler steps %s, got %q", tc.wantSchedulerSteps, got)
 			}
 		})
+	}
+}
+
+func TestApplyRuntimeDefaultsUsesTensorParallelForMultiGPUPods(t *testing.T) {
+	cases := []struct {
+		name     string
+		model    string
+		gpuType  GPUType
+		gpuCount int
+		wantTP   string
+	}{
+		{
+			name:     "known model on 2xA100-80",
+			model:    "Qwen/Qwen2.5-7B-Instruct",
+			gpuType:  GPUA100_80,
+			gpuCount: 2,
+			wantTP:   "2",
+		},
+		{
+			name:     "unknown model on 4xH100",
+			model:    "meta-llama/Llama-3.1-70B-Instruct",
+			gpuType:  GPUH100,
+			gpuCount: 4,
+			wantTP:   "4",
+		},
+		{
+			name:     "known model on 8xH100",
+			model:    "moonshotai/Kimi-K2.5-Instruct",
+			gpuType:  GPUH100,
+			gpuCount: 8,
+			wantTP:   "8",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &ProvisionRequest{
+				GPUType:  tc.gpuType,
+				GPUCount: tc.gpuCount,
+				Models:   []string{tc.model},
+			}
+			ApplyRuntimeDefaults(req)
+
+			if got := req.Options[OptionVLLMTensorParallelSize]; got != tc.wantTP {
+				t.Fatalf("expected tensor parallel size %s, got %q", tc.wantTP, got)
+			}
+		})
+	}
+}
+
+func TestApplyRuntimeDefaultsDoesNotEnableTensorParallelOnSingleGPU(t *testing.T) {
+	req := &ProvisionRequest{
+		GPUType:  GPUA100_80,
+		GPUCount: 1,
+		Models:   []string{"meta-llama/Llama-3.1-8B-Instruct"},
+	}
+
+	ApplyRuntimeDefaults(req)
+
+	if got := req.Options[OptionVLLMTensorParallelSize]; got != "" {
+		t.Fatalf("expected no tensor parallel override on single GPU, got %q", got)
 	}
 }
 
@@ -168,7 +229,7 @@ func TestApplyRuntimeDefaultsPreservesExplicitOverrides(t *testing.T) {
 		GPUCount: 1,
 		Models:   []string{"Qwen/Qwen3-4B-Thinking-2507"},
 		Options: map[string]string{
-			OptionVLLMTensorParallelSize:    "2",
+			OptionVLLMTensorParallelSize:   "2",
 			OptionVLLMMaxModelLen:          "8192",
 			OptionVLLMGPUMemoryUtilization: "0.90",
 			OptionVLLMEnableChunkedPrefill: "false",
@@ -253,6 +314,36 @@ func TestSpecDecodingInjectedOnLargeGPU(t *testing.T) {
 			name:          "Kimi on H100 gets ngram",
 			model:         "moonshotai/Kimi-K2.5-Instruct",
 			gpuType:       GPUH100,
+			wantSpecModel: "[ngram]",
+			wantNumTokens: "4",
+			wantNgram:     "4",
+		},
+		{
+			name:          "Qwen2.5-14B on H100 gets draft model",
+			model:         "Qwen/Qwen2.5-14B-Instruct",
+			gpuType:       GPUH100,
+			wantSpecModel: "Qwen/Qwen2.5-0.5B-Instruct",
+			wantNumTokens: "5",
+		},
+		{
+			name:          "Qwen2.5-32B on H100 gets draft model",
+			model:         "Qwen/Qwen2.5-32B-Instruct",
+			gpuType:       GPUH100,
+			wantSpecModel: "Qwen/Qwen2.5-1.5B-Instruct",
+			wantNumTokens: "5",
+		},
+		{
+			name:          "Llama 3.1 8B on A100-80 gets ngram",
+			model:         "meta-llama/Meta-Llama-3.1-8B-Instruct",
+			gpuType:       GPUA100_80,
+			wantSpecModel: "[ngram]",
+			wantNumTokens: "4",
+			wantNgram:     "4",
+		},
+		{
+			name:          "Mistral 7B v0.3 on A100-40 gets ngram",
+			model:         "mistralai/Mistral-7B-Instruct-v0.3",
+			gpuType:       GPUA100_40,
 			wantSpecModel: "[ngram]",
 			wantNumTokens: "4",
 			wantNgram:     "4",
@@ -344,7 +435,7 @@ func TestValidateWorkerImageRef(t *testing.T) {
 func TestWorkerRuntimeEnvIncludesChunkedPrefillTunables(t *testing.T) {
 	req := &ProvisionRequest{
 		Options: map[string]string{
-			OptionVLLMTensorParallelSize:    "4",
+			OptionVLLMTensorParallelSize:   "4",
 			OptionVLLMEnableChunkedPrefill: "true",
 			OptionVLLMMaxNumBatchedTokens:  "2048",
 			OptionVLLMMaxNumSeqs:           "64",

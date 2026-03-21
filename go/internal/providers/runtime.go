@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	OptionVLLMTensorParallelSize    = "INFERA_VLLM_TENSOR_PARALLEL_SIZE"
+	OptionVLLMTensorParallelSize   = "INFERA_VLLM_TENSOR_PARALLEL_SIZE"
 	OptionVLLMMaxModelLen          = "INFERA_VLLM_MAX_MODEL_LEN"
 	OptionVLLMGPUMemoryUtilization = "INFERA_VLLM_GPU_MEMORY_UTILIZATION"
 	OptionVLLMEnableChunkedPrefill = "INFERA_VLLM_ENABLE_CHUNKED_PREFILL"
@@ -65,8 +65,12 @@ func ApplyRuntimeDefaults(req *ProvisionRequest) {
 	if strings.TrimSpace(req.Options[OptionVLLMMaxModelLen]) == "" && preset.MaxModelLen > 0 {
 		req.Options[OptionVLLMMaxModelLen] = fmt.Sprintf("%d", preset.MaxModelLen)
 	}
-	if strings.TrimSpace(req.Options[OptionVLLMTensorParallelSize]) == "" && preset.TensorParallelSize > 0 {
-		req.Options[OptionVLLMTensorParallelSize] = fmt.Sprintf("%d", preset.TensorParallelSize)
+	if strings.TrimSpace(req.Options[OptionVLLMTensorParallelSize]) == "" {
+		if preset.TensorParallelSize > 0 {
+			req.Options[OptionVLLMTensorParallelSize] = fmt.Sprintf("%d", preset.TensorParallelSize)
+		} else if tpSize := defaultTensorParallelSize(req); tpSize > 1 {
+			req.Options[OptionVLLMTensorParallelSize] = fmt.Sprintf("%d", tpSize)
+		}
 	}
 	if strings.TrimSpace(req.Options[OptionVLLMGPUMemoryUtilization]) == "" && preset.GPUMemoryUtilization != "" {
 		req.Options[OptionVLLMGPUMemoryUtilization] = preset.GPUMemoryUtilization
@@ -134,6 +138,18 @@ func mergeRuntimePreset(base modelRuntimePreset, overlay modelRuntimePreset) mod
 		merged.NumSchedulerSteps = overlay.NumSchedulerSteps
 	}
 	return merged
+}
+
+func defaultTensorParallelSize(req *ProvisionRequest) int {
+	if req == nil || req.GPUCount <= 1 {
+		return 0
+	}
+	switch req.GPUType {
+	case GPUA100_40, GPUA100_80, GPUH100:
+		return req.GPUCount
+	default:
+		return 0
+	}
 }
 
 // applySpecDecodingDefaults injects spec decoding options for large GPUs.
@@ -234,8 +250,8 @@ type modelRuntimePresetOverride struct {
 // tuning, provide one or more overrides. The base preset is used when none match.
 // SpecDecoding is applied automatically on large GPUs (VRAM >= largeGPUVRAMThresholdGB).
 type modelRuntimePresetEntry struct {
-	Base      modelRuntimePreset
-	Overrides []modelRuntimePresetOverride
+	Base         modelRuntimePreset
+	Overrides    []modelRuntimePresetOverride
 	SpecDecoding *specDecodingConfig
 }
 
@@ -367,6 +383,39 @@ var modelRuntimePresets = map[string]modelRuntimePresetEntry{
 			},
 		},
 		// No confirmed Qwen3 draft model yet; use ngram drafting as a safe fallback.
+		SpecDecoding: &specDecodingConfig{
+			DraftModel:    "",
+			NumSpecTokens: 4,
+			NgramLookup:   4,
+		},
+	},
+	"Qwen/Qwen2.5-14B-Instruct": {
+		SpecDecoding: &specDecodingConfig{
+			DraftModel:    "Qwen/Qwen2.5-0.5B-Instruct",
+			NumSpecTokens: 5,
+		},
+	},
+	"Qwen/Qwen2.5-32B-Instruct": {
+		SpecDecoding: &specDecodingConfig{
+			DraftModel:    "Qwen/Qwen2.5-1.5B-Instruct",
+			NumSpecTokens: 5,
+		},
+	},
+	"meta-llama/Meta-Llama-3.1-8B-Instruct": {
+		SpecDecoding: &specDecodingConfig{
+			DraftModel:    "",
+			NumSpecTokens: 4,
+			NgramLookup:   4,
+		},
+	},
+	"mistralai/Mistral-7B-Instruct-v0.2": {
+		SpecDecoding: &specDecodingConfig{
+			DraftModel:    "",
+			NumSpecTokens: 4,
+			NgramLookup:   4,
+		},
+	},
+	"mistralai/Mistral-7B-Instruct-v0.3": {
 		SpecDecoding: &specDecodingConfig{
 			DraftModel:    "",
 			NumSpecTokens: 4,

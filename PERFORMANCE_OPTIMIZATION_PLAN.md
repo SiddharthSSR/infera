@@ -63,6 +63,7 @@
 Range notes:
 
 - Unknown OSS models now inherit the GPU-tier fallback preset instead of receiving no runtime tuning at all.
+- Multi-GPU `A100` and `H100` requests now default `tensor_parallel_size` to the requested GPU count; single-GPU and smaller SKUs remain unchanged.
 - Treat `A40` like the `L40S` tier for initial `max_num_seqs` experiments until it is added as a first-class GPU type.
 - Raise `max_num_seqs` only when warm-run memory headroom is stable and TTFT does not regress materially at 4x concurrency.
 - Lower `max_num_seqs` first if OOMs, swap thrash, or P95/P99 latency spikes appear before decode throughput improves.
@@ -74,12 +75,12 @@ Range notes:
   - **Measure**: Compare TTFT, decode tok/s, memory footprint, and cost/query for each quantized candidate against the base model.
   - **Status**: `[ ]` not started
 
-- [ ] **T1-05: Enable tensor-parallel presets for multi-GPU pods**
+- [x] **T1-05: Enable tensor-parallel presets for multi-GPU pods**
   - **What**: Use `tensor_parallel_size > 1` when provisioning multi-GPU workers where the model and GPU count justify it.
   - **Why**: Medium impact. Multi-GPU pods are currently under-optimized because tensor parallelism is configurable in the worker but not preset-driven in provisioning.
   - **How**: Add provider preset support for tensor parallel size, starting with multi-GPU A100/H100 requests in `go/internal/providers/runtime.go`; keep single-GPU presets unchanged.
   - **Measure**: Validate successful model load, compare warm TTFT and decode tok/s between TP=1 and TP=N on the same pod size.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
 - [ ] **T1-06: Expand speculative decoding coverage with tested model pairs**
   - **What**: Add tested draft-model and ngram-mode recommendations for the models we actively serve.
