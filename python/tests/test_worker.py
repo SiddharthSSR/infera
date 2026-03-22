@@ -54,6 +54,11 @@ class TestWorker:
         
         assert worker.state == WorkerState.READY
         assert worker.engine is not None
+        startup = worker.get_startup_status()
+        assert "model_load_started" in startup["stages"]
+        assert "model_load_finished" in startup["stages"]
+        assert "worker_ready" in startup["stages"]
+        assert startup["durations_ms"]["worker_ready"] >= 0
 
     @pytest.mark.asyncio
     async def test_stop_worker(self, worker):

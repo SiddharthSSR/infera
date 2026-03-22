@@ -206,6 +206,7 @@ class HTTPServer:
 
         site = web.TCPSite(self.runner, "0.0.0.0", self.config.http_port)
         await site.start()
+        self.worker.record_startup_stage("server_started")
 
         logger.info("HTTP server started", port=self.config.http_port)
 
@@ -255,6 +256,7 @@ class HTTPServer:
 
         await self._register_with_gateway()
         self._gateway_registered = True
+        self.worker.record_startup_stage("gateway_registered")
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def _register_with_gateway(self) -> None:
@@ -647,6 +649,7 @@ class HTTPServer:
             "ready": ready,
             "draining": state == WorkerState.DRAINING,
             "gateway_registered": self._gateway_registered,
+            "startup": self.worker.get_startup_status(),
             "models_loaded": len(self.worker.get_loaded_models()),
             "memory_used_bytes": stats.memory_used_bytes,
             "memory_total_bytes": stats.memory_total_bytes,

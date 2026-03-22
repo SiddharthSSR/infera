@@ -29,6 +29,9 @@ class Worker:
         self.worker_id = config.worker_id or str(uuid.uuid4())
         self.state = WorkerState.INITIALIZING
         self.engine: InferenceEngine | None = None
+        self._startup_events: dict[str, datetime] = {
+            "worker_created": datetime.now(),
+        }
         
         # Stats tracking
         self._request_count = 0
@@ -52,6 +55,8 @@ class Worker:
         logger.info("Starting worker", worker_id=self.worker_id, engine=self.config.engine)
         
         try:
+            self.record_startup_stage("model_load_started")
+
             # Create inference engine
             self.engine = create_engine(self.config)
             
@@ -59,8 +64,10 @@ class Worker:
             for model_id in self.config.preload_models:
                 logger.info("Preloading model", model_id=model_id)
                 await self.load_model(ModelConfig(model_id=model_id))
-            
+
+            self.record_startup_stage("model_load_finished")
             self.state = WorkerState.READY
+            self.record_startup_stage("worker_ready")
             logger.info("Worker ready", worker_id=self.worker_id)
             
         except Exception as e:
@@ -312,6 +319,26 @@ class Worker:
     def get_state(self) -> WorkerState:
         """Get current worker state."""
         return self.state
+
+    def record_startup_stage(self, stage: str) -> None:
+        """Record a startup-stage timestamp if it has not been recorded yet."""
+        self._startup_events.setdefault(stage, datetime.now())
+
+    def get_startup_status(self) -> dict[str, dict[str, str | int]]:
+        """Get startup stage timestamps and durations from worker creation."""
+        created_at = self._startup_events["worker_created"]
+        stages = {
+            stage: timestamp.isoformat()
+            for stage, timestamp in sorted(self._startup_events.items(), key=lambda item: item[1])
+        }
+        durations_ms = {
+            stage: int((timestamp - created_at).total_seconds() * 1000)
+            for stage, timestamp in self._startup_events.items()
+        }
+        return {
+            "stages": stages,
+            "durations_ms": durations_ms,
+        }
 
     def _record_latency(self, latency_ms: float) -> None:
         """Record a latency measurement."""

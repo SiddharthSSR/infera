@@ -108,9 +108,8 @@ flowchart TD
 
 ### Current Bottlenecks
 
-- Worker startup is still serialized: model preload finishes before the HTTP server starts.
-- This means process-up, model-loading, and ready-for-inference are not externally separated.
-- First-time image pull and first-time model download can still dominate startup time.
+- Worker HTTP now starts before preload completes, but first-time image pull and first-time model download can still dominate startup time.
+- Gateway registration still happens only after model preload completes, so the gateway cannot use staged startup states yet.
 - Worker does extra tokenizer loading at model load time.
 
 ### Current Strengths
@@ -153,7 +152,7 @@ flowchart TD
 ### Current Bottlenecks
 
 - Registration still begins only after model preload is complete from the gateway’s perspective; startup is now externally visible through `/health`, but the gateway does not yet receive staged startup heartbeats.
-- We still do not emit explicit cold-start stage timestamps for `server_started`, `model_load_started`, `model_load_finished`, and `gateway_registered`.
+- Worker-side cold-start stage timestamps now exist, but provider-side milestones like `instance_running` still have to be correlated externally.
 
 ## 7. Model Load Pipeline
 
@@ -169,9 +168,8 @@ flowchart TD
 
 ### Current Bottlenecks
 
-- Model load is still monolithic from the platform’s perspective.
 - Tokenizer load is separate from engine creation and adds startup time.
-- The worker now reports `live=true` before model readiness, but the gateway still only sees the worker after successful registration.
+- The worker now exposes staged startup timestamps for `server_started`, `model_load_started`, `model_load_finished`, `worker_ready`, and `gateway_registered`, but the gateway still only sees the worker after successful registration.
 
 ## 8. Routing and Batching Pipeline
 
@@ -229,7 +227,7 @@ flowchart TD
 ### Current Bottlenecks
 
 - We now have strong warm-run benchmarking, but standard `RunPod A100` baseline capture is still incomplete.
-- Cold-start stage measurement still needs completion for fresh provision, stop/start, and reused stopped-instance paths.
+- Worker-side cold-start stage timestamps are available now, but fresh provision, stop/start, and reused stopped-instance baselines still need to be captured.
 - Prefill-vs-decode stage visibility is still not exposed directly from the worker/vLLM path.
 
 ## 11. Priority Optimization Order

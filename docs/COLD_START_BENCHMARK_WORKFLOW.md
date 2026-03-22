@@ -18,15 +18,19 @@ Capture these timestamps for every run:
 
 - `T0 request_sent`: the instant the provision or start action is triggered
 - `T1 instance_running`: the first time `GET /api/instances` or `GET /api/instances/{id}` shows the instance as `running`
-- `T2 worker_registered`: the first time the worker appears in `GET /api/workers`
-- `T3 first_successful_completion`: the first successful response from `scripts/benchmark-chat.py` or a direct `/v1/chat/completions` request
+- `T2 server_started`: the first time the worker `/health` payload exposes `startup.stages.server_started`
+- `T3 model_load_finished`: the first time the worker `/health` payload exposes `startup.stages.model_load_finished`
+- `T4 worker_registered`: the first time the worker appears in `GET /api/workers` or `/health` shows `gateway_registered=true`
+- `T5 first_successful_completion`: the first successful response from `scripts/benchmark-chat.py` or a direct `/v1/chat/completions` request
 
 Derive these metrics:
 
 - `provision_to_running_ms = T1 - T0`
-- `provision_to_registered_ms = T2 - T0`
-- `provision_to_first_success_ms = T3 - T0`
-- `registered_to_first_success_ms = T3 - T2`
+- `running_to_server_started_ms = T2 - T1`
+- `server_to_model_ready_ms = T3 - T2`
+- `provision_to_registered_ms = T4 - T0`
+- `provision_to_first_success_ms = T5 - T0`
+- `registered_to_first_success_ms = T5 - T4`
 
 ## Preparation
 
@@ -57,21 +61,23 @@ python3 scripts/benchmark-chat.py \
 
 1. Trigger `POST /api/instances/provision` and record `T0 request_sent`.
 2. Poll `GET /api/instances/{id}` until the instance becomes `running`; record `T1 instance_running`.
-3. Poll `GET /api/workers` until the worker registers; record `T2 worker_registered`.
-4. Run the benchmark command once and record the first successful completion as `T3 first_successful_completion`.
+3. Poll the worker `/health` endpoint until `startup.stages.server_started` appears; record `T2 server_started`.
+4. Continue polling `/health` until `startup.stages.model_load_finished` appears and `ready=true`; record `T3 model_load_finished`.
+5. Poll `GET /api/workers` until the worker registers, or use `/health` and wait for `gateway_registered=true`; record `T4 worker_registered`.
+6. Run the benchmark command once and record the first successful completion as `T5 first_successful_completion`.
 
 ### 2. Stopped Instance Start
 
 1. Pick a stopped instance that already has the target model and image configuration.
 2. Trigger `POST /api/instances/{id}/start` and record `T0 request_sent`.
-3. Record `T1`, `T2`, and `T3` using the same polling and benchmark steps as above.
+3. Record `T1` through `T5` using the same polling and benchmark steps as above.
 
 ### 3. Stopped Instance Reuse
 
 1. Stop a matching instance first with `POST /api/instances/{id}/stop`.
 2. Trigger `POST /api/instances/provision` again with the same workload shape and record `T0 request_sent`.
 3. Confirm the returned instance ID matches the stopped instance instead of a new provider-side provision.
-4. Record `T1`, `T2`, and `T3` using the same polling and benchmark steps as above.
+4. Record `T1` through `T5` using the same polling and benchmark steps as above.
 
 ## Recording Rules
 

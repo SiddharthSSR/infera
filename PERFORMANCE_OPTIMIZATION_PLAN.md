@@ -13,6 +13,7 @@
 - [x] Gateway worker HTTP clients already use keep-alive pooling.
 - [x] Router batching exists, but gateway-to-worker dispatch is still one request per worker call; current batching mainly adds queue/wait behavior before worker selection.
 - [x] Worker HTTP now starts before model preload completes, and `/health` exposes separate `live`, `ready`, and `gateway_registered` fields during startup.
+- [x] Worker `/health` now exposes startup-stage timestamps for `server_started`, `model_load_started`, `model_load_finished`, `worker_ready`, and `gateway_registered`.
 
 ## Planning Corrections
 
@@ -104,6 +105,8 @@ Range notes:
   - **How**: Benchmark `provision`, `stop/start`, and `reused stopped instance` paths; add visibility around reuse in provider-manager logs and docs; verify matching logic in `go/internal/providers/manager.go`.
   - **Measure**: Record cold start to ready, restart to ready, and cache-hit behavior for reused instances.
   - **Status**: `[ ]` not started
+  - Progress as of `2026-03-22`:
+  - Worker `/health` now exposes startup-stage timestamps, so reuse-path runs can capture `server_started`, `model_load_finished`, and `gateway_registered` directly instead of inferring them only from logs.
 
 - [x] **C2-02: Split liveness and readiness from full model preload**
   - **What**: Start the worker HTTP surface earlier and distinguish process-up from model-ready.
@@ -235,6 +238,8 @@ Range notes:
   - **How**: Expand `docs/BENCHMARK_BASELINE_TEMPLATE.md` and, if helpful, add a helper script that timestamps provision request, first health, registration, and first successful inference.
   - **Measure**: Record provision-to-health, provision-to-ready, and provision-to-first-successful-completion for each provider path.
   - **Status**: `[x]` done
+  - Notes:
+  - `docs/COLD_START_BENCHMARK_WORKFLOW.md` now uses worker `/health` startup-stage timestamps to capture `server_started`, `model_load_finished`, and `worker_registered` explicitly.
 
 - [ ] **B5-04: Establish a committed benchmark baseline before any runtime-default changes**
   - **What**: Capture a baseline for the current branch using the current production-like image, model, GPU, and routing strategy.

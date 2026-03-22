@@ -1,5 +1,6 @@
 """Tests for worker HTTP server metrics."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import asyncio
@@ -167,10 +168,11 @@ async def test_health_endpoint_reports_live_but_not_ready_while_initializing(moc
     response = await server.handle_health(request)
 
     assert response.status == 200
-    payload = response.text
-    assert '"state": "initializing"' in payload
-    assert '"live": true' in payload
-    assert '"ready": false' in payload
+    payload = json.loads(response.body.decode())
+    assert payload["state"] == "initializing"
+    assert payload["live"] is True
+    assert payload["ready"] is False
+    assert "worker_created" in payload["startup"]["stages"]
 
 
 @pytest.mark.asyncio
@@ -192,6 +194,8 @@ async def test_activate_gateway_reporting_registers_once_worker_is_ready(mock_wo
         register.assert_awaited_once()
         assert server._gateway_registered is True
         assert server._heartbeat_task is not None
+        startup = worker.get_startup_status()
+        assert "gateway_registered" in startup["stages"]
     finally:
         if server._heartbeat_task is not None:
             server._heartbeat_task.cancel()
