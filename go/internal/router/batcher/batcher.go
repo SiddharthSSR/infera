@@ -17,6 +17,8 @@ type Config struct {
 	Enabled           bool
 }
 
+const fastFirstBatchWaitMS = 5
+
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() Config {
 	return Config{
@@ -186,7 +188,14 @@ func (q *Queue) Size() int {
 }
 
 func (q *Queue) batchFormationLoop() {
-	ticker := time.NewTicker(time.Duration(q.config.MaxWaitMS/2) * time.Millisecond)
+	tickMS := q.config.MaxWaitMS / 2
+	if fastTick := fastFirstBatchWaitMS / 2; tickMS == 0 || tickMS > fastTick {
+		tickMS = fastTick
+	}
+	if tickMS < 1 {
+		tickMS = 1
+	}
+	ticker := time.NewTicker(time.Duration(tickMS) * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -250,12 +259,16 @@ func (q *Queue) Flush() *types.BatchContext {
 }
 
 func (q *Queue) newBatch() *types.BatchContext {
+	maxWaitMS := q.config.MaxWaitMS
+	if maxWaitMS > fastFirstBatchWaitMS {
+		maxWaitMS = fastFirstBatchWaitMS
+	}
 	return &types.BatchContext{
 		BatchID:   uuid.New().String(),
 		Requests:  make([]*types.RoutedRequest, 0),
 		ModelID:   q.modelID,
 		CreatedAt: time.Now(),
 		MaxSize:   q.config.MaxBatchSize,
-		MaxWaitMS: q.config.MaxWaitMS,
+		MaxWaitMS: maxWaitMS,
 	}
 }

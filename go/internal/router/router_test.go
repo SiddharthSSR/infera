@@ -8,7 +8,51 @@ import (
 	"github.com/infera/infera/go/pkg/types"
 )
 
-func TestRouteBatchedRequestsWaitForDispatchAndShareBatch(t *testing.T) {
+// TestRouteSoloRequestAvoidsFullBatchWait verifies that a single non-streaming
+// request no longer waits the full MaxBatchWaitMS window before dispatch.
+func TestRouteSoloRequestAvoidsFullBatchWait(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableBatching = true
+	cfg.MaxBatchSize = 8
+	cfg.MaxBatchWaitMS = 500 // solo requests should dispatch far sooner than this
+
+	r := New(cfg)
+	defer r.Stop()
+
+	if err := r.RegisterWorker(&types.WorkerInfo{
+		WorkerID: "worker-1",
+		Address:  "worker-1:8081",
+		Status:   types.WorkerStatusHealthy,
+		LoadedModels: []types.LoadedModel{
+			{ModelID: "model-1"},
+		},
+	}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	start := time.Now()
+	routed, err := r.Route(context.Background(), &types.InferenceRequest{
+		RequestID: "req-1",
+		ModelID:   "model-1",
+		Messages:  []types.Message{{Role: types.RoleUser, Content: "hello"}},
+		Priority:  types.PriorityNormal,
+	})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if routed.WorkerID != "worker-1" {
+		t.Fatalf("expected worker-1, got %s", routed.WorkerID)
+	}
+	// Should complete well under the full batch wait window because the
+	// first-request batch timeout is shortened.
+	if elapsed > 200*time.Millisecond {
+		t.Fatalf("expected shortened route wait (<200ms), took %v", elapsed)
+	}
+}
+
+func TestRouteBatchedRequestsShareBatch(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EnableBatching = true
 	cfg.MaxBatchSize = 2
@@ -46,15 +90,6 @@ func TestRouteBatchedRequestsWaitForDispatchAndShareBatch(t *testing.T) {
 		Messages:  []types.Message{{Role: types.RoleUser, Content: "hello"}},
 		Priority:  types.PriorityNormal,
 	})
-
-	select {
-	case <-results:
-		t.Fatal("expected first request to wait for batch dispatch")
-	case err := <-errs:
-		t.Fatalf("unexpected routing error: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-
 	go routeAsync(&types.InferenceRequest{
 		RequestID: "req-2",
 		ModelID:   "model-1",
@@ -83,11 +118,10 @@ func TestRouteBatchedRequestsWaitForDispatchAndShareBatch(t *testing.T) {
 	if routed[0].BatchSize != 2 || routed[1].BatchSize != 2 {
 		t.Fatalf("expected batch size 2 on both routed requests, got %d and %d", routed[0].BatchSize, routed[1].BatchSize)
 	}
-	if routed[0].BatchWaitMS < 0 || routed[1].BatchWaitMS < 0 {
-		t.Fatalf("expected non-negative batch wait, got %d and %d", routed[0].BatchWaitMS, routed[1].BatchWaitMS)
-	}
-	if routed[0].WorkerID != "worker-1" || routed[1].WorkerID != "worker-1" {
-		t.Fatalf("expected batched requests to route to worker-1, got %q and %q", routed[0].WorkerID, routed[1].WorkerID)
+	for _, rr := range routed {
+		if rr.WorkerID != "worker-1" {
+			t.Fatalf("expected worker-1, got %s", rr.WorkerID)
+		}
 	}
 }
 

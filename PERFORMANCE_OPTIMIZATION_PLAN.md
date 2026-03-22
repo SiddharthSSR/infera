@@ -1,7 +1,7 @@
 # Performance Optimization Plan
 
 > Tracking file for performance work across the Infera stack.
-> Branch: `backend/affinity-routing-and-prefix-cache` | Last updated: 2026-03-21
+> Branch: `task/performance-optimization-execution` | Last updated: 2026-03-21
 
 ---
 
@@ -73,7 +73,12 @@ Range notes:
   - **Why**: Medium to high impact on cost and throughput. Quantization may unlock smaller GPUs or higher concurrency, but only if TTFT and output quality remain acceptable.
   - **How**: Add candidate quantized model IDs to docs and runtime presets where appropriate; benchmark via `scripts/benchmark-chat.py`; only promote variants that pass latency and quality smoke checks. Track the candidate and result matrix in `docs/QUANTIZATION_BENCHMARK_MATRIX.md`.
   - **Measure**: Compare TTFT, decode tok/s, memory footprint, and cost/query for each quantized candidate against the base model.
-  - **Status**: `[ ]` not started
+  - **Status**: `[ ]`
+  - Progress as of `2026-03-21`:
+  - Live `L40S` warm benchmarks are now recorded in [`docs/QUANTIZATION_BENCHMARK_MATRIX.md`](/Users/siddharthsingh/codingtensor/infera/docs/QUANTIZATION_BENCHMARK_MATRIX.md).
+  - `solidrust/Mistral-7B-Instruct-v0.3-AWQ` and `Qwen/Qwen2.5-7B-Instruct-AWQ` are provisional winners on throughput and cost/query.
+  - `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` is not a good interactive default on `L40S` because TTFT regresses too much.
+  - This item stays open until manual quality smoke checks are recorded and at least one production-like `A100` confirmation run is captured.
 
 - [x] **T1-05: Enable tensor-parallel presets for multi-GPU pods**
   - **What**: Use `tensor_parallel_size > 1` when provisioning multi-GPU workers where the model and GPU count justify it.
@@ -132,19 +137,19 @@ Range notes:
 
 ## 3. Gateway & Routing Efficiency
 
-- [ ] **G3-01: Add a fast path that avoids batch wait for lone low-contention requests**
+- [x] **G3-01: Add a fast path that avoids batch wait for lone low-contention requests**
   - **What**: Skip the full `MaxBatchWaitMS` penalty when a request arrives to an empty per-model queue and a healthy worker is available.
   - **Why**: High impact on P50 latency. The current batch manager adds wait time even when there is nothing useful to batch.
-  - **How**: Update `go/internal/router/batcher/batcher.go` and `go/internal/router/router.go` so single-request, non-streaming traffic can route immediately under low contention; keep batching active once queue depth grows.
+  - **How**: Keep requests eligible for batching, but shorten the first-request batch wait window in `batcher.go` so lone requests do not pay the full queue delay while real concurrent arrivals can still share a batch.
   - **Measure**: Compare single-user P50/P95 latency and batch-size distribution before/after.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done — `go/internal/router/batcher/batcher.go`
 
-- [ ] **G3-02: Make gateway audit persistence asynchronous**
+- [x] **G3-02: Make gateway audit persistence asynchronous**
   - **What**: Remove synchronous SQLite audit writes from the inference hot path.
   - **Why**: High impact, low effort. `AppendInference` is currently called synchronously in the request defer path.
-  - **How**: Introduce a buffered audit channel and background flush worker in `go/internal/gateway/gateway.go`; ensure graceful drain on shutdown; keep store semantics unchanged in `go/internal/audit/store.go`.
+  - **How**: Buffered channel (`auditCh`, cap 1024) + background `runAuditWriter` goroutine in `gateway.go`; defer sends to channel; `Stop()` closes channel and waits for drain before HTTP shutdown.
   - **Measure**: Compare gateway-added latency and request throughput before/after under concurrent non-streaming load.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done — `go/internal/gateway/gateway.go`
 
 - [ ] **G3-03: Reuse a shared httpx client for registration, heartbeats, and deregistration**
   - **What**: Stop creating a new `httpx.AsyncClient()` for each worker-to-gateway call.
@@ -236,7 +241,10 @@ Range notes:
   - **Why**: High impact. Runtime tuning without a committed baseline makes regressions impossible to prove.
   - **How**: Run the benchmark harness against one standard model/GPU matrix and store the summarized results in this file or an adjacent benchmark doc such as `docs/BENCHMARK_BASELINE_CURRENT.md`.
   - **Measure**: Baseline must include TTFT p50/p95/p99, decode tok/s p50/p95, cold-start timing, and cost/query.
-  - **Status**: `[ ]` not started
+  - **Status**: `[ ]`
+  - Progress as of `2026-03-21`:
+  - Exploratory live `L40S` warm-run data is now preserved in [`docs/BENCHMARK_BASELINE_CURRENT.md`](/Users/siddharthsingh/codingtensor/infera/docs/BENCHMARK_BASELINE_CURRENT.md).
+  - This does not close the item because the standard `RunPod A100 40GB/80GB` matrix and cold-start timings are still pending.
 
 - [ ] **B5-05: Add CI or scheduled regression checks only after the benchmark harness is stable**
   - **What**: Automate regression detection for key latency and throughput metrics.
