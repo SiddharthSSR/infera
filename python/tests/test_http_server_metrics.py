@@ -1,11 +1,14 @@
 """Tests for worker HTTP server metrics."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import asyncio
 
 import pytest
 from aiohttp.test_utils import make_mocked_request
 from prometheus_client import generate_latest
 
+from infera_worker import http_server as http_server_module
 from infera_worker.http_server import HTTPServer
 from infera_worker.worker import Worker
 
@@ -114,3 +117,82 @@ async def test_streaming_invalid_request_returns_error_before_prepare(mock_worke
     assert "infera_worker_inference_requests_total" in metrics
     assert 'status="invalid_request"' in metrics
     assert 'stream="true"' in metrics
+
+
+@pytest.mark.asyncio
+async def test_gateway_client_is_reused_and_closed_on_stop(mock_worker_config, monkeypatch):
+    created_clients: list[object] = []
+
+    class FakeAsyncClient:
+        def __init__(self):
+            self.is_closed = False
+            self.closed = False
+            created_clients.append(self)
+
+        async def aclose(self):
+            self.is_closed = True
+            self.closed = True
+
+        async def post(self, *_args, **_kwargs):
+            return SimpleNamespace(status_code=200, text="", is_error=False)
+
+        async def delete(self, *_args, **_kwargs):
+            return SimpleNamespace(status_code=200, text="", is_error=False)
+
+    monkeypatch.setattr(http_server_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    worker = Worker(mock_worker_config)
+    server = HTTPServer(worker, mock_worker_config)
+
+    client_a = server._ensure_gateway_client()
+    client_b = server._ensure_gateway_client()
+
+    assert client_a is client_b
+    assert len(created_clients) == 1
+
+    server._gateway_registered = True
+    await server.stop()
+
+    assert len(created_clients) == 1
+    assert created_clients[0].closed is True
+    assert server._gateway_client is None
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_reports_live_but_not_ready_while_initializing(mock_worker_config):
+    worker = Worker(mock_worker_config)
+    server = HTTPServer(worker, mock_worker_config)
+
+    request = make_mocked_request("GET", "/health")
+    response = await server.handle_health(request)
+
+    assert response.status == 200
+    payload = response.text
+    assert '"state": "initializing"' in payload
+    assert '"live": true' in payload
+    assert '"ready": false' in payload
+
+
+@pytest.mark.asyncio
+async def test_activate_gateway_reporting_registers_once_worker_is_ready(mock_worker_config, monkeypatch):
+    worker = Worker(mock_worker_config)
+    server = HTTPServer(worker, mock_worker_config)
+    await worker.start()
+
+    register = AsyncMock()
+    monkeypatch.setattr(server, "_register_with_gateway", register)
+
+    async def fake_heartbeat_loop():
+        await asyncio.Future()
+
+    monkeypatch.setattr(server, "_heartbeat_loop", fake_heartbeat_loop)
+
+    try:
+        await server.activate_gateway_reporting()
+        register.assert_awaited_once()
+        assert server._gateway_registered is True
+        assert server._heartbeat_task is not None
+    finally:
+        if server._heartbeat_task is not None:
+            server._heartbeat_task.cancel()
+            await asyncio.gather(server._heartbeat_task, return_exceptions=True)

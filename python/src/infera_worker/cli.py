@@ -41,11 +41,15 @@ async def run_worker(config: WorkerConfig) -> None:
         loop.add_signal_handler(sig, signal_handler)
 
     try:
-        # Start worker
-        await worker.start()
-        
-        # Start HTTP server
+        # Start HTTP server first so liveness and loading state are observable
+        # while the worker is still initializing models.
         await http_server.start()
+
+        # Start worker and preload models.
+        await worker.start()
+
+        # Register only after the worker is actually ready for traffic.
+        await http_server.activate_gateway_reporting()
         
         logger.info(
             "Worker running",

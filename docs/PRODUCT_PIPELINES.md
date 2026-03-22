@@ -152,8 +152,8 @@ flowchart TD
 
 ### Current Bottlenecks
 
-- The worker currently creates a new `httpx.AsyncClient()` for registration, deregistration, and each heartbeat call.
-- Registration only happens after model preload is complete, so the gateway cannot observe intermediate startup stages.
+- Registration still begins only after model preload is complete from the gateway’s perspective; startup is now externally visible through `/health`, but the gateway does not yet receive staged startup heartbeats.
+- We still do not emit explicit cold-start stage timestamps for `server_started`, `model_load_started`, `model_load_finished`, and `gateway_registered`.
 
 ## 7. Model Load Pipeline
 
@@ -171,7 +171,7 @@ flowchart TD
 
 - Model load is still monolithic from the platform’s perspective.
 - Tokenizer load is separate from engine creation and adds startup time.
-- There is no staged readiness signal for “container up, model still loading.”
+- The worker now reports `live=true` before model readiness, but the gateway still only sees the worker after successful registration.
 
 ## 8. Routing and Batching Pipeline
 
@@ -210,9 +210,9 @@ flowchart LR
 
 ### Current Bottlenecks
 
-- Audit persistence is synchronous.
 - Quota checks can add extra store work in the gateway path.
-- This path is correct functionally, but still not fully minimized for hot latency.
+- Audit persistence is now asynchronous, but quota checks are still authoritative store reads on the hot path.
+- This path is functionally correct and leaner than before, but still not fully minimized for hot latency.
 
 ## 10. Benchmark and Performance Measurement Pipeline
 
@@ -245,8 +245,8 @@ If the goal is to improve performance with the highest leverage first, this is t
 
 These are the most concrete next pipeline optimizations still available:
 
-1. Add a single-request fast path so router batching does not impose queue wait on empty/low-contention traffic.
-2. Make gateway audit persistence asynchronous.
-3. Reuse one worker-side `httpx` client for register, heartbeat, and deregister.
-4. Split worker `liveness`, `readiness`, and `model-ready` so startup is observable and routable sooner.
-5. Add explicit prefill/decode stage instrumentation before deeper GPU/model matrix tuning.
+1. Add explicit prefill/decode stage instrumentation before deeper GPU/model matrix tuning.
+2. Add cold-start stage instrumentation from provision request through first successful inference.
+3. Benchmark and optimize the existing stop/start reuse path before building warm pools.
+4. Extend staged readiness into gateway-visible startup metrics and routing policy.
+5. Build the GPU/model/config performance matrix on top of the stabilized pipeline.

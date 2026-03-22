@@ -12,7 +12,7 @@
 - [x] Matching stopped instances are already reused via provider `start` instead of always reprovisioning from scratch.
 - [x] Gateway worker HTTP clients already use keep-alive pooling.
 - [x] Router batching exists, but gateway-to-worker dispatch is still one request per worker call; current batching mainly adds queue/wait behavior before worker selection.
-- [x] Worker startup still blocks on model preload before the HTTP server is started, so readiness is coupled to full model load.
+- [x] Worker HTTP now starts before model preload completes, and `/health` exposes separate `live`, `ready`, and `gateway_registered` fields during startup.
 
 ## Planning Corrections
 
@@ -105,12 +105,12 @@ Range notes:
   - **Measure**: Record cold start to ready, restart to ready, and cache-hit behavior for reused instances.
   - **Status**: `[ ]` not started
 
-- [ ] **C2-02: Split liveness and readiness from full model preload**
+- [x] **C2-02: Split liveness and readiness from full model preload**
   - **What**: Start the worker HTTP surface earlier and distinguish process-up from model-ready.
   - **Why**: High impact on perceived cold-start time and operability. Today the server only starts after preload completes, so the platform cannot observe intermediate startup stages.
   - **How**: Change startup order in `python/src/infera_worker/cli.py` and `python/src/infera_worker/worker.py` so the server can report state during model load; add readiness-specific fields to `/health` and heartbeat payloads in `python/src/infera_worker/http_server.py`; keep inference endpoints rejecting requests until ready.
   - **Measure**: Compare provision-to-first-health, provision-to-ready, and gateway registration timing before/after.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
 - [ ] **C2-03: Add persistent-cache strategy for Vast.ai**
   - **What**: Avoid full model redownloads on Vast.ai restart paths.
@@ -151,12 +151,12 @@ Range notes:
   - **Measure**: Compare gateway-added latency and request throughput before/after under concurrent non-streaming load.
   - **Status**: `[x]` done — `go/internal/gateway/gateway.go`
 
-- [ ] **G3-03: Reuse a shared httpx client for registration, heartbeats, and deregistration**
+- [x] **G3-03: Reuse a shared httpx client for registration, heartbeats, and deregistration**
   - **What**: Stop creating a new `httpx.AsyncClient()` for each worker-to-gateway call.
   - **Why**: Medium impact. This reduces connection churn and removes avoidable overhead from the worker control path.
   - **How**: Create one long-lived client in `python/src/infera_worker/http_server.py`, reuse it for register/heartbeat/deregister, and close it in `stop()`.
   - **Measure**: Confirm reduced connection churn in logs/metrics and no regression in registration or heartbeat behavior.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done — `python/src/infera_worker/http_server.py`
 
 - [ ] **G3-04: Benchmark routing strategy choices under realistic multi-turn load**
   - **What**: Compare least-loaded, latency-based, and affinity-heavy routing using the same concurrent conversation workload.
