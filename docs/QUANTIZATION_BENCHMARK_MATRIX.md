@@ -2,7 +2,7 @@
 
 Use this document to evaluate quantized OSS model variants before promoting them into any default runtime path.
 
-Status: candidate matrix prepared, live benchmark execution pending
+Status: live `L40S` benchmark results captured for Mistral and Qwen; manual smoke validation and standard `A100` confirmation still pending
 
 ## Rules
 
@@ -95,14 +95,27 @@ Treat a quantized candidate as promotable only if all of these are true relative
 
 ## Result Table
 
-Commit measured results here once a live benchmark target is available.
+Live warm-run results captured on `2026-03-21` against the live gateway on `L40S` with `--runs 3 --warmup 2 --concurrency 4 --cost-per-hour 0.99`. These rows are enough to make provisional throughput decisions, but not enough to promote a default runtime without the manual smoke checks above.
 
 | Family | Base model | Quantized model | GPU | Scenario | TTFT p50 | TTFT p95 | Decode tok/s p50 | Decode tok/s p95 | Cost/query | Quality result | Decision |
 |---|---|---|---|---|---:|---:|---:|---:|---:|---|---|
-| Mistral | `mistralai/Mistral-7B-Instruct-v0.3` | `solidrust/Mistral-7B-Instruct-v0.3-AWQ` | pending | pending | pending | pending | pending | pending | pending | pending | pending |
-| Qwen | `Qwen/Qwen2.5-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct-AWQ` | pending | pending | pending | pending | pending | pending | pending | pending | pending |
-| Qwen | `Qwen/Qwen2.5-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` | pending | pending | pending | pending | pending | pending | pending | pending | pending |
-| Qwen | `Qwen/Qwen2.5-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int8` | pending | pending | pending | pending | pending | pending | pending | pending | pending |
+| Mistral | `mistralai/Mistral-7B-Instruct-v0.3` | `solidrust/Mistral-7B-Instruct-v0.3-AWQ` | `L40S` | no reuse | `641.0ms` | `735.8ms` | `144.58` | `154.20` | `$0.000417` | benchmark conversation passed; manual smoke pending | provisional winner over base on throughput and TTFT |
+| Mistral | `mistralai/Mistral-7B-Instruct-v0.3` | `solidrust/Mistral-7B-Instruct-v0.3-AWQ` | `L40S` | affinity reuse | `663.3ms` | `1463.8ms` | `140.39` | `149.59` | `$0.000423` | benchmark conversation passed; manual smoke pending | throughput good, but tail TTFT too spiky to prefer over no reuse |
+| Qwen | `Qwen/Qwen2.5-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct-AWQ` | `L40S` | no reuse | `421.0ms` | `462.5ms` | `133.88` | `154.47` | `$0.000468` | benchmark conversation passed; manual smoke pending | provisional winner over base on throughput with slightly better TTFT |
+| Qwen | `Qwen/Qwen2.5-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct-AWQ` | `L40S` | affinity reuse | `430.8ms` | `1217.0ms` | `135.20` | `165.33` | `$0.000273` | benchmark conversation passed; manual smoke pending | promising throughput, but rerun needed because of P95 spike |
+| Qwen | `Qwen/Qwen2.5-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` | `L40S` | no reuse | `1127.3ms` | `1624.0ms` | `131.50` | `155.45` | `$0.000449` | benchmark conversation passed; manual smoke pending | do not promote for interactive traffic; TTFT regresses too much |
+| Qwen | `Qwen/Qwen2.5-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` | `L40S` | affinity reuse | `1157.0ms` | `1639.0ms` | `141.31` | `158.63` | `$0.000474` | benchmark conversation passed; manual smoke pending | do not promote; affinity does not fix tail latency |
+| Qwen | `Qwen/Qwen2.5-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int8` | pending | pending | pending | pending | pending | pending | pending | smoke and live benchmark pending | pending |
+
+## Observed Conclusions
+
+- `solidrust/Mistral-7B-Instruct-v0.3-AWQ` is the strongest Mistral candidate so far on `L40S`.
+  Base `no reuse` was `1168.9ms` TTFT p50 and `46.33` decode tok/s p50, while AWQ `no reuse` improved to `641.0ms` and `144.58`.
+- `Qwen/Qwen2.5-7B-Instruct-AWQ` is the strongest Qwen candidate so far on `L40S`.
+  Base `no reuse` was `462.6ms` TTFT p50 and `50.27` decode tok/s p50, while AWQ `no reuse` improved to `421.0ms` and `133.88`.
+- `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` has good throughput on `L40S`, but its TTFT regression is too large for interactive defaults.
+- Affinity reuse is not a confirmed win for these quantized profiles yet.
+  Both Mistral AWQ and Qwen AWQ showed strong throughput, but each had a high-tail TTFT run that needs rerun and explanation before we recommend affinity here.
 
 ## Promotion Rule
 
