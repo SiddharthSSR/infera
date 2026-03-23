@@ -3,6 +3,7 @@
 from collections.abc import AsyncGenerator
 from datetime import datetime
 import asyncio
+import inspect
 from typing import Any
 
 from ..types import (
@@ -64,28 +65,36 @@ class VLLMEngine(InferenceEngine):
             enable_chunked_prefill=self.config.vllm_enable_chunked_prefill,
         )
 
+        optional_engine_kwargs: dict[str, Any] = {}
         if self.config.vllm_max_num_batched_tokens is not None:
-            engine_kwargs["max_num_batched_tokens"] = self.config.vllm_max_num_batched_tokens
+            optional_engine_kwargs["max_num_batched_tokens"] = self.config.vllm_max_num_batched_tokens
 
         if self.config.vllm_max_num_seqs is not None:
-            engine_kwargs["max_num_seqs"] = self.config.vllm_max_num_seqs
+            optional_engine_kwargs["max_num_seqs"] = self.config.vllm_max_num_seqs
 
         if self.config.vllm_swap_space is not None:
-            engine_kwargs["swap_space"] = self.config.vllm_swap_space
+            optional_engine_kwargs["swap_space"] = self.config.vllm_swap_space
 
         if self.config.vllm_enforce_eager:
-            engine_kwargs["enforce_eager"] = True
+            optional_engine_kwargs["enforce_eager"] = True
 
         if self.config.vllm_num_scheduler_steps > 0:
-            engine_kwargs["num_scheduler_steps"] = self.config.vllm_num_scheduler_steps
+            optional_engine_kwargs["num_scheduler_steps"] = self.config.vllm_num_scheduler_steps
 
         spec_model = self.config.vllm_speculative_model.strip()
         num_spec_tokens = self.config.vllm_num_speculative_tokens
         if spec_model and num_spec_tokens > 0:
-            engine_kwargs["speculative_model"] = spec_model
-            engine_kwargs["num_speculative_tokens"] = num_spec_tokens
+            optional_engine_kwargs["speculative_model"] = spec_model
+            optional_engine_kwargs["num_speculative_tokens"] = num_spec_tokens
             if spec_model == "[ngram]" and self.config.vllm_ngram_prompt_lookup_num_tokens > 0:
-                engine_kwargs["ngram_prompt_lookup_num_tokens"] = self.config.vllm_ngram_prompt_lookup_num_tokens
+                optional_engine_kwargs["ngram_prompt_lookup_num_tokens"] = (
+                    self.config.vllm_ngram_prompt_lookup_num_tokens
+                )
+
+        supported_kwargs = set(inspect.signature(AsyncEngineArgs).parameters)
+        for key, value in optional_engine_kwargs.items():
+            if key in supported_kwargs:
+                engine_kwargs[key] = value
 
         engine_args = AsyncEngineArgs(**engine_kwargs)
 
