@@ -2,7 +2,7 @@
 
 This document is the committed baseline record for the current branch once live measurements are captured.
 
-Status: standard `RunPod A100` baseline still pending; exploratory live `L40S` quantization results captured on `2026-03-21`
+Status: partial `RunPod A100_80GB` cold-start baseline captured on `2026-03-23` with the automated helper script; standard warm `RunPod A100` matrix still pending; exploratory live `L40S` quantization results captured on `2026-03-21`
 
 ## Standard Matrix
 
@@ -79,6 +79,21 @@ Follow [`docs/COLD_START_BENCHMARK_WORKFLOW.md`](/Users/siddharthsingh/codingten
 - `stopped_instance_start`
 - `stopped_instance_reuse`
 
+Automated helper example:
+
+```bash
+python3 scripts/cold-start-benchmark.py \
+  https://inferai.co.in \
+  --api-key "$INFERA_ADMIN_KEY" \
+  --provider runpod \
+  --gpu-type A100_80GB \
+  --provider-gpu-type-id "NVIDIA A100 80GB PCIe" \
+  --gpu-count 1 \
+  --model "Qwen/Qwen2.5-7B-Instruct" \
+  --health-insecure \
+  --json-output /tmp/cold-start-a100-80.json
+```
+
 ## Results
 
 Fill this table only with live measurements from the standard matrix above.
@@ -92,11 +107,37 @@ Fill this table only with live measurements from the standard matrix above.
 
 ## Cold-Start Results
 
-| Provider | GPU | Scenario | Provision to running | Provision to registered | Provision to first success | Registered to first success | Notes |
-|---|---|---|---:|---:|---:|---:|---|
-| RunPod | A100 40GB | fresh_provision | pending | pending | pending | pending |  |
-| RunPod | A100 40GB | stopped_instance_start | pending | pending | pending | pending |  |
-| RunPod | A100 40GB | stopped_instance_reuse | pending | pending | pending | pending | confirm reused instance ID |
+| Provider | GPU | Scenario | Request to running | Request to server started | Server to model ready | Request to registered | Request to first success | Registered to first success | Notes |
+|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| RunPod | A100 80GB PCIe | fresh_provision | `5,527 ms` | `3,273 ms` | `88,127 ms` | `92,777 ms` | `94,631 ms` | `1,854 ms` | automated helper run; `instance_id=6dwe0z1gvxrs0u`; worker `157f5d73-a73b-4882-8bf6-72f52e3ade20` |
+| RunPod | A100 80GB PCIe | stopped_instance_start | `9,444 ms` | `5,440 ms` | `54,772 ms` | `62,473 ms` | `63,405 ms` | `932 ms` | same reused instance after explicit `stop`/`start`; worker `587cbd7f-ff6b-4a3f-a02d-4b9822c2a850` |
+| RunPod | A100 80GB PCIe | stopped_instance_reuse | `3,122 ms` | `4,397 ms` | `57,405 ms` | `64,328 ms` | `66,277 ms` | `1,949 ms` | same `instance_id=6dwe0z1gvxrs0u` returned by a matching provision request; worker `7f708903-ec55-48be-a031-6930386f60c3` |
+
+### Cold-Start Sample Details
+
+- Date: `2026-03-23`
+- Gateway: `https://inferai.co.in`
+- Provider: `runpod`
+- GPU: `A100_80GB` with `provider_gpu_type_id="NVIDIA A100 80GB PCIe"`
+- Model: `Qwen/Qwen2.5-7B-Instruct`
+- Cold-start helper: [`scripts/cold-start-benchmark.py`](/Users/siddharthsingh/codingtensor/infera/scripts/cold-start-benchmark.py)
+- Helper invocation:
+  `python3 scripts/cold-start-benchmark.py https://inferai.co.in --api-key "$INFERA_ADMIN_KEY" --provider runpod --gpu-type A100_80GB --provider-gpu-type-id "NVIDIA A100 80GB PCIe" --gpu-count 1 --model "Qwen/Qwen2.5-7B-Instruct" --health-insecure --json-output /tmp/cold-start-a100-80.json`
+- First-success probe: single completion request using the same model through `/v1/chat/completions`
+- Worker image: updated image compatible with optional vLLM engine args (`num_scheduler_steps` now filtered by runtime signature)
+- Worker `/health` now exposes `startup.stages` and `startup.durations_ms`, so `server_started` and `model_load_finished` are read from worker-emitted timestamps instead of being inferred from later observation time.
+- `request_to_running_ms` is still a coarse gateway milestone from `/api/instances/*`; it can lag the worker’s own `server_started` timestamp.
+- Direct scripted `urllib` access to the RunPod proxy health URL can be blocked with `HTTP 403 / error code 1010`; the helper script now falls back to local `curl` for the health fetch path.
+
+### Early Read on the Data
+
+- `fresh_provision` is dominated by model load on this image/model combination: `server_to_model_ready_ms = 88,127 ms`.
+- `stopped_instance_start` and `stopped_instance_reuse` are both much better than fresh provision because model artifacts are already present, but they still spend about `55-57 s` in model load.
+- Relative to `fresh_provision`, this automated sample shows:
+  - `stopped_instance_start` first success about `1.49x` faster
+  - `stopped_instance_reuse` first success about `1.43x` faster
+- The current bottleneck is no longer infrastructure boot alone; model load is now the dominant cold-start cost even on the reuse/start paths.
+- This still supports prioritizing `C2-01` reuse/start-path optimization before any true warm-pool feature, but it also makes model-load reduction the next clear lever.
 
 ## Exploratory Live Results
 

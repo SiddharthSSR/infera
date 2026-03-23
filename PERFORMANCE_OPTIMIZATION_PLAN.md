@@ -107,6 +107,23 @@ Range notes:
   - **Status**: `[ ]` not started
   - Progress as of `2026-03-22`:
   - Worker `/health` now exposes startup-stage timestamps, so reuse-path runs can capture `server_started`, `model_load_finished`, and `gateway_registered` directly instead of inferring them only from logs.
+  - Progress as of `2026-03-23`:
+  - First live `RunPod A100_80GB` cold-start sample set is now recorded in [`docs/BENCHMARK_BASELINE_CURRENT.md`](/Users/siddharthsingh/codingtensor/infera/docs/BENCHMARK_BASELINE_CURRENT.md).
+  - Measured `provision_to_first_success_ms`:
+    - `fresh_provision`: `605,704 ms`
+    - `stopped_instance_start`: `193,905 ms`
+    - `stopped_instance_reuse`: `114,388 ms`
+  - This confirms the existing reuse path is already materially better than fresh provision and should be optimized before a true warm-pool feature.
+  - Progress as of `2026-03-23` (automated rerun with updated worker image and startup-stage capture):
+  - Latest helper-script sample on `RunPod A100_80GB PCIe` now records:
+    - `fresh_provision`: `94,631 ms` to first success
+    - `stopped_instance_start`: `63,405 ms`
+    - `stopped_instance_reuse`: `66,277 ms`
+  - Worker-reported `server_to_model_ready_ms` is the dominant cost:
+    - `fresh_provision`: `88,127 ms`
+    - `stopped_instance_start`: `54,772 ms`
+    - `stopped_instance_reuse`: `57,405 ms`
+  - Start and reuse are now in the same band on this sample, which suggests model load dominates more than infrastructure boot.
 
 - [x] **C2-02: Split liveness and readiness from full model preload**
   - **What**: Start the worker HTTP surface earlier and distinguish process-up from model-ready.

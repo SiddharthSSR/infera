@@ -2,6 +2,35 @@
 
 Use this runbook to measure cold-start behavior consistently across provider paths.
 
+If you want to automate the full three-scenario flow, use the helper script:
+
+```bash
+python3 scripts/cold-start-benchmark.py \
+  https://inferai.co.in \
+  --api-key "$INFERA_ADMIN_KEY" \
+  --provider runpod \
+  --gpu-type A100_80GB \
+  --provider-gpu-type-id "NVIDIA A100 80GB PCIe" \
+  --gpu-count 1 \
+  --model "Qwen/Qwen2.5-7B-Instruct" \
+  --health-insecure \
+  --json-output /tmp/cold-start-a100-80.json
+```
+
+For CLI help and all flags:
+
+```bash
+python3 scripts/cold-start-benchmark.py --help
+```
+
+The helper runs all three scenarios in order:
+
+1. `fresh_provision`
+2. `stopped_instance_start`
+3. `stopped_instance_reuse`
+
+It records `T0-T5`, worker `/health` startup stages, first-success probe timings, and writes a JSON report you can paste into the baseline docs.
+
 ## Scope
 
 Record all three scenarios separately:
@@ -59,11 +88,16 @@ Capture these timestamps for every run:
 Derive these metrics:
 
 - `provision_to_running_ms = T1 - T0`
-- `running_to_server_started_ms = T2 - T1`
+- `provision_to_server_started_ms = T2 - T0`
 - `server_to_model_ready_ms = T3 - T2`
 - `provision_to_registered_ms = T4 - T0`
 - `provision_to_first_success_ms = T5 - T0`
 - `registered_to_first_success_ms = T5 - T4`
+
+Notes:
+
+- The worker's own `server_started` timestamp can precede the gateway's coarse `instance_running` milestone from `/api/instances/*`.
+- Because of that, prefer `provision_to_server_started_ms` over `running_to_server_started_ms` as the primary benchmark metric.
 
 ## Preparation
 
