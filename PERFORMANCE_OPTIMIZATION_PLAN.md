@@ -116,14 +116,25 @@ Range notes:
   - This confirms the existing reuse path is already materially better than fresh provision and should be optimized before a true warm-pool feature.
   - Progress as of `2026-03-23` (automated rerun with updated worker image and startup-stage capture):
   - Latest helper-script sample on `RunPod A100_80GB PCIe` now records:
-    - `fresh_provision`: `94,631 ms` to first success
-    - `stopped_instance_start`: `63,405 ms`
-    - `stopped_instance_reuse`: `66,277 ms`
+    - `fresh_provision`: `96,743 ms` to first success
+    - `stopped_instance_start`: `66,441 ms`
+    - `stopped_instance_reuse`: `63,888 ms`
   - Worker-reported `server_to_model_ready_ms` is the dominant cost:
-    - `fresh_provision`: `88,127 ms`
-    - `stopped_instance_start`: `54,772 ms`
-    - `stopped_instance_reuse`: `57,405 ms`
-  - Start and reuse are now in the same band on this sample, which suggests model load dominates more than infrastructure boot.
+    - `fresh_provision`: `89,853 ms`
+    - `stopped_instance_start`: `58,154 ms`
+    - `stopped_instance_reuse`: `54,119 ms`
+  - The new worker substages show that most of this time is in `vllm_engine_init_finished`, while engine creation is only about `5-6s`.
+  - Async tokenizer warmup now exists in code but still needs a fresh rerun to confirm whether `registered_to_first_success_ms` comes back down.
+  - Progress as of `2026-03-23` (rerun after async tokenizer warmup and helper-script registration fixes):
+  - Latest helper-script sample on `RunPod A100_80GB PCIe` now records:
+    - `fresh_provision`: `335,547 ms` to first success, but this row is skewed by gateway worker-list visibility lag and should not be used as the primary baseline
+    - `stopped_instance_start`: `58,113 ms`
+    - `stopped_instance_reuse`: `56,764 ms`
+  - Worker-reported `server_to_model_ready_ms` on the reliable restart paths is now:
+    - `stopped_instance_start`: `47,320 ms`
+    - `stopped_instance_reuse`: `47,010 ms`
+  - Async tokenizer warmup now completes in background on the measured sample, and `registered_to_first_success_ms` is down to about `1.5-1.8s`.
+  - The dominant remaining cold-start bottleneck is still `vllm_engine_init_finished`, not worker boot, registration, or tokenizer setup.
 
 - [x] **C2-02: Split liveness and readiness from full model preload**
   - **What**: Start the worker HTTP surface earlier and distinguish process-up from model-ready.
@@ -267,6 +278,15 @@ Range notes:
   - Progress as of `2026-03-21`:
   - Exploratory live `L40S` warm-run data is now preserved in [`docs/BENCHMARK_BASELINE_CURRENT.md`](/Users/siddharthsingh/codingtensor/infera/docs/BENCHMARK_BASELINE_CURRENT.md).
   - This does not close the item because the standard `RunPod A100 40GB/80GB` matrix and cold-start timings are still pending.
+  - Progress as of `2026-03-23`:
+  - Warm `RunPod A100_80GB` baseline rows are now recorded in [`docs/BENCHMARK_BASELINE_CURRENT.md`](/Users/siddharthsingh/codingtensor/infera/docs/BENCHMARK_BASELINE_CURRENT.md) for:
+    - `least_loaded + no reuse`
+    - `affinity reuse`
+  - Measured results for `Qwen/Qwen2.5-7B-Instruct`, `runs=3`, `warmup=2`, `concurrency=4`:
+    - no reuse: `TTFT p50=937.8ms`, `decode tok/s p50=152.84`, `aggregate decode tok/s p50=587.77`, cost/query about `$0.000493`
+    - affinity reuse: `TTFT p50=1055.5ms`, `decode tok/s p50=134.32`, `aggregate decode tok/s p50=494.35`, cost/query about `$0.000512`
+  - On this sample, affinity reuse underperformed the default least-loaded path, so it should not be treated as a warm-path default win.
+  - This item remains open until the `A100_40GB` warm rows are captured or explicitly deferred.
 
 - [ ] **B5-05: Add CI or scheduled regression checks only after the benchmark harness is stable**
   - **What**: Automate regression detection for key latency and throughput metrics.

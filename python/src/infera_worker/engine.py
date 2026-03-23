@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator
 from datetime import datetime
 import asyncio
 import random
+from typing import Callable
 
 from .types import (
     InferenceRequest, InferenceResponse, TokenChunk, Choice, Message,
@@ -15,6 +16,17 @@ from .config import WorkerConfig, ModelConfig
 
 class InferenceEngine(ABC):
     """Abstract base class for inference engines."""
+
+    def set_startup_stage_recorder(
+        self,
+        recorder: Callable[[str], None] | None,
+    ) -> None:
+        """Install an optional callback for detailed startup-stage reporting."""
+        del recorder
+
+    async def warm_model_runtime(self, model_id: str) -> None:
+        """Warm optional runtime artifacts after readiness without blocking startup."""
+        del model_id
 
     @abstractmethod
     async def load_model(self, config: ModelConfig) -> LoadedModel:

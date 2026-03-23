@@ -31,6 +31,13 @@ The helper runs all three scenarios in order:
 
 It records `T0-T5`, worker `/health` startup stages, first-success probe timings, and writes a JSON report you can paste into the baseline docs.
 
+Helper behavior notes:
+
+- Worker `/health` polling and gateway `/api/workers` registration polling are now independent.
+- This prevents a flaky or slow RunPod proxy health path from blocking `T4 worker_registered` or `T5 first_successful_completion`.
+- Registration now rejects stale worker entries by requiring a fresh `last_heartbeat` after the current scenario's `T0` and, on restart/reuse paths, by rejecting the previous scenario's `worker_id`.
+- Fresh-provision samples can still be skewed if gateway worker-list visibility lags behind the worker's own `gateway_registered` timestamp. When that happens, trust worker-emitted startup substages for root-cause analysis and treat `fresh_provision` end-to-end timings as directional only.
+
 ## Scope
 
 Record all three scenarios separately:

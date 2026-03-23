@@ -2,7 +2,7 @@
 
 This document is the committed baseline record for the current branch once live measurements are captured.
 
-Status: partial `RunPod A100_80GB` cold-start baseline captured on `2026-03-23` with the automated helper script; standard warm `RunPod A100` matrix still pending; exploratory live `L40S` quantization results captured on `2026-03-21`
+Status: partial `RunPod A100_80GB` warm and cold baseline captured on `2026-03-23`; standard `RunPod A100_40GB` warm rows still pending; exploratory live `L40S` quantization results captured on `2026-03-21`
 
 ## Standard Matrix
 
@@ -102,16 +102,16 @@ Fill this table only with live measurements from the standard matrix above.
 |---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|
 | RunPod | A100 40GB | Warm, conversation | least_loaded + no reuse | pending | pending | pending | pending | pending | pending | pending |  |
 | RunPod | A100 40GB | Warm, conversation | affinity reuse | pending | pending | pending | pending | pending | pending | pending |  |
-| RunPod | A100 80GB | Warm, conversation | least_loaded + no reuse | pending | pending | pending | pending | pending | pending | pending | optional if inventory available |
-| RunPod | A100 80GB | Warm, conversation | affinity reuse | pending | pending | pending | pending | pending | pending | pending | optional if inventory available |
+| RunPod | A100 80GB | Warm, conversation | least_loaded + no reuse | `937.8ms` | `1010.8ms` | `1010.9ms` | `152.84` | `236.97` | `587.77` | `$0.000493` | `Qwen/Qwen2.5-7B-Instruct`, `runs=3`, `warmup=2`, `concurrency=4`, `cost_per_hour=1.19`; current best warm `A100_80GB` baseline |
+| RunPod | A100 80GB | Warm, conversation | affinity reuse | `1055.5ms` | `1378.5ms` | `1380.2ms` | `134.32` | `320.40` | `494.35` | `$0.000512` | same workload as above; affinity was worse on TTFT, median decode, aggregate decode, and cost/query in this sample |
 
 ## Cold-Start Results
 
 | Provider | GPU | Scenario | Request to running | Request to server started | Server to model ready | Request to registered | Request to first success | Registered to first success | Notes |
 |---|---|---|---:|---:|---:|---:|---:|---:|---|
-| RunPod | A100 80GB PCIe | fresh_provision | `5,527 ms` | `3,273 ms` | `88,127 ms` | `92,777 ms` | `94,631 ms` | `1,854 ms` | automated helper run; `instance_id=6dwe0z1gvxrs0u`; worker `157f5d73-a73b-4882-8bf6-72f52e3ade20` |
-| RunPod | A100 80GB PCIe | stopped_instance_start | `9,444 ms` | `5,440 ms` | `54,772 ms` | `62,473 ms` | `63,405 ms` | `932 ms` | same reused instance after explicit `stop`/`start`; worker `587cbd7f-ff6b-4a3f-a02d-4b9822c2a850` |
-| RunPod | A100 80GB PCIe | stopped_instance_reuse | `3,122 ms` | `4,397 ms` | `57,405 ms` | `64,328 ms` | `66,277 ms` | `1,949 ms` | same `instance_id=6dwe0z1gvxrs0u` returned by a matching provision request; worker `7f708903-ec55-48be-a031-6930386f60c3` |
+| RunPod | A100 80GB PCIe | fresh_provision | `5,005 ms` | `155,248 ms` | `176,795 ms` | `333,731 ms` | `335,547 ms` | `1,816 ms` | automated helper run; `instance_id=4jal1lkguq9mut`; worker `4f3ab86a-ae39-4070-9b5e-8eed3ec45734`; gateway worker-list visibility lag makes this row directionally useful only |
+| RunPod | A100 80GB PCIe | stopped_instance_start | `8,945 ms` | `7,385 ms` | `47,320 ms` | `56,616 ms` | `58,113 ms` | `1,497 ms` | same reused instance after explicit `stop`/`start`; worker `bdb62ba8-fb97-4c49-8dec-89e25a11ea57` |
+| RunPod | A100 80GB PCIe | stopped_instance_reuse | `9,573 ms` | `5,331 ms` | `47,010 ms` | `55,210 ms` | `56,764 ms` | `1,554 ms` | same `instance_id=4jal1lkguq9mut` returned by a matching provision request; worker `1aee620e-deca-4c13-8277-accce15df911` |
 
 ### Cold-Start Sample Details
 
@@ -124,20 +124,34 @@ Fill this table only with live measurements from the standard matrix above.
 - Helper invocation:
   `python3 scripts/cold-start-benchmark.py https://inferai.co.in --api-key "$INFERA_ADMIN_KEY" --provider runpod --gpu-type A100_80GB --provider-gpu-type-id "NVIDIA A100 80GB PCIe" --gpu-count 1 --model "Qwen/Qwen2.5-7B-Instruct" --health-insecure --json-output /tmp/cold-start-a100-80.json`
 - First-success probe: single completion request using the same model through `/v1/chat/completions`
-- Worker image: updated image compatible with optional vLLM engine args (`num_scheduler_steps` now filtered by runtime signature)
+- Worker image: updated image compatible with optional vLLM engine args, detailed startup substages, and async tokenizer warmup after readiness
 - Worker `/health` now exposes `startup.stages` and `startup.durations_ms`, so `server_started` and `model_load_finished` are read from worker-emitted timestamps instead of being inferred from later observation time.
+- This sample also includes finer-grained worker load substages such as `engine_create_finished`, `vllm_engine_init_finished`, and `tokenizer_load_deferred`, which isolates the actual vLLM init cost from the rest of startup.
 - `request_to_running_ms` is still a coarse gateway milestone from `/api/instances/*`; it can lag the worker’s own `server_started` timestamp.
 - Direct scripted `urllib` access to the RunPod proxy health URL can be blocked with `HTTP 403 / error code 1010`; the helper script now falls back to local `curl` for the health fetch path.
+- Worker registration is now polled independently from health stages so a slow RunPod proxy `/health` path does not block `T4` or the first-success probe.
+- The `fresh_provision` row remains skewed because the gateway `/api/workers` view lagged the worker’s own `gateway_registered` timestamp by a large margin on this sample.
 
 ### Early Read on the Data
 
-- `fresh_provision` is dominated by model load on this image/model combination: `server_to_model_ready_ms = 88,127 ms`.
-- `stopped_instance_start` and `stopped_instance_reuse` are both much better than fresh provision because model artifacts are already present, but they still spend about `55-57 s` in model load.
-- Relative to `fresh_provision`, this automated sample shows:
-  - `stopped_instance_start` first success about `1.49x` faster
-  - `stopped_instance_reuse` first success about `1.43x` faster
-- The current bottleneck is no longer infrastructure boot alone; model load is now the dominant cold-start cost even on the reuse/start paths.
-- This still supports prioritizing `C2-01` reuse/start-path optimization before any true warm-pool feature, but it also makes model-load reduction the next clear lever.
+- The current warm `A100_80GB` sample shows `least_loaded + no reuse` outperforming `affinity reuse` for `Qwen/Qwen2.5-7B-Instruct` at `concurrency=4`:
+  - no reuse: `TTFT p50=937.8ms`, aggregate decode `587.77 tok/s`, cost/query about `$0.000493`
+  - affinity reuse: `TTFT p50=1055.5ms`, aggregate decode `494.35 tok/s`, cost/query about `$0.000512`
+- On this branch and workload, affinity should not be considered a default win; it needs further investigation under a more obviously cache-friendly multi-turn pattern before changing routing defaults.
+
+- `fresh_provision` is still directionally useful, but not apples-to-apples, because gateway worker-list visibility lag inflated `request_to_registered_ms` and `request_to_first_success_ms`.
+- The reliable current baselines are the warm-cache restart paths:
+  - `stopped_instance_start`: `58,113 ms` to first success
+  - `stopped_instance_reuse`: `56,764 ms` to first success
+- `stopped_instance_start` and `stopped_instance_reuse` both spend about `47 s` in model load on this image/model combination.
+- The fine-grained startup substages show the real cost center:
+  - `engine_create_finished`: about `4.2-4.7 s`
+  - `vllm_engine_init_finished`: about `47.0 s` on start/reuse and `176.8 s` on the fresh sample
+- That means vLLM engine/model initialization is still the dominant cold-start bottleneck, not the extra Python-side setup.
+- Async tokenizer warmup now completes in the background on the measured sample:
+  - `tokenizer_warmup_finished` appears in `fresh_provision` and `stopped_instance_reuse`
+  - `registered_to_first_success_ms` is now about `1.5-1.8 s`
+- The current bottleneck is no longer infrastructure boot alone; vLLM model initialization is the dominant cold-start cost even on the reuse/start paths.
 
 ## Exploratory Live Results
 

@@ -12,6 +12,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 import urllib.error
@@ -24,6 +25,7 @@ DEFAULT_POLL_INTERVAL_MS = 2000
 DEFAULT_TIMEOUT_S = 900
 PROBE_PROMPT = "Reply with the single word OK."
 PROGRESS_LOG_INTERVAL_S = 15.0
+HEALTH_REQUEST_TIMEOUT_S = 5
 
 
 @dataclass
@@ -58,6 +60,16 @@ class ScenarioResult:
     probe: ProbeResult | None = None
     health_snapshot: dict[str, Any] | None = None
     notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class HealthPollState:
+    t2_server_started: int | None = None
+    t3_model_load_finished: int | None = None
+    latest_payload: dict[str, Any] | None = None
+    notes: list[str] = field(default_factory=list)
+    last_error: str | None = None
+    finished: bool = False
 
 
 def parse_args() -> argparse.Namespace:
@@ -134,8 +146,20 @@ def now_ms() -> int:
 def parse_stage_timestamp_ms(value: str | None) -> int | None:
     if not value:
         return None
+    normalized = value
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    if "." in normalized:
+        main, rest = normalized.split(".", 1)
+        tz_sep = "+" if "+" in rest else "-" if "-" in rest else None
+        if tz_sep is not None:
+            frac, tz = rest.split(tz_sep, 1)
+            frac = frac[:6]
+            normalized = f"{main}.{frac}{tz_sep}{tz}"
+        else:
+            normalized = f"{main}.{rest[:6]}"
     try:
-        parsed = datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
         return None
     if parsed.tzinfo is None:
@@ -364,30 +388,32 @@ def wait_for_health_stages(
     timeout_s: int,
     poll_interval_ms: int,
     args: argparse.Namespace,
-) -> tuple[int | None, int | None, dict[str, Any] | None, list[str]]:
+    state: HealthPollState | None = None,
+    stop_event: threading.Event | None = None,
+) -> HealthPollState:
+    state = state or HealthPollState()
     if not health_url:
-        return None, None, None, ["health_url unavailable"]
+        state.notes.append("health_url unavailable")
+        state.finished = True
+        return state
 
     deadline = time.time() + timeout_s
-    t2: int | None = None
-    t3: int | None = None
-    latest_payload: dict[str, Any] | None = None
-    notes: list[str] = []
     started = time.time()
     next_log_at = started
     logged_t2 = False
     logged_t3 = False
     last_error: Exception | None = None
 
-    while time.time() < deadline:
+    while time.time() < deadline and not (stop_event is not None and stop_event.is_set()):
         try:
-            payload = fetch_health(health_url, timeout=15, insecure=args.health_insecure)
-            latest_payload = payload
+            payload = fetch_health(health_url, timeout=HEALTH_REQUEST_TIMEOUT_S, insecure=args.health_insecure)
+            state.latest_payload = payload
             last_error = None
         except Exception:
             last_error = sys.exc_info()[1]
+            state.last_error = str(last_error)
             if "HTTP 403" in str(last_error) and "1010" in str(last_error):
-                notes.append("worker health polling blocked by upstream access policy (HTTP 403 / error code 1010)")
+                state.notes.append("worker health polling blocked by upstream access policy (HTTP 403 / error code 1010)")
                 log_progress(
                     args,
                     f"worker health {health_url}: blocked by upstream access policy; skipping T2/T3 capture",
@@ -405,22 +431,26 @@ def wait_for_health_stages(
 
         startup = payload.get("startup") or {}
         stages = startup.get("stages") or {}
-        if t2 is None and stages.get("server_started"):
-            t2 = parse_stage_timestamp_ms(stages.get("server_started")) or now_ms()
+        if state.t2_server_started is None and stages.get("server_started"):
+            state.t2_server_started = parse_stage_timestamp_ms(stages.get("server_started")) or now_ms()
             logged_t2 = True
-            log_progress(args, f"worker health {health_url}: observed server_started at {t2}")
+            log_progress(args, f"worker health {health_url}: observed server_started at {state.t2_server_started}")
         if (
-            t3 is None
+            state.t3_model_load_finished is None
             and stages.get("model_load_finished")
             and payload.get("ready") is True
         ):
-            t3 = parse_stage_timestamp_ms(stages.get("model_load_finished")) or now_ms()
+            state.t3_model_load_finished = parse_stage_timestamp_ms(stages.get("model_load_finished")) or now_ms()
             logged_t3 = True
-            log_progress(args, f"worker health {health_url}: observed model_load_finished and ready at {t3}")
+            log_progress(
+                args,
+                "worker health "
+                f"{health_url}: observed model_load_finished and ready at {state.t3_model_load_finished}",
+            )
             break
 
         if payload.get("ready") is True and not stages:
-            notes.append("worker health did not expose startup stages on live image")
+            state.notes.append("worker health did not expose startup stages on live image")
             log_progress(args, f"worker health {health_url}: ready=true but startup stages unavailable")
             break
 
@@ -435,22 +465,47 @@ def wait_for_health_stages(
 
         time.sleep(poll_interval_ms / 1000.0)
 
-    if t2 is None and not logged_t2:
+    if stop_event is not None and stop_event.is_set() and (
+        state.t2_server_started is None or state.t3_model_load_finished is None
+    ):
+        missing = []
+        if state.t2_server_started is None:
+            missing.append("T2")
+        if state.t3_model_load_finished is None:
+            missing.append("T3")
+        state.notes.append(
+            f"worker health polling stopped after first success before {'/'.join(missing)} was observed"
+        )
+
+    if state.t2_server_started is None and not logged_t2:
         suffix = f" last_error={last_error}" if last_error is not None else ""
         log_progress(args, f"worker health {health_url}: server_started not observed.{suffix}")
-    if t3 is None and not logged_t3:
+    if state.t3_model_load_finished is None and not logged_t3:
         suffix = f" last_error={last_error}" if last_error is not None else ""
         log_progress(args, f"worker health {health_url}: model_load_finished not observed.{suffix}")
 
-    return t2, t3, latest_payload, notes
+    state.finished = True
+    return state
 
 
-def match_worker(workers_payload: dict[str, Any], instance: dict[str, Any]) -> dict[str, Any] | None:
+def match_worker(
+    workers_payload: dict[str, Any],
+    instance: dict[str, Any],
+    *,
+    min_heartbeat_ms: int | None = None,
+    forbidden_worker_id: str | None = None,
+) -> dict[str, Any] | None:
     provider_id = str(instance.get("provider_id") or "")
     instance_worker_id = str(instance.get("worker_id") or "")
     for worker in workers_payload.get("workers") or []:
         address = str(worker.get("address") or "")
         worker_id = str(worker.get("worker_id") or "")
+        if forbidden_worker_id and worker_id == forbidden_worker_id:
+            continue
+        if min_heartbeat_ms is not None:
+            last_heartbeat_ms = parse_stage_timestamp_ms(str(worker.get("last_heartbeat") or ""))
+            if last_heartbeat_ms is None or last_heartbeat_ms < min_heartbeat_ms:
+                continue
         if provider_id and provider_id in address:
             return worker
         if instance_worker_id and worker_id == instance_worker_id:
@@ -463,13 +518,21 @@ def wait_for_worker_registration(
     api_key: str,
     instance: dict[str, Any],
     *,
+    scenario_start_ms: int,
+    previous_worker_id: str | None,
     args: argparse.Namespace,
     timeout_s: int,
     poll_interval_ms: int,
 ) -> tuple[int, dict[str, Any]]:
     return wait_for_condition(
         lambda: fetch_workers(base_url, api_key),
-        lambda payload: match_worker(payload, instance) is not None,
+        lambda payload: match_worker(
+            payload,
+            instance,
+            min_heartbeat_ms=scenario_start_ms,
+            forbidden_worker_id=previous_worker_id,
+        )
+        is not None,
         description=f"worker registration for instance {instance.get('id')}",
         timeout_s=timeout_s,
         poll_interval_ms=poll_interval_ms,
@@ -575,6 +638,7 @@ def run_ready_path(
 ) -> ScenarioResult:
     instance_id = str(instance["id"])
     provider_id = str(instance.get("provider_id") or "")
+    previous_worker_id = str(instance.get("worker_id") or "") or None
     times = ScenarioTimes(t0_request_sent=t0)
     log_progress(
         args,
@@ -595,26 +659,43 @@ def run_ready_path(
 
     health_url = format_health_url(args.health_url_template, refreshed_instance)
     log_progress(args, f"{scenario_name}: health_url={health_url or 'unavailable'}")
-    t2, t3, health_snapshot, notes = wait_for_health_stages(
-        health_url,
-        args=args,
-        timeout_s=args.timeout_s,
-        poll_interval_ms=args.poll_interval_ms,
-    )
-    times.t2_server_started = t2
-    times.t3_model_load_finished = t3
-    log_progress(args, f"{scenario_name}: T2={t2} T3={t3}")
+    health_state = HealthPollState()
+    health_stop_event = threading.Event()
+    health_thread: threading.Thread | None = None
+    if health_url:
+        health_thread = threading.Thread(
+            target=wait_for_health_stages,
+            kwargs={
+                "health_url": health_url,
+                "timeout_s": args.timeout_s,
+                "poll_interval_ms": args.poll_interval_ms,
+                "args": args,
+                "state": health_state,
+                "stop_event": health_stop_event,
+            },
+            daemon=True,
+        )
+        health_thread.start()
+    else:
+        health_state.notes.append("health_url unavailable")
 
     t4, workers_payload = wait_for_worker_registration(
         base_url,
         api_key,
         refreshed_instance,
+        scenario_start_ms=t0,
+        previous_worker_id=previous_worker_id,
         args=args,
         timeout_s=args.timeout_s,
         poll_interval_ms=args.poll_interval_ms,
     )
     times.t4_worker_registered = t4
-    worker = match_worker(workers_payload, refreshed_instance)
+    worker = match_worker(
+        workers_payload,
+        refreshed_instance,
+        min_heartbeat_ms=t0,
+        forbidden_worker_id=previous_worker_id,
+    )
     log_progress(
         args,
         f"{scenario_name}: T4 worker_registered={t4} worker_id={str((worker or {}).get('worker_id') or '-')}",
@@ -632,6 +713,18 @@ def run_ready_path(
     times.t5_first_successful_completion = now_ms()
     log_progress(args, f"{scenario_name}: T5 first_successful_completion={times.t5_first_successful_completion}")
 
+    health_stop_event.set()
+    if health_thread is not None:
+        health_thread.join(timeout=HEALTH_REQUEST_TIMEOUT_S + 1)
+        if health_thread.is_alive():
+            health_state.notes.append(
+                "worker health polling still in-flight after first success; using partial health data"
+            )
+
+    times.t2_server_started = health_state.t2_server_started
+    times.t3_model_load_finished = health_state.t3_model_load_finished
+    log_progress(args, f"{scenario_name}: T2={times.t2_server_started} T3={times.t3_model_load_finished}")
+
     return ScenarioResult(
         scenario=scenario_name,
         instance_id=instance_id,
@@ -642,8 +735,8 @@ def run_ready_path(
         times=times,
         durations_ms=compute_durations(times),
         probe=probe,
-        health_snapshot=health_snapshot,
-        notes=notes,
+        health_snapshot=health_state.latest_payload,
+        notes=health_state.notes,
     )
 
 

@@ -49,6 +49,7 @@ class Worker:
         
         # Lifecycle
         self._shutdown_event = asyncio.Event()
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
         """Initialize the worker."""
@@ -56,18 +57,24 @@ class Worker:
         
         try:
             self.record_startup_stage("model_load_started")
+            self.record_startup_stage("engine_create_started")
 
             # Create inference engine
             self.engine = create_engine(self.config)
+            self.engine.set_startup_stage_recorder(self.record_startup_stage)
+            self.record_startup_stage("engine_create_finished")
             
             # Preload models if configured
             for model_id in self.config.preload_models:
+                self.record_startup_stage("preload_model_started")
                 logger.info("Preloading model", model_id=model_id)
                 await self.load_model(ModelConfig(model_id=model_id))
+                self.record_startup_stage("preload_model_finished")
 
             self.record_startup_stage("model_load_finished")
             self.state = WorkerState.READY
             self.record_startup_stage("worker_ready")
+            self._schedule_post_ready_warmup()
             logger.info("Worker ready", worker_id=self.worker_id)
             
         except Exception as e:
@@ -97,6 +104,11 @@ class Worker:
         
         self.state = WorkerState.SHUTTING_DOWN
         self._shutdown_event.set()
+        if self._background_tasks:
+            for task in list(self._background_tasks):
+                task.cancel()
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
         
         # Unload all models
         if self.engine:
@@ -323,6 +335,33 @@ class Worker:
     def record_startup_stage(self, stage: str) -> None:
         """Record a startup-stage timestamp if it has not been recorded yet."""
         self._startup_events.setdefault(stage, datetime.now())
+
+    def _schedule_post_ready_warmup(self) -> None:
+        """Warm optional runtime artifacts in the background after readiness."""
+        if self.engine is None or not self.config.preload_models:
+            return
+
+        task = asyncio.create_task(self._warm_preloaded_models())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _warm_preloaded_models(self) -> None:
+        """Warm per-model runtime artifacts without delaying readiness."""
+        if self.engine is None:
+            return
+
+        for model_id in self.config.preload_models:
+            try:
+                await self.engine.warm_model_runtime(model_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "Post-ready model warmup failed",
+                    worker_id=self.worker_id,
+                    model_id=model_id,
+                    error=str(exc),
+                )
 
     def get_startup_status(self) -> dict[str, dict[str, str | int]]:
         """Get startup stage timestamps and durations from worker creation."""

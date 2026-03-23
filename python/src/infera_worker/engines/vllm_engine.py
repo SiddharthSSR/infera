@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from datetime import datetime
 import asyncio
 import inspect
-from typing import Any
+from typing import Any, Callable
 
 from ..types import (
     InferenceRequest,
@@ -34,6 +34,9 @@ except ImportError:
     RequestOutput = None
 
 
+_TOKENIZER_UNINITIALIZED = object()
+
+
 class VLLMEngine(InferenceEngine):
     """vLLM-based inference engine for maximum throughput."""
 
@@ -47,7 +50,27 @@ class VLLMEngine(InferenceEngine):
         self.engines: dict[str, AsyncLLMEngine] = {}
         self.loaded_models: dict[str, LoadedModel] = {}
         self.tokenizers: dict[str, Any] = {}  # Store tokenizers for chat templates
+        self.model_paths: dict[str, str] = {}
         self.active_requests: set[str] = set()
+        self._startup_stage_recorder: Callable[[str], None] | None = None
+
+    def set_startup_stage_recorder(
+        self,
+        recorder: Callable[[str], None] | None,
+    ) -> None:
+        """Install an optional callback for detailed startup-stage reporting."""
+        self._startup_stage_recorder = recorder
+
+    def _record_stage(self, stage: str) -> None:
+        """Record a startup substage if a recorder is installed."""
+        if self._startup_stage_recorder is not None:
+            self._startup_stage_recorder(stage)
+
+    async def warm_model_runtime(self, model_id: str) -> None:
+        """Warm deferred tokenizer/chat-template state after readiness."""
+        self._record_stage("tokenizer_warmup_started")
+        await asyncio.to_thread(self._get_tokenizer, model_id)
+        self._record_stage("tokenizer_warmup_finished")
 
     async def load_model(self, model_config: ModelConfig) -> LoadedModel:
         """Load a model using vLLM."""
@@ -98,20 +121,19 @@ class VLLMEngine(InferenceEngine):
 
         engine_args = AsyncEngineArgs(**engine_kwargs)
 
+        self._record_stage("vllm_engine_init_started")
         engine = AsyncLLMEngine.from_engine_args(engine_args)
+        self._record_stage("vllm_engine_init_finished")
         self.engines[model_config.model_id] = engine
+        self.model_paths[model_config.model_id] = model_path
 
         # Get model config for metadata
         # vLLM V1: model_config is a property, not an async method
         model_cfg = engine.model_config
 
-        # Store tokenizer for chat template
-        try:
-            from transformers import AutoTokenizer
-            tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-            self.tokenizers[model_config.model_id] = tokenizer
-        except Exception:
-            self.tokenizers[model_config.model_id] = None
+        # Defer tokenizer creation until the first request that needs chat templating.
+        self.tokenizers[model_config.model_id] = _TOKENIZER_UNINITIALIZED
+        self._record_stage("tokenizer_load_deferred")
 
         loaded = LoadedModel(
             model_id=model_config.model_id,
@@ -130,6 +152,8 @@ class VLLMEngine(InferenceEngine):
             # vLLM doesn't have explicit unload, we just remove reference
             del self.engines[model_id]
             del self.loaded_models[model_id]
+            self.tokenizers.pop(model_id, None)
+            self.model_paths.pop(model_id, None)
             return True
         return False
 
@@ -314,7 +338,7 @@ class VLLMEngine(InferenceEngine):
         ]
         
         # Try to use tokenizer's chat template
-        tokenizer = self.tokenizers.get(request.model_id)
+        tokenizer = self._get_tokenizer(request.model_id)
         if tokenizer is not None and hasattr(tokenizer, 'apply_chat_template'):
             try:
                 prompt = tokenizer.apply_chat_template(
@@ -360,6 +384,28 @@ class VLLMEngine(InferenceEngine):
             i += 1
         
         return "".join(parts)
+
+    def _get_tokenizer(self, model_id: str) -> Any:
+        """Load a tokenizer lazily so startup is not blocked on chat-template setup."""
+        tokenizer = self.tokenizers.get(model_id)
+        if tokenizer is not _TOKENIZER_UNINITIALIZED:
+            return tokenizer
+
+        model_path = self.model_paths.get(model_id)
+        if not model_path:
+            self.tokenizers[model_id] = None
+            return None
+
+        self._record_stage("tokenizer_load_started")
+        try:
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        except Exception:
+            tokenizer = None
+        self.tokenizers[model_id] = tokenizer
+        self._record_stage("tokenizer_load_finished")
+        return tokenizer
 
     def _map_finish_reason(self, reason: str | None) -> FinishReason:
         """Map vLLM finish reason to our enum."""

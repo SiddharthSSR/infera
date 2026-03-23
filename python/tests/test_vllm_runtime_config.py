@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -175,3 +176,88 @@ async def test_vllm_engine_skips_unsupported_optional_knobs(monkeypatch):
     assert FakeAsyncEngineArgsWithoutScheduler.last_kwargs["swap_space"] == 12.5
     assert FakeAsyncEngineArgsWithoutScheduler.last_kwargs["enforce_eager"] is True
     assert "num_scheduler_steps" not in FakeAsyncEngineArgsWithoutScheduler.last_kwargs
+
+
+@pytest.mark.asyncio
+async def test_vllm_engine_defers_tokenizer_load_until_prompt_build(monkeypatch):
+    monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
+    monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgs)
+    monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
+
+    created_tokenizers: list[str] = []
+
+    class FakeTokenizer:
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+            assert tokenize is False
+            assert add_generation_prompt is True
+            return f"templated:{messages[-1]['content']}"
+
+    class FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model_path, trust_remote_code):
+            assert trust_remote_code is True
+            created_tokenizers.append(model_path)
+            return FakeTokenizer()
+
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer))
+
+    config = WorkerConfig(engine="vllm")
+    engine = vllm_module.VLLMEngine(config)
+
+    await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
+
+    assert created_tokenizers == []
+    prompt = engine._build_prompt(
+        SimpleNamespace(
+            model_id="Qwen/Qwen2.5-7B-Instruct",
+            messages=[SimpleNamespace(role=SimpleNamespace(value="user"), content="Hello")],
+        )
+    )
+    assert created_tokenizers == ["Qwen/Qwen2.5-7B-Instruct"]
+    assert prompt == "templated:Hello"
+
+
+@pytest.mark.asyncio
+async def test_vllm_engine_records_detailed_load_stages(monkeypatch):
+    monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
+    monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgs)
+    monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
+
+    recorded_stages: list[str] = []
+    engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm"))
+    engine.set_startup_stage_recorder(recorded_stages.append)
+
+    await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
+
+    assert "vllm_engine_init_started" in recorded_stages
+    assert "vllm_engine_init_finished" in recorded_stages
+    assert "tokenizer_load_deferred" in recorded_stages
+
+
+@pytest.mark.asyncio
+async def test_vllm_engine_warm_model_runtime_loads_deferred_tokenizer(monkeypatch):
+    monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
+    monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgs)
+    monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
+
+    created_tokenizers: list[str] = []
+    recorded_stages: list[str] = []
+
+    class FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model_path, trust_remote_code):
+            assert trust_remote_code is True
+            created_tokenizers.append(model_path)
+            return object()
+
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer))
+
+    engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm"))
+    engine.set_startup_stage_recorder(recorded_stages.append)
+
+    await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
+    await engine.warm_model_runtime("Qwen/Qwen2.5-7B-Instruct")
+
+    assert created_tokenizers == ["Qwen/Qwen2.5-7B-Instruct"]
+    assert "tokenizer_warmup_started" in recorded_stages
+    assert "tokenizer_warmup_finished" in recorded_stages
