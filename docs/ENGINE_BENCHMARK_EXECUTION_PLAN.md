@@ -92,6 +92,8 @@ Use the same cold-start scenarios across all engines:
 
 Before benchmarking an engine, build and deploy its dedicated worker image.
 
+If your gateway deployment already uses engine-specific image env vars, you do not need to keep swapping the global `INFERA_WORKER_IMAGE`. Set the appropriate `INFERA_WORKER_IMAGE_<ENGINE>` values once and provision with the target engine.
+
 Examples:
 
 ```bash

@@ -29,13 +29,13 @@ const (
 	OptionSGLangSamplingBackend    = "INFERA_SGLANG_SAMPLING_BACKEND"
 	OptionSGLangDisableCudaGraph   = "INFERA_SGLANG_DISABLE_CUDA_GRAPH"
 
-	OptionTensorRTLLMTensorParallelSize             = "INFERA_TENSORRT_LLM_TENSOR_PARALLEL_SIZE"
-	OptionTensorRTLLMMaxBatchSize                   = "INFERA_TENSORRT_LLM_MAX_BATCH_SIZE"
-	OptionTensorRTLLMMaxNumTokens                   = "INFERA_TENSORRT_LLM_MAX_NUM_TOKENS"
-	OptionTensorRTLLMMaxBeamWidth                   = "INFERA_TENSORRT_LLM_MAX_BEAM_WIDTH"
-	OptionTensorRTLLMKVCacheFreeGPUMemoryFraction   = "INFERA_TENSORRT_LLM_KV_CACHE_FREE_GPU_MEMORY_FRACTION"
-	OptionTensorRTLLMEnableChunkedContext           = "INFERA_TENSORRT_LLM_ENABLE_CHUNKED_CONTEXT"
-	OptionTensorRTLLMBackend                        = "INFERA_TENSORRT_LLM_BACKEND"
+	OptionTensorRTLLMTensorParallelSize           = "INFERA_TENSORRT_LLM_TENSOR_PARALLEL_SIZE"
+	OptionTensorRTLLMMaxBatchSize                 = "INFERA_TENSORRT_LLM_MAX_BATCH_SIZE"
+	OptionTensorRTLLMMaxNumTokens                 = "INFERA_TENSORRT_LLM_MAX_NUM_TOKENS"
+	OptionTensorRTLLMMaxBeamWidth                 = "INFERA_TENSORRT_LLM_MAX_BEAM_WIDTH"
+	OptionTensorRTLLMKVCacheFreeGPUMemoryFraction = "INFERA_TENSORRT_LLM_KV_CACHE_FREE_GPU_MEMORY_FRACTION"
+	OptionTensorRTLLMEnableChunkedContext         = "INFERA_TENSORRT_LLM_ENABLE_CHUNKED_CONTEXT"
+	OptionTensorRTLLMBackend                      = "INFERA_TENSORRT_LLM_BACKEND"
 
 	// largeGPUVRAMThresholdGB is the minimum VRAM (GB) required to enable a
 	// real draft model. GPUs below this threshold get no speculative decoding.
@@ -344,11 +344,38 @@ func workerRuntimeOptionKeys(engine InferenceEngine) []string {
 	}
 }
 
+func cloneWorkerImages(input map[InferenceEngine]string) map[InferenceEngine]string {
+	if len(input) == 0 {
+		return nil
+	}
+	cloned := make(map[InferenceEngine]string, len(input))
+	for engine, image := range input {
+		normalizedEngine := engine.OrDefault()
+		trimmedImage := strings.TrimSpace(image)
+		if trimmedImage == "" {
+			continue
+		}
+		cloned[normalizedEngine] = trimmedImage
+	}
+	if len(cloned) == 0 {
+		return nil
+	}
+	return cloned
+}
+
+func resolveWorkerImage(engine InferenceEngine, defaultImage string, images map[InferenceEngine]string) string {
+	normalizedEngine := engine.OrDefault()
+	if image := strings.TrimSpace(images[normalizedEngine]); image != "" {
+		return image
+	}
+	return strings.TrimSpace(defaultImage)
+}
+
 // ValidateWorkerImageRef requires a pinned worker image tag or digest for non-dev deploys.
 func ValidateWorkerImageRef(image string) error {
 	image = strings.TrimSpace(image)
 	if image == "" {
-		return fmt.Errorf("worker image is required; set INFERA_WORKER_IMAGE to a pinned tag or digest")
+		return fmt.Errorf("worker image is required; set INFERA_WORKER_IMAGE or an engine-specific INFERA_WORKER_IMAGE_<ENGINE> value to a pinned tag or digest")
 	}
 	if strings.Contains(image, "@sha256:") {
 		return nil

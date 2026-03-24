@@ -27,14 +27,14 @@ const (
 )
 
 var inferenceEngineAliases = map[string]InferenceEngine{
-	"":              EngineVLLM,
-	"vllm":          EngineVLLM,
-	"sglang":        EngineSGLang,
-	"mock":          EngineMock,
-	"tensorrt_llm":  EngineTensorRTLLM,
-	"tensorrt-llm":  EngineTensorRTLLM,
-	"trtllm":        EngineTensorRTLLM,
-	"trt-llm":       EngineTensorRTLLM,
+	"":             EngineVLLM,
+	"vllm":         EngineVLLM,
+	"sglang":       EngineSGLang,
+	"mock":         EngineMock,
+	"tensorrt_llm": EngineTensorRTLLM,
+	"tensorrt-llm": EngineTensorRTLLM,
+	"trtllm":       EngineTensorRTLLM,
+	"trt-llm":      EngineTensorRTLLM,
 }
 
 func NormalizeInferenceEngine(value string) InferenceEngine {
@@ -128,8 +128,8 @@ type Instance struct {
 	HTTPPort int    `json:"http_port,omitempty"`
 
 	// Infera
-	WorkerID string   `json:"worker_id,omitempty"`
-	Models   []string `json:"models,omitempty"`
+	WorkerID string          `json:"worker_id,omitempty"`
+	Models   []string        `json:"models,omitempty"`
 	Engine   InferenceEngine `json:"engine,omitempty"`
 
 	// Cost
@@ -161,10 +161,10 @@ type ProvisionRequest struct {
 	MaxCostHour       float64      `json:"max_cost_hour,omitempty"` // Budget limit
 
 	// Worker configuration
-	Models         []string `json:"models,omitempty"`
+	Models         []string        `json:"models,omitempty"`
 	Engine         InferenceEngine `json:"engine,omitempty"`
-	DockerImage    string   `json:"docker_image,omitempty"`
-	GatewayAddress string   `json:"gateway_address,omitempty"` // Address for worker to connect back
+	DockerImage    string          `json:"docker_image,omitempty"`
+	GatewayAddress string          `json:"gateway_address,omitempty"` // Address for worker to connect back
 
 	// SSH key for access
 	SSHPublicKey string `json:"ssh_public_key,omitempty"`

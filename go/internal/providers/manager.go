@@ -23,6 +23,7 @@ type Manager struct {
 	// Configuration
 	defaultProvider ProviderType
 	workerImage     string
+	workerImages    map[InferenceEngine]string
 	gatewayAddress  string
 
 	workspaceProviderConfigResolver func(workspaceID string, providerType ProviderType) (*ProviderConfig, error)
@@ -31,9 +32,10 @@ type Manager struct {
 // ManagerConfig configures the instance manager.
 type ManagerConfig struct {
 	DefaultProvider ProviderType
-	WorkerImage     string // Docker image for workers
-	GatewayAddress  string // Gateway address for workers to connect
-	CostDBPath      string // Path to SQLite DB for persistent cost tracking (empty = in-memory)
+	WorkerImage     string                     // Default Docker image for workers
+	WorkerImages    map[InferenceEngine]string // Engine-specific worker images
+	GatewayAddress  string                     // Gateway address for workers to connect
+	CostDBPath      string                     // Path to SQLite DB for persistent cost tracking (empty = in-memory)
 }
 
 // NewManager creates a new instance manager.
@@ -55,6 +57,7 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		costs:           costs,
 		defaultProvider: config.DefaultProvider,
 		workerImage:     config.WorkerImage,
+		workerImages:    cloneWorkerImages(config.WorkerImages),
 		gatewayAddress:  config.GatewayAddress,
 	}, nil
 }
@@ -145,13 +148,13 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	}
 
 	// Set defaults
-	if req.DockerImage == "" {
-		req.DockerImage = m.workerImage
-	}
 	if req.GPUCount == 0 {
 		req.GPUCount = 1
 	}
 	req.Engine = req.Engine.OrDefault()
+	if req.DockerImage == "" {
+		req.DockerImage = resolveWorkerImage(req.Engine, m.workerImage, m.workerImages)
+	}
 	if req.GatewayAddress == "" {
 		req.GatewayAddress = m.gatewayAddress
 	}

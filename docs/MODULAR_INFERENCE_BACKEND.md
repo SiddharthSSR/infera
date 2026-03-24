@@ -122,6 +122,19 @@ Engine-specific production worker images now live in:
 
 The build helper in [scripts/build-docker.sh](/Users/siddharthsingh/codingtensor/infera/scripts/build-docker.sh) now exposes separate targets for each engine image.
 
+Gateway image selection now supports:
+
+- `INFERA_WORKER_IMAGE` as the global fallback image
+- `INFERA_WORKER_IMAGE_VLLM`
+- `INFERA_WORKER_IMAGE_SGLANG`
+- `INFERA_WORKER_IMAGE_TENSORRT_LLM`
+- `INFERA_WORKER_IMAGE_MOCK`
+
+Resolution rule:
+
+- use the engine-specific image when configured
+- otherwise fall back to `INFERA_WORKER_IMAGE`
+
 Why separate images:
 
 - dependency isolation between runtimes

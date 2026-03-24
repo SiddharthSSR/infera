@@ -201,7 +201,10 @@ func TestNewManager(t *testing.T) {
 	config := ManagerConfig{
 		DefaultProvider: ProviderMock,
 		WorkerImage:     "test-image:latest",
-		GatewayAddress:  "localhost:8080",
+		WorkerImages: map[InferenceEngine]string{
+			EngineSGLang: "sglang-worker:v1",
+		},
+		GatewayAddress: "localhost:8080",
 	}
 
 	mgr := newTestManager(t, config)
@@ -214,6 +217,9 @@ func TestNewManager(t *testing.T) {
 	}
 	if mgr.workerImage != "test-image:latest" {
 		t.Errorf("expected test-image:latest, got %s", mgr.workerImage)
+	}
+	if got := mgr.workerImages[EngineSGLang]; got != "sglang-worker:v1" {
+		t.Errorf("expected cloned engine-specific image, got %q", got)
 	}
 }
 
@@ -321,6 +327,64 @@ func TestManagerProvisionWithDefaults(t *testing.T) {
 
 	if instance.Provider != ProviderMock {
 		t.Errorf("expected default provider mock, got %s", instance.Provider)
+	}
+}
+
+func TestManagerProvisionUsesEngineSpecificWorkerImage(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{
+		DefaultProvider: ProviderMock,
+		WorkerImage:     "default-worker:v1",
+		WorkerImages: map[InferenceEngine]string{
+			EngineSGLang: "sglang-worker:v2",
+		},
+	})
+	provider := newMockTestProvider()
+	mgr.RegisterProvider(provider)
+
+	req := &ProvisionRequest{
+		Name:     "sglang-test",
+		Provider: ProviderMock,
+		Engine:   EngineSGLang,
+		GPUType:  GPURTX4090,
+	}
+
+	if _, err := mgr.Provision(context.Background(), req); err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+	if provider.lastReq == nil {
+		t.Fatal("expected provider to receive provision request")
+	}
+	if provider.lastReq.DockerImage != "sglang-worker:v2" {
+		t.Fatalf("expected engine-specific image, got %q", provider.lastReq.DockerImage)
+	}
+}
+
+func TestManagerProvisionFallsBackToDefaultWorkerImage(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{
+		DefaultProvider: ProviderMock,
+		WorkerImage:     "default-worker:v1",
+		WorkerImages: map[InferenceEngine]string{
+			EngineSGLang: "sglang-worker:v2",
+		},
+	})
+	provider := newMockTestProvider()
+	mgr.RegisterProvider(provider)
+
+	req := &ProvisionRequest{
+		Name:     "vllm-test",
+		Provider: ProviderMock,
+		Engine:   EngineVLLM,
+		GPUType:  GPURTX4090,
+	}
+
+	if _, err := mgr.Provision(context.Background(), req); err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+	if provider.lastReq == nil {
+		t.Fatal("expected provider to receive provision request")
+	}
+	if provider.lastReq.DockerImage != "default-worker:v1" {
+		t.Fatalf("expected default worker image, got %q", provider.lastReq.DockerImage)
 	}
 }
 

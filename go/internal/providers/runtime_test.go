@@ -2,6 +2,41 @@ package providers
 
 import "testing"
 
+func TestResolveWorkerImage(t *testing.T) {
+	images := map[InferenceEngine]string{
+		EngineSGLang:      "sglang-worker:v1",
+		EngineTensorRTLLM: "trt-worker:v1",
+	}
+
+	if got := resolveWorkerImage(EngineSGLang, "default-worker:v1", images); got != "sglang-worker:v1" {
+		t.Fatalf("expected engine-specific sglang image, got %q", got)
+	}
+	if got := resolveWorkerImage(EngineVLLM, "default-worker:v1", images); got != "default-worker:v1" {
+		t.Fatalf("expected fallback default image, got %q", got)
+	}
+	if got := resolveWorkerImage("tensorrt-llm", "default-worker:v1", images); got != "trt-worker:v1" {
+		t.Fatalf("expected normalized TensorRT image, got %q", got)
+	}
+}
+
+func TestCloneWorkerImagesNormalizesAndDropsEmptyValues(t *testing.T) {
+	cloned := cloneWorkerImages(map[InferenceEngine]string{
+		EngineSGLang:   " sglang-worker:v1 ",
+		"tensorrt-llm": "trt-worker:v1",
+		EngineVLLM:     "   ",
+	})
+
+	if len(cloned) != 2 {
+		t.Fatalf("expected 2 worker images, got %d", len(cloned))
+	}
+	if got := cloned[EngineSGLang]; got != "sglang-worker:v1" {
+		t.Fatalf("expected trimmed sglang image, got %q", got)
+	}
+	if got := cloned[EngineTensorRTLLM]; got != "trt-worker:v1" {
+		t.Fatalf("expected normalized TensorRT image, got %q", got)
+	}
+}
+
 func TestApplyRuntimeDefaultsForKnownModel(t *testing.T) {
 	req := &ProvisionRequest{
 		GPUType:  GPUL40S,
