@@ -269,15 +269,15 @@ Range notes:
   - Notes:
   - `docs/COLD_START_BENCHMARK_WORKFLOW.md` now uses worker `/health` startup-stage timestamps to capture `server_started`, `model_load_finished`, and `worker_registered` explicitly.
 
-- [ ] **B5-04: Establish a committed benchmark baseline before any runtime-default changes**
+- [x] **B5-04: Establish a committed benchmark baseline before any runtime-default changes**
   - **What**: Capture a baseline for the current branch using the current production-like image, model, GPU, and routing strategy.
   - **Why**: High impact. Runtime tuning without a committed baseline makes regressions impossible to prove.
   - **How**: Run the benchmark harness against one standard model/GPU matrix and store the summarized results in this file or an adjacent benchmark doc such as `docs/BENCHMARK_BASELINE_CURRENT.md`.
   - **Measure**: Baseline must include TTFT p50/p95/p99, decode tok/s p50/p95, cold-start timing, and cost/query.
-  - **Status**: `[ ]`
+  - **Status**: `[x]` done
   - Progress as of `2026-03-21`:
   - Exploratory live `L40S` warm-run data is now preserved in [`docs/BENCHMARK_BASELINE_CURRENT.md`](/Users/siddharthsingh/codingtensor/infera/docs/BENCHMARK_BASELINE_CURRENT.md).
-  - This does not close the item because the standard `RunPod A100 40GB/80GB` matrix and cold-start timings are still pending.
+  - This did not close the item at that time because the standard `RunPod A100_80GB` warm rows and cold-start timings were still pending.
   - Progress as of `2026-03-23`:
   - Warm `RunPod A100_80GB` baseline rows are now recorded in [`docs/BENCHMARK_BASELINE_CURRENT.md`](/Users/siddharthsingh/codingtensor/infera/docs/BENCHMARK_BASELINE_CURRENT.md) for:
     - `least_loaded + no reuse`
@@ -286,7 +286,8 @@ Range notes:
     - no reuse: `TTFT p50=937.8ms`, `decode tok/s p50=152.84`, `aggregate decode tok/s p50=587.77`, cost/query about `$0.000493`
     - affinity reuse: `TTFT p50=1055.5ms`, `decode tok/s p50=134.32`, `aggregate decode tok/s p50=494.35`, cost/query about `$0.000512`
   - On this sample, affinity reuse underperformed the default least-loaded path, so it should not be treated as a warm-path default win.
-  - This item remains open until the `A100_40GB` warm rows are captured or explicitly deferred.
+  - RunPod does not currently offer an `A100_40GB` SKU in the live provider offering set, so `A100_40GB` is not a valid remaining baseline target for this provider.
+  - The active RunPod A100 baseline is now `A100_80GB`; `L40S` is the optional lower-cost comparison SKU.
 
 - [ ] **B5-05: Add CI or scheduled regression checks only after the benchmark harness is stable**
   - **What**: Automate regression detection for key latency and throughput metrics.

@@ -2,15 +2,15 @@
 
 This document is the committed baseline record for the current branch once live measurements are captured.
 
-Status: partial `RunPod A100_80GB` warm and cold baseline captured on `2026-03-23`; standard `RunPod A100_40GB` warm rows still pending; exploratory live `L40S` quantization results captured on `2026-03-21`
+Status: `RunPod A100_80GB` warm and cold baseline captured on `2026-03-23`; `A100_40GB` is not offered on RunPod and is not part of the active baseline matrix; exploratory live `L40S` quantization results captured on `2026-03-21`
 
 ## Standard Matrix
 
 Use this matrix before any worker runtime-default changes land on top of the current branch.
 
 - Provider: `runpod`
-- Primary GPU: `A100_40GB`
-- Secondary GPU: `A100_80GB`
+- Primary GPU: `A100_80GB`
+- Secondary GPU: `L40S`
 - Model: `Qwen/Qwen2.5-7B-Instruct`
 - Worker image: pinned production-like image tag or digest
 - Default routing behavior: `least_loaded`
@@ -21,7 +21,7 @@ Why this matrix:
 
 - `Qwen/Qwen2.5-7B-Instruct` already has a concrete runtime preset in [runtime.go](/Users/siddharthsingh/codingtensor/infera/go/internal/providers/runtime.go#L181).
 - RunPod is a production-ready provider in [README.md](/Users/siddharthsingh/codingtensor/infera/README.md#L453).
-- `A100_40GB` and `A100_80GB` are standard RunPod SKUs already documented in [README.md](/Users/siddharthsingh/codingtensor/infera/README.md#L465).
+- `A100_80GB` and `L40S` are active RunPod SKUs in the current provider offering list used for live benchmarking.
 - The router default remains `least_loaded`, while affinity is layered on top when an affinity key is present in [router.go](/Users/siddharthsingh/codingtensor/infera/go/internal/router/router.go#L417).
 
 ## Baseline Runs
@@ -48,11 +48,11 @@ python3 scripts/benchmark-chat.py \
   --warmup 2 \
   --concurrency 4 \
   --cache-reuse-mode none \
-  --cost-per-hour 0.79 \
-  --json-output /tmp/infera-benchmark-a100-40-no-reuse.json
+  --cost-per-hour 1.19 \
+  --json-output /tmp/infera-benchmark-a100-80-no-reuse.json
 ```
 
-Use `--cost-per-hour 1.19` for `A100_80GB`.
+Use `--cost-per-hour 0.79` for `L40S`.
 
 ### Warm Baseline, Affinity Reuse
 
@@ -67,8 +67,8 @@ python3 scripts/benchmark-chat.py \
   --concurrency 4 \
   --cache-reuse-mode affinity \
   --cache-key-prefix baseline \
-  --cost-per-hour 0.79 \
-  --json-output /tmp/infera-benchmark-a100-40-affinity.json
+  --cost-per-hour 1.19 \
+  --json-output /tmp/infera-benchmark-a100-80-affinity.json
 ```
 
 ### Cold-Start Workflow
@@ -100,10 +100,10 @@ Fill this table only with live measurements from the standard matrix above.
 
 | Provider | GPU | Scenario | Routing mode | TTFT p50 | TTFT p95 | TTFT p99 | Decode tok/s p50 | Decode tok/s p95 | Aggregate decode tok/s p50 | Cost/query | Notes |
 |---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| RunPod | A100 40GB | Warm, conversation | least_loaded + no reuse | pending | pending | pending | pending | pending | pending | pending |  |
-| RunPod | A100 40GB | Warm, conversation | affinity reuse | pending | pending | pending | pending | pending | pending | pending |  |
 | RunPod | A100 80GB | Warm, conversation | least_loaded + no reuse | `937.8ms` | `1010.8ms` | `1010.9ms` | `152.84` | `236.97` | `587.77` | `$0.000493` | `Qwen/Qwen2.5-7B-Instruct`, `runs=3`, `warmup=2`, `concurrency=4`, `cost_per_hour=1.19`; current best warm `A100_80GB` baseline |
 | RunPod | A100 80GB | Warm, conversation | affinity reuse | `1055.5ms` | `1378.5ms` | `1380.2ms` | `134.32` | `320.40` | `494.35` | `$0.000512` | same workload as above; affinity was worse on TTFT, median decode, aggregate decode, and cost/query in this sample |
+| RunPod | L40S | Warm, conversation | least_loaded + no reuse | see exploratory section | see exploratory section | see exploratory section | see exploratory section | see exploratory section | see exploratory section | see exploratory section | optional lower-cost comparison; not the primary A100 baseline |
+| RunPod | L40S | Warm, conversation | affinity reuse | see exploratory section | see exploratory section | see exploratory section | see exploratory section | see exploratory section | see exploratory section | see exploratory section | optional lower-cost comparison; rerun if an apples-to-apples standard matrix is needed |
 
 ## Cold-Start Results
 
@@ -182,5 +182,5 @@ These are real live-gateway measurements, but they are not the standard baseline
 - Do not update this document with local non-GPU or mock-provider numbers.
 - Keep the worker image pinned for the entire baseline capture.
 - Record the git commit and worker image digest alongside the filled-in results.
-- If `A100_80GB` inventory is not available, capture `A100_40GB` first and leave the 80GB rows pending.
+- If `A100_80GB` inventory is not available, capture `L40S` as the fallback comparison SKU and mark the `A100_80GB` warm rows pending.
 - Keep exploratory `L40S` numbers separate from the standard matrix so baseline regressions remain apples-to-apples.

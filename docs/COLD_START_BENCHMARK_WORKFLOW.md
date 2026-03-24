@@ -121,7 +121,7 @@ Recommended instance provision payload template:
 {
   "name": "cold-start-bench",
   "provider": "runpod",
-  "gpu_type": "A100_40GB",
+  "gpu_type": "A100_80GB",
   "gpu_count": 1,
   "models": ["Qwen/Qwen2.5-7B-Instruct"]
 }
@@ -137,7 +137,7 @@ curl -fsS \
   -d '{
     "name": "cold-start-bench",
     "provider": "runpod",
-    "gpu_type": "A100_40GB",
+    "gpu_type": "A100_80GB",
     "gpu_count": 1,
     "models": ["Qwen/Qwen2.5-7B-Instruct"]
   }'
