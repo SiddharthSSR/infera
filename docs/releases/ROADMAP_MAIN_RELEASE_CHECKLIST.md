@@ -31,6 +31,8 @@ These checks were run successfully on `roadmap`:
   - initial run failed only because required production env vars were not set
 - `docker compose -f docker-compose.prod.yml config` with dummy required env vars
   - result: config rendered successfully
+- `./scripts/compose-smoke-prod.sh`
+  - result: local production-compose smoke passed after release-script fixes for env export, local ingress routing, and isolated smoke data mount
 - `git diff --check`
   - result: clean
 
