@@ -18,8 +18,10 @@ try:
     from tensorrt_llm.llmapi import BuildConfig, KvCacheConfig
 
     TENSORRT_LLM_AVAILABLE = True
-except ImportError:
+    TENSORRT_LLM_IMPORT_ERROR: ImportError | None = None
+except ImportError as exc:
     TENSORRT_LLM_AVAILABLE = False
+    TENSORRT_LLM_IMPORT_ERROR = exc
     LLM = None
     SamplingParams = None
     BuildConfig = None
@@ -31,7 +33,11 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
 
     def __init__(self, config: WorkerConfig) -> None:
         if not TENSORRT_LLM_AVAILABLE:
-            raise ImportError("TensorRT-LLM is not installed. Install with: pip install tensorrt_llm")
+            detail = f" Original import error: {TENSORRT_LLM_IMPORT_ERROR}" if TENSORRT_LLM_IMPORT_ERROR else ""
+            raise ImportError(
+                "TensorRT-LLM import failed. Ensure the worker image includes tensorrt_llm and its runtime dependencies."
+                f"{detail}"
+            ) from TENSORRT_LLM_IMPORT_ERROR
 
         super().__init__(config)
         self.engines: dict[str, Any] = {}

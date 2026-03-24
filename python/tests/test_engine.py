@@ -264,7 +264,8 @@ class TestTensorRTLLMEngine:
 
     def test_tensorrt_engine_raises_when_dependency_missing(self, monkeypatch):
         monkeypatch.setattr(tensorrt_module, "TENSORRT_LLM_AVAILABLE", False)
-        with pytest.raises(ImportError, match="TensorRT-LLM is not installed"):
+        monkeypatch.setattr(tensorrt_module, "TENSORRT_LLM_IMPORT_ERROR", ImportError("libcuda.so.1: cannot open shared object file"))
+        with pytest.raises(ImportError, match="TensorRT-LLM import failed"):
             tensorrt_module.TensorRTLLMEngine(WorkerConfig(engine="tensorrt_llm"))
 
 
