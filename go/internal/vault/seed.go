@@ -1,19 +1,13 @@
 package vault
 
-import "log/slog"
+import (
+	"errors"
+	"log/slog"
+)
 
-// SeedDefaultModels populates the registry with well-known models if it's empty.
-// This is idempotent — it skips seeding if any models already exist.
+// SeedDefaultModels ensures well-known default models exist in the registry.
+// This is idempotent and additive: missing defaults are inserted, existing ones are left unchanged.
 func SeedDefaultModels(store *Store) error {
-	count, err := store.Count()
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		slog.Info("vault seed skipped, models already exist", slog.Int("count", count))
-		return nil
-	}
-
 	models := []Model{
 		{
 			Name:         "Mistral 7B Instruct v0.3",
@@ -27,18 +21,18 @@ func SeedDefaultModels(store *Store) error {
 			Tags:         []string{"chat", "instruct", "general"},
 			Status:       "available",
 		},
-		{
-			Name:         "Mistral 7B Instruct v0.3 (AWQ)",
-			Source:       "huggingface",
-			SourceURI:    "TheBloke/Mistral-7B-Instruct-v0.3-AWQ",
-			Parameters:   "7B",
-			Quantization: "awq",
-			VRAMRequired: 6144,
-			MaxContext:   32768,
-			Family:       "mistral",
-			Tags:         []string{"chat", "instruct", "quantized"},
-			Status:       "available",
-		},
+			{
+				Name:         "Mistral 7B Instruct v0.3 (AWQ)",
+				Source:       "huggingface",
+				SourceURI:    "solidrust/Mistral-7B-Instruct-v0.3-AWQ",
+				Parameters:   "7B",
+				Quantization: "awq",
+				VRAMRequired: 6144,
+				MaxContext:   32768,
+				Family:       "mistral",
+				Tags:         []string{"chat", "instruct", "quantized"},
+				Status:       "available",
+			},
 		{
 			Name:         "Llama 3.1 8B Instruct",
 			Source:       "huggingface",
@@ -75,16 +69,76 @@ func SeedDefaultModels(store *Store) error {
 			Tags:         []string{"chat", "instruct", "compact"},
 			Status:       "available",
 		},
-		{
-			Name:         "Qwen2.5 7B Instruct",
-			Source:       "huggingface",
-			SourceURI:    "Qwen/Qwen2.5-7B-Instruct",
+			{
+				Name:         "Qwen2.5 7B Instruct",
+				Source:       "huggingface",
+				SourceURI:    "Qwen/Qwen2.5-7B-Instruct",
 			Parameters:   "7B",
 			Quantization: "none",
 			VRAMRequired: 16384,
 			MaxContext:   131072,
 			Family:       "qwen",
-			Tags:         []string{"chat", "instruct", "multilingual"},
+				Tags:         []string{"chat", "instruct", "multilingual"},
+				Status:       "available",
+			},
+			{
+				Name:         "Qwen2.5 7B Instruct (AWQ)",
+				Source:       "huggingface",
+				SourceURI:    "Qwen/Qwen2.5-7B-Instruct-AWQ",
+				Parameters:   "7B",
+				Quantization: "awq",
+				VRAMRequired: 8192,
+				MaxContext:   131072,
+				Family:       "qwen",
+				Tags:         []string{"chat", "instruct", "multilingual", "quantized"},
+				Status:       "available",
+			},
+			{
+				Name:         "Qwen2.5 7B Instruct (GPTQ Int4)",
+				Source:       "huggingface",
+				SourceURI:    "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4",
+				Parameters:   "7B",
+				Quantization: "gptq-int4",
+				VRAMRequired: 8192,
+				MaxContext:   131072,
+				Family:       "qwen",
+				Tags:         []string{"chat", "instruct", "multilingual", "quantized"},
+				Status:       "available",
+			},
+			{
+				Name:         "Qwen2.5 7B Instruct (GPTQ Int8)",
+				Source:       "huggingface",
+				SourceURI:    "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int8",
+				Parameters:   "7B",
+				Quantization: "gptq-int8",
+				VRAMRequired: 12288,
+				MaxContext:   131072,
+				Family:       "qwen",
+				Tags:         []string{"chat", "instruct", "multilingual", "quantized"},
+				Status:       "available",
+			},
+			{
+				Name:         "Qwen3 4B Thinking 2507",
+				Source:       "huggingface",
+				SourceURI:    "Qwen/Qwen3-4B-Thinking-2507",
+			Parameters:   "4B",
+			Quantization: "none",
+			VRAMRequired: 12288,
+			MaxContext:   262144,
+			Family:       "qwen",
+			Tags:         []string{"chat", "reasoning", "multilingual"},
+			Status:       "available",
+		},
+		{
+			Name:         "Kimi K2.5 Instruct",
+			Source:       "huggingface",
+			SourceURI:    "moonshotai/Kimi-K2.5-Instruct",
+			Parameters:   "1T MoE",
+			Quantization: "none",
+			VRAMRequired: 675840,
+			MaxContext:   131072,
+			Family:       "kimi",
+			Tags:         []string{"chat", "reasoning", "coding", "moe"},
 			Status:       "available",
 		},
 		{
@@ -113,12 +167,25 @@ func SeedDefaultModels(store *Store) error {
 		},
 	}
 
+	inserted := 0
 	for i := range models {
+		_, err := store.GetBySourceURI(models[i].SourceURI)
+		if err == nil {
+			continue
+		}
+		if err != nil && !errors.Is(err, ErrModelNotFound) {
+			return err
+		}
 		if err := store.Create(&models[i]); err != nil {
 			return err
 		}
+		inserted++
 	}
 
-	slog.Info("vault seeded default models", slog.Int("count", len(models)))
+	slog.Info(
+		"vault seeded default models",
+		slog.Int("inserted", inserted),
+		slog.Int("defaults", len(models)),
+	)
 	return nil
 }

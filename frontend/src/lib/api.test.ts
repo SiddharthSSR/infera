@@ -4,12 +4,15 @@ import {
   createSession,
   getSession,
   destroySession,
+  fetchWorkspaces,
   fetchWorkers,
   fetchModels,
   fetchStats,
   fetchInstances,
   fetchOfferings,
+  fetchProviders,
   fetchCosts,
+  fetchDeploymentAttempts,
   fetchApiKeys,
   createApiKey,
   revokeApiKey,
@@ -31,6 +34,9 @@ import {
   terminateInstance,
   startInstance,
   stopInstance,
+  updateDeploymentVerification,
+  markDeploymentAutoVerificationRequested,
+  switchSessionWorkspace,
 } from './api'
 
 const mockFetch = vi.fn()
@@ -86,6 +92,32 @@ describe('API Functions', () => {
       mockFetch.mockRejectedValueOnce(new Error('network down'))
       await expect(destroySession()).resolves.toBeUndefined()
     })
+
+    it('switchSessionWorkspace should update session workspace', async () => {
+      const payload = {
+        session: { id: 'sess-1', expires_at: '2099-01-01T00:00:00Z' },
+        key: { id: 'k2', key_prefix: 'inf_qwer', name: 'member', role: 'operator', workspace_id: 'ws_2' },
+        workspace: { id: 'ws_2', slug: 'beta-team', name: 'Beta Team' },
+      }
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => payload,
+      })
+
+      const result = await switchSessionWorkspace('ws_2')
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/auth/session/workspace',
+        expect.objectContaining({
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspace_id: 'ws_2' }),
+        }),
+      )
+      expect(result).toEqual(payload)
+    })
   })
 
   describe('core endpoints', () => {
@@ -116,18 +148,20 @@ describe('API Functions', () => {
       window.removeEventListener('auth-expired', handler)
     })
 
-    it('fetchModels/fetchStats/fetchInstances/fetchOfferings/fetchCosts should parse payloads', async () => {
+    it('fetchModels/fetchStats/fetchInstances/fetchOfferings/fetchProviders/fetchCosts should parse payloads', async () => {
       mockFetch
         .mockResolvedValueOnce({ ok: true, json: async () => ({ data: [{ id: 'llama-3-8b', object: 'model' }] }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ workers: { total: 1, healthy: 1 } }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ instances: [{ id: 'i1', status: 'running' }] }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ offerings: [{ gpu_type: 'RTX_4090' }] }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ providers: [{ provider: 'runpod', connected: true }] }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ current_hourly: 1.5 }) })
 
       await expect(fetchModels()).resolves.toHaveLength(1)
       await expect(fetchStats()).resolves.toEqual(expect.objectContaining({ workers: { total: 1, healthy: 1 } }))
       await expect(fetchInstances()).resolves.toHaveLength(1)
       await expect(fetchOfferings()).resolves.toHaveLength(1)
+      await expect(fetchProviders()).resolves.toHaveLength(1)
       await expect(fetchCosts()).resolves.toEqual(expect.objectContaining({ current_hourly: 1.5 }))
     })
 
@@ -162,6 +196,86 @@ describe('API Functions', () => {
         4,
         '/api/instances/new-inst',
         expect.objectContaining({ method: 'DELETE', credentials: 'include' })
+      )
+    })
+
+    it('fetchDeploymentAttempts/updateDeploymentVerification/markDeploymentAutoVerificationRequested should parse payloads', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            attempts: [
+              {
+                id: 'attempt-1',
+                outcome: 'provisioned',
+                request: { gpu_type: 'RTX_4090' },
+                created_at: '2026-03-16T00:00:00Z',
+                updated_at: '2026-03-16T00:00:00Z',
+              },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            attempt: {
+              id: 'attempt-1',
+              outcome: 'provisioned',
+              request: { gpu_type: 'RTX_4090' },
+              created_at: '2026-03-16T00:00:00Z',
+              updated_at: '2026-03-16T00:01:00Z',
+              inference_verification: {
+                status: 'passed',
+                verified_at: '2026-03-16T00:01:00Z',
+                latency_ms: 420,
+              },
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            attempt: {
+              id: 'attempt-1',
+              outcome: 'provisioned',
+              request: { gpu_type: 'RTX_4090' },
+              created_at: '2026-03-16T00:00:00Z',
+              updated_at: '2026-03-16T00:01:00Z',
+              auto_verification_requested_at: '2026-03-16T00:00:30Z',
+            },
+          }),
+        })
+
+      await expect(fetchDeploymentAttempts()).resolves.toHaveLength(1)
+      await expect(updateDeploymentVerification('attempt-1', {
+        status: 'passed',
+        verified_at: '2026-03-16T00:01:00Z',
+        latency_ms: 420,
+      })).resolves.toEqual(expect.objectContaining({
+        id: 'attempt-1',
+        inference_verification: expect.objectContaining({ status: 'passed' }),
+      }))
+      await expect(markDeploymentAutoVerificationRequested('attempt-1', '2026-03-16T00:00:30Z')).resolves.toEqual(
+        expect.objectContaining({
+          id: 'attempt-1',
+          auto_verification_requested_at: '2026-03-16T00:00:30Z',
+        }),
+      )
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/deployments',
+        expect.objectContaining({ credentials: 'include' }),
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/deployments/attempt-1/verification',
+        expect.objectContaining({ method: 'PUT', credentials: 'include' }),
+      )
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        3,
+        '/api/deployments/attempt-1/auto-verification',
+        expect.objectContaining({ method: 'PUT', credentials: 'include' }),
       )
     })
   })
@@ -205,6 +319,26 @@ describe('API Functions', () => {
   })
 
   describe('workspace admin endpoints', () => {
+    it('fetchWorkspaces parses workspace list', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          workspaces: [
+            { id: 'ws_1', slug: 'alpha', name: 'Alpha', created_at: '2026-03-15T00:00:00Z', status: 'active' },
+            { id: 'ws_2', slug: 'beta', name: 'Beta', created_at: '2026-03-15T00:00:00Z', status: 'active' },
+          ],
+        }),
+      })
+
+      const workspaces = await fetchWorkspaces()
+
+      expect(workspaces).toHaveLength(2)
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/auth/workspaces',
+        expect.objectContaining({ credentials: 'include' }),
+      )
+    })
+
     it('fetchWorkspaceQuota/fetchWorkspaceMembers/fetchWorkspaceInvites parse payloads', async () => {
       mockFetch
         .mockResolvedValueOnce({ ok: true, json: async () => ({ quota: { workspace_id: 'ws_1', enforce_hard_limits: true } }) })

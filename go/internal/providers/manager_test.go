@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -22,6 +23,8 @@ func newTestManager(t *testing.T, config ManagerConfig) *Manager {
 type mockTestProvider struct {
 	instances map[string]*Instance
 	lastReq   *ProvisionRequest
+	started   []string
+	stopped   []string
 }
 
 type workspaceConfiguredProvider struct {
@@ -50,6 +53,7 @@ func (p *mockTestProvider) Provision(ctx context.Context, req *ProvisionRequest)
 		Status:      InstanceStatusRunning,
 		GPUType:     req.GPUType,
 		GPUCount:    req.GPUCount,
+		Models:      append([]string(nil), req.Models...),
 		CostPerHour: 1.00,
 		CreatedAt:   now,
 		StartedAt:   &now,
@@ -90,10 +94,23 @@ func (p *mockTestProvider) Terminate(ctx context.Context, instanceID string) err
 }
 
 func (p *mockTestProvider) Start(ctx context.Context, instanceID string) error {
+	p.started = append(p.started, instanceID)
+	if inst := p.findInstance(instanceID); inst != nil {
+		inst.Status = InstanceStatusRunning
+		now := time.Now()
+		inst.StartedAt = &now
+		inst.StoppedAt = nil
+	}
 	return nil
 }
 
 func (p *mockTestProvider) Stop(ctx context.Context, instanceID string) error {
+	p.stopped = append(p.stopped, instanceID)
+	if inst := p.findInstance(instanceID); inst != nil {
+		inst.Status = InstanceStatusStopped
+		now := time.Now()
+		inst.StoppedAt = &now
+	}
 	return nil
 }
 
@@ -127,6 +144,18 @@ func (p *mockTestProvider) GetStatus(ctx context.Context) (*ProviderStatus, erro
 }
 
 func (p *mockTestProvider) WaitForReady(ctx context.Context, instanceID string) error {
+	return nil
+}
+
+func (p *mockTestProvider) findInstance(id string) *Instance {
+	if inst, ok := p.instances[id]; ok {
+		return inst
+	}
+	for _, inst := range p.instances {
+		if inst.ProviderID == id {
+			return inst
+		}
+	}
 	return nil
 }
 
@@ -384,7 +413,8 @@ func TestManagerTerminateNonExistent(t *testing.T) {
 
 func TestManagerStartStop(t *testing.T) {
 	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
-	mgr.RegisterProvider(newMockTestProvider())
+	provider := newMockTestProvider()
+	mgr.RegisterProvider(provider)
 
 	ctx := context.Background()
 	req := &ProvisionRequest{Name: "start-stop", GPUType: GPURTX4090}
@@ -395,6 +425,10 @@ func TestManagerStartStop(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stop failed: %v", err)
 		}
+		inst, _ := mgr.GetInstance(instance.ID)
+		if inst.Status != InstanceStatusStopped {
+			t.Fatalf("expected stopped status, got %s", inst.Status)
+		}
 	})
 
 	t.Run("Start", func(t *testing.T) {
@@ -402,7 +436,104 @@ func TestManagerStartStop(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Start failed: %v", err)
 		}
+		inst, _ := mgr.GetInstance(instance.ID)
+		if inst.Status != InstanceStatusProvisioning {
+			t.Fatalf("expected provisioning status after start, got %s", inst.Status)
+		}
+		if len(provider.started) != 1 {
+			t.Fatalf("expected 1 provider start call, got %d", len(provider.started))
+		}
 	})
+}
+
+func TestManagerStartRejectedForTerminatedInstance(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	provider := newMockTestProvider()
+	mgr.RegisterProvider(provider)
+
+	ctx := context.Background()
+	req := &ProvisionRequest{Name: "terminated-start", GPUType: GPURTX4090}
+	instance, _ := mgr.Provision(ctx, req)
+	instance.Status = InstanceStatusTerminated
+
+	err := mgr.Start(ctx, instance.ID)
+	if err == nil {
+		t.Fatal("expected terminated instance start to fail")
+	}
+
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != ProviderErrorNotFound {
+		t.Fatalf("expected not_found, got %q", providerErr.Code)
+	}
+}
+
+func TestManagerRefreshMarksMissingInstanceTerminated(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	provider := newMockTestProvider()
+	mgr.RegisterProvider(provider)
+
+	ctx := context.Background()
+	req := &ProvisionRequest{Name: "missing-on-refresh", GPUType: GPURTX4090}
+	instance, _ := mgr.Provision(ctx, req)
+	delete(provider.instances, instance.ProviderID)
+
+	if err := mgr.RefreshInstances(ctx); err != nil {
+		t.Fatalf("RefreshInstances failed: %v", err)
+	}
+
+	refreshed, ok := mgr.GetInstance(instance.ID)
+	if !ok {
+		t.Fatal("expected tracked instance to still exist")
+	}
+	if refreshed.Status != InstanceStatusTerminated {
+		t.Fatalf("expected terminated status, got %s", refreshed.Status)
+	}
+	if refreshed.ErrorMessage == "" {
+		t.Fatal("expected refresh to persist missing-instance error")
+	}
+}
+
+func TestManagerProvisionReusesStoppedInstance(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock, WorkerImage: "worker:v1"})
+	provider := newMockTestProvider()
+	mgr.RegisterProvider(provider)
+
+	ctx := context.Background()
+	req := &ProvisionRequest{
+		Name:        "warm-reuse",
+		Provider:    ProviderMock,
+		WorkspaceID: "ws_alpha",
+		GPUType:     GPURTX4090,
+		GPUCount:    1,
+		Models:      []string{"Qwen/Qwen2.5-7B-Instruct"},
+	}
+
+	first, err := mgr.Provision(ctx, req)
+	if err != nil {
+		t.Fatalf("first provision failed: %v", err)
+	}
+	if err := mgr.Stop(ctx, first.ID); err != nil {
+		t.Fatalf("stop failed: %v", err)
+	}
+
+	provider.lastReq = nil
+
+	second, err := mgr.Provision(ctx, req)
+	if err != nil {
+		t.Fatalf("second provision failed: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected stopped instance %s to be reused, got %s", first.ID, second.ID)
+	}
+	if provider.lastReq != nil {
+		t.Fatal("expected no second provider provision call when a stopped instance matches")
+	}
+	if len(provider.started) == 0 {
+		t.Fatal("expected provider start to be called for warm reuse")
+	}
 }
 
 func TestManagerListOfferings(t *testing.T) {
@@ -482,5 +613,27 @@ func TestManagerLinkWorkerNonExistent(t *testing.T) {
 	err := mgr.LinkWorker("non-existent", "worker-123")
 	if err == nil {
 		t.Error("expected error for non-existent instance")
+	}
+}
+
+func TestManagerGetInstanceByProviderRef(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(newMockTestProvider())
+
+	ctx := context.Background()
+	instance, err := mgr.Provision(ctx, &ProvisionRequest{Name: "provider-ref-test", GPUType: GPURTX4090})
+	if err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+
+	instance.Provider = ProviderRunPod
+	instance.ProviderID = "pod-123"
+
+	found, ok := mgr.GetInstanceByProviderRef(ProviderRunPod, "pod-123")
+	if !ok {
+		t.Fatal("expected provider ref lookup to find instance")
+	}
+	if found.ID != instance.ID {
+		t.Fatalf("expected instance %q, got %q", instance.ID, found.ID)
 	}
 }

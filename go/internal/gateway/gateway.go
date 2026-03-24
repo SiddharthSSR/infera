@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
+	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/internal/vault"
@@ -44,6 +45,11 @@ type Gateway struct {
 
 	// Audit (inference usage tracking)
 	auditStore *audit.Store
+	auditCh    chan audit.InferenceAuditRecord
+	auditWg    sync.WaitGroup
+
+	// Deployments (shared deployment history)
+	deploymentStore *deployments.Store
 
 	// Rate limiting
 	rateLimiter *RateLimiter
@@ -73,6 +79,8 @@ type Config struct {
 	AllowedOrigins    []string
 	WorkerSharedToken string
 	RequestTimeoutMS  int
+	RateLimiter       *RateLimiterConfig
+	MaxInFlight       int64
 }
 
 // DefaultConfig returns sensible defaults.
@@ -91,16 +99,44 @@ func DefaultConfig() Config {
 
 // New creates a new gateway.
 func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gateway {
+	rateLimiter := NewRateLimiter(DefaultRateLimiterConfig())
+	if config.RateLimiter != nil {
+		if config.RateLimiter.RequestsPerMinute > 0 {
+			rateLimiter = NewRateLimiter(*config.RateLimiter)
+		} else {
+			rateLimiter = nil
+		}
+	}
+
+	maxInFlight := int64(100)
+	if config.MaxInFlight > 0 {
+		maxInFlight = config.MaxInFlight
+	}
+
 	gw := &Gateway{
 		router:             r,
 		config:             config,
 		instanceManager:    instanceMgr,
-		rateLimiter:        NewRateLimiter(DefaultRateLimiterConfig()),
+		rateLimiter:        rateLimiter,
 		metrics:            NewGatewayMetrics(),
-		maxInFlightDefault: 100,
+		maxInFlightDefault: maxInFlight,
 		log:                NewLogger(),
 		workerClients:      make(map[string]*WorkerClient),
 		startedAt:          time.Now(),
+	}
+
+	if r != nil {
+		r.OnBatchDispatch(func(batch *types.BatchContext) {
+			if gw.metrics == nil {
+				return
+			}
+
+			wait := time.Since(batch.CreatedAt)
+			if batch.SealedAt != nil {
+				wait = batch.SealedAt.Sub(batch.CreatedAt)
+			}
+			gw.metrics.RecordBatch(batch.ModelID, batch.Size(), wait)
+		})
 	}
 
 	if instanceMgr != nil {
@@ -120,9 +156,31 @@ func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 	g.vaultHandler = h
 }
 
-// SetAuditStore sets the inference audit store.
+// SetAuditStore sets the inference audit store and starts the async writer.
 func (g *Gateway) SetAuditStore(s *audit.Store) {
 	g.auditStore = s
+	g.auditCh = make(chan audit.InferenceAuditRecord, 1024)
+	g.auditWg.Add(1)
+	go g.runAuditWriter()
+}
+
+// runAuditWriter drains auditCh in the background, keeping audit writes off
+// the inference hot path.
+func (g *Gateway) runAuditWriter() {
+	defer g.auditWg.Done()
+	for rec := range g.auditCh {
+		if err := g.auditStore.AppendInference(rec); err != nil {
+			g.log.Warn("inference.audit_persist_failed", slog.String("error", err.Error()))
+		}
+	}
+}
+
+// SetDeploymentStore sets the shared deployment history store.
+func (g *Gateway) SetDeploymentStore(s *deployments.Store) {
+	g.deploymentStore = s
+	if g.instanceHandlers != nil {
+		g.instanceHandlers.SetDeploymentStore(s)
+	}
 }
 
 // Start starts the HTTP server.
@@ -187,6 +245,7 @@ func (g *Gateway) Start() error {
 		mux,
 		recoveryMiddleware(g.log),
 		requestIDMiddleware,
+		traceparentMiddleware,
 		bodySizeLimitMiddleware(maxRequestBodyBytes),
 	)
 	if g.metrics != nil {
@@ -209,7 +268,16 @@ func (g *Gateway) Stop(ctx context.Context) error {
 		g.rateLimiter.Stop()
 	}
 	if g.httpServer != nil {
-		return g.httpServer.Shutdown(ctx)
+		if err := g.httpServer.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
+	// Drain the audit channel only after HTTP shutdown has completed so
+	// request handlers can no longer enqueue records into the channel.
+	if g.auditCh != nil {
+		close(g.auditCh)
+		g.auditWg.Wait()
+		g.auditCh = nil
 	}
 	return nil
 }
@@ -403,6 +471,74 @@ func hashPrompt(messages []ChatMessage) string {
 	return sum
 }
 
+func hashPromptPrefix(messages []ChatMessage, maxBytes int) string {
+	if len(messages) == 0 || maxBytes <= 0 {
+		return ""
+	}
+
+	hasher := sha256.New()
+	remaining := maxBytes
+	for _, msg := range messages {
+		parts := []string{msg.Role, msg.Name, msg.Content}
+		for _, part := range parts {
+			if remaining <= 0 {
+				break
+			}
+			chunk := part
+			if len(chunk) > remaining {
+				chunk = chunk[:remaining]
+			}
+			_, _ = hasher.Write([]byte(chunk))
+			_, _ = hasher.Write([]byte{0})
+			remaining -= len(chunk)
+		}
+		if remaining <= 0 {
+			break
+		}
+	}
+
+	sum := hex.EncodeToString(hasher.Sum(nil))
+	if len(sum) > 16 {
+		return sum[:16]
+	}
+	return sum
+}
+
+func buildAffinityMetadata(r *http.Request, req *ChatCompletionRequest) map[string]string {
+	const prefixHashBytes = 1024
+
+	explicitAffinity := strings.TrimSpace(r.Header.Get("X-Infera-Affinity-Key"))
+	prefixHash := hashPromptPrefix(req.Messages, prefixHashBytes)
+	modelID := strings.TrimSpace(req.Model)
+	if modelID == "" {
+		modelID = "unknown-model"
+	}
+
+	metadata := map[string]string{}
+	if prefixHash != "" {
+		metadata[types.MetadataPromptPrefixHash] = prefixHash
+	}
+
+	switch {
+	case explicitAffinity != "":
+		metadata[types.MetadataAffinityKey] = fmt.Sprintf("explicit:%s:%s", modelID, explicitAffinity)
+		metadata[types.MetadataAffinitySource] = types.MetadataExplicitAffinity
+	case auth.SessionFromContext(r.Context()) != nil:
+		session := auth.SessionFromContext(r.Context())
+		metadata[types.MetadataAffinityKey] = fmt.Sprintf("session:%s:%s:%s", session.ID, modelID, prefixHash)
+		metadata[types.MetadataAffinitySource] = types.MetadataSessionAffinity
+	case auth.KeyFromContext(r.Context()) != nil:
+		key := auth.KeyFromContext(r.Context())
+		metadata[types.MetadataAffinityKey] = fmt.Sprintf("key:%s:%s:%s", key.ID, modelID, prefixHash)
+		metadata[types.MetadataAffinitySource] = types.MetadataAPIKeyAffinity
+	}
+
+	if len(metadata) == 0 || metadata[types.MetadataAffinityKey] == "" {
+		return nil
+	}
+	return metadata
+}
+
 func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed")
@@ -469,8 +605,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		}
 		g.log.Info("inference.audit", attrs...)
 
-		if g.auditStore != nil {
-			err := g.auditStore.AppendInference(audit.InferenceAuditRecord{
+		if g.auditCh != nil {
+			rec := audit.InferenceAuditRecord{
 				Timestamp:    requestStart.UTC(),
 				RequestID:    requestID,
 				KeyID:        keyID,
@@ -484,11 +620,12 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				Status:       auditStatus,
 				ErrorCode:    auditErrorCode,
 				LatencyMS:    latencyMS,
-			})
-			if err != nil {
-				g.log.Warn("inference.audit_persist_failed",
+			}
+			select {
+			case g.auditCh <- rec:
+			default:
+				g.log.Warn("inference.audit_dropped",
 					slog.String("request_id", requestID),
-					slog.String("error", err.Error()),
 				)
 			}
 		}
@@ -504,14 +641,24 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	r = r.WithContext(ctx)
 
 	// Convert to internal format
-	inferenceReq := g.toInferenceRequest(&req)
+	inferenceReq := g.toInferenceRequest(r, &req)
 	if !g.enforceWorkspaceQuota(w, r, inferenceReq) {
 		return
 	}
 
 	// Route the request
-	routed, err := g.router.Route(inferenceReq)
+	routed, err := g.router.Route(ctx, inferenceReq)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			auditStatus = "client_canceled"
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			auditStatus = "failed"
+			auditErrorCode = "inference_timeout"
+			g.writeError(w, http.StatusGatewayTimeout, "inference_timeout", "Inference request timed out")
+			return
+		}
 		g.log.Warn("inference.route_failed",
 			slog.String("request_id", requestID),
 			slog.String("key_id", keyID),
@@ -585,6 +732,9 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 	if completionTokens == 0 {
 		completionTokens = estimateCompletionTokens(resp)
 	}
+	if g.metrics != nil {
+		g.recordNonStreamingLatencyMetrics(model, resp, completionTokens)
+	}
 	totalTokens := usageTotalTokens(
 		promptTokens,
 		completionTokens,
@@ -648,7 +798,8 @@ func (g *Gateway) enforceWorkspaceQuota(w http.ResponseWriter, r *http.Request, 
 
 	now := time.Now().UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	usage, err := g.auditStore.UsageSummary(audit.UsageSummaryQuery{
+
+	result, err := g.auditStore.UsageSummary(audit.UsageSummaryQuery{
 		Start:       monthStart,
 		End:         now,
 		WorkspaceID: key.WorkspaceID,
@@ -659,6 +810,11 @@ func (g *Gateway) enforceWorkspaceQuota(w http.ResponseWriter, r *http.Request, 
 			slog.String("error", err.Error()),
 		)
 		return true
+	}
+
+	var usage audit.UsageSummary
+	if result != nil {
+		usage = *result
 	}
 
 	projectedRequests := usage.RequestCount + 1
@@ -701,6 +857,7 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 
 	requestID := "chatcmpl-" + req.RequestID
 	created := time.Now().Unix()
+	streamStart := time.Now()
 
 	// Send initial role chunk (OpenAI format)
 	initialChunk := ChatCompletionChunk{
@@ -726,8 +883,36 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	bestPromptTokens := 0
 	bestCompletionTokens := 0
 	bestTotalTokens := 0
+	firstChunkObserved := false
+	var previousChunkAt time.Time
+	prevCompletionTokens := 0
 
 	for chunk := range chunks {
+		now := time.Now()
+		if !firstChunkObserved {
+			firstChunkObserved = true
+			if g.metrics != nil {
+				g.metrics.RecordTTFT(model, true, now.Sub(streamStart))
+			}
+		} else if g.metrics != nil {
+			elapsed := now.Sub(previousChunkAt)
+			// Derive how many completion tokens arrived in this chunk using
+			// the cumulative CompletionTokens counter. Fall back to 1 when
+			// the worker doesn't populate Usage mid-stream.
+			tokensInChunk := 1
+			if chunk.Usage != nil && chunk.Usage.CompletionTokens > prevCompletionTokens {
+				tokensInChunk = chunk.Usage.CompletionTokens - prevCompletionTokens
+			}
+			perToken := elapsed / time.Duration(tokensInChunk)
+			for i := 0; i < tokensInChunk; i++ {
+				g.metrics.RecordTPOT(model, true, perToken)
+			}
+		}
+		if chunk.Usage != nil && chunk.Usage.CompletionTokens > 0 {
+			prevCompletionTokens = chunk.Usage.CompletionTokens
+		}
+		previousChunkAt = now
+
 		generatedChars += len(chunk.Delta)
 		if chunk.Usage != nil {
 			bestPromptTokens = maxInt(bestPromptTokens, chunk.Usage.PromptTokens)
@@ -777,6 +962,22 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	))
 
 	return tokenCount, "success"
+}
+
+func (g *Gateway) recordNonStreamingLatencyMetrics(model string, resp *types.InferenceResponse, completionTokens int) {
+	ttft := time.Duration(resp.Latency.TimeToFirstTokenMS) * time.Millisecond
+	g.metrics.RecordTTFT(model, false, ttft)
+
+	if completionTokens <= 1 {
+		return
+	}
+
+	total := time.Duration(resp.Latency.TotalMS) * time.Millisecond
+	if total <= ttft {
+		return
+	}
+
+	g.metrics.RecordTPOT(model, false, (total-ttft)/time.Duration(completionTokens-1))
 }
 
 func (g *Gateway) handlePrometheusWorkerTargets(w http.ResponseWriter, r *http.Request) {
@@ -1119,6 +1320,8 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	g.linkWorkerToInstance(workerInfo)
+
 	// Register worker client
 	g.RegisterWorkerClient(req.WorkerID, req.Address)
 
@@ -1183,6 +1386,14 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if g.metrics != nil {
+		g.metrics.RecordWorkerQueueDepth(req.WorkerID, req.Stats.QueueDepth)
+	}
+
+	if worker, found := g.router.GetWorker(req.WorkerID); found {
+		g.linkWorkerToInstance(worker)
+	}
+
 	// Sync loaded models from heartbeat (self-healing if registration missed them)
 	if len(req.LoadedModels) > 0 {
 		models := make([]types.LoadedModel, len(req.LoadedModels))
@@ -1199,6 +1410,98 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"acknowledged": true,
 	})
+}
+
+func (g *Gateway) linkWorkerToInstance(worker *types.WorkerInfo) {
+	if g == nil || g.instanceManager == nil || worker == nil {
+		return
+	}
+
+	if instance, found := g.instanceManager.GetInstanceByWorker(worker.WorkerID); found && instance != nil {
+		return
+	}
+
+	instanceID := strings.TrimSpace(worker.Tags["instance_id"])
+	if instanceID == "" {
+		instanceID = strings.TrimSpace(worker.Tags["provider_id"])
+	}
+
+	if instanceID != "" {
+		if inst, found := g.instanceManager.GetInstance(instanceID); found && inst != nil {
+			if err := g.instanceManager.LinkWorker(inst.ID, worker.WorkerID); err == nil {
+				g.log.Info("worker.linked_via_tag",
+					slog.String("worker_id", worker.WorkerID),
+					slog.String("instance_id", inst.ID),
+				)
+			}
+			return
+		}
+	}
+
+	providerID, providerType, method, ok := inferWorkerProviderRef(worker)
+	if !ok {
+		g.log.Debug("worker.link_skipped",
+			slog.String("worker_id", worker.WorkerID),
+			slog.String("address", worker.Address),
+			slog.String("reason", "no provider ref resolvable from tags or hostname"),
+		)
+		return
+	}
+
+	if inst, found := g.instanceManager.GetInstanceByProviderRef(providerType, providerID); found && inst != nil {
+		if err := g.instanceManager.LinkWorker(inst.ID, worker.WorkerID); err == nil {
+			g.log.Info("worker.linked_via_provider_ref",
+				slog.String("worker_id", worker.WorkerID),
+				slog.String("instance_id", inst.ID),
+				slog.String("provider", string(providerType)),
+				slog.String("provider_id", providerID),
+				slog.String("method", method),
+			)
+		}
+	} else {
+		g.log.Warn("worker.link_no_instance",
+			slog.String("worker_id", worker.WorkerID),
+			slog.String("provider", string(providerType)),
+			slog.String("provider_id", providerID),
+			slog.String("method", method),
+		)
+	}
+}
+
+func inferWorkerProviderRef(worker *types.WorkerInfo) (providerID string, providerType providers.ProviderType, method string, ok bool) {
+	if worker == nil {
+		return "", "", "", false
+	}
+
+	if tagProviderID := strings.TrimSpace(worker.Tags["provider_id"]); tagProviderID != "" {
+		provider := providers.ProviderType(strings.TrimSpace(worker.Tags["provider"]))
+		if provider != "" {
+			return tagProviderID, provider, "tags", true
+		}
+	}
+
+	address := strings.TrimSpace(worker.Address)
+	if address == "" {
+		return "", "", "", false
+	}
+
+	host := address
+	if parsedHost, _, err := net.SplitHostPort(address); err == nil {
+		host = parsedHost
+	}
+	host = strings.ToLower(strings.TrimSpace(host))
+
+	if strings.Contains(host, ".proxy.runpod.net") {
+		firstLabel := host
+		if idx := strings.Index(host, "."); idx >= 0 {
+			firstLabel = host[:idx]
+		}
+		if dash := strings.Index(firstLabel, "-"); dash > 0 {
+			return firstLabel[:dash], providers.ProviderRunPod, "runpod_hostname", true
+		}
+	}
+
+	return "", "", "", false
 }
 
 func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {
@@ -1400,7 +1703,7 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 // Helper Methods
 // ============================================================================
 
-func (g *Gateway) toInferenceRequest(req *ChatCompletionRequest) *types.InferenceRequest {
+func (g *Gateway) toInferenceRequest(r *http.Request, req *ChatCompletionRequest) *types.InferenceRequest {
 	messages := make([]types.Message, len(req.Messages))
 	for i, msg := range req.Messages {
 		messages[i] = types.Message{
@@ -1440,6 +1743,7 @@ func (g *Gateway) toInferenceRequest(req *ChatCompletionRequest) *types.Inferenc
 		Parameters: params,
 		Stream:     req.Stream,
 		Priority:   types.PriorityNormal,
+		Metadata:   buildAffinityMetadata(r, req),
 		CreatedAt:  time.Now(),
 	}
 }

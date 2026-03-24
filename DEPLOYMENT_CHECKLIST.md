@@ -1,6 +1,8 @@
 # Infera Deployment Checklist
 
-Use this checklist for production deployments of `main`/`v1-production` to the VM.
+Use this checklist for production deployments of `main` to the VM.
+
+For the `roadmap -> main` release gate, use [docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md](/Users/siddharthsingh/codingtensor/infera/docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md) first, then use this file for the VM deploy itself.
 
 ## 1. Pre-Deploy
 

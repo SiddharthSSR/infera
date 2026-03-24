@@ -91,7 +91,8 @@ export interface ChatCompletionResponse {
 // GPU Provider Types
 
 export type ProviderType = 'runpod' | 'vastai' | 'lambda' | 'mock';
-export type GPUType = 'RTX_4090' | 'RTX_4080' | 'A100_40GB' | 'A100_80GB' | 'H100' | 'L40S';
+export type KnownGPUType = 'RTX_4090' | 'RTX_4080' | 'A100_40GB' | 'A100_80GB' | 'H100' | 'L40S';
+export type GPUType = KnownGPUType | (string & {});
 export type InstanceStatus = 'pending' | 'provisioning' | 'running' | 'stopping' | 'stopped' | 'terminating' | 'terminated' | 'error';
 
 export interface Instance {
@@ -121,6 +122,8 @@ export interface Instance {
 export interface GPUOffering {
   provider: ProviderType;
   gpu_type: GPUType;
+  display_name?: string;
+  provider_gpu_type_id?: string;
   gpu_count: number;
   vcpu: number;
   memory_gb: number;
@@ -139,6 +142,19 @@ export interface ProviderStatus {
   active_instances: number;
   quota_limit?: number;
   error?: string;
+  error_code?: string;
+  capabilities?: ProviderCapabilities;
+}
+
+export interface ProviderCapabilities {
+  supports_spot: boolean;
+  supports_custom_images: boolean;
+  supports_region_selection: boolean;
+  supports_public_ip: boolean;
+  supports_ssh_keys: boolean;
+  supports_start_stop: boolean;
+  startup_script_limit?: number;
+  known_regions?: string[];
 }
 
 export interface CostSummary {
@@ -154,11 +170,13 @@ export interface ProvisionRequest {
   name?: string;
   provider?: ProviderType;
   gpu_type: GPUType;
+  provider_gpu_type_id?: string;
   gpu_count?: number;
   region?: string;
   spot_instance?: boolean;
   max_cost_hour?: number;
   models?: string[];
+  selected_model_name?: string;
 }
 
 // Vault (Model Registry) Types

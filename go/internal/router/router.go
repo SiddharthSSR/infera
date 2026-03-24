@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ type Config struct {
 	EnableBatching   bool
 	MaxBatchSize     int
 	MaxBatchWaitMS   int
+	AffinityTTL      time.Duration
 	RequestTimeoutMS int
 	MaxRetries       int
 }
@@ -30,6 +32,7 @@ func DefaultConfig() Config {
 		EnableBatching:   true,
 		MaxBatchSize:     8,
 		MaxBatchWaitMS:   50,
+		AffinityTTL:      10 * time.Minute,
 		RequestTimeoutMS: 30000,
 		MaxRetries:       3,
 	}
@@ -37,14 +40,29 @@ func DefaultConfig() Config {
 
 // Router is the main routing service.
 type Router struct {
-	config         Config
-	registry       *registry.WorkerRegistry
-	strategyEngine *strategy.Engine
-	batchManager   *batcher.Manager
-	trackers       map[string]*types.RequestTracker
-	trackersMu     sync.RWMutex
-	ctx            context.Context
-	cancel         context.CancelFunc
+	config          Config
+	registry        *registry.WorkerRegistry
+	strategyEngine  *strategy.Engine
+	batchManager    *batcher.Manager
+	onBatchDispatch func(batch *types.BatchContext)
+	trackers        map[string]*types.RequestTracker
+	trackersMu      sync.RWMutex
+	batchWaiters    map[string]chan batchRouteResult
+	batchWaitersMu  sync.Mutex
+	affinity        map[string]affinityBinding
+	affinityMu      sync.RWMutex
+	ctx             context.Context
+	cancel          context.CancelFunc
+}
+
+type batchRouteResult struct {
+	routed *types.RoutedRequest
+	err    error
+}
+
+type affinityBinding struct {
+	WorkerID  string
+	ExpiresAt time.Time
 }
 
 // New creates a new router.
@@ -61,9 +79,11 @@ func New(config Config) *Router {
 			MaxTokensPerBatch: 4096,
 			Enabled:           config.EnableBatching,
 		}),
-		trackers: make(map[string]*types.RequestTracker),
-		ctx:      ctx,
-		cancel:   cancel,
+		trackers:     make(map[string]*types.RequestTracker),
+		batchWaiters: make(map[string]chan batchRouteResult),
+		affinity:     make(map[string]affinityBinding),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 
 	r.batchManager.OnBatchReady(r.onBatchReady)
@@ -73,7 +93,7 @@ func New(config Config) *Router {
 }
 
 // Route routes an inference request to a worker.
-func (r *Router) Route(request *types.InferenceRequest) (*types.RoutedRequest, error) {
+func (r *Router) Route(ctx context.Context, request *types.InferenceRequest) (*types.RoutedRequest, error) {
 	if request.RequestID == "" {
 		request.RequestID = uuid.New().String()
 	}
@@ -81,40 +101,49 @@ func (r *Router) Route(request *types.InferenceRequest) (*types.RoutedRequest, e
 	tracker := r.createTracker(request.RequestID)
 	tracker.Transition(types.RequestStateQueued, "validated")
 
-	candidates := r.registry.GetHealthyWorkersForModel(request.ModelID)
-	if len(candidates) == 0 {
-		allWorkers := r.registry.GetWorkersForModel(request.ModelID)
-		if len(allWorkers) == 0 {
-			return nil, types.NewInferaError(types.ErrorCodeModelNotFound,
-				fmt.Sprintf("model %s not found", request.ModelID)).WithRequestID(request.RequestID)
-		}
-		return nil, types.NewInferaError(types.ErrorCodeModelOverloaded,
-			fmt.Sprintf("all workers for model %s at capacity", request.ModelID)).WithRequestID(request.RequestID)
-	}
-
-	selection, err := r.strategyEngine.SelectWorker(request, candidates)
-	if err != nil {
-		return nil, types.NewInferaError(types.ErrorCodeInternalError,
-			fmt.Sprintf("failed to select worker: %v", err)).WithRequestID(request.RequestID)
-	}
-
 	routed := &types.RoutedRequest{
-		Request:         request,
-		WorkerID:        selection.Worker.WorkerID,
-		RoutingDecision: selection.Decision,
-		RoutedAt:        time.Now(),
-		Attempt:         1,
-		MaxAttempts:     r.config.MaxRetries,
-		Deadline:        time.Now().Add(time.Duration(r.config.RequestTimeoutMS) * time.Millisecond),
+		Request:     request,
+		RoutedAt:    time.Now(),
+		Attempt:     1,
+		MaxAttempts: r.config.MaxRetries,
+		Deadline:    time.Now().Add(time.Duration(r.config.RequestTimeoutMS) * time.Millisecond),
 	}
-
-	tracker.CurrentWorker = selection.Worker.WorkerID
 
 	if r.batchManager.ShouldBatch(request) {
+		if err := r.validateModelAvailability(request); err != nil {
+			return nil, err
+		}
+		waiter := r.registerBatchWaiter(request.RequestID)
+		defer r.unregisterBatchWaiter(request.RequestID, waiter)
+
 		tracker.Transition(types.RequestStateBatched, "batched")
 		r.batchManager.Enqueue(routed)
+
+		select {
+		case result := <-waiter:
+			if result.err != nil {
+				return nil, result.err
+			}
+			return result.routed, nil
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return nil, context.Canceled
+			}
+			return nil, types.NewInferaError(
+				types.ErrorCodeTimeout,
+				"request timed out while waiting for batch dispatch",
+			).WithRequestID(request.RequestID)
+		}
 	}
 
+	selection, err := r.selectWorker(request)
+	if err != nil {
+		return nil, err
+	}
+
+	routed.WorkerID = selection.Worker.WorkerID
+	routed.RoutingDecision = selection.Decision
+	tracker.CurrentWorker = selection.Worker.WorkerID
 	return routed, nil
 }
 
@@ -124,6 +153,8 @@ func (r *Router) HandleFailure(request *types.RoutedRequest, err error) (*types.
 	if tracker != nil {
 		tracker.Transition(types.RequestStateFailed, err.Error())
 	}
+
+	r.clearAffinityForFailure(request)
 
 	if !request.IsRetriable() || request.IsExpired() {
 		return nil, types.NewInferaError(types.ErrorCodeInternalError,
@@ -229,19 +260,130 @@ func (r *Router) getTracker(requestID string) *types.RequestTracker {
 }
 
 func (r *Router) onBatchReady(batch *types.BatchContext) {
+	selection, err := r.selectWorkerForModel(batch.ModelID)
+	batchWait := time.Since(batch.CreatedAt)
+	if batch.SealedAt != nil {
+		batchWait = batch.SealedAt.Sub(batch.CreatedAt)
+	}
+	if err == nil && r.onBatchDispatch != nil {
+		r.onBatchDispatch(batch)
+	}
 	for _, req := range batch.Requests {
 		tracker := r.getTracker(req.Request.RequestID)
 		if tracker != nil {
 			tracker.CurrentBatch = batch.BatchID
-			tracker.Transition(types.RequestStateProcessing, "batch dispatched")
+			if err == nil {
+				tracker.CurrentWorker = selection.Worker.WorkerID
+				tracker.Transition(types.RequestStateProcessing, "batch dispatched")
+			} else {
+				tracker.Transition(types.RequestStateFailed, err.Error())
+			}
 		}
+
+		if err != nil {
+			r.completeBatchRoute(req.Request.RequestID, batchRouteResult{err: err})
+			continue
+		}
+
+		req.WorkerID = selection.Worker.WorkerID
+		req.BatchSize = batch.Size()
+		req.BatchWaitMS = batchWait.Milliseconds()
+		req.RoutingDecision = selection.Decision
+		req.RoutedAt = time.Now()
+		r.completeBatchRoute(req.Request.RequestID, batchRouteResult{routed: req})
 	}
+}
+
+// OnBatchDispatch sets a callback invoked once per dispatched batch.
+func (r *Router) OnBatchDispatch(callback func(batch *types.BatchContext)) {
+	r.onBatchDispatch = callback
 }
 
 // Stop shuts down the router.
 func (r *Router) Stop() {
 	r.cancel()
 	r.batchManager.Stop()
+}
+
+func (r *Router) registerBatchWaiter(requestID string) chan batchRouteResult {
+	waiter := make(chan batchRouteResult, 1)
+	r.batchWaitersMu.Lock()
+	r.batchWaiters[requestID] = waiter
+	r.batchWaitersMu.Unlock()
+	return waiter
+}
+
+func (r *Router) unregisterBatchWaiter(requestID string, waiter chan batchRouteResult) {
+	r.batchWaitersMu.Lock()
+	if existing, ok := r.batchWaiters[requestID]; ok && existing == waiter {
+		delete(r.batchWaiters, requestID)
+	}
+	r.batchWaitersMu.Unlock()
+}
+
+func (r *Router) completeBatchRoute(requestID string, result batchRouteResult) {
+	r.batchWaitersMu.Lock()
+	waiter, ok := r.batchWaiters[requestID]
+	if ok {
+		delete(r.batchWaiters, requestID)
+	}
+	r.batchWaitersMu.Unlock()
+
+	if !ok {
+		return
+	}
+
+	waiter <- result
+	close(waiter)
+}
+
+func (r *Router) validateModelAvailability(request *types.InferenceRequest) error {
+	allWorkers := r.registry.GetWorkersForModel(request.ModelID)
+	if len(allWorkers) == 0 {
+		return types.NewInferaError(
+			types.ErrorCodeModelNotFound,
+			fmt.Sprintf("model %s not found", request.ModelID),
+		).WithRequestID(request.RequestID)
+	}
+
+	if len(r.registry.GetHealthyWorkersForModel(request.ModelID)) == 0 {
+		return types.NewInferaError(
+			types.ErrorCodeModelOverloaded,
+			fmt.Sprintf("all workers for model %s at capacity", request.ModelID),
+		).WithRequestID(request.RequestID)
+	}
+
+	return nil
+}
+
+func (r *Router) selectWorker(request *types.InferenceRequest) (*strategy.Selection, error) {
+	if err := r.validateModelAvailability(request); err != nil {
+		return nil, err
+	}
+
+	if selection, ok := r.selectAffinityWorker(request); ok {
+		return selection, nil
+	}
+
+	candidates := r.registry.GetHealthyWorkersForModel(request.ModelID)
+	selection, err := r.strategyEngine.SelectWorker(request, candidates)
+	if err != nil {
+		return nil, types.NewInferaError(
+			types.ErrorCodeInternalError,
+			fmt.Sprintf("failed to select worker: %v", err),
+		).WithRequestID(request.RequestID)
+	}
+	r.rememberAffinity(request, selection.Worker.WorkerID)
+	return selection, nil
+}
+
+func (r *Router) selectWorkerForModel(modelID string) (*strategy.Selection, error) {
+	req := &types.InferenceRequest{
+		RequestID: uuid.New().String(),
+		ModelID:   modelID,
+		Priority:  types.PriorityNormal,
+	}
+	return r.selectWorker(req)
 }
 
 // Stats contains router statistics.
@@ -270,4 +412,87 @@ func (r *Router) GetStats() Stats {
 		TotalQueueDepth: r.GetQueueDepth(),
 		ModelsAvailable: len(modelSet),
 	}
+}
+
+func (r *Router) affinityKey(request *types.InferenceRequest) string {
+	if request == nil || request.Metadata == nil {
+		return ""
+	}
+	return request.Metadata[types.MetadataAffinityKey]
+}
+
+func (r *Router) selectAffinityWorker(request *types.InferenceRequest) (*strategy.Selection, bool) {
+	key := r.affinityKey(request)
+	if key == "" || r.config.AffinityTTL <= 0 {
+		return nil, false
+	}
+
+	r.affinityMu.RLock()
+	binding, ok := r.affinity[key]
+	r.affinityMu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(binding.ExpiresAt) {
+		r.clearAffinity(key)
+		return nil, false
+	}
+
+	worker, ok := r.registry.Get(binding.WorkerID)
+	if !ok || !worker.IsHealthy() || !worker.HasCapacity() || !worker.HasModel(request.ModelID) {
+		r.clearAffinity(key)
+		return nil, false
+	}
+
+	score := 1.0 - worker.CurrentLoad()
+	return &strategy.Selection{
+		Worker: worker,
+		Score:  score,
+		Decision: types.RoutingDecision{
+			Strategy:            types.StrategyAffinity,
+			Reason:              "selected sticky worker for affinity key",
+			CandidatesEvaluated: 1,
+			SelectedWorkerScore: score,
+		},
+	}, true
+}
+
+func (r *Router) rememberAffinity(request *types.InferenceRequest, workerID string) {
+	key := r.affinityKey(request)
+	if key == "" || workerID == "" || r.config.AffinityTTL <= 0 {
+		return
+	}
+
+	r.affinityMu.Lock()
+	r.affinity[key] = affinityBinding{
+		WorkerID:  workerID,
+		ExpiresAt: time.Now().Add(r.config.AffinityTTL),
+	}
+	r.affinityMu.Unlock()
+}
+
+func (r *Router) clearAffinityForFailure(request *types.RoutedRequest) {
+	if request == nil || request.Request == nil {
+		return
+	}
+	key := r.affinityKey(request.Request)
+	if key == "" {
+		return
+	}
+
+	r.affinityMu.Lock()
+	binding, ok := r.affinity[key]
+	if ok && binding.WorkerID == request.WorkerID {
+		delete(r.affinity, key)
+	}
+	r.affinityMu.Unlock()
+}
+
+func (r *Router) clearAffinity(key string) {
+	if key == "" {
+		return
+	}
+	r.affinityMu.Lock()
+	delete(r.affinity, key)
+	r.affinityMu.Unlock()
 }

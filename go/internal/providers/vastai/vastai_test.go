@@ -124,6 +124,53 @@ func TestProvisionUsesSelectedOfferAndEnv(t *testing.T) {
 	}
 }
 
+func TestProvisionAddsRuntimeEnvOverridesForKnownModel(t *testing.T) {
+	provider := newTestProvider(t)
+	var captured map[string]any
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/offers":
+			return httpResponse(http.StatusOK, `[{"id":"offer-1","gpu_type":"L40S","gpu_count":1,"cost_per_hour":0.7,"spot_price":0.4,"region":"global","available":1}]`), nil
+		case "/instances":
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("ReadAll: %v", err)
+			}
+			if err := json.Unmarshal(body, &captured); err != nil {
+				t.Fatalf("json.Unmarshal request: %v", err)
+			}
+			return httpResponse(http.StatusOK, `{"id":"inst-1","name":"worker","status":"running","gpu_type":"L40S","gpu_count":1,"cost_per_hour":0.7}`), nil
+		default:
+			t.Fatalf("unexpected path %s", req.URL.Path)
+			return nil, nil
+		}
+	})
+
+	req := &providers.ProvisionRequest{
+		Name:        "worker",
+		GPUType:     providers.GPUL40S,
+		GPUCount:    1,
+		DockerImage: "custom/worker:v1",
+		Models:      []string{"Qwen/Qwen3-4B-Thinking-2507"},
+	}
+	providers.ApplyRuntimeDefaults(req)
+
+	if _, err := provider.Provision(context.Background(), req); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	env, ok := captured["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected env map, got %#v", captured["env"])
+	}
+	if env[providers.OptionVLLMMaxModelLen] != "65536" {
+		t.Fatalf("expected max model len override, got %#v", env[providers.OptionVLLMMaxModelLen])
+	}
+	if env[providers.OptionVLLMGPUMemoryUtilization] != "0.94" {
+		t.Fatalf("expected gpu memory utilization override, got %#v", env[providers.OptionVLLMGPUMemoryUtilization])
+	}
+}
+
 func TestVastAIProviderConformance(t *testing.T) {
 	originalPollInterval := pollInterval
 	originalReadyTimeout := readyTimeout
@@ -145,10 +192,11 @@ func runProviderConformanceSuite(t *testing.T, provider providers.Provider) {
 
 	ctx := context.Background()
 	req := &providers.ProvisionRequest{
-		Name:     "vast-worker",
-		GPUType:  providers.GPURTX4090,
-		GPUCount: 1,
-		Models:   []string{"meta-llama/Meta-Llama-3.1-8B-Instruct"},
+		Name:        "vast-worker",
+		GPUType:     providers.GPURTX4090,
+		GPUCount:    1,
+		DockerImage: "custom/worker:v1",
+		Models:      []string{"meta-llama/Meta-Llama-3.1-8B-Instruct"},
 	}
 
 	instance, err := provider.Provision(ctx, req)

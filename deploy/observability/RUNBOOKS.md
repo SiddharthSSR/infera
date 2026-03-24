@@ -27,6 +27,27 @@
 3. Check provider-side latency and instance health.
 4. If sustained, scale workers or reduce per-request token limits.
 
+## InferaInferenceTTFTHigh
+
+1. Check the `Inference TTFT p95 by Model` panel in Grafana and identify which model is affected.
+2. Compare TTFT against `Batch Wait p95 by Model` to separate queueing delay from model prefill delay.
+3. Confirm warm workers exist for the affected model and that recent requests are not cold-starting new capacity.
+4. If TTFT regressed after a deploy, compare worker image, model preload behavior, and model cache persistence on RunPod.
+
+## InferaInferenceTPOTHigh
+
+1. Inspect the `Inference TPOT p95 by Model` panel and verify whether the issue is isolated to one model family.
+2. Compare worker GPU utilization, active requests, and queue depth to determine whether decode is saturated.
+3. Check batching behavior and KV-cache locality; if batch wait is low but TPOT is high, decode efficiency is the likely bottleneck.
+4. If sustained, reduce concurrency for the affected model or benchmark a more suitable quantization/runtime config.
+
+## InferaBatchWaitHigh
+
+1. Inspect `Batch Wait p95 by Model` and `Batch Size avg by Model` together to see whether queues are waiting without forming useful batches.
+2. Confirm the affected model has enough healthy workers and that router load metrics are updating.
+3. If batch size stays small while wait time rises, reduce `MaxBatchWaitMS` or add warm capacity for that model.
+4. If wait time rises with large batches, decode throughput is saturated and additional worker capacity is likely needed.
+
 ## InferaWorkerHeartbeatAuthRejected
 
 1. Confirm gateway and worker shared token values match exactly.

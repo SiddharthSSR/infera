@@ -4,6 +4,7 @@ package vault
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -43,20 +44,20 @@ var vaultMigrations = []migrate.Migration{
 
 // Model represents a model in the registry.
 type Model struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Source        string            `json:"source"`
-	SourceURI     string            `json:"source_uri"`
-	Parameters    string            `json:"parameters"`
-	Quantization  string            `json:"quantization"`
-	VRAMRequired  int               `json:"vram_required"`
-	MaxContext    int               `json:"max_context"`
-	Family        string            `json:"family"`
-	Tags          []string          `json:"tags"`
-	Metadata      map[string]string `json:"metadata"`
-	Status        string            `json:"status"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Source       string            `json:"source"`
+	SourceURI    string            `json:"source_uri"`
+	Parameters   string            `json:"parameters"`
+	Quantization string            `json:"quantization"`
+	VRAMRequired int               `json:"vram_required"`
+	MaxContext   int               `json:"max_context"`
+	Family       string            `json:"family"`
+	Tags         []string          `json:"tags"`
+	Metadata     map[string]string `json:"metadata"`
+	Status       string            `json:"status"`
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
 }
 
 // ModelFilter supports query filtering on models.
@@ -74,6 +75,9 @@ type ModelFilter struct {
 type Store struct {
 	db *sql.DB
 }
+
+// ErrModelNotFound indicates the requested model does not exist in the registry.
+var ErrModelNotFound = errors.New("model not found")
 
 // NewStore opens a SQLite database and runs migrations.
 func NewStore(dbPath string) (*Store, error) {
@@ -153,6 +157,12 @@ func (s *Store) Create(m *Model) error {
 // Get retrieves a model by ID.
 func (s *Store) Get(id string) (*Model, error) {
 	row := s.db.QueryRow(`SELECT id, name, source, source_uri, parameters, quantization, vram_required, max_context, family, tags, metadata, status, created_at, updated_at FROM models WHERE id = ?`, id)
+	return scanModel(row)
+}
+
+// GetBySourceURI retrieves a model by its source URI.
+func (s *Store) GetBySourceURI(sourceURI string) (*Model, error) {
+	row := s.db.QueryRow(`SELECT id, name, source, source_uri, parameters, quantization, vram_required, max_context, family, tags, metadata, status, created_at, updated_at FROM models WHERE source_uri = ? LIMIT 1`, sourceURI)
 	return scanModel(row)
 }
 
@@ -346,7 +356,7 @@ func scanModel(row *sql.Row) (*Model, error) {
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("model not found")
+			return nil, ErrModelNotFound
 		}
 		return nil, err
 	}

@@ -171,10 +171,10 @@ func (p *Provider) ListInstances(ctx context.Context) ([]*providers.Instance, er
 
 func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering, error) {
 	return []*providers.GPUOffering{
-		{Provider: providers.ProviderMock, GPUType: providers.GPURTX4090, GPUCount: 1, VCPU: 8, MemoryGB: 32, StorageGB: 100, CostPerHour: 0.40, SpotPrice: 0.20, Region: "mock", Available: 100},
-		{Provider: providers.ProviderMock, GPUType: providers.GPUA100_40, GPUCount: 1, VCPU: 16, MemoryGB: 64, StorageGB: 200, CostPerHour: 1.20, SpotPrice: 0.60, Region: "mock", Available: 50},
-		{Provider: providers.ProviderMock, GPUType: providers.GPUA100_80, GPUCount: 1, VCPU: 16, MemoryGB: 128, StorageGB: 200, CostPerHour: 2.00, SpotPrice: 1.00, Region: "mock", Available: 25},
-		{Provider: providers.ProviderMock, GPUType: providers.GPUH100, GPUCount: 1, VCPU: 24, MemoryGB: 256, StorageGB: 500, CostPerHour: 3.50, SpotPrice: 1.75, Region: "mock", Available: 10},
+		{Provider: providers.ProviderMock, GPUType: providers.GPURTX4090, DisplayName: "RTX 4090", ProviderGPUTypeID: "mock-rtx4090", GPUCount: 1, VCPU: 8, MemoryGB: 32, StorageGB: 100, CostPerHour: 0.40, SpotPrice: 0.20, Region: "mock", Available: 100},
+		{Provider: providers.ProviderMock, GPUType: providers.GPUA100_40, DisplayName: "A100 40GB", ProviderGPUTypeID: "mock-a100-40", GPUCount: 1, VCPU: 16, MemoryGB: 64, StorageGB: 200, CostPerHour: 1.20, SpotPrice: 0.60, Region: "mock", Available: 50},
+		{Provider: providers.ProviderMock, GPUType: providers.GPUA100_80, DisplayName: "A100 80GB", ProviderGPUTypeID: "mock-a100-80", GPUCount: 1, VCPU: 16, MemoryGB: 128, StorageGB: 200, CostPerHour: 2.00, SpotPrice: 1.00, Region: "mock", Available: 25},
+		{Provider: providers.ProviderMock, GPUType: providers.GPUH100, DisplayName: "H100", ProviderGPUTypeID: "mock-h100", GPUCount: 1, VCPU: 24, MemoryGB: 256, StorageGB: 500, CostPerHour: 3.50, SpotPrice: 1.75, Region: "mock", Available: 10},
 	}, nil
 }
 

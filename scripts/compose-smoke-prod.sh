@@ -4,6 +4,7 @@
 set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
 SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-180}"
 INGRESS_URL="${INGRESS_URL:-http://127.0.0.1}"
 INGRESS_URL="${INGRESS_URL%/}"
@@ -19,7 +20,7 @@ cleanup() {
   if [[ "${REMOVE_COMPOSE_VOLUMES:-false}" == "true" ]]; then
     down_args+=("-v")
   fi
-  docker compose -f "${COMPOSE_FILE}" "${down_args[@]}" >/dev/null 2>&1 || true
+  docker compose "${COMPOSE_ARGS[@]}" "${down_args[@]}" >/dev/null 2>&1 || true
   rm -rf "${TMP_DIR}"
 }
 trap cleanup EXIT
@@ -40,20 +41,40 @@ trap cleanup EXIT
 : "${VASTAI_API_KEY:=}"
 : "${HF_TOKEN:=}"
 
-prepare_ci_bind_mounts() {
-  if [[ "${CI:-}" != "true" ]]; then
-    return
-  fi
+export INFERA_ADMIN_KEY
+export INFERA_ALLOWED_ORIGINS
+export INFERA_GATEWAY_ADDRESS
+export INFERA_WORKER_SHARED_TOKEN
+export INFERA_WORKER_IMAGE
+export GRAFANA_ADMIN_USER
+export GRAFANA_ADMIN_PASSWORD
+export ALERT_EMAIL_TO
+export ALERT_SMTP_FROM
+export ALERT_SMTP_SMARTHOST
+export ALERT_SMTP_USERNAME
+export ALERT_SMTP_PASSWORD
+export RUNPOD_API_KEY
+export VASTAI_API_KEY
+export HF_TOKEN
 
-  # The production compose file bind-mounts ./data into /app/data. In CI the
-  # gateway container runs as a non-root user, so make the host path writable
-  # before startup.
-  mkdir -p data
-  chmod 0777 data
+prepare_smoke_compose_file() {
+  local smoke_override_file="${TMP_DIR}/docker-compose.smoke.override.yml"
+  local smoke_data_dir="${TMP_DIR}/data"
+  mkdir -p "${smoke_data_dir}"
+  chmod 0777 "${smoke_data_dir}"
+
+  cat > "${smoke_override_file}" <<EOF
+services:
+  gateway:
+    volumes:
+      - ${smoke_data_dir}:/app/data
+EOF
+
+  COMPOSE_ARGS+=(-f "${smoke_override_file}")
 }
 
 prepare_ci_caddyfile() {
-  if [[ "${CI:-}" != "true" ]]; then
+  if [[ "${CI:-}" != "true" && "${INGRESS_URL}" != "http://127.0.0.1" && "${INGRESS_URL}" != "http://localhost" ]]; then
     return
   fi
 
@@ -89,6 +110,10 @@ prepare_ci_caddyfile() {
 EOF
 }
 
+compose() {
+  docker compose "${COMPOSE_ARGS[@]}" "$@"
+}
+
 wait_for_service() {
   local service="$1"
   local timeout_seconds="$2"
@@ -96,7 +121,7 @@ wait_for_service() {
   local status
   local elapsed=0
 
-  container_id="$(docker compose -f "${COMPOSE_FILE}" ps -q "${service}")"
+  container_id="$(compose ps -q "${service}")"
   if [[ -z "${container_id}" ]]; then
     echo "ERROR: could not resolve container id for service ${service}"
     return 1
@@ -113,33 +138,34 @@ wait_for_service() {
   done
 
   echo "ERROR: ${service} did not become healthy in ${timeout_seconds}s"
-  docker compose -f "${COMPOSE_FILE}" logs "${service}" --tail=200 || true
+  compose logs "${service}" --tail=200 || true
   return 1
 }
 
-prepare_ci_bind_mounts
+prepare_smoke_compose_file
 prepare_ci_caddyfile
 
 echo "Building and starting gateway from ${COMPOSE_FILE}"
-docker compose -f "${COMPOSE_FILE}" up -d --build gateway
+compose up -d --build gateway
 
 echo "Waiting for gateway"
 wait_for_service gateway "${SMOKE_TIMEOUT}"
 
 echo "Starting frontend"
-docker compose -f "${COMPOSE_FILE}" up -d frontend
+compose up -d frontend
 
 echo "Waiting for frontend"
 wait_for_service frontend "${SMOKE_TIMEOUT}"
 
 echo "Starting caddy ingress"
-docker compose -f "${COMPOSE_FILE}" up -d caddy
+compose up -d caddy
 
 echo "Waiting for caddy"
 wait_for_service caddy "${SMOKE_TIMEOUT}"
 
 echo "Checking ingress /health"
 HEALTH_BODY="$(curl -fsS --max-time 10 \
+  -H "Host: ${INGRESS_HOST}" \
   "${INGRESS_URL}/health")"
 HEALTH_BODY="${HEALTH_BODY}" python3 - <<'PY'
 import os
@@ -151,6 +177,7 @@ PY
 
 echo "Checking authenticated ingress /v1/models"
 MODELS_BODY="$(curl -fsS --max-time 10 \
+  -H "Host: ${INGRESS_HOST}" \
   -H "Authorization: Bearer ${INFERA_ADMIN_KEY}" \
   "${INGRESS_URL}/v1/models")"
 MODELS_BODY="${MODELS_BODY}" python3 - <<'PY'
@@ -164,6 +191,7 @@ PY
 
 echo "Checking ingress root document"
 FRONTEND_BODY="$(curl -fsS --max-time 10 \
+  -H "Host: ${INGRESS_HOST}" \
   "${INGRESS_URL}/")"
 if [[ "${FRONTEND_BODY}" != *"<html"* ]]; then
   echo "ERROR: frontend root did not return HTML"

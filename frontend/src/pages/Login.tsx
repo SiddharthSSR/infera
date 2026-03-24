@@ -93,7 +93,6 @@ export function Login({ onAuthenticated }: LoginProps) {
         justifyContent: 'space-between',
         padding: '3rem',
       }}>
-        <div />
         <div>
           <div className="display-text" style={{
             fontSize: '7rem',
@@ -114,6 +113,24 @@ export function Login({ onAuthenticated }: LoginProps) {
             Self-hosted inference at scale
           </div>
         </div>
+
+        {/* Feature highlights */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          {[
+            { label: 'OPEN SOURCE', desc: 'Run anywhere — cloud, on-prem, or hybrid. No vendor lock-in.' },
+            { label: 'OPENAI COMPATIBLE', desc: 'Drop-in replacement. Change base_url and use your inf_ key.' },
+            { label: 'MULTI-PROVIDER', desc: 'Provision workers across RunPod, Lambda, and bare metal.' },
+          ].map((f, i) => (
+            <div key={f.label} style={{
+              padding: '1.25rem 0',
+              borderTop: i > 0 ? 'var(--grid-line)' : 'none',
+            }}>
+              <div className="label-text" style={{ marginBottom: '0.4rem' }}>{f.label}</div>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{f.desc}</div>
+            </div>
+          ))}
+        </div>
+
         <div style={{
           display: 'flex',
           justifyContent: 'space-between',

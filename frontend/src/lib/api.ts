@@ -3,6 +3,7 @@ import type {
   Instance, GPUOffering, ProviderStatus, CostSummary, ProvisionRequest,
   VaultModel, VaultStats, VaultModelFilter, CreateVaultModelInput
 } from '../types';
+import type { DeploymentAttemptRecord } from './deploymentHistory';
 
 const API_BASE = '';
 
@@ -129,6 +130,18 @@ export async function getSession(): Promise<SessionInfo | null> {
   } catch {
     return null;
   }
+}
+
+export async function switchSessionWorkspace(workspaceId: string): Promise<SessionInfo> {
+  const response = await authFetch(`${API_BASE}/api/auth/session/workspace`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace_id: workspaceId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, 'Failed to switch workspace'));
+  }
+  return response.json();
 }
 
 // Destroy the current session (logout). Always succeeds.
@@ -352,6 +365,49 @@ export async function stopInstance(instanceId: string): Promise<void> {
   if (!response.ok) {
     throw new Error(await readResponseError(response, 'Stop failed'));
   }
+}
+
+export async function fetchDeploymentAttempts(): Promise<DeploymentAttemptRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/deployments`);
+  if (!response.ok) throw new Error(await readResponseError(response, 'Failed to fetch deployment history'));
+  const data = await response.json();
+  return data.attempts;
+}
+
+export async function updateDeploymentVerification(
+  attemptId: string,
+  verification: NonNullable<DeploymentAttemptRecord['inference_verification']>,
+): Promise<DeploymentAttemptRecord> {
+  const response = await authFetch(`${API_BASE}/api/deployments/${attemptId}/verification`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(verification),
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, 'Failed to update deployment verification'));
+  }
+  const data = await response.json();
+  return data.attempt;
+}
+
+export async function markDeploymentAutoVerificationRequested(
+  attemptId: string,
+  requestedAt: string,
+): Promise<DeploymentAttemptRecord> {
+  const response = await authFetch(`${API_BASE}/api/deployments/${attemptId}/auto-verification`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ requested_at: requestedAt }),
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, 'Failed to update deployment auto verification'));
+  }
+  const data = await response.json();
+  return data.attempt;
 }
 
 // Vault (Model Registry) API

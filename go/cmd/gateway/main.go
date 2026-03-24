@@ -9,12 +9,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
+	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/gateway"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/providers/mock"
@@ -36,16 +38,39 @@ func main() {
 
 	log.Info("Starting Infera Gateway...")
 
-	// Create router
+	// Create router — batcher tuning via env vars for zero-rebuild tuning in production.
 	routerConfig := router.DefaultConfig()
+	if v := strings.TrimSpace(os.Getenv("INFERA_ENABLE_BATCHING")); v != "" {
+		routerConfig.EnableBatching = parseBoolEnv(v, routerConfig.EnableBatching)
+	}
+	if v := strings.TrimSpace(os.Getenv("INFERA_MAX_BATCH_SIZE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			routerConfig.MaxBatchSize = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("INFERA_MAX_BATCH_WAIT_MS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			routerConfig.MaxBatchWaitMS = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("INFERA_AFFINITY_TTL_SECONDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			if n <= 0 {
+				routerConfig.AffinityTTL = 0
+			} else {
+				routerConfig.AffinityTTL = time.Duration(n) * time.Second
+			}
+		}
+	}
 	r := router.New(routerConfig)
 
 	// Create instance manager
-	// Get worker image from env or use default
-	workerImage := os.Getenv("INFERA_WORKER_IMAGE")
+	// Prefer an explicitly pinned worker image for reproducible warm restarts.
+	workerImage := strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE"))
 	if workerImage == "" {
-		workerImage = "infera/worker:latest"
+		log.Warn("INFERA_WORKER_IMAGE is not set; non-mock provisioning will fail until a pinned worker image tag or digest is configured")
 	}
+	enableMockProvider := os.Getenv("INFERA_DEV_MODE") == "1" || os.Getenv("INFERA_ENABLE_MOCK_PROVIDER") == "1"
 	gatewayAddress := strings.TrimSpace(os.Getenv("INFERA_GATEWAY_ADDRESS"))
 	if gatewayAddress == "" {
 		gatewayAddress = fmt.Sprintf("localhost:%d", *httpPort)
@@ -71,8 +96,10 @@ func main() {
 		}
 	}()
 
-	// Register mock provider (always available for testing)
-	instanceMgr.RegisterProvider(mock.New())
+	if enableMockProvider {
+		instanceMgr.RegisterProvider(mock.New())
+		log.Info("provider registered", slog.String("provider", "mock"))
+	}
 
 	// Register RunPod if API key provided
 	if *runpodKey != "" {
@@ -106,6 +133,12 @@ func main() {
 	gatewayConfig := gateway.DefaultConfig()
 	gatewayConfig.HTTPPort = *httpPort
 	gatewayConfig.WorkerSharedToken = strings.TrimSpace(os.Getenv("INFERA_WORKER_SHARED_TOKEN"))
+	gatewayConfig.RateLimiter = parseRateLimiterConfigFromEnv()
+	if v := strings.TrimSpace(os.Getenv("INFERA_MAX_IN_FLIGHT_REQUESTS")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			gatewayConfig.MaxInFlight = n
+		}
+	}
 	if gatewayConfig.WorkerSharedToken == "" {
 		log.Error("INFERA_WORKER_SHARED_TOKEN is required and cannot be empty")
 		os.Exit(1)
@@ -196,6 +229,14 @@ func main() {
 		gw.SetAuditStore(auditStore)
 	}
 
+	deploymentStore, err := deployments.NewStore("data/deployments.db")
+	if err != nil {
+		log.Warn("failed to initialize deployment store", slog.String("error", err.Error()))
+	} else {
+		defer deploymentStore.Close()
+		gw.SetDeploymentStore(deploymentStore)
+	}
+
 	// Handle shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -259,6 +300,40 @@ func parseAllowedOrigins(raw string) []string {
 		}
 	}
 	return out
+}
+
+func parseBoolEnv(raw string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func parseRateLimiterConfigFromEnv() *gateway.RateLimiterConfig {
+	cfg := gateway.DefaultRateLimiterConfig()
+	changed := false
+
+	if v := strings.TrimSpace(os.Getenv("INFERA_RATE_LIMIT_REQUESTS_PER_MINUTE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.RequestsPerMinute = n
+			changed = true
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("INFERA_RATE_LIMIT_BURST_SIZE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.BurstSize = n
+			changed = true
+		}
+	}
+
+	if changed {
+		return &cfg
+	}
+	return nil
 }
 
 func persistBootstrapAdminKey(path, fullKey string) error {

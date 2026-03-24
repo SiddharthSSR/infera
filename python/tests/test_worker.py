@@ -1,8 +1,10 @@
 """Tests for the main worker."""
 
+import asyncio
+from types import SimpleNamespace
 import pytest
-from datetime import datetime
 
+from infera_worker import worker as worker_module
 from infera_worker.worker import Worker
 from infera_worker.config import WorkerConfig, ModelConfig
 from infera_worker.types import (
@@ -54,6 +56,83 @@ class TestWorker:
         
         assert worker.state == WorkerState.READY
         assert worker.engine is not None
+        startup = worker.get_startup_status()
+        assert "model_load_started" in startup["stages"]
+        assert "engine_create_started" in startup["stages"]
+        assert "engine_create_finished" in startup["stages"]
+        assert "model_load_finished" in startup["stages"]
+        assert "worker_ready" in startup["stages"]
+        assert startup["durations_ms"]["worker_ready"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_start_worker_records_preload_stages(self):
+        worker = Worker(WorkerConfig(engine="mock", preload_models=["test-model"]))
+
+        await worker.start()
+
+        startup = worker.get_startup_status()
+        assert "preload_model_started" in startup["stages"]
+        assert "preload_model_finished" in startup["stages"]
+
+    @pytest.mark.asyncio
+    async def test_start_worker_schedules_post_ready_warmup(self, monkeypatch):
+        warmed_models: list[str] = []
+
+        class FakeEngine:
+            def __init__(self):
+                self.loaded_models = []
+
+            def set_startup_stage_recorder(self, recorder):
+                self.recorder = recorder
+
+            def set_startup_metadata_recorder(self, recorder):
+                self.metadata_recorder = recorder
+
+            async def load_model(self, config):
+                self.metadata_recorder("model_loads", {config.model_id: {"model_source": "mock"}})
+                model = SimpleNamespace(model_id=config.model_id)
+                self.loaded_models.append(model)
+                return SimpleNamespace(
+                    model_id=config.model_id,
+                    version="1.0.0",
+                    loaded_at=None,
+                    memory_bytes=1,
+                    max_batch_size=config.max_batch_size,
+                    max_sequence_length=config.max_sequence_length,
+                )
+
+            async def unload_model(self, model_id):
+                return True
+
+            def is_model_loaded(self, model_id):
+                return True
+
+            def get_loaded_models(self):
+                return self.loaded_models
+
+            async def infer(self, request):
+                raise NotImplementedError
+
+            async def infer_stream(self, request):
+                raise NotImplementedError
+
+            async def cancel(self, request_id):
+                return False
+
+            def get_memory_usage(self):
+                return (0, 0)
+
+            async def warm_model_runtime(self, model_id):
+                warmed_models.append(model_id)
+
+        monkeypatch.setattr(worker_module, "create_engine", lambda _config: FakeEngine())
+
+        worker = Worker(WorkerConfig(engine="mock", preload_models=["test-model"]))
+        await worker.start()
+        await asyncio.sleep(0)
+
+        assert warmed_models == ["test-model"]
+        assert worker.get_startup_status()["metadata"]["model_loads"]["test-model"]["model_source"] == "mock"
 
     @pytest.mark.asyncio
     async def test_stop_worker(self, worker):
@@ -166,6 +245,24 @@ class TestWorker:
         assert stats.memory_total_bytes >= 0
 
     @pytest.mark.asyncio
+    async def test_get_stats_prefers_runtime_or_engine_memory(self, monkeypatch):
+        worker = Worker(WorkerConfig(engine="mock"))
+        await worker.start()
+
+        monkeypatch.setattr(worker, "_get_gpu_memory_usage", lambda: (1024, 4096))
+
+        class FakeEngine:
+            def get_memory_usage(self):
+                return (2048, 4096)
+
+        worker.engine = FakeEngine()
+
+        stats = worker.get_stats()
+
+        assert stats.memory_used_bytes == 2048
+        assert stats.memory_total_bytes == 4096
+
+    @pytest.mark.asyncio
     async def test_get_stats_after_requests(self, worker, sample_request):
         await worker.start()
         await worker.load_model(ModelConfig(model_id="test-model"))
@@ -178,6 +275,54 @@ class TestWorker:
         
         assert stats.requests_per_second >= 0
         assert stats.avg_latency_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_get_stats_tracks_queued_and_active_requests(self):
+        worker = Worker(WorkerConfig(engine="mock", max_concurrent_requests=1))
+        await worker.start()
+        await worker.load_model(ModelConfig(model_id="test-model"))
+
+        original_infer = worker.engine.infer
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked_infer(request):
+            started.set()
+            await release.wait()
+            return await original_infer(request)
+
+        worker.engine.infer = blocked_infer
+
+        first = InferenceRequest(
+            request_id="req-1",
+            model_id="test-model",
+            messages=[Message(role=Role.USER, content="First")],
+        )
+        second = InferenceRequest(
+            request_id="req-2",
+            model_id="test-model",
+            messages=[Message(role=Role.USER, content="Second")],
+        )
+
+        task1 = asyncio.create_task(worker.infer(first))
+        await started.wait()
+
+        task2 = asyncio.create_task(worker.infer(second))
+        await asyncio.sleep(0.05)
+
+        stats = worker.get_stats()
+
+        assert stats.active_requests == 1
+        assert stats.queue_depth == 1
+        assert worker.get_state() == WorkerState.BUSY
+
+        release.set()
+        await asyncio.gather(task1, task2)
+
+        final_stats = worker.get_stats()
+        assert final_stats.active_requests == 0
+        assert final_stats.queue_depth == 0
+        assert worker.get_state() == WorkerState.READY
 
     def test_get_state(self, worker):
         assert worker.get_state() == WorkerState.INITIALIZING

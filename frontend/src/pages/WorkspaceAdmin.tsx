@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   fetchApiKeys,
   createApiKey,
   revokeApiKey,
   fetchAuditUsage,
+  fetchProviders,
   fetchWorkspaceQuota,
   updateWorkspaceQuota,
   fetchWorkspaceMembers,
@@ -23,7 +25,11 @@ import {
   type WorkspaceInvitationRecord,
   type WorkspaceProviderConfigRecord,
 } from '../lib/api';
+import type { ProviderCapabilities, ProviderStatus } from '../types';
 import { useAuthSession } from '../lib/auth-context';
+import { MetadataList } from '../components/MetadataList';
+import { inviteStatusMeta, memberStatusMeta, normalizeInviteStatus } from '../lib/workspaceLifecycle';
+import { buildWorkspaceActivityItems } from '../lib/workspaceActivity';
 
 const assignableInviteRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
 const serviceAccountRoles = ['operator', 'developer', 'read_only', 'billing'] as const;
@@ -61,12 +67,85 @@ function formatCount(value: number): string {
 }
 
 function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return '100%+';
   return `${Math.round(value * 100)}%`;
 }
 
 function clampPercent(value: number): number {
-  if (!Number.isFinite(value) || value < 0) return 0;
+  if (!Number.isFinite(value)) return 100;
+  if (value < 0) return 0;
   return Math.min(value * 100, 100);
+}
+
+function usageRatio(used: number, limit?: number | null): number {
+  if (limit == null) return 0;
+  if (limit <= 0) return used > 0 ? Number.POSITIVE_INFINITY : 1;
+  return used / limit;
+}
+
+function capabilityLabels(capabilities?: ProviderCapabilities): string[] {
+  if (!capabilities) return [];
+
+  const labels: string[] = [];
+  if (capabilities.supports_spot) labels.push('SPOT');
+  if (capabilities.supports_start_stop) labels.push('START/STOP');
+  if (capabilities.supports_custom_images) labels.push('CUSTOM IMAGES');
+  if (capabilities.supports_region_selection) labels.push('REGIONS');
+  if (capabilities.supports_public_ip) labels.push('PUBLIC IP');
+  if (capabilities.supports_ssh_keys) labels.push('SSH KEYS');
+  return labels;
+}
+
+function providerLiveState(status?: ProviderStatus, configured?: boolean): {
+  label: string;
+  tone: string;
+  detail: string;
+} {
+  if (!configured) {
+    return {
+      label: 'NOT CONFIGURED',
+      tone: 'inactive',
+      detail: 'No workspace-specific provider credential has been saved yet.',
+    };
+  }
+
+  if (!status) {
+    return {
+      label: 'UNAVAILABLE',
+      tone: 'warning',
+      detail: 'Configuration exists, but the provider is not returning live status for this workspace.',
+    };
+  }
+
+  if (status.connected) {
+    return {
+      label: 'CONNECTED',
+      tone: '',
+      detail: 'Provider is reachable and can return live account status.',
+    };
+  }
+
+  if (status.error_code === 'auth_failed') {
+    return {
+      label: 'AUTH FAILED',
+      tone: 'error',
+      detail: 'Saved credentials were rejected by the provider.',
+    };
+  }
+
+  if (status.error_code === 'rate_limited') {
+    return {
+      label: 'RATE LIMITED',
+      tone: 'warning',
+      detail: 'Provider is reachable but temporarily rate limiting status or offering requests.',
+    };
+  }
+
+  return {
+    label: 'DEGRADED',
+    tone: 'warning',
+    detail: status.error || 'Provider is configured but currently unreachable or unhealthy.',
+  };
 }
 
 function monthRange() {
@@ -77,6 +156,7 @@ function monthRange() {
 
 export function WorkspaceAdmin() {
   const { session } = useAuthSession();
+  const navigate = useNavigate();
   const workspaceId = session?.workspace?.id ?? '';
   const role = session?.key?.role ?? 'user';
   const member = session?.member;
@@ -94,6 +174,7 @@ export function WorkspaceAdmin() {
   const [invites, setInvites] = useState<WorkspaceInvitationRecord[]>([]);
   const [serviceAccounts, setServiceAccounts] = useState<ApiKeyRecord[]>([]);
   const [providerConfigs, setProviderConfigs] = useState<WorkspaceProviderConfigRecord[]>([]);
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
   const [usageRows, setUsageRows] = useState<AuditUsageRow[]>([]);
 
   const [requestLimit, setRequestLimit] = useState('');
@@ -117,6 +198,10 @@ export function WorkspaceAdmin() {
   const [savingProviderConfig, setSavingProviderConfig] = useState(false);
   const [updatingMemberId, setUpdatingMemberId] = useState<string | null>(null);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
+  const [settingsTab, setSettingsTab] = useState<'usage' | 'providers' | 'service' | 'members' | 'invites'>('usage');
+  const createdInviteLink = createdInviteToken && typeof window !== 'undefined'
+    ? `${window.location.origin}/accept-invite?token=${encodeURIComponent(createdInviteToken)}`
+    : null;
 
   const visibleInviteRoles = useMemo(() => {
     if (role === 'owner') return assignableInviteRoles;
@@ -170,12 +255,80 @@ export function WorkspaceAdmin() {
     return { requests, tokens, successes, errors, dailyTrend, topKeys };
   }, [usageRows]);
 
-  const requestUsageRatio = quota?.monthly_request_limit ? usageSummary.requests / quota.monthly_request_limit : 0;
-  const tokenUsageRatio = quota?.monthly_token_limit ? usageSummary.tokens / quota.monthly_token_limit : 0;
+  const requestUsageRatio = usageRatio(usageSummary.requests, quota?.monthly_request_limit);
+  const tokenUsageRatio = usageRatio(usageSummary.tokens, quota?.monthly_token_limit);
   const quotaPressure = Math.max(requestUsageRatio, tokenUsageRatio);
   const quotaState = quotaPressure >= 1 ? 'EXCEEDED' : quotaPressure >= 0.8 ? 'NEAR LIMIT' : 'HEALTHY';
   const quotaStateClass = quotaPressure >= 1 ? 'error' : quotaPressure >= 0.8 ? 'warning' : '';
   const selectedProviderMeta = configurableProviders.find((provider) => provider.id === selectedProvider) || configurableProviders[0];
+  const providerHealthRows = useMemo(() => {
+    const configsByProvider = new Map(providerConfigs.map((config) => [config.provider, config]));
+    const statusesByProvider = new Map(providerStatuses.map((status) => [status.provider, status]));
+
+    return configurableProviders.map((provider) => {
+      const config = configsByProvider.get(provider.id);
+      const status = statusesByProvider.get(provider.id);
+      const liveState = providerLiveState(status, config?.configured);
+
+      return {
+        id: provider.id,
+        name: provider.name,
+        config,
+        status,
+        liveState,
+        capabilities: capabilityLabels(status?.capabilities),
+      };
+    });
+  }, [providerConfigs, providerStatuses]);
+  const memberCounts = useMemo(() => ({
+    total: members.length,
+    admins: members.filter((record) => record.role === 'admin' || record.role === 'owner').length,
+    operators: members.filter((record) => record.role === 'operator').length,
+  }), [members]);
+  const pendingInvites = useMemo(
+    () => invites.filter((invite) => normalizeInviteStatus(invite) === 'pending'),
+    [invites],
+  );
+  const inviteHistory = useMemo(
+    () => invites.filter((invite) => normalizeInviteStatus(invite) !== 'pending'),
+    [invites],
+  );
+  const inviteCounts = useMemo(() => ({
+    pending: pendingInvites.length,
+    accepted: invites.filter((invite) => normalizeInviteStatus(invite) === 'accepted').length,
+    expired: invites.filter((invite) => normalizeInviteStatus(invite) === 'expired').length,
+    revoked: invites.filter((invite) => normalizeInviteStatus(invite) === 'revoked').length,
+  }), [invites, pendingInvites.length]);
+  const workspaceProfileItems = useMemo(
+    () => [
+      { label: 'MEMBERS', value: String(members.length), mono: true },
+      { label: 'PENDING INVITES', value: String(pendingInvites.length), mono: true },
+      { label: 'SERVICE ACCOUNTS', value: String(serviceAccounts.length), mono: true },
+      {
+        label: 'LIVE PROVIDERS',
+        value: String(providerHealthRows.filter((provider) => provider.liveState.label === 'CONNECTED').length),
+        mono: true,
+      },
+    ],
+    [members.length, pendingInvites.length, providerHealthRows, serviceAccounts.length],
+  );
+  const workspaceActivity = useMemo(
+    () => buildWorkspaceActivityItems({
+      members,
+      invites,
+      serviceAccounts,
+      providerConfigs,
+    }),
+    [members, invites, serviceAccounts, providerConfigs],
+  );
+  const teamActivity = useMemo(
+    () => workspaceActivity.filter((item) => item.category === 'team').slice(0, 6),
+    [workspaceActivity],
+  );
+  const accessActivity = useMemo(
+    () => workspaceActivity.filter((item) => item.category === 'access').slice(0, 6),
+    [workspaceActivity],
+  );
 
   const loadWorkspaceData = async () => {
     if (!workspaceId) return;
@@ -245,8 +398,14 @@ export function WorkspaceAdmin() {
           .then(setProviderConfigs)
           .catch(() => setProviderConfigs([])),
       );
+      tasks.push(
+        fetchProviders()
+          .then((statuses) => setProviderStatuses(statuses.filter((status) => status.provider !== 'mock' && status.provider !== 'lambda')))
+          .catch(() => setProviderStatuses([])),
+      );
     } else {
       setProviderConfigs([]);
+      setProviderStatuses([]);
     }
 
     await Promise.all(tasks);
@@ -463,8 +622,14 @@ export function WorkspaceAdmin() {
           <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.5 }}>
             This does not send an email yet. Share the token or the <code style={{ fontFamily: 'var(--font-mono)' }}>/accept-invite</code> link manually with the person you invited.
           </div>
+          {createdInviteLink && (
+            <div className="code-block" style={{ marginTop: '0.75rem' }}>{createdInviteLink}</div>
+          )}
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             <button className="btn-primary" onClick={() => navigator.clipboard.writeText(createdInviteToken).then(() => toast.success('Invitation token copied.'))}>COPY TOKEN</button>
+            {createdInviteLink && (
+              <button className="btn-secondary" onClick={() => navigator.clipboard.writeText(createdInviteLink).then(() => toast.success('Invitation link copied.'))}>COPY LINK</button>
+            )}
             <button className="btn-secondary" onClick={() => setCreatedInviteToken(null)}>DISMISS</button>
           </div>
         </div>
@@ -494,7 +659,13 @@ export function WorkspaceAdmin() {
             <span className="badge">{session?.key?.principal_type === 'service_account' ? 'SERVICE ACCOUNT' : 'HUMAN'}</span>
             {session?.workspace?.slug && <span className="badge mono">{session.workspace.slug}</span>}
           </div>
-          <div style={{ marginTop: '1.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.6 }}>
+          <div style={{ marginTop: '1.1rem' }}>
+            <MetadataList
+              items={workspaceProfileItems}
+              columns={2}
+            />
+          </div>
+          <div style={{ marginTop: '1.1rem', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.6 }}>
             {member?.email
               ? `Signed in as ${member.email}.`
               : 'Signed in with a workspace-scoped key.'}
@@ -511,9 +682,43 @@ export function WorkspaceAdmin() {
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage quota</span><span className="mono">{canManageQuota ? 'YES' : 'NO'}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>View quota</span><span className="mono">{canViewQuota ? 'YES' : 'NO'}</span></div>
           </div>
+          <div className="help-callout" style={{ marginTop: '1rem', padding: '0.95rem 1rem' }}>
+            <div className="label-text">WORKSPACE ADMIN GUIDE</div>
+            <div className="help-callout-copy">
+              Invite creation still produces a manual share token or link, not an email. Service accounts are for automation in this workspace only. Provider states here mean: <strong>connected</strong> for healthy credentials and live status, <strong>degraded</strong> for reachable but unhealthy, and <strong>auth failed</strong> when the saved credentials are rejected.
+            </div>
+          </div>
         </div>
       </div>
 
+      <div className="grid-row">
+        <div className="cell" style={{ gridColumn: 'span 4', paddingTop: '1.25rem', paddingBottom: '1.25rem' }}>
+          <div className="label-text">SETTINGS SECTIONS</div>
+          <div className="chip-row" style={{ marginTop: '0.85rem' }}>
+            {[
+              ['usage', 'Usage & Quota'],
+              ['providers', 'Providers'],
+              ['service', 'Service Accounts'],
+              ['members', 'Members'],
+              ['invites', 'Invites'],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={settingsTab === key ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setSettingsTab(key as typeof settingsTab)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop: '0.85rem', color: 'var(--text-secondary)', fontSize: '0.86rem', lineHeight: 1.6 }}>
+            Use the active section to focus the admin surface. This keeps usage, provider credentials, automation identity management, and access control from competing on one long page.
+          </div>
+        </div>
+      </div>
+
+      {settingsTab === 'usage' && (
       <div className="grid-row workspace-usage-row">
         <div className="cell workspace-usage-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>CURRENT MONTH USAGE</div>
@@ -597,6 +802,10 @@ export function WorkspaceAdmin() {
             ) : (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 No usage recorded for this workspace in the current month yet.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY A MODEL</button>
+                  <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+                </div>
               </div>
             )
           ) : (
@@ -606,7 +815,9 @@ export function WorkspaceAdmin() {
           )}
         </div>
       </div>
+      )}
 
+      {(settingsTab === 'providers' || settingsTab === 'service') && (
       <div className="grid-row workspace-ops-row">
         <div className="cell workspace-provider-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>PROVIDER CONFIGS</div>
@@ -617,29 +828,92 @@ export function WorkspaceAdmin() {
                   <thead>
                     <tr>
                       <th>PROVIDER</th>
-                      <th>STATE</th>
+                      <th>CONFIG</th>
+                      <th>LIVE STATE</th>
                       <th>ENDPOINT</th>
+                      <th>ACTIVE</th>
                       <th>UPDATED</th>
                       <th style={{ textAlign: 'right' }}>ACTION</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {providerConfigs.map((config) => (
-                      <tr key={config.provider}>
-                        <td>{config.provider}</td>
-                        <td><span className="badge">{config.configured ? 'CONFIGURED' : 'INCOMPLETE'}</span></td>
-                        <td className="mono">{config.endpoint || 'default'}</td>
-                        <td>{formatDate(config.updated_at)}</td>
+                    {providerHealthRows.map((provider) => (
+                      <tr key={provider.id}>
+                        <td>{provider.name}</td>
+                        <td><span className="badge">{provider.config?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}</span></td>
+                        <td>
+                          <span className={`badge ${provider.liveState.tone ? `status-${provider.liveState.tone}` : ''}`}>
+                            {provider.liveState.label}
+                          </span>
+                        </td>
+                        <td className="mono">{provider.config ? (provider.config.endpoint || 'default') : '—'}</td>
+                        <td>{provider.status?.active_instances ?? 0}</td>
+                        <td>{provider.config ? formatDate(provider.config.updated_at) : '—'}</td>
                         <td style={{ textAlign: 'right' }}>
-                          <button className="action-btn destructive" onClick={() => handleDeleteProviderConfig(config.provider)}>DELETE</button>
+                          {provider.config ? (
+                            <button className="action-btn destructive" onClick={() => handleDeleteProviderConfig(provider.id)}>DELETE</button>
+                          ) : (
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>—</span>
+                          )}
                         </td>
                       </tr>
                     ))}
-                    {providerConfigs.length === 0 && (
-                      <tr><td colSpan={5} style={{ color: 'var(--text-secondary)', padding: '1.5rem 0' }}>No workspace provider configs yet.</td></tr>
-                    )}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="workspace-provider-health-grid" style={{ display: 'grid', gap: '1rem', marginBottom: '1.5rem' }}>
+                {providerHealthRows.map((provider) => (
+                  <div key={`${provider.id}-health`} className="workspace-provider-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                      <div>
+                        <div className="label-text" style={{ marginBottom: '0.5rem' }}>{provider.name.toUpperCase()}</div>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <span className="badge">{provider.config?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}</span>
+                          <span className={`badge ${provider.liveState.tone ? `status-${provider.liveState.tone}` : ''}`}>{provider.liveState.label}</span>
+                        </div>
+                      </div>
+                      <div className="mono" style={{ color: 'var(--text-secondary)' }}>
+                        {provider.status?.account_id || provider.config?.endpoint || (provider.config ? 'default endpoint' : 'not configured')}
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: 1.6 }}>
+                      {provider.liveState.detail}
+                    </div>
+
+                    <div className="workspace-provider-meta" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.9rem', marginTop: '1rem' }}>
+                      <div>
+                        <div className="label-text">ACTIVE INSTANCES</div>
+                        <div className="mono" style={{ marginTop: '0.4rem' }}>{provider.status?.active_instances ?? 0}</div>
+                      </div>
+                      <div>
+                        <div className="label-text">REGIONS</div>
+                        <div style={{ marginTop: '0.4rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+                          {provider.status?.capabilities?.known_regions?.length
+                            ? provider.status.capabilities.known_regions.join(', ')
+                            : 'Default'}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="label-text">BILLING SIGNAL</div>
+                        <div className="mono" style={{ marginTop: '0.4rem' }}>
+                          {provider.status?.balance != null ? `$${provider.status.balance.toFixed(2)}` : '—'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      {provider.capabilities.length > 0 ? (
+                        provider.capabilities.map((capability) => (
+                          <span key={`${provider.id}-${capability}`} className="badge">{capability}</span>
+                        ))
+                      ) : (
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Capabilities will appear when live provider status is available.</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
 
               <div style={{ display: 'grid', gap: '1rem' }}>
@@ -742,7 +1016,15 @@ export function WorkspaceAdmin() {
                       </tr>
                     ))}
                     {serviceAccounts.length === 0 && (
-                      <tr><td colSpan={5} style={{ color: 'var(--text-secondary)', padding: '1.5rem 0' }}>No service accounts yet.</td></tr>
+                      <tr>
+                        <td colSpan={5} style={{ color: 'var(--text-secondary)', padding: '1.5rem 0' }}>
+                          No service accounts yet.
+                          <div className="help-actions" style={{ justifyContent: 'center' }}>
+                            <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="ci-bot"]')?.focus()}>CREATE ONE</button>
+                            <button className="action-btn" onClick={() => navigate('/api-keys')}>OPEN API KEYS</button>
+                          </div>
+                        </td>
+                      </tr>
                     )}
                   </tbody>
                 </table>
@@ -773,67 +1055,86 @@ export function WorkspaceAdmin() {
           )}
         </div>
       </div>
+      )}
 
+      {(settingsTab === 'members' || settingsTab === 'invites') && (
       <div className="grid-row workspace-members-row" style={{ alignItems: 'start' }}>
         <div className="cell workspace-members-cell" style={{ gridColumn: 'span 2' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>MEMBERS</div>
+          <div className="workspace-lifecycle-summary">
+            <span className="badge">TOTAL {memberCounts.total}</span>
+            <span className="badge">ADMINS {memberCounts.admins}</span>
+            <span className="badge">OPERATORS {memberCounts.operators}</span>
+          </div>
           {canManageMemberships ? (
             members.length > 0 ? (
               <div className="mobile-data-list">
-                {members.map((memberRecord) => (
-                  <div key={memberRecord.id} className="mobile-data-card">
-                    <div className="mobile-data-card-header">
-                      <div>
-                        <div className="mobile-data-title">{memberRecord.display_name}</div>
-                        <div className="mobile-data-subtitle">{memberRecord.email}</div>
-                      </div>
-                      <span className="badge">{(memberRoles[memberRecord.id] || memberRecord.role).toUpperCase()}</span>
-                    </div>
-                    <div className="mobile-data-meta">
-                      <div><span className="label-text">STATUS</span> <span>{memberRecord.status}</span></div>
-                      <div><span className="label-text">JOINED</span> <span>{formatDate(memberRecord.created_at)}</span></div>
-                    </div>
-                    <div style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
-                      <div>
-                        <div className="label-text">ROLE</div>
-                        <select
-                          className="control-input"
-                          value={memberRoles[memberRecord.id] || memberRecord.role}
-                          disabled={member?.id === memberRecord.id}
-                          onChange={(e) => setMemberRoles((current) => ({ ...current, [memberRecord.id]: e.target.value }))}
-                        >
-                          {roleOptionsForMember(memberRecord.role).map((candidate) => (
-                            <option key={candidate} value={candidate}>{candidate}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="mobile-data-actions">
-                        <button
-                          className="action-btn"
-                          disabled={updatingMemberId === memberRecord.id || member?.id === memberRecord.id || (memberRoles[memberRecord.id] || memberRecord.role) === memberRecord.role}
-                          onClick={() => handleUpdateMemberRole(memberRecord.id, memberRecord.role)}
-                        >
-                          {updatingMemberId === memberRecord.id ? 'SAVING...' : 'SAVE ROLE'}
-                        </button>
-                        <button
-                          className="action-btn destructive"
-                          disabled={removingMemberId === memberRecord.id || member?.id === memberRecord.id}
-                          onClick={() => handleRemoveMember(memberRecord.id)}
-                        >
-                          {removingMemberId === memberRecord.id ? 'REMOVING...' : 'REMOVE'}
-                        </button>
-                      </div>
-                      {member?.id === memberRecord.id && (
-                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                          You cannot change or remove your own membership from this screen.
+                {members.map((memberRecord) => {
+                  const status = memberStatusMeta(memberRecord, member?.id);
+                  return (
+                    <div key={memberRecord.id} className="mobile-data-card">
+                      <div className="mobile-data-card-header">
+                        <div>
+                          <div className="mobile-data-title">{memberRecord.display_name}</div>
+                          <div className="mobile-data-subtitle">{memberRecord.email}</div>
                         </div>
-                      )}
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          <span className="badge">{(memberRoles[memberRecord.id] || memberRecord.role).toUpperCase()}</span>
+                          <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
+                        </div>
+                      </div>
+                      <div className="mobile-data-meta">
+                        <div><span className="label-text">ACCESS</span> <span>{status.detail}</span></div>
+                        <div><span className="label-text">JOINED</span> <span>{formatDate(memberRecord.created_at)}</span></div>
+                      </div>
+                      <div style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
+                        <div>
+                          <div className="label-text">ROLE</div>
+                          <select
+                            className="control-input"
+                            value={memberRoles[memberRecord.id] || memberRecord.role}
+                            disabled={member?.id === memberRecord.id}
+                            onChange={(e) => setMemberRoles((current) => ({ ...current, [memberRecord.id]: e.target.value }))}
+                          >
+                            {roleOptionsForMember(memberRecord.role).map((candidate) => (
+                              <option key={candidate} value={candidate}>{candidate}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="mobile-data-actions">
+                          <button
+                            className="action-btn"
+                            disabled={updatingMemberId === memberRecord.id || member?.id === memberRecord.id || (memberRoles[memberRecord.id] || memberRecord.role) === memberRecord.role}
+                            onClick={() => handleUpdateMemberRole(memberRecord.id, memberRecord.role)}
+                          >
+                            {updatingMemberId === memberRecord.id ? 'SAVING...' : 'SAVE ROLE'}
+                          </button>
+                          <button
+                            className="action-btn destructive"
+                            disabled={removingMemberId === memberRecord.id || member?.id === memberRecord.id}
+                            onClick={() => handleRemoveMember(memberRecord.id)}
+                          >
+                            {removingMemberId === memberRecord.id ? 'REMOVING...' : 'REMOVE'}
+                          </button>
+                        </div>
+                        {member?.id === memberRecord.id && (
+                          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                            You cannot change or remove your own membership from this screen.
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No members yet.</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                No members yet.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE INVITE</button>
+                  <button className="action-btn" onClick={() => navigate('/docs')}>READ TEAM ACCESS DOCS</button>
+                </div>
+              </div>
             )
           ) : (
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
@@ -844,6 +1145,12 @@ export function WorkspaceAdmin() {
 
         <div className="cell workspace-invites-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>INVITATIONS</div>
+          <div className="workspace-lifecycle-summary">
+            <span className="badge">PENDING {inviteCounts.pending}</span>
+            <span className="badge">ACCEPTED {inviteCounts.accepted}</span>
+            <span className="badge">EXPIRED {inviteCounts.expired}</span>
+            <span className="badge">REVOKED {inviteCounts.revoked}</span>
+          </div>
           {canManageMemberships ? (
             <>
               <div style={{ display: 'grid', gap: '1rem' }}>
@@ -872,32 +1179,79 @@ export function WorkspaceAdmin() {
               </div>
 
               <div style={{ marginTop: '2rem' }}>
-                {invites.length > 0 ? (
+                {pendingInvites.length > 0 ? (
                   <div className="mobile-data-list">
-                    {invites.map((invite) => (
+                    {pendingInvites.map((invite) => {
+                      const status = inviteStatusMeta(invite);
+                      return (
                       <div key={invite.id} className="mobile-data-card">
                         <div className="mobile-data-card-header">
                           <div>
                             <div className="mobile-data-title">{invite.display_name || invite.email}</div>
                             <div className="mobile-data-subtitle">{invite.email}</div>
                           </div>
-                          <span className="badge">{invite.role.toUpperCase()}</span>
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            <span className="badge">{invite.role.toUpperCase()}</span>
+                            <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
+                          </div>
                         </div>
                         <div className="mobile-data-meta">
                           <div><span className="label-text">EXPIRES</span> <span>{formatDate(invite.expires_at)}</span></div>
-                          <div><span className="label-text">STATUS</span> <span>{invite.status}</span></div>
+                          <div><span className="label-text">STATE</span> <span>{status.detail}</span></div>
                         </div>
                         <div className="mobile-data-actions">
                           <button className="action-btn destructive" onClick={() => handleRevokeInvite(invite.id)}>REVOKE</button>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                    No pending invitations.
+                    No pending invitations. Accepted, expired, and revoked invites appear in history below.
+                    <div className="help-actions">
+                      <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE INVITE</button>
+                      <button className="action-btn" onClick={() => navigate('/docs')}>READ INVITE FLOW</button>
+                    </div>
                   </div>
                 )}
+              </div>
+
+              <div style={{ marginTop: '2rem' }}>
+                <div className="label-text" style={{ marginBottom: '1rem' }}>INVITE HISTORY</div>
+                {inviteHistory.length > 0 ? (
+                  <div className="mobile-data-list">
+                    {inviteHistory.map((invite) => {
+                      const status = inviteStatusMeta(invite);
+                      return (
+                        <div key={invite.id} className="mobile-data-card">
+                          <div className="mobile-data-card-header">
+                            <div>
+                              <div className="mobile-data-title">{invite.display_name || invite.email}</div>
+                              <div className="mobile-data-subtitle">{invite.email}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                              <span className="badge">{invite.role.toUpperCase()}</span>
+                              <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
+                            </div>
+                          </div>
+                          <div className="mobile-data-meta">
+                            <div><span className="label-text">CREATED</span> <span>{formatDate(invite.created_at)}</span></div>
+                            <div><span className="label-text">FINAL STATE</span> <span>{status.detail}</span></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                Invite history will appear once invites are accepted, revoked, or expire.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE FIRST INVITE</button>
+                  <button className="action-btn" onClick={() => navigate('/docs')}>READ INVITE FLOW</button>
+                </div>
+              </div>
+            )}
               </div>
             </>
           ) : (
@@ -907,13 +1261,85 @@ export function WorkspaceAdmin() {
           )}
         </div>
       </div>
+      )}
 
+      {(settingsTab === 'members' || settingsTab === 'invites' || settingsTab === 'providers' || settingsTab === 'service') && (
+      <div className="grid-row">
+        <div className="cell workspace-activity-cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text" style={{ marginBottom: '1.5rem' }}>RECENT TEAM ACTIVITY</div>
+          {canManageMemberships ? (
+            teamActivity.length > 0 ? (
+              <div className="workspace-activity-list">
+                {teamActivity.map((item) => (
+                  <div key={item.id} className="workspace-activity-item">
+                    <div className="workspace-activity-header">
+                      <span className="label-text">{item.title}</span>
+                      <span className={`badge ${item.tone ? `status-${item.tone}` : ''}`.trim()}>{formatDate(item.timestamp)}</span>
+                    </div>
+                    <div className="workspace-activity-detail">{item.detail}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                Team activity will appear here once members join or invites are created.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>INVITE FIRST MEMBER</button>
+                  <button className="action-btn" onClick={() => navigate('/docs')}>READ WORKSPACE HELP</button>
+                </div>
+              </div>
+            )
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Team lifecycle visibility is restricted to workspace owners and admins.
+            </div>
+          )}
+        </div>
+
+        <div className="cell workspace-activity-cell workspace-activity-accent-cell" style={{ gridColumn: 'span 2' }}>
+          <div className="label-text" style={{ marginBottom: '1.5rem' }}>ACCESS AND CONFIG ACTIVITY</div>
+          {(canManageKeys || canManageProviderConfigs) ? (
+            accessActivity.length > 0 ? (
+              <div className="workspace-activity-list">
+                {accessActivity.map((item) => (
+                  <div key={item.id} className="workspace-activity-item">
+                    <div className="workspace-activity-header">
+                      <span className="label-text">{item.title}</span>
+                      <span className={`badge ${item.tone ? `status-${item.tone}` : ''}`.trim()}>{formatDate(item.timestamp)}</span>
+                    </div>
+                    <div className="workspace-activity-detail">{item.detail}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                Provider updates and service-account usage will appear here once this workspace records access activity.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => navigate('/api-keys')}>OPEN API KEYS</button>
+                  <button className="action-btn" onClick={() => navigate('/docs')}>READ AUTOMATION DOCS</button>
+                </div>
+              </div>
+            )
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Access activity is restricted to roles that can manage service accounts or provider configs.
+            </div>
+          )}
+        </div>
+      </div>
+      )}
+
+      {settingsTab === 'usage' && (
       <div className="grid-row">
         <div className="cell" style={{ gridColumn: 'span 4' }}>
           <div className="label-text" style={{ marginBottom: '1.5rem' }}>TOP KEY ACTIVITY THIS MONTH</div>
           {canViewUsage ? (
             usageSummary.topKeys.length > 0 ? (
-              <div className="responsive-scroll-x">
+              <>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: 1.6, marginBottom: '1rem' }}>
+                  This is a lightweight audit view of which keys are driving the most traffic in the active workspace this month. Use it to spot the hottest automation key, unexpected error-heavy traffic, or access concentration.
+                </div>
+                <div className="responsive-scroll-x">
                 <table className="data-table responsive-scroll-x-content">
                   <thead>
                     <tr>
@@ -936,10 +1362,15 @@ export function WorkspaceAdmin() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+                </div>
+              </>
             ) : (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 Key-level usage will appear here once this workspace records traffic.
+                <div className="help-actions">
+                  <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY A MODEL</button>
+                  <button className="action-btn" onClick={() => navigate('/api-keys')}>OPEN API KEYS</button>
+                </div>
               </div>
             )
           ) : (
@@ -949,6 +1380,7 @@ export function WorkspaceAdmin() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

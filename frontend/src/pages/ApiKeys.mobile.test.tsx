@@ -16,6 +16,16 @@ vi.mock('../hooks/useIsMobile', () => ({
   useIsMobile: () => true,
 }));
 
+vi.mock('../lib/auth-context', () => ({
+  useAuthSession: () => ({
+    session: {
+      workspace: { id: 'ws_test', name: 'Test Workspace', slug: 'test-workspace' },
+      key: { role: 'admin', principal_type: 'human' },
+    },
+    availableWorkspaces: [{ id: 'ws_test', name: 'Test Workspace', slug: 'test-workspace', created_at: '2026-03-15T00:00:00Z', status: 'active' }],
+  }),
+}));
+
 vi.mock('../lib/api', () => ({
   fetchApiKeys: apiMocks.fetchApiKeys,
   createApiKey: apiMocks.createApiKey,
@@ -35,6 +45,9 @@ describe('ApiKeys mobile layout', () => {
         name: 'Production',
         key_prefix: 'inf_live_***',
         role: 'admin',
+        principal_type: 'human',
+        workspace_name: 'Test Workspace',
+        workspace_slug: 'test-workspace',
         status: 'active',
         created_at: '2026-03-01T12:00:00Z',
         last_used: null,
@@ -51,6 +64,8 @@ describe('ApiKeys mobile layout', () => {
       expect(screen.getByText('Production')).toBeInTheDocument();
     });
 
+    expect(screen.getAllByText('HUMAN').length).toBeGreaterThan(0);
+    expect(screen.getByText('Can start dashboard sessions')).toBeInTheDocument();
     expect(screen.getByText('REVOKE')).toBeInTheDocument();
     expect(container.querySelectorAll('.mobile-data-card').length).toBeGreaterThan(0);
     expect(screen.queryByText('NAME / PREFIX')).not.toBeInTheDocument();

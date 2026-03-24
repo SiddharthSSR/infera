@@ -38,6 +38,7 @@ class WorkerConfig(BaseSettings):
     
     # Health reporting
     health_report_interval_ms: int = Field(default=5000, description="Health report interval")
+    drain_timeout_s: int = Field(default=30, description="Seconds to wait for in-flight requests to finish on graceful shutdown")
     
     # Inference engine
     engine: str = Field(default="vllm", description="Inference engine: vllm, mlx, mock")
@@ -46,6 +47,22 @@ class WorkerConfig(BaseSettings):
     vllm_tensor_parallel_size: int = Field(default=1, description="Tensor parallel size")
     vllm_gpu_memory_utilization: float = Field(default=0.9, description="GPU memory utilization")
     vllm_max_model_len: int | None = Field(default=None, description="Max model length")
+
+    # vLLM performance flags
+    vllm_enable_prefix_caching: bool = Field(default=True, description="Enable automatic prefix caching (KV cache reuse)")
+    vllm_enable_chunked_prefill: bool = Field(default=True, description="Enable chunked prefill to avoid blocking decode batches")
+    vllm_max_num_batched_tokens: int | None = Field(default=None, description="Max tokens per prefill chunk (None = vLLM default)")
+    vllm_max_num_seqs: int | None = Field(default=None, description="Max concurrent sequences per iteration (None = vLLM default)")
+    vllm_swap_space: float | None = Field(default=None, description="CPU swap space for KV spill in GiB (None = vLLM default)")
+    vllm_enforce_eager: bool = Field(default=False, description="Disable CUDA graphs and force eager execution")
+    vllm_num_scheduler_steps: int = Field(default=0, description="Multi-step scheduling steps per iteration (0 = disabled)")
+
+    # vLLM speculative decoding
+    # Set to a HuggingFace model ID for draft-model mode, or "[ngram]" for ngram mode.
+    # Leave empty (default) to disable speculative decoding.
+    vllm_speculative_model: str = Field(default="", description="Draft model ID or '[ngram]' for speculative decoding")
+    vllm_num_speculative_tokens: int = Field(default=0, description="Tokens to speculate per step (0 = disabled)")
+    vllm_ngram_prompt_lookup_num_tokens: int = Field(default=0, description="Ngram look-back window (ngram mode only)")
     
     # Logging
     log_level: str = Field(default="INFO", description="Log level")

@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { useModels } from '../hooks/useApi';
+import { CollapsibleSection } from '../components/CollapsibleSection';
 import { useChat } from '../lib/chat-context';
 import { streamChatCompletion } from '../lib/api';
 
@@ -37,7 +38,9 @@ export function Playground() {
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const [focusMode, setFocusMode] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 900);
+  const [isCompactDesktop, setIsCompactDesktop] = useState(() => window.innerWidth <= 1460);
   const [showMobileSettings, setShowMobileSettings] = useState(false);
+  const [showCompactHistory, setShowCompactHistory] = useState(false);
   const responseRef = useRef<HTMLDivElement>(null);
 
   // Keyboard shortcut: Escape to exit focus mode
@@ -51,17 +54,27 @@ export function Playground() {
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 900px)');
+    const compactQuery = window.matchMedia('(max-width: 1460px)');
     const handleChange = (event: MediaQueryListEvent) => setIsMobile(event.matches);
+    const handleCompactChange = (event: MediaQueryListEvent) => setIsCompactDesktop(event.matches);
     setIsMobile(mediaQuery.matches);
+    setIsCompactDesktop(compactQuery.matches);
     mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
+    compactQuery.addEventListener('change', handleCompactChange);
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange);
+      compactQuery.removeEventListener('change', handleCompactChange);
+    };
   }, []);
 
   useEffect(() => {
     if (!isMobile) {
       setShowMobileSettings(false);
     }
-  }, [isMobile]);
+    if (!isCompactDesktop) {
+      setShowCompactHistory(false);
+    }
+  }, [isCompactDesktop, isMobile]);
 
   // Auto-select the first available model after data loads.
   useEffect(() => {
@@ -226,6 +239,71 @@ export function Playground() {
     </>
   );
 
+  const historyPanel = (
+    <>
+      {history.length === 0 ? (
+        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '1rem 0' }}>
+          No requests yet. Run an inference to see history.
+        </div>
+      ) : (
+        history.map((entry, i) => (
+          <button
+            type="button"
+            key={entry.id}
+            style={{
+              padding: '1rem 0',
+              cursor: 'pointer',
+              opacity: i === 0 ? 1 : 0.7,
+              background: 'none',
+              border: 'none',
+              borderBottom: '1px solid #E5E2DE',
+              width: '100%',
+              textAlign: 'left',
+            }}
+            onClick={() => {
+              // Could restore the prompt from history
+            }}
+          >
+            <span className="mono" style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.25rem' }}>
+              {entry.time} - {entry.latencyMs}ms
+            </span>
+            <div style={{
+              fontSize: '0.85rem', whiteSpace: 'nowrap', overflow: 'hidden',
+              textOverflow: 'ellipsis', color: 'var(--text-primary)',
+            }}>
+              {entry.preview}
+            </div>
+            {entry.promptTokens != null && (
+              <span className="mono" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', marginTop: '0.25rem', display: 'block' }}>
+                {entry.promptTokens} + {entry.completionTokens} tokens
+              </span>
+            )}
+          </button>
+        ))
+      )}
+
+      {history.length > 0 && (
+        <div style={{ marginTop: '1rem' }}>
+          <button
+            className="btn-secondary"
+            style={{ width: '100%', borderStyle: 'dashed', opacity: 0.5 }}
+            onClick={() => setHistory([])}
+          >
+            CLEAR HISTORY
+          </button>
+        </div>
+      )}
+    </>
+  );
+
+  const showDesktopSettingsRail = !focusMode && !isMobile && !isCompactDesktop;
+  const showDesktopHistoryRail = showDesktopSettingsRail && history.length > 0;
+  const playgroundGridTemplateColumns = focusMode || isMobile || isCompactDesktop
+    ? '1fr'
+    : showDesktopHistoryRail
+      ? '252px minmax(0, 1fr) 236px'
+      : '252px minmax(0, 1fr)';
+
   return (
     <div style={focusMode ? {
       position: 'fixed', inset: 0, zIndex: 100,
@@ -234,21 +312,21 @@ export function Playground() {
     } : {}}>
       {/* Playground has its own display header */}
       {!focusMode && (
-        <header className="display-text" style={{ fontSize: isMobile ? '3.25rem' : '6rem', padding: isMobile ? '1.5rem 0' : '3rem 0' }}>
+        <header className="display-text" style={{ fontSize: isMobile ? '3rem' : '4.2rem', padding: isMobile ? '1.25rem 0' : '1.5rem 0 1.2rem' }}>
           PLAYGROUND
         </header>
       )}
 
       <div style={{
         display: 'grid',
-        gridTemplateColumns: focusMode || isMobile ? '1fr' : '320px 1fr 320px',
+        gridTemplateColumns: playgroundGridTemplateColumns,
         flexGrow: 1,
         overflow: 'hidden',
-        height: focusMode ? '100vh' : isMobile ? 'calc(100vh - 190px)' : 'calc(100vh - 260px)',
+        height: focusMode ? '100vh' : isMobile ? 'calc(100vh - 170px)' : 'calc(100vh - 190px)',
       }}>
         {/* Left Sidebar - Parameters */}
-        {!focusMode && !isMobile && <aside style={{
-          padding: '2rem',
+        {showDesktopSettingsRail && <aside style={{
+          padding: '1.5rem',
           borderRight: 'var(--grid-line)',
           overflowY: 'auto',
         }}>
@@ -259,22 +337,37 @@ export function Playground() {
         <main style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Action Bar */}
           <div style={{
-            padding: isMobile ? '1rem' : '1.5rem 2rem', borderBottom: 'var(--grid-line)',
+            padding: isMobile ? '1rem' : '1rem 1.5rem', borderBottom: 'var(--grid-line)',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             flexWrap: 'wrap', gap: '0.75rem',
             flexShrink: 0,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>
-              <div style={{ width: 6, height: 6, background: isLoading ? 'var(--color-warning)' : 'var(--color-success)', borderRadius: '50%' }} />
-              {isLoading ? 'generating...' : 'ready to inference'}
+            <div style={{ display: 'grid', gap: '0.35rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>
+                <div style={{ width: 6, height: 6, background: isLoading ? 'var(--color-warning)' : 'var(--color-success)', borderRadius: '50%' }} />
+                {isLoading ? 'generating...' : 'ready to inference'}
+              </div>
+              {!showDesktopHistoryRail && !isMobile && !isCompactDesktop && (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Request history will appear here after the first successful run.
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              {isMobile && !focusMode && (
+              {(isMobile || isCompactDesktop) && !focusMode && (
                 <button
                   className="btn-secondary"
                   onClick={() => setShowMobileSettings(prev => !prev)}
                 >
                   {showMobileSettings ? 'HIDE SETTINGS' : 'SETTINGS'}
+                </button>
+              )}
+              {(isMobile || isCompactDesktop) && !focusMode && (
+                <button
+                  className="btn-secondary"
+                  onClick={() => setShowCompactHistory(prev => !prev)}
+                >
+                  {showCompactHistory ? 'HIDE HISTORY' : 'HISTORY'}
                 </button>
               )}
               <button
@@ -291,22 +384,43 @@ export function Playground() {
             </div>
           </div>
 
-          {isMobile && !focusMode && showMobileSettings && (
+          {(isMobile || isCompactDesktop) && !focusMode && showMobileSettings && (
             <section style={{
               padding: '1rem',
               borderBottom: 'var(--grid-line)',
-              overflowY: 'auto',
-              maxHeight: '45vh',
+              backgroundColor: 'var(--bg-accent)',
             }}>
-              {settingsControls}
+              <CollapsibleSection
+                title="SETTINGS"
+                description="Model selection, decoding controls, and system prompt."
+                defaultExpanded
+              >
+                {settingsControls}
+              </CollapsibleSection>
+            </section>
+          )}
+
+          {(isMobile || isCompactDesktop) && !focusMode && showCompactHistory && (
+            <section style={{
+              padding: '1rem',
+              borderBottom: 'var(--grid-line)',
+              backgroundColor: 'rgba(244, 242, 238, 0.72)',
+            }}>
+              <CollapsibleSection
+                title="REQUEST HISTORY"
+                description="Recent prompts, latency, and token counts."
+                defaultExpanded
+              >
+                {historyPanel}
+              </CollapsibleSection>
             </section>
           )}
 
           {/* Prompt Area - fixed height, does not grow */}
           <section style={{
-            padding: isMobile ? '1rem' : '2rem', borderBottom: 'var(--grid-line)',
+            padding: isMobile ? '1rem' : '1.25rem 1.5rem', borderBottom: 'var(--grid-line)',
             display: 'flex', flexDirection: 'column',
-            height: isMobile ? 150 : 180, flexShrink: 0,
+            height: 132, flexShrink: 0,
           }}>
             <label className="label-text" style={{ marginBottom: '0.75rem', display: 'block' }}>USER PROMPT</label>
             <textarea
@@ -329,7 +443,7 @@ export function Playground() {
             overflow: 'hidden', minHeight: 0,
           }}>
             <div style={{
-              padding: isMobile ? '0.75rem 1rem 0.5rem' : '1rem 2rem 0.5rem', flexShrink: 0,
+              padding: isMobile ? '0.75rem 1rem 0.5rem' : '0.85rem 1.5rem 0.4rem', flexShrink: 0,
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               flexWrap: 'wrap', gap: '0.5rem',
             }}>
@@ -347,7 +461,7 @@ export function Playground() {
               )}
             </div>
             <div ref={responseRef} style={{
-              flex: 1, overflowY: 'auto', padding: isMobile ? '0.5rem 1rem 1rem' : '0.5rem 2rem 2rem',
+              flex: 1, overflowY: 'auto', padding: isMobile ? '0.5rem 1rem 1rem' : '0.45rem 1.5rem 1.5rem',
               minHeight: 0,
             }}>
               {response ? (
@@ -403,66 +517,14 @@ export function Playground() {
         </main>
 
         {/* Right Sidebar - History */}
-        {!focusMode && !isMobile && <aside style={{
+        {showDesktopHistoryRail && <aside style={{
           borderLeft: 'var(--grid-line)',
           backgroundColor: 'var(--bg-accent)',
-          padding: '2rem',
+          padding: '1.5rem',
           overflowY: 'auto',
         }}>
           <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>REQUEST HISTORY</label>
-
-          {history.length === 0 ? (
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '1rem 0' }}>
-              No requests yet. Run an inference to see history.
-            </div>
-          ) : (
-            history.map((entry, i) => (
-              <button
-                type="button"
-                key={entry.id}
-                style={{
-                  padding: '1rem 0',
-                  cursor: 'pointer',
-                  opacity: i === 0 ? 1 : 0.7,
-                  background: 'none',
-                  border: 'none',
-                  borderBottom: '1px solid #E5E2DE',
-                  width: '100%',
-                  textAlign: 'left',
-                }}
-                onClick={() => {
-                  // Could restore the prompt from history
-                }}
-              >
-                <span className="mono" style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.25rem' }}>
-                  {entry.time} &mdash; {entry.latencyMs}ms
-                </span>
-                <div style={{
-                  fontSize: '0.85rem', whiteSpace: 'nowrap', overflow: 'hidden',
-                  textOverflow: 'ellipsis', color: 'var(--text-primary)',
-                }}>
-                  {entry.preview}
-                </div>
-                {entry.promptTokens != null && (
-                  <span className="mono" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', marginTop: '0.25rem', display: 'block' }}>
-                    {entry.promptTokens} + {entry.completionTokens} tokens
-                  </span>
-                )}
-              </button>
-            ))
-          )}
-
-          {history.length > 0 && (
-            <div style={{ marginTop: '2rem' }}>
-              <button
-                className="btn-secondary"
-                style={{ width: '100%', borderStyle: 'dashed', opacity: 0.5 }}
-                onClick={() => setHistory([])}
-              >
-                CLEAR HISTORY
-              </button>
-            </div>
-          )}
+          {historyPanel}
         </aside>}
       </div>
     </div>

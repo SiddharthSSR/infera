@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -153,6 +154,23 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	if req.GatewayAddress == "" {
 		req.GatewayAddress = m.gatewayAddress
 	}
+	ApplyRuntimeDefaults(req)
+	if providerType != ProviderMock {
+		if err := ValidateWorkerImageRef(req.DockerImage); err != nil {
+			return nil, &ProviderError{
+				Provider: providerType,
+				Code:     ProviderErrorInvalidRequest,
+				Message:  err.Error(),
+			}
+		}
+	}
+
+	if reusable := m.findReusableStoppedInstance(providerType, req); reusable != nil {
+		if err := m.Start(ctx, reusable.ID); err != nil {
+			return nil, err
+		}
+		return reusable, nil
+	}
 
 	// Create instance via provider
 	instance, err := provider.Provision(ctx, req)
@@ -215,6 +233,13 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 	if !exists {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
+	if instance.Status == InstanceStatusTerminated {
+		return &ProviderError{
+			Provider: instance.Provider,
+			Code:     ProviderErrorNotFound,
+			Message:  "instance can no longer be started because the provider no longer reports it",
+		}
+	}
 
 	provider, err := m.resolveProvider(instance.WorkspaceID, instance.Provider)
 	if err != nil {
@@ -227,6 +252,14 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 
 	// Resume cost tracking
 	m.costs.StartTracking(instance)
+
+	m.mu.Lock()
+	now := time.Now()
+	instance.Status = InstanceStatusProvisioning
+	instance.StartedAt = &now
+	instance.StoppedAt = nil
+	instance.ErrorMessage = ""
+	m.mu.Unlock()
 
 	return nil
 }
@@ -249,6 +282,12 @@ func (m *Manager) Stop(ctx context.Context, instanceID string) error {
 
 	// Stop cost tracking
 	m.costs.StopTracking(instanceID)
+
+	m.mu.Lock()
+	now := time.Now()
+	instance.Status = InstanceStatusStopped
+	instance.StoppedAt = &now
+	m.mu.Unlock()
 
 	return nil
 }
@@ -300,6 +339,54 @@ func (m *Manager) ListInstancesByWorkspace(workspaceID string) []*Instance {
 	return instances
 }
 
+func (m *Manager) findReusableStoppedInstance(providerType ProviderType, req *ProvisionRequest) *Instance {
+	if len(req.Models) == 0 {
+		return nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var best *Instance
+	for _, inst := range m.instances {
+		if inst.Provider != providerType || inst.WorkspaceID != req.WorkspaceID {
+			continue
+		}
+		if inst.Status != InstanceStatusStopped {
+			continue
+		}
+		if inst.GPUType != req.GPUType || inst.GPUCount != req.GPUCount {
+			continue
+		}
+		if !sameModels(inst.Models, req.Models) {
+			continue
+		}
+		if best == nil || stoppedAtUnix(inst) > stoppedAtUnix(best) {
+			best = inst
+		}
+	}
+
+	return best
+}
+
+func sameModels(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	left := append([]string(nil), a...)
+	right := append([]string(nil), b...)
+	slices.Sort(left)
+	slices.Sort(right)
+	return slices.Equal(left, right)
+}
+
+func stoppedAtUnix(inst *Instance) int64 {
+	if inst.StoppedAt != nil {
+		return inst.StoppedAt.Unix()
+	}
+	return inst.CreatedAt.Unix()
+}
+
 // RefreshInstances updates instance status from providers.
 func (m *Manager) RefreshInstances(ctx context.Context) error {
 	m.mu.RLock()
@@ -316,6 +403,20 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 		}
 		refreshed, err := provider.GetInstance(ctx, inst.ProviderID)
 		if err != nil {
+			var providerErr *ProviderError
+			if errors.As(err, &providerErr) && providerErr.Code == ProviderErrorNotFound {
+				m.mu.Lock()
+				if existing, exists := m.instances[inst.ID]; exists {
+					existing.Status = InstanceStatusTerminated
+					existing.ErrorMessage = "Provider no longer reports this instance"
+					now := time.Now()
+					if existing.StoppedAt == nil {
+						existing.StoppedAt = &now
+					}
+				}
+				m.mu.Unlock()
+				m.costs.StopTracking(inst.ID)
+			}
 			continue
 		}
 
@@ -324,7 +425,12 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 			existing.Status = refreshed.Status
 			existing.PublicIP = refreshed.PublicIP
 			existing.ErrorMessage = refreshed.ErrorMessage
-			existing.WorkerID = refreshed.WorkerID
+			// Only update WorkerID from provider if non-empty; providers don't
+			// track our worker process so a blank value from the refresh loop
+			// must not overwrite a link we established via heartbeat.
+			if refreshed.WorkerID != "" {
+				existing.WorkerID = refreshed.WorkerID
+			}
 		}
 		m.mu.Unlock()
 	}
@@ -435,6 +541,19 @@ func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
 
 	for _, inst := range m.instances {
 		if inst.WorkerID == workerID {
+			return inst, true
+		}
+	}
+	return nil, false
+}
+
+// GetInstanceByProviderRef finds an instance by provider type and provider-native ID.
+func (m *Manager) GetInstanceByProviderRef(providerType ProviderType, providerID string) (*Instance, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, inst := range m.instances {
+		if inst.Provider == providerType && inst.ProviderID == providerID {
 			return inst, true
 		}
 	}

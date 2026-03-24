@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -123,6 +124,12 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	if got := input["imageName"]; got != "custom/worker:v1" {
 		t.Fatalf("expected custom image, got %#v", got)
 	}
+	if got := input["volumeMountPath"]; got != "/workspace" {
+		t.Fatalf("expected persistent workspace mount, got %#v", got)
+	}
+	if got := input["volumeInGb"]; got != float64(70) {
+		t.Fatalf("expected volume size 70GB, got %#v", got)
+	}
 
 	env, ok := input["env"].([]interface{})
 	if !ok {
@@ -130,6 +137,216 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	}
 	assertEnvContains(t, env, "INFERA_ROUTER_ADDRESS", "https://gateway.example.com")
 	assertEnvContains(t, env, "INFERA_WORKER_SHARED_TOKEN", "worker-shared-token")
+	assertEnvContains(t, env, "XDG_CACHE_HOME", "/workspace/.cache")
+	assertEnvContains(t, env, "HF_HOME", "/workspace/.cache/huggingface")
+	assertEnvContains(t, env, "HUGGINGFACE_HUB_CACHE", "/workspace/.cache/huggingface/hub")
+}
+
+func TestProvisionAddsRuntimeEnvOverridesForKnownModel(t *testing.T) {
+	t.Setenv("INFERA_WORKER_SHARED_TOKEN", "worker-shared-token")
+
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var captured graphQLRequest
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S"}}}}`), nil
+	})
+
+	req := &providers.ProvisionRequest{
+		Name:           "worker",
+		GPUType:        providers.GPUL40S,
+		GPUCount:       1,
+		DockerImage:    "custom/worker:v1",
+		Models:         []string{"Qwen/Qwen2.5-7B-Instruct"},
+		GatewayAddress: "https://gateway.example.com",
+	}
+	providers.ApplyRuntimeDefaults(req)
+
+	if _, err := provider.Provision(context.Background(), req); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	input, ok := captured.Variables["input"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graphql input variables, got %#v", captured.Variables)
+	}
+	env, ok := input["env"].([]interface{})
+	if !ok {
+		t.Fatalf("expected env array, got %#v", input["env"])
+	}
+	assertEnvContains(t, env, providers.OptionVLLMMaxModelLen, "32768")
+	assertEnvContains(t, env, providers.OptionVLLMGPUMemoryUtilization, "0.94")
+}
+
+func TestProvisionRejectsFloatingWorkerImage(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:        "worker",
+		GPUType:     providers.GPUL40S,
+		GPUCount:    1,
+		DockerImage: "codingtensor/infera-worker:latest",
+	})
+	if err == nil {
+		t.Fatal("expected floating worker image to be rejected")
+	}
+}
+
+func TestListOfferingsUsesLiveRunPodValues(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[
+			{"id":"gpu-4090","displayName":"NVIDIA GeForce RTX 4090","memoryInGb":24,"communityPrice":0.41,"securePrice":0.52,"communitySpotPrice":0.22,"secureSpotPrice":0.31,"maxGpuCountCommunityCloud":14,"maxGpuCountSecureCloud":0,"lowestPrice2":{"minimumBidPrice":0.40,"uninterruptablePrice":0.80},"lowestPrice4":{"minimumBidPrice":0.78,"uninterruptablePrice":1.56},"lowestPrice8":{"minimumBidPrice":1.52,"uninterruptablePrice":3.04}},
+			{"id":"gpu-unknown","displayName":"NVIDIA Mystery GPU","memoryInGb":48,"communityPrice":0.99,"securePrice":1.10,"communitySpotPrice":0.45,"secureSpotPrice":0.55,"maxGpuCountCommunityCloud":8,"maxGpuCountSecureCloud":0},
+			{"id":"gpu-h100","displayName":"NVIDIA H100 PCIe","memoryInGb":80,"communityPrice":1.99,"securePrice":2.20,"communitySpotPrice":1.09,"secureSpotPrice":1.30,"maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":0}
+		]}}`), nil
+	})
+
+	offerings, err := provider.ListOfferings(context.Background())
+	if err != nil {
+		t.Fatalf("ListOfferings: %v", err)
+	}
+
+	if len(offerings) != 9 {
+		t.Fatalf("expected 9 live offerings, got %d", len(offerings))
+	}
+
+	offering := offerings[0]
+	if offering.GPUType != providers.GPURTX4090 {
+		t.Fatalf("expected RTX_4090, got %s", offering.GPUType)
+	}
+	if offering.DisplayName != "RTX 4090" {
+		t.Fatalf("expected compact display name RTX 4090, got %q", offering.DisplayName)
+	}
+	if offering.ProviderGPUTypeID != "gpu-4090" {
+		t.Fatalf("expected provider gpu id gpu-4090, got %q", offering.ProviderGPUTypeID)
+	}
+	if offering.CostPerHour != 0.41 {
+		t.Fatalf("expected live cost 0.41, got %f", offering.CostPerHour)
+	}
+	if offering.SpotPrice != 0.22 {
+		t.Fatalf("expected live spot price 0.22, got %f", offering.SpotPrice)
+	}
+	if offering.Available != 14 {
+		t.Fatalf("expected live availability 14, got %d", offering.Available)
+	}
+
+	if offerings[1].GPUCount != 2 || offerings[1].CostPerHour != 0.80 {
+		t.Fatalf("expected 2x RTX_4090 live offering with aliased pricing, got count=%d price=%f", offerings[1].GPUCount, offerings[1].CostPerHour)
+	}
+	if offerings[4].GPUCount != 14 {
+		t.Fatalf("expected exact max count offering to be surfaced, got %d", offerings[4].GPUCount)
+	}
+	if math.Abs(offerings[4].CostPerHour-5.74) > 0.0001 {
+		t.Fatalf("expected fallback scaled price for 14x offering, got %f", offerings[4].CostPerHour)
+	}
+	if offerings[5].GPUType != providers.GPUType("NVIDIA Mystery GPU") {
+		t.Fatalf("expected unknown gpu to be preserved, got %q", offerings[5].GPUType)
+	}
+	if offerings[8].GPUCount != 8 {
+		t.Fatalf("expected 8x unknown gpu offering to be surfaced, got %d", offerings[8].GPUCount)
+	}
+}
+
+func TestListOfferingsReturnsErrorWhenLiveQueryFails(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusInternalServerError, `{"errors":[{"message":"boom"}]}`), nil
+	})
+
+	_, err = provider.ListOfferings(context.Background())
+	if err == nil {
+		t.Fatal("expected ListOfferings to return live query error")
+	}
+
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Provider != providers.ProviderRunPod {
+		t.Fatalf("expected runpod provider error, got %q", providerErr.Provider)
+	}
+}
+
+func TestProvisionRejectsUnsupportedGPUType(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:    "worker",
+		GPUType: providers.GPUType(""),
+	})
+	if err == nil {
+		t.Fatal("expected unsupported GPU type error")
+	}
+
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != "invalid_gpu_type" {
+		t.Fatalf("expected invalid_gpu_type, got %q", providerErr.Code)
+	}
+}
+
+func TestProvisionPassesThroughUnknownLiveGPUDisplayName(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var captured graphQLRequest
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-h200","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA H200 SXM"}}}}`), nil
+	})
+
+	_, err = provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:        "worker",
+		GPUType:     providers.GPUType("H200 SXM"),
+		GPUCount:    1,
+		DockerImage: "custom/worker:v1",
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	input, ok := captured.Variables["input"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graphql input variables, got %#v", captured.Variables)
+	}
+	if got := input["gpuTypeId"]; got != "H200 SXM" {
+		t.Fatalf("expected raw gpuTypeId passthrough, got %#v", got)
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

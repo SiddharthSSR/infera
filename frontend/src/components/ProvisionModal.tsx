@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X, Cpu, DollarSign, Loader2, Box } from 'lucide-react';
-import type { GPUOffering, ProvisionRequest, ProviderType, GPUType } from '../types';
+import type { GPUOffering, ProvisionRequest, ProviderType, GPUType, KnownGPUType } from '../types';
 import { useProvisionInstance } from '../hooks/useApi';
 
 interface ProvisionModalProps {
@@ -9,7 +9,7 @@ interface ProvisionModalProps {
   offerings: GPUOffering[] | undefined;
 }
 
-const GPU_LABELS: Record<GPUType, string> = {
+const GPU_LABELS: Record<KnownGPUType, string> = {
   RTX_4090: 'RTX 4090 (24GB)',
   RTX_4080: 'RTX 4080 (16GB)',
   A100_40GB: 'A100 40GB',
@@ -29,12 +29,14 @@ const PROVIDER_LABELS: Record<ProviderType, string> = {
 const AVAILABLE_MODELS = [
   { id: 'mistralai/Mistral-7B-Instruct-v0.2', name: 'Mistral 7B Instruct', vram: 16, gated: false },
   { id: 'meta-llama/Llama-3-8B-Instruct', name: 'Llama 3 8B Instruct', vram: 18, gated: true },
+  { id: 'Qwen/Qwen3-4B-Thinking-2507', name: 'Qwen3 4B Thinking 2507', vram: 12, gated: false },
+  { id: 'moonshotai/Kimi-K2.5-Instruct', name: 'Kimi K2.5 Instruct', vram: 660, gated: false },
   { id: 'microsoft/phi-2', name: 'Phi-2 (2.7B)', vram: 6, gated: false },
   { id: 'google/gemma-7b-it', name: 'Gemma 7B Instruct', vram: 16, gated: true },
 ];
 
 // GPU VRAM in GB
-const GPU_VRAM: Record<GPUType, number> = {
+const GPU_VRAM: Record<KnownGPUType, number> = {
   RTX_4090: 24,
   RTX_4080: 16,
   A100_40GB: 40,
@@ -73,7 +75,7 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
     : 0;
 
   // Filter models that fit in selected GPU
-  const gpuVram = GPU_VRAM[gpuType] || 24;
+  const gpuVram = selectedOffering?.memory_gb || GPU_VRAM[gpuType as KnownGPUType] || 24;
   const compatibleModels = AVAILABLE_MODELS.filter(m => m.vram <= gpuVram * gpuCount);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -84,6 +86,7 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
       name,
       provider,
       gpu_type: gpuType,
+      provider_gpu_type_id: selectedOffering?.provider_gpu_type_id,
       gpu_count: gpuCount,
       spot_instance: spotInstance,
       max_cost_hour: estimatedCost * 1.5,
@@ -164,7 +167,7 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
           <div>
             <label className="block text-sm text-gray-400 mb-1.5">GPU Type</label>
             <div className="grid grid-cols-2 gap-2">
-              {(availableGPUs.length > 0 ? availableGPUs : ['RTX_4090', 'A100_40GB', 'A100_80GB', 'H100'] as GPUType[]).map(gpu => {
+              {availableGPUs.map(gpu => {
                 const offering = providerOfferings.find(o => o.gpu_type === gpu);
                 return (
                   <button
@@ -179,7 +182,7 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
                   >
                     <div className="flex items-center gap-2 mb-1">
                       <Cpu className="w-4 h-4" />
-                      <span className="font-medium text-sm">{GPU_LABELS[gpu] || gpu}</span>
+                      <span className="font-medium text-sm">{GPU_LABELS[gpu as KnownGPUType] || gpu}</span>
                     </div>
                     {offering && (
                       <div className="text-xs text-gray-400">
@@ -195,6 +198,11 @@ export function ProvisionModal({ isOpen, onClose, offerings }: ProvisionModalPro
                 );
               })}
             </div>
+            {availableGPUs.length === 0 && (
+              <p className="text-sm text-amber-400">
+                No live GPU offerings are currently available for this provider.
+              </p>
+            )}
           </div>
 
           {/* GPU Count */}
