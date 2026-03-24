@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 from datetime import datetime
 import asyncio
 import random
-from typing import Callable
+from typing import Any, Callable
 
 from .types import (
     InferenceRequest, InferenceResponse, TokenChunk, Choice, Message,
@@ -22,6 +22,13 @@ class InferenceEngine(ABC):
         recorder: Callable[[str], None] | None,
     ) -> None:
         """Install an optional callback for detailed startup-stage reporting."""
+        del recorder
+
+    def set_startup_metadata_recorder(
+        self,
+        recorder: Callable[[str, dict[str, Any]], None] | None,
+    ) -> None:
+        """Install an optional callback for startup metadata reporting."""
         del recorder
 
     async def warm_model_runtime(self, model_id: str) -> None:

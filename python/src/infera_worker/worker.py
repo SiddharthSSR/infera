@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator
 from datetime import datetime
+from typing import Any
 import uuid
 import structlog
 
@@ -32,6 +33,7 @@ class Worker:
         self._startup_events: dict[str, datetime] = {
             "worker_created": datetime.now(),
         }
+        self._startup_metadata: dict[str, Any] = {}
         
         # Stats tracking
         self._request_count = 0
@@ -62,6 +64,7 @@ class Worker:
             # Create inference engine
             self.engine = create_engine(self.config)
             self.engine.set_startup_stage_recorder(self.record_startup_stage)
+            self.engine.set_startup_metadata_recorder(self.record_startup_metadata)
             self.record_startup_stage("engine_create_finished")
             
             # Preload models if configured
@@ -336,6 +339,16 @@ class Worker:
         """Record a startup-stage timestamp if it has not been recorded yet."""
         self._startup_events.setdefault(stage, datetime.now())
 
+    def record_startup_metadata(self, key: str, payload: dict[str, Any]) -> None:
+        """Record startup metadata for diagnostics."""
+        existing = self._startup_metadata.get(key)
+        if isinstance(existing, dict):
+            merged = dict(existing)
+            merged.update(payload)
+            self._startup_metadata[key] = merged
+        else:
+            self._startup_metadata[key] = payload
+
     def _schedule_post_ready_warmup(self) -> None:
         """Warm optional runtime artifacts in the background after readiness."""
         if self.engine is None or not self.config.preload_models:
@@ -377,6 +390,7 @@ class Worker:
         return {
             "stages": stages,
             "durations_ms": durations_ms,
+            "metadata": self._startup_metadata,
         }
 
     def _record_latency(self, latency_ms: float) -> None:

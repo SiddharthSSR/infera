@@ -85,7 +85,11 @@ class TestWorker:
             def set_startup_stage_recorder(self, recorder):
                 self.recorder = recorder
 
+            def set_startup_metadata_recorder(self, recorder):
+                self.metadata_recorder = recorder
+
             async def load_model(self, config):
+                self.metadata_recorder("model_loads", {config.model_id: {"model_source": "mock"}})
                 model = SimpleNamespace(model_id=config.model_id)
                 self.loaded_models.append(model)
                 return SimpleNamespace(
@@ -128,6 +132,7 @@ class TestWorker:
         await asyncio.sleep(0)
 
         assert warmed_models == ["test-model"]
+        assert worker.get_startup_status()["metadata"]["model_loads"]["test-model"]["model_source"] == "mock"
 
     @pytest.mark.asyncio
     async def test_stop_worker(self, worker):

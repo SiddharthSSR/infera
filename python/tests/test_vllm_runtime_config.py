@@ -261,3 +261,42 @@ async def test_vllm_engine_warm_model_runtime_loads_deferred_tokenizer(monkeypat
     assert created_tokenizers == ["Qwen/Qwen2.5-7B-Instruct"]
     assert "tokenizer_warmup_started" in recorded_stages
     assert "tokenizer_warmup_finished" in recorded_stages
+
+
+@pytest.mark.asyncio
+async def test_vllm_engine_records_cache_probe_metadata(monkeypatch, tmp_path):
+    monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
+    monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgs)
+    monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
+
+    hub_cache = tmp_path / "huggingface" / "hub"
+    snapshot_dir = (
+        hub_cache
+        / "models--Qwen--Qwen2.5-7B-Instruct"
+        / "snapshots"
+        / "snapshot-1"
+    )
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / "config.json").write_text("{}", encoding="utf-8")
+    (snapshot_dir / "tokenizer_config.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "huggingface"))
+    monkeypatch.setenv("HUGGINGFACE_HUB_CACHE", str(hub_cache))
+    monkeypatch.setenv("TRANSFORMERS_CACHE", str(hub_cache))
+    monkeypatch.setenv("TORCH_HOME", str(tmp_path / "torch"))
+
+    recorded_metadata: list[tuple[str, dict[str, object]]] = []
+    engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm"))
+    engine.set_startup_metadata_recorder(lambda key, payload: recorded_metadata.append((key, payload)))
+
+    await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
+
+    assert recorded_metadata
+    key, payload = recorded_metadata[-1]
+    assert key == "model_loads"
+    model_probe = payload["Qwen/Qwen2.5-7B-Instruct"]
+    assert model_probe["model_source"] == "huggingface_repo"
+    assert model_probe["inferred_hf_repo_cache_exists"] is True
+    assert model_probe["inferred_hf_snapshot_count"] == 1
+    assert model_probe["inferred_latest_snapshot_has_config_json"] is True
+    assert model_probe["inferred_latest_snapshot_has_tokenizer_config_json"] is True
