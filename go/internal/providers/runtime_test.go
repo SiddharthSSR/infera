@@ -468,3 +468,74 @@ func TestWorkerRuntimeEnvIncludesChunkedPrefillTunables(t *testing.T) {
 		t.Fatalf("expected num scheduler steps env 8, got %q", got)
 	}
 }
+
+func TestApplyRuntimeDefaultsForSGLang(t *testing.T) {
+	req := &ProvisionRequest{
+		Engine:   EngineSGLang,
+		GPUType:  GPUA100_80,
+		GPUCount: 1,
+		Models:   []string{"Qwen/Qwen2.5-7B-Instruct"},
+	}
+
+	ApplyRuntimeDefaults(req)
+
+	if got := req.Options[OptionSGLangContextLength]; got != "32768" {
+		t.Fatalf("expected sglang context length 32768, got %q", got)
+	}
+	if got := req.Options[OptionSGLangMemFractionStatic]; got != "0.94" {
+		t.Fatalf("expected sglang mem fraction 0.94, got %q", got)
+	}
+	if got := req.Options[OptionSGLangChunkedPrefillSize]; got != "8192" {
+		t.Fatalf("expected sglang chunked prefill 8192, got %q", got)
+	}
+	if got := req.Options[OptionSGLangMaxRunningRequests]; got != "48" {
+		t.Fatalf("expected sglang max running requests 48, got %q", got)
+	}
+}
+
+func TestApplyRuntimeDefaultsForTensorRTLLM(t *testing.T) {
+	req := &ProvisionRequest{
+		Engine:   EngineTensorRTLLM,
+		GPUType:  GPUA100_80,
+		GPUCount: 2,
+		Models:   []string{"Qwen/Qwen2.5-7B-Instruct"},
+	}
+
+	ApplyRuntimeDefaults(req)
+
+	if got := req.Options[OptionTensorRTLLMTensorParallelSize]; got != "2" {
+		t.Fatalf("expected TensorRT-LLM TP size 2, got %q", got)
+	}
+	if got := req.Options[OptionTensorRTLLMMaxNumTokens]; got != "8192" {
+		t.Fatalf("expected TensorRT-LLM max tokens 8192, got %q", got)
+	}
+	if got := req.Options[OptionTensorRTLLMMaxBatchSize]; got != "48" {
+		t.Fatalf("expected TensorRT-LLM max batch size 48, got %q", got)
+	}
+}
+
+func TestWorkerRuntimeEnvUsesEngineSpecificKeys(t *testing.T) {
+	req := &ProvisionRequest{
+		Engine: EngineSGLang,
+		Options: map[string]string{
+			OptionSGLangTPSize:             "2",
+			OptionSGLangContextLength:      "32768",
+			OptionSGLangMaxRunningRequests: "64",
+			OptionVLLMTensorParallelSize:   "8",
+		},
+	}
+
+	env := WorkerRuntimeEnv(req)
+	if got := env[OptionSGLangTPSize]; got != "2" {
+		t.Fatalf("expected sglang tp env 2, got %q", got)
+	}
+	if got := env[OptionSGLangContextLength]; got != "32768" {
+		t.Fatalf("expected sglang context env 32768, got %q", got)
+	}
+	if got := env[OptionSGLangMaxRunningRequests]; got != "64" {
+		t.Fatalf("expected sglang max running requests env 64, got %q", got)
+	}
+	if _, exists := env[OptionVLLMTensorParallelSize]; exists {
+		t.Fatalf("expected vllm env keys to be omitted for sglang engine")
+	}
+}

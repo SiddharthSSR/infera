@@ -38,6 +38,7 @@ def test_parse_args_defaults(monkeypatch):
     )
     args = module.parse_args()
     assert args.base_url == "https://inferai.co.in"
+    assert args.engine == "vllm"
     assert args.instance_name == "cache-probe-bench"
     assert args.include_restart is False
 
@@ -63,6 +64,7 @@ def test_build_report_serializes_capture():
             {
                 "base_url": "https://inferai.co.in",
                 "provider": "runpod",
+                "engine": "vllm",
                 "gpu_type": "A100_80GB",
                 "provider_gpu_type_id": "NVIDIA A100 80GB PCIe",
                 "gpu_count": 1,

@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "phase": "engine_specific_tuning",
+  "description": "Candidate knob groups to sweep after baseline numbers exist.",
+  "engines": {
+    "vllm": {
+      "primary_metrics": [
+        "ttft_p50_ms",
+        "aggregate_decode_tok_s_p50",
+        "server_to_model_ready_ms"
+      ],
+      "sweeps": [
+        {
+          "group": "prefill_batching",
+          "env": "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS",
+          "values": ["2048", "4096", "8192"]
+        },
+        {
+          "group": "concurrency",
+          "env": "INFERA_VLLM_MAX_NUM_SEQS",
+          "values": ["16", "32", "48", "64"]
+        },
+        {
+          "group": "scheduler",
+          "env": "INFERA_VLLM_NUM_SCHEDULER_STEPS",
+          "values": ["0", "2", "4", "6", "8"]
+        }
+      ]
+    },
+    "sglang": {
+      "primary_metrics": [
+        "ttft_p50_ms",
+        "aggregate_decode_tok_s_p50",
+        "memory_used_bytes"
+      ],
+      "sweeps": [
+        {
+          "group": "chunked_prefill",
+          "env": "INFERA_SGLANG_CHUNKED_PREFILL_SIZE",
+          "values": ["2048", "4096", "8192"]
+        },
+        {
+          "group": "running_requests",
+          "env": "INFERA_SGLANG_MAX_RUNNING_REQUESTS",
+          "values": ["16", "32", "48", "64"]
+        },
+        {
+          "group": "memory_fraction",
+          "env": "INFERA_SGLANG_MEM_FRACTION_STATIC",
+          "values": ["0.85", "0.90", "0.94"]
+        }
+      ]
+    },
+    "tensorrt_llm": {
+      "primary_metrics": [
+        "ttft_p50_ms",
+        "aggregate_decode_tok_s_p50",
+        "memory_used_bytes"
+      ],
+      "sweeps": [
+        {
+          "group": "batch_size",
+          "env": "INFERA_TENSORRT_LLM_MAX_BATCH_SIZE",
+          "values": ["8", "16", "32"]
+        },
+        {
+          "group": "tokens_per_iteration",
+          "env": "INFERA_TENSORRT_LLM_MAX_NUM_TOKENS",
+          "values": ["2048", "4096", "8192"]
+        },
+        {
+          "group": "kv_cache_headroom",
+          "env": "INFERA_TENSORRT_LLM_KV_CACHE_FREE_GPU_MEMORY_FRACTION",
+          "values": ["0.05", "0.10", "0.15"]
+        }
+      ]
+    }
+  }
+}

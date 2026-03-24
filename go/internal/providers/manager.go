@@ -151,6 +151,7 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	if req.GPUCount == 0 {
 		req.GPUCount = 1
 	}
+	req.Engine = req.Engine.OrDefault()
 	if req.GatewayAddress == "" {
 		req.GatewayAddress = m.gatewayAddress
 	}
@@ -184,6 +185,9 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	}
 	if instance.WorkspaceID == "" {
 		instance.WorkspaceID = req.WorkspaceID
+	}
+	if instance.Engine == "" {
+		instance.Engine = req.Engine
 	}
 
 	// Track instance
@@ -356,6 +360,9 @@ func (m *Manager) findReusableStoppedInstance(providerType ProviderType, req *Pr
 			continue
 		}
 		if inst.GPUType != req.GPUType || inst.GPUCount != req.GPUCount {
+			continue
+		}
+		if inst.Engine.OrDefault() != req.Engine.OrDefault() {
 			continue
 		}
 		if !sameModels(inst.Models, req.Models) {

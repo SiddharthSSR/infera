@@ -82,6 +82,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--api-key", required=True, help="Gateway bearer token")
     parser.add_argument("--provider", default="runpod", help="Provider type (default: %(default)s)")
+    parser.add_argument("--engine", default="vllm", help="Inference engine to provision (default: %(default)s)")
     parser.add_argument("--gpu-type", required=True, help="Infera GPU type, e.g. A100_80GB")
     parser.add_argument("--provider-gpu-type-id", default="", help="Exact provider GPU type identifier")
     parser.add_argument("--gpu-count", type=int, default=1, help="GPU count (default: %(default)s)")
@@ -272,6 +273,7 @@ def build_provision_payload(args: argparse.Namespace) -> dict[str, Any]:
     payload = {
         "name": args.instance_name,
         "provider": args.provider,
+        "engine": args.engine,
         "gpu_type": args.gpu_type,
         "gpu_count": args.gpu_count,
         "models": [args.model],
@@ -850,6 +852,7 @@ def build_report(args: argparse.Namespace, scenarios: list[ScenarioResult]) -> d
     return {
         "base_url": args.base_url,
         "provider": args.provider,
+        "engine": args.engine,
         "gpu_type": args.gpu_type,
         "provider_gpu_type_id": args.provider_gpu_type_id,
         "gpu_count": args.gpu_count,

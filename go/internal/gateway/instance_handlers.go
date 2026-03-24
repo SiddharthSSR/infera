@@ -153,6 +153,7 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		Name              string   `json:"name"`
 		Provider          string   `json:"provider"`
+		Engine            string   `json:"engine"`
 		GPUType           string   `json:"gpu_type"`
 		ProviderGPUTypeID string   `json:"provider_gpu_type_id"`
 		GPUCount          int      `json:"gpu_count"`
@@ -174,6 +175,11 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid_request", "gpu_type is required")
 		return
 	}
+	engine := providers.NormalizeInferenceEngine(req.Engine)
+	if !engine.Valid() {
+		writeError(w, http.StatusBadRequest, "invalid_request", "engine must be one of: vllm, sglang, tensorrt_llm, mock")
+		return
+	}
 
 	// Get gateway address from request, env, or default
 	gatewayAddress := req.GatewayAddress
@@ -192,6 +198,7 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		SpotInstance:      req.SpotInstance,
 		MaxCostHour:       req.MaxCostHour,
 		Models:            req.Models,
+		Engine:            engine,
 		GatewayAddress:    gatewayAddress,
 	}
 
@@ -436,7 +443,7 @@ func instanceToMap(inst *providers.Instance) map[string]interface{} {
 		"gpu_count": inst.GPUCount, "vcpu": inst.VCPU, "memory_gb": inst.MemoryGB,
 		"storage_gb": inst.StorageGB, "public_ip": inst.PublicIP,
 		"http_port": inst.HTTPPort, "ssh_port": inst.SSHPort,
-		"worker_id": inst.WorkerID, "models": inst.Models,
+		"worker_id": inst.WorkerID, "models": inst.Models, "engine": inst.Engine,
 		"cost_per_hour": inst.CostPerHour, "spot_instance": inst.SpotInstance,
 		"created_at": inst.CreatedAt, "error": inst.ErrorMessage,
 	}

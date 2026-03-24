@@ -38,6 +38,12 @@ dependencies = [
 vllm = [
     "vllm>=0.16.0",
 ]
+sglang = [
+    "sglang",
+]
+tensorrt-llm = [
+    "tensorrt_llm",
+]
 mlx = [
     "mlx>=0.8.0",
     "mlx-lm>=0.8.0",

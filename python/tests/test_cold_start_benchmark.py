@@ -39,6 +39,7 @@ def test_parse_args_defaults(monkeypatch):
     args = module.parse_args()
     assert args.base_url == "https://inferai.co.in"
     assert args.provider == "runpod"
+    assert args.engine == "vllm"
     assert args.health_url_template == "https://{provider_id}-8081.proxy.runpod.net/health"
     assert args.gpu_count == 1
 
@@ -163,6 +164,7 @@ def test_build_report_serializes_probe():
             {
                 "base_url": "https://inferai.co.in",
                 "provider": "runpod",
+                "engine": "vllm",
                 "gpu_type": "A100_80GB",
                 "provider_gpu_type_id": "NVIDIA A100 80GB PCIe",
                 "gpu_count": 1,

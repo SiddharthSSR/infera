@@ -108,6 +108,21 @@ def parse_args() -> argparse.Namespace:
         help="Model ID to benchmark",
     )
     parser.add_argument(
+        "--engine-label",
+        default="",
+        help="Optional engine label to include in benchmark output metadata",
+    )
+    parser.add_argument(
+        "--provider-label",
+        default="",
+        help="Optional provider label to include in benchmark output metadata",
+    )
+    parser.add_argument(
+        "--gpu-label",
+        default="",
+        help="Optional GPU label to include in benchmark output metadata",
+    )
+    parser.add_argument(
         "--preset",
         choices=["short", "medium", "long", "conversation", "all"],
         default="all",
@@ -555,6 +570,9 @@ def run_benchmark_group(
 def build_output_payload(
     base_url: str,
     model: str,
+    engine_label: str,
+    provider_label: str,
+    gpu_label: str,
     runs: int,
     concurrency: int,
     warmup: int,
@@ -565,6 +583,9 @@ def build_output_payload(
     return {
         "base_url": base_url,
         "model": model,
+        "engine": engine_label or None,
+        "provider": provider_label or None,
+        "gpu_type": gpu_label or None,
         "runs": runs,
         "concurrency": concurrency,
         "warmup": warmup,
@@ -679,6 +700,9 @@ def main() -> int:
             build_output_payload(
                 args.base_url,
                 args.model,
+                args.engine_label,
+                args.provider_label,
+                args.gpu_label,
                 args.runs,
                 args.concurrency,
                 args.warmup,

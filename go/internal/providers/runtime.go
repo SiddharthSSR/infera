@@ -19,6 +19,24 @@ const (
 	OptionVLLMNumSpecTokens        = "INFERA_VLLM_NUM_SPECULATIVE_TOKENS"
 	OptionVLLMNgramLookup          = "INFERA_VLLM_NGRAM_PROMPT_LOOKUP_NUM_TOKENS"
 
+	OptionSGLangTPSize             = "INFERA_SGLANG_TP_SIZE"
+	OptionSGLangMemFractionStatic  = "INFERA_SGLANG_MEM_FRACTION_STATIC"
+	OptionSGLangContextLength      = "INFERA_SGLANG_CONTEXT_LENGTH"
+	OptionSGLangChunkedPrefillSize = "INFERA_SGLANG_CHUNKED_PREFILL_SIZE"
+	OptionSGLangMaxRunningRequests = "INFERA_SGLANG_MAX_RUNNING_REQUESTS"
+	OptionSGLangSchedulePolicy     = "INFERA_SGLANG_SCHEDULE_POLICY"
+	OptionSGLangAttentionBackend   = "INFERA_SGLANG_ATTENTION_BACKEND"
+	OptionSGLangSamplingBackend    = "INFERA_SGLANG_SAMPLING_BACKEND"
+	OptionSGLangDisableCudaGraph   = "INFERA_SGLANG_DISABLE_CUDA_GRAPH"
+
+	OptionTensorRTLLMTensorParallelSize             = "INFERA_TENSORRT_LLM_TENSOR_PARALLEL_SIZE"
+	OptionTensorRTLLMMaxBatchSize                   = "INFERA_TENSORRT_LLM_MAX_BATCH_SIZE"
+	OptionTensorRTLLMMaxNumTokens                   = "INFERA_TENSORRT_LLM_MAX_NUM_TOKENS"
+	OptionTensorRTLLMMaxBeamWidth                   = "INFERA_TENSORRT_LLM_MAX_BEAM_WIDTH"
+	OptionTensorRTLLMKVCacheFreeGPUMemoryFraction   = "INFERA_TENSORRT_LLM_KV_CACHE_FREE_GPU_MEMORY_FRACTION"
+	OptionTensorRTLLMEnableChunkedContext           = "INFERA_TENSORRT_LLM_ENABLE_CHUNKED_CONTEXT"
+	OptionTensorRTLLMBackend                        = "INFERA_TENSORRT_LLM_BACKEND"
+
 	// largeGPUVRAMThresholdGB is the minimum VRAM (GB) required to enable a
 	// real draft model. GPUs below this threshold get no speculative decoding.
 	largeGPUVRAMThresholdGB = 40
@@ -48,6 +66,21 @@ type specDecodingConfig struct {
 // ApplyRuntimeDefaults injects conservative runtime defaults.
 // Explicit caller-provided overrides always win.
 func ApplyRuntimeDefaults(req *ProvisionRequest) {
+	if req == nil {
+		return
+	}
+	req.Engine = req.Engine.OrDefault()
+	switch req.Engine {
+	case EngineSGLang:
+		applySGLangRuntimeDefaults(req)
+	case EngineTensorRTLLM:
+		applyTensorRTLLMRuntimeDefaults(req)
+	default:
+		applyVLLMRuntimeDefaults(req)
+	}
+}
+
+func applyVLLMRuntimeDefaults(req *ProvisionRequest) {
 	if req == nil {
 		return
 	}
@@ -95,6 +128,72 @@ func ApplyRuntimeDefaults(req *ProvisionRequest) {
 	}
 
 	applySpecDecodingDefaults(req, entry.SpecDecoding)
+}
+
+func applySGLangRuntimeDefaults(req *ProvisionRequest) {
+	if req == nil {
+		return
+	}
+	entry := modelRuntimePresetEntryForRequest(req)
+	preset, found := runtimePresetForRequest(req)
+	if !found {
+		return
+	}
+	if req.Options == nil {
+		req.Options = map[string]string{}
+	}
+	if strings.TrimSpace(req.Options[OptionSGLangContextLength]) == "" && preset.MaxModelLen > 0 {
+		req.Options[OptionSGLangContextLength] = fmt.Sprintf("%d", preset.MaxModelLen)
+	}
+	if strings.TrimSpace(req.Options[OptionSGLangTPSize]) == "" {
+		if preset.TensorParallelSize > 0 {
+			req.Options[OptionSGLangTPSize] = fmt.Sprintf("%d", preset.TensorParallelSize)
+		} else if tpSize := defaultTensorParallelSize(req); tpSize > 1 {
+			req.Options[OptionSGLangTPSize] = fmt.Sprintf("%d", tpSize)
+		}
+	}
+	if strings.TrimSpace(req.Options[OptionSGLangMemFractionStatic]) == "" && preset.GPUMemoryUtilization != "" {
+		req.Options[OptionSGLangMemFractionStatic] = preset.GPUMemoryUtilization
+	}
+	if strings.TrimSpace(req.Options[OptionSGLangChunkedPrefillSize]) == "" && preset.MaxNumBatchedTokens > 0 {
+		req.Options[OptionSGLangChunkedPrefillSize] = fmt.Sprintf("%d", preset.MaxNumBatchedTokens)
+	}
+	if strings.TrimSpace(req.Options[OptionSGLangMaxRunningRequests]) == "" && preset.MaxNumSeqs > 0 {
+		req.Options[OptionSGLangMaxRunningRequests] = fmt.Sprintf("%d", preset.MaxNumSeqs)
+	}
+	if entry.Base.EnableChunkedPrefill != nil && strings.TrimSpace(req.Options[OptionSGLangDisableCudaGraph]) == "" && preset.EnforceEager != nil {
+		req.Options[OptionSGLangDisableCudaGraph] = fmt.Sprintf("%t", *preset.EnforceEager)
+	}
+}
+
+func applyTensorRTLLMRuntimeDefaults(req *ProvisionRequest) {
+	if req == nil {
+		return
+	}
+	entry := modelRuntimePresetEntryForRequest(req)
+	preset, found := runtimePresetForRequest(req)
+	if !found {
+		return
+	}
+	if req.Options == nil {
+		req.Options = map[string]string{}
+	}
+	if strings.TrimSpace(req.Options[OptionTensorRTLLMTensorParallelSize]) == "" {
+		if preset.TensorParallelSize > 0 {
+			req.Options[OptionTensorRTLLMTensorParallelSize] = fmt.Sprintf("%d", preset.TensorParallelSize)
+		} else if tpSize := defaultTensorParallelSize(req); tpSize > 1 {
+			req.Options[OptionTensorRTLLMTensorParallelSize] = fmt.Sprintf("%d", tpSize)
+		}
+	}
+	if strings.TrimSpace(req.Options[OptionTensorRTLLMMaxNumTokens]) == "" && preset.MaxNumBatchedTokens > 0 {
+		req.Options[OptionTensorRTLLMMaxNumTokens] = fmt.Sprintf("%d", preset.MaxNumBatchedTokens)
+	}
+	if strings.TrimSpace(req.Options[OptionTensorRTLLMMaxBatchSize]) == "" && preset.MaxNumSeqs > 0 {
+		req.Options[OptionTensorRTLLMMaxBatchSize] = fmt.Sprintf("%d", preset.MaxNumSeqs)
+	}
+	if strings.TrimSpace(req.Options[OptionTensorRTLLMEnableChunkedContext]) == "" && entry.Base.EnableChunkedPrefill != nil {
+		req.Options[OptionTensorRTLLMEnableChunkedContext] = fmt.Sprintf("%t", *entry.Base.EnableChunkedPrefill)
+	}
 }
 
 func modelRuntimePresetEntryForRequest(req *ProvisionRequest) modelRuntimePresetEntry {
@@ -191,20 +290,7 @@ func WorkerRuntimeEnv(req *ProvisionRequest) map[string]string {
 	}
 
 	env := make(map[string]string)
-	for _, key := range []string{
-		OptionVLLMTensorParallelSize,
-		OptionVLLMMaxModelLen,
-		OptionVLLMGPUMemoryUtilization,
-		OptionVLLMEnableChunkedPrefill,
-		OptionVLLMMaxNumBatchedTokens,
-		OptionVLLMMaxNumSeqs,
-		OptionVLLMSwapSpace,
-		OptionVLLMEnforceEager,
-		OptionVLLMNumSchedulerSteps,
-		OptionVLLMSpeculativeModel,
-		OptionVLLMNumSpecTokens,
-		OptionVLLMNgramLookup,
-	} {
+	for _, key := range workerRuntimeOptionKeys(req.Engine.OrDefault()) {
 		if value := strings.TrimSpace(req.Options[key]); value != "" {
 			env[key] = value
 		}
@@ -214,6 +300,48 @@ func WorkerRuntimeEnv(req *ProvisionRequest) map[string]string {
 		return nil
 	}
 	return env
+}
+
+func workerRuntimeOptionKeys(engine InferenceEngine) []string {
+	switch engine.OrDefault() {
+	case EngineSGLang:
+		return []string{
+			OptionSGLangTPSize,
+			OptionSGLangMemFractionStatic,
+			OptionSGLangContextLength,
+			OptionSGLangChunkedPrefillSize,
+			OptionSGLangMaxRunningRequests,
+			OptionSGLangSchedulePolicy,
+			OptionSGLangAttentionBackend,
+			OptionSGLangSamplingBackend,
+			OptionSGLangDisableCudaGraph,
+		}
+	case EngineTensorRTLLM:
+		return []string{
+			OptionTensorRTLLMTensorParallelSize,
+			OptionTensorRTLLMMaxBatchSize,
+			OptionTensorRTLLMMaxNumTokens,
+			OptionTensorRTLLMMaxBeamWidth,
+			OptionTensorRTLLMKVCacheFreeGPUMemoryFraction,
+			OptionTensorRTLLMEnableChunkedContext,
+			OptionTensorRTLLMBackend,
+		}
+	default:
+		return []string{
+			OptionVLLMTensorParallelSize,
+			OptionVLLMMaxModelLen,
+			OptionVLLMGPUMemoryUtilization,
+			OptionVLLMEnableChunkedPrefill,
+			OptionVLLMMaxNumBatchedTokens,
+			OptionVLLMMaxNumSeqs,
+			OptionVLLMSwapSpace,
+			OptionVLLMEnforceEager,
+			OptionVLLMNumSchedulerSteps,
+			OptionVLLMSpeculativeModel,
+			OptionVLLMNumSpecTokens,
+			OptionVLLMNgramLookup,
+		}
+	}
 }
 
 // ValidateWorkerImageRef requires a pinned worker image tag or digest for non-dev deploys.

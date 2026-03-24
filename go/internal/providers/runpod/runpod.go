@@ -115,7 +115,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 
 	// Build environment variables
 	env := []map[string]string{
-		{"key": "INFERA_ENGINE", "value": "vllm"},
+		{"key": "INFERA_ENGINE", "value": string(req.Engine.OrDefault())},
 		{"key": "INFERA_HTTP_PORT", "value": "8081"},
 		{"key": "INFERA_LOG_LEVEL", "value": "INFO"},
 		{"key": "XDG_CACHE_HOME", "value": workspaceMountPath + "/.cache"},

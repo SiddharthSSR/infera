@@ -158,6 +158,7 @@ func TestHandleProvision(t *testing.T) {
 		body := map[string]interface{}{
 			"name":      "test-worker",
 			"provider":  "mock",
+			"engine":    "sglang",
 			"gpu_type":  "RTX_4090",
 			"gpu_count": 1,
 		}
@@ -181,6 +182,30 @@ func TestHandleProvision(t *testing.T) {
 		}
 		if resp["instance"] == nil {
 			t.Error("expected instance in response")
+		}
+		instance := resp["instance"].(map[string]interface{})
+		if instance["engine"] != string(providers.EngineSGLang) {
+			t.Fatalf("expected engine sglang, got %v", instance["engine"])
+		}
+	})
+
+	t.Run("Invalid engine", func(t *testing.T) {
+		body := map[string]interface{}{
+			"name":     "test-worker",
+			"provider": "mock",
+			"engine":   "unsupported",
+			"gpu_type": "RTX_4090",
+		}
+		bodyBytes, _ := json.Marshal(body)
+
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		h.handleProvision(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
 		}
 	})
 
@@ -787,6 +812,7 @@ func TestInstanceToMap(t *testing.T) {
 		SSHPort:      22,
 		WorkerID:     "worker-123",
 		Models:       []string{"llama-3-8b"},
+		Engine:       providers.EngineTensorRTLLM,
 		CostPerHour:  0.80,
 		SpotInstance: true,
 		CreatedAt:    now,
@@ -813,6 +839,7 @@ func TestInstanceToMap(t *testing.T) {
 		{"http_port", 8080},
 		{"ssh_port", 22},
 		{"worker_id", "worker-123"},
+		{"engine", providers.EngineTensorRTLLM},
 		{"cost_per_hour", 0.80},
 		{"spot_instance", true},
 	}

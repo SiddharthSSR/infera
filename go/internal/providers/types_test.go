@@ -49,6 +49,46 @@ func TestGPUTypes(t *testing.T) {
 	}
 }
 
+func TestInferenceEngines(t *testing.T) {
+	tests := []struct {
+		name     string
+		engine   InferenceEngine
+		expected string
+	}{
+		{"vLLM", EngineVLLM, "vllm"},
+		{"SGLang", EngineSGLang, "sglang"},
+		{"TensorRTLLM", EngineTensorRTLLM, "tensorrt_llm"},
+		{"Mock", EngineMock, "mock"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if string(tt.engine) != tt.expected {
+				t.Errorf("expected %s, got %s", tt.expected, tt.engine)
+			}
+		})
+	}
+}
+
+func TestNormalizeInferenceEngine(t *testing.T) {
+	cases := []struct {
+		input string
+		want  InferenceEngine
+	}{
+		{input: "", want: EngineVLLM},
+		{input: "vllm", want: EngineVLLM},
+		{input: "sglang", want: EngineSGLang},
+		{input: "tensorrt-llm", want: EngineTensorRTLLM},
+		{input: "TRTLLM", want: EngineTensorRTLLM},
+	}
+
+	for _, tc := range cases {
+		if got := NormalizeInferenceEngine(tc.input); got != tc.want {
+			t.Fatalf("expected %q to normalize to %q, got %q", tc.input, tc.want, got)
+		}
+	}
+}
+
 func TestInstanceStatus(t *testing.T) {
 	tests := []struct {
 		name     string
