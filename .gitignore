@@ -11,6 +11,8 @@ bin/
 *.so
 *.dylib
 *.test
+/go/gateway
+/go/*.test
 go.work
 go/vendor/
 
