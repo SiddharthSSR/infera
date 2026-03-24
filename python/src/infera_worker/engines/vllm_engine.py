@@ -3,7 +3,12 @@
 from collections.abc import AsyncGenerator
 from datetime import datetime
 import asyncio
-from typing import Any
+import inspect
+import os
+from pathlib import Path
+from typing import Any, Callable
+
+import structlog
 
 from ..types import (
     InferenceRequest,
@@ -33,6 +38,10 @@ except ImportError:
     RequestOutput = None
 
 
+_TOKENIZER_UNINITIALIZED = object()
+logger = structlog.get_logger()
+
+
 class VLLMEngine(InferenceEngine):
     """vLLM-based inference engine for maximum throughput."""
 
@@ -46,11 +55,55 @@ class VLLMEngine(InferenceEngine):
         self.engines: dict[str, AsyncLLMEngine] = {}
         self.loaded_models: dict[str, LoadedModel] = {}
         self.tokenizers: dict[str, Any] = {}  # Store tokenizers for chat templates
+        self.model_paths: dict[str, str] = {}
         self.active_requests: set[str] = set()
+        self._startup_stage_recorder: Callable[[str], None] | None = None
+        self._startup_metadata_recorder: Callable[[str, dict[str, Any]], None] | None = None
+
+    def set_startup_stage_recorder(
+        self,
+        recorder: Callable[[str], None] | None,
+    ) -> None:
+        """Install an optional callback for detailed startup-stage reporting."""
+        self._startup_stage_recorder = recorder
+
+    def set_startup_metadata_recorder(
+        self,
+        recorder: Callable[[str, dict[str, Any]], None] | None,
+    ) -> None:
+        """Install an optional callback for startup metadata reporting."""
+        self._startup_metadata_recorder = recorder
+
+    def _record_stage(self, stage: str) -> None:
+        """Record a startup substage if a recorder is installed."""
+        if self._startup_stage_recorder is not None:
+            self._startup_stage_recorder(stage)
+
+    def _record_metadata(self, key: str, payload: dict[str, Any]) -> None:
+        """Record startup metadata if a recorder is installed."""
+        if self._startup_metadata_recorder is not None:
+            self._startup_metadata_recorder(key, payload)
+
+    async def warm_model_runtime(self, model_id: str) -> None:
+        """Warm deferred tokenizer/chat-template state after readiness."""
+        self._record_stage("tokenizer_warmup_started")
+        await asyncio.to_thread(self._get_tokenizer, model_id)
+        self._record_stage("tokenizer_warmup_finished")
 
     async def load_model(self, model_config: ModelConfig) -> LoadedModel:
         """Load a model using vLLM."""
         model_path = model_config.model_path or model_config.model_id
+        cache_probe = self._collect_model_cache_probe(model_config.model_id, model_path)
+        self._record_metadata("model_loads", {model_config.model_id: cache_probe})
+        logger.info(
+            "Model load cache probe",
+            model_id=model_config.model_id,
+            model_path=model_path,
+            model_source=cache_probe["model_source"],
+            local_model_path_exists=cache_probe["local_model_path_exists"],
+            inferred_hf_repo_cache_exists=cache_probe["inferred_hf_repo_cache_exists"],
+            inferred_hf_snapshot_count=cache_probe["inferred_hf_snapshot_count"],
+        )
 
         engine_kwargs: dict = dict(
             model=model_path,
@@ -64,36 +117,52 @@ class VLLMEngine(InferenceEngine):
             enable_chunked_prefill=self.config.vllm_enable_chunked_prefill,
         )
 
+        optional_engine_kwargs: dict[str, Any] = {}
         if self.config.vllm_max_num_batched_tokens is not None:
-            engine_kwargs["max_num_batched_tokens"] = self.config.vllm_max_num_batched_tokens
+            optional_engine_kwargs["max_num_batched_tokens"] = self.config.vllm_max_num_batched_tokens
+
+        if self.config.vllm_max_num_seqs is not None:
+            optional_engine_kwargs["max_num_seqs"] = self.config.vllm_max_num_seqs
+
+        if self.config.vllm_swap_space is not None:
+            optional_engine_kwargs["swap_space"] = self.config.vllm_swap_space
+
+        if self.config.vllm_enforce_eager:
+            optional_engine_kwargs["enforce_eager"] = True
 
         if self.config.vllm_num_scheduler_steps > 0:
-            engine_kwargs["num_scheduler_steps"] = self.config.vllm_num_scheduler_steps
+            optional_engine_kwargs["num_scheduler_steps"] = self.config.vllm_num_scheduler_steps
 
         spec_model = self.config.vllm_speculative_model.strip()
         num_spec_tokens = self.config.vllm_num_speculative_tokens
         if spec_model and num_spec_tokens > 0:
-            engine_kwargs["speculative_model"] = spec_model
-            engine_kwargs["num_speculative_tokens"] = num_spec_tokens
+            optional_engine_kwargs["speculative_model"] = spec_model
+            optional_engine_kwargs["num_speculative_tokens"] = num_spec_tokens
             if spec_model == "[ngram]" and self.config.vllm_ngram_prompt_lookup_num_tokens > 0:
-                engine_kwargs["ngram_prompt_lookup_num_tokens"] = self.config.vllm_ngram_prompt_lookup_num_tokens
+                optional_engine_kwargs["ngram_prompt_lookup_num_tokens"] = (
+                    self.config.vllm_ngram_prompt_lookup_num_tokens
+                )
+
+        supported_kwargs = set(inspect.signature(AsyncEngineArgs).parameters)
+        for key, value in optional_engine_kwargs.items():
+            if key in supported_kwargs:
+                engine_kwargs[key] = value
 
         engine_args = AsyncEngineArgs(**engine_kwargs)
 
+        self._record_stage("vllm_engine_init_started")
         engine = AsyncLLMEngine.from_engine_args(engine_args)
+        self._record_stage("vllm_engine_init_finished")
         self.engines[model_config.model_id] = engine
+        self.model_paths[model_config.model_id] = model_path
 
         # Get model config for metadata
         # vLLM V1: model_config is a property, not an async method
         model_cfg = engine.model_config
 
-        # Store tokenizer for chat template
-        try:
-            from transformers import AutoTokenizer
-            tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-            self.tokenizers[model_config.model_id] = tokenizer
-        except Exception:
-            self.tokenizers[model_config.model_id] = None
+        # Defer tokenizer creation until the first request that needs chat templating.
+        self.tokenizers[model_config.model_id] = _TOKENIZER_UNINITIALIZED
+        self._record_stage("tokenizer_load_deferred")
 
         loaded = LoadedModel(
             model_id=model_config.model_id,
@@ -112,6 +181,8 @@ class VLLMEngine(InferenceEngine):
             # vLLM doesn't have explicit unload, we just remove reference
             del self.engines[model_id]
             del self.loaded_models[model_id]
+            self.tokenizers.pop(model_id, None)
+            self.model_paths.pop(model_id, None)
             return True
         return False
 
@@ -296,7 +367,7 @@ class VLLMEngine(InferenceEngine):
         ]
         
         # Try to use tokenizer's chat template
-        tokenizer = self.tokenizers.get(request.model_id)
+        tokenizer = self._get_tokenizer(request.model_id)
         if tokenizer is not None and hasattr(tokenizer, 'apply_chat_template'):
             try:
                 prompt = tokenizer.apply_chat_template(
@@ -342,6 +413,108 @@ class VLLMEngine(InferenceEngine):
             i += 1
         
         return "".join(parts)
+
+    def _get_tokenizer(self, model_id: str) -> Any:
+        """Load a tokenizer lazily so startup is not blocked on chat-template setup."""
+        tokenizer = self.tokenizers.get(model_id)
+        if tokenizer is not _TOKENIZER_UNINITIALIZED:
+            return tokenizer
+
+        model_path = self.model_paths.get(model_id)
+        if not model_path:
+            self.tokenizers[model_id] = None
+            return None
+
+        self._record_stage("tokenizer_load_started")
+        try:
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        except Exception:
+            tokenizer = None
+        self.tokenizers[model_id] = tokenizer
+        self._record_stage("tokenizer_load_finished")
+        return tokenizer
+
+    def _collect_model_cache_probe(self, model_id: str, model_path: str) -> dict[str, Any]:
+        """Collect lightweight cache/path diagnostics for startup analysis."""
+        resolved_model_path = Path(model_path).expanduser()
+        local_model_path_exists = resolved_model_path.exists()
+        local_model_path_is_dir = resolved_model_path.is_dir()
+        local_model_config_exists = (resolved_model_path / "config.json").exists() if local_model_path_is_dir else False
+        local_tokenizer_config_exists = (
+            (resolved_model_path / "tokenizer_config.json").exists() if local_model_path_is_dir else False
+        )
+
+        huggingface_hub_cache = (
+            os.getenv("HUGGINGFACE_HUB_CACHE")
+            or os.getenv("TRANSFORMERS_CACHE")
+            or self._default_huggingface_hub_cache()
+        )
+        inferred_repo_cache_dir = self._infer_huggingface_repo_cache_dir(model_path, huggingface_hub_cache)
+        inferred_repo_cache_exists = inferred_repo_cache_dir.exists() if inferred_repo_cache_dir is not None else False
+        inferred_snapshot_dir = self._latest_snapshot_dir(inferred_repo_cache_dir)
+        inferred_snapshot_count = self._snapshot_count(inferred_repo_cache_dir)
+
+        return {
+            "model_id": model_id,
+            "requested_model_path": model_path,
+            "model_source": "local_path" if local_model_path_exists else "huggingface_repo",
+            "local_model_path": str(resolved_model_path),
+            "local_model_path_exists": local_model_path_exists,
+            "local_model_path_is_dir": local_model_path_is_dir,
+            "local_model_has_config_json": local_model_config_exists,
+            "local_model_has_tokenizer_config_json": local_tokenizer_config_exists,
+            "cache_dirs": {
+                "hf_home": os.getenv("HF_HOME", ""),
+                "huggingface_hub": huggingface_hub_cache or "",
+                "transformers": os.getenv("TRANSFORMERS_CACHE", ""),
+                "torch": os.getenv("TORCH_HOME", ""),
+            },
+            "inferred_hf_repo_cache_dir": str(inferred_repo_cache_dir) if inferred_repo_cache_dir is not None else None,
+            "inferred_hf_repo_cache_exists": inferred_repo_cache_exists,
+            "inferred_hf_snapshot_count": inferred_snapshot_count,
+            "inferred_latest_snapshot_dir": str(inferred_snapshot_dir) if inferred_snapshot_dir is not None else None,
+            "inferred_latest_snapshot_has_config_json": (
+                (inferred_snapshot_dir / "config.json").exists() if inferred_snapshot_dir is not None else False
+            ),
+            "inferred_latest_snapshot_has_tokenizer_config_json": (
+                (inferred_snapshot_dir / "tokenizer_config.json").exists()
+                if inferred_snapshot_dir is not None
+                else False
+            ),
+        }
+
+    def _default_huggingface_hub_cache(self) -> str:
+        hf_home = os.getenv("HF_HOME", "")
+        if not hf_home:
+            return ""
+        return str(Path(hf_home).expanduser() / "hub")
+
+    def _infer_huggingface_repo_cache_dir(self, model_path: str, hub_cache: str) -> Path | None:
+        if not hub_cache or "/" not in model_path:
+            return None
+        normalized_repo = model_path.replace("/", "--")
+        return Path(hub_cache).expanduser() / f"models--{normalized_repo}"
+
+    def _latest_snapshot_dir(self, repo_cache_dir: Path | None) -> Path | None:
+        if repo_cache_dir is None:
+            return None
+        snapshots_dir = repo_cache_dir / "snapshots"
+        if not snapshots_dir.exists() or not snapshots_dir.is_dir():
+            return None
+        snapshot_dirs = sorted((path for path in snapshots_dir.iterdir() if path.is_dir()), key=lambda path: path.name)
+        if not snapshot_dirs:
+            return None
+        return snapshot_dirs[-1]
+
+    def _snapshot_count(self, repo_cache_dir: Path | None) -> int:
+        if repo_cache_dir is None:
+            return 0
+        snapshots_dir = repo_cache_dir / "snapshots"
+        if not snapshots_dir.exists() or not snapshots_dir.is_dir():
+            return 0
+        return sum(1 for path in snapshots_dir.iterdir() if path.is_dir())
 
     def _map_finish_reason(self, reason: str | None) -> FinishReason:
         """Map vLLM finish reason to our enum."""

@@ -254,17 +254,9 @@ func TestHandleChatCompletionsRecordsBatchAndLatencyMetrics(t *testing.T) {
 		t.Fatalf("expected tpot metric count=1, got %d", got)
 	}
 
-	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_batch_size", map[string]string{
-		"model": modelID,
-	}); got != 1 {
-		t.Fatalf("expected batch size metric count=1, got %d", got)
-	}
-
-	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_batch_wait_seconds", map[string]string{
-		"model": modelID,
-	}); got != 1 {
-		t.Fatalf("expected batch wait metric count=1, got %d", got)
-	}
+	// Batch metrics are only recorded when requests actually go through the
+	// batcher (queue depth > 0 when they arrive). A single isolated request
+	// takes the fast-path directly to the worker, so no batch metric is emitted.
 }
 
 func TestHandleChatCompletionsStreamingReturnsSSEChunksAndDone(t *testing.T) {

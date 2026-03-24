@@ -26,6 +26,7 @@ from .types import (
     Message,
     Priority,
     Role,
+    WorkerState,
 )
 from .worker import Worker
 
@@ -59,6 +60,7 @@ class HTTPServer:
         self.config = config
         self.app = web.Application()
         self.runner: web.AppRunner | None = None
+        self._gateway_client: httpx.AsyncClient | None = None
         self._registration_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
         self._consecutive_auth_failures = 0
@@ -191,6 +193,12 @@ class HTTPServer:
         self._memory_used_gauge.set(stats.memory_used_bytes)
         self._memory_total_gauge.set(stats.memory_total_bytes)
 
+    def _ensure_gateway_client(self) -> httpx.AsyncClient:
+        """Return a reusable client for gateway control-plane calls."""
+        if self._gateway_client is None or self._gateway_client.is_closed:
+            self._gateway_client = httpx.AsyncClient()
+        return self._gateway_client
+
     async def start(self) -> None:
         """Start the HTTP server."""
         self.runner = web.AppRunner(self.app)
@@ -198,20 +206,18 @@ class HTTPServer:
 
         site = web.TCPSite(self.runner, "0.0.0.0", self.config.http_port)
         await site.start()
+        self.worker.record_startup_stage("server_started")
 
         logger.info("HTTP server started", port=self.config.http_port)
 
-        # Register with gateway before heartbeats so auth errors fail startup.
-        if self.config.router_address:
+        if self._worker_ready_for_gateway():
             try:
-                await self._register_with_gateway()
+                await self.activate_gateway_reporting()
             except Exception:
                 if self.runner:
                     await self.runner.cleanup()
                     self.runner = None
                 raise
-            self._gateway_registered = True
-            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def stop(self) -> None:
         """Stop the HTTP server."""
@@ -229,10 +235,29 @@ class HTTPServer:
         # Deregister only if registration succeeded.
         if self._gateway_registered:
             await self._deregister_from_gateway()
+        if self._gateway_client is not None:
+            await self._gateway_client.aclose()
+            self._gateway_client = None
 
         if self.runner:
             await self.runner.cleanup()
             logger.info("HTTP server stopped")
+
+    def _worker_ready_for_gateway(self) -> bool:
+        """Return true when the worker is ready to be registered for traffic."""
+        return self.worker.get_state() in {WorkerState.READY, WorkerState.BUSY}
+
+    async def activate_gateway_reporting(self) -> None:
+        """Register a ready worker with the gateway and start heartbeats."""
+        if not self.config.router_address or self._gateway_registered:
+            return
+        if not self._worker_ready_for_gateway():
+            return
+
+        await self._register_with_gateway()
+        self._gateway_registered = True
+        self.worker.record_startup_stage("gateway_registered")
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def _register_with_gateway(self) -> None:
         """Register this worker with the gateway."""
@@ -265,51 +290,51 @@ class HTTPServer:
 
         for attempt in range(max_retries):
             try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        gateway_url,
-                        json=registration_data,
-                        headers=self.config.gateway_headers(),
-                        timeout=10.0,
-                    )
+                client = self._ensure_gateway_client()
+                response = await client.post(
+                    gateway_url,
+                    json=registration_data,
+                    headers=self.config.gateway_headers(),
+                    timeout=10.0,
+                )
 
-                    if response.status_code == 200:
-                        self._record_gateway_registration("success")
-                        logger.info(
-                            "Registered with gateway",
-                            gateway=self.config.router_address,
-                            worker_id=self.worker.worker_id,
-                        )
-                        return
-                    elif response.status_code in (401, 403):
-                        self._record_gateway_registration("auth_rejected")
-                        logger.error(
-                            "Gateway registration rejected by auth",
-                            status=response.status_code,
-                            response=response.text,
-                            gateway=self.config.router_address,
-                            gateway_url=gateway_url,
-                            worker_id=self.worker.worker_id,
-                        )
-                        raise RuntimeError("Gateway auth rejected worker registration")
-                    elif 400 <= response.status_code < 500:
-                        self._record_gateway_registration("client_error")
-                        logger.error(
-                            "Gateway registration failed with non-retriable client error",
-                            status=response.status_code,
-                            response=response.text,
-                            gateway=self.config.router_address,
-                            gateway_url=gateway_url,
-                            worker_id=self.worker.worker_id,
-                        )
-                        raise RuntimeError("Gateway registration failed with non-retriable client error")
-                    else:
-                        self._record_gateway_registration("http_error")
-                        logger.warning(
-                            "Gateway registration failed",
-                            status=response.status_code,
-                            response=response.text,
-                        )
+                if response.status_code == 200:
+                    self._record_gateway_registration("success")
+                    logger.info(
+                        "Registered with gateway",
+                        gateway=self.config.router_address,
+                        worker_id=self.worker.worker_id,
+                    )
+                    return
+                elif response.status_code in (401, 403):
+                    self._record_gateway_registration("auth_rejected")
+                    logger.error(
+                        "Gateway registration rejected by auth",
+                        status=response.status_code,
+                        response=response.text,
+                        gateway=self.config.router_address,
+                        gateway_url=gateway_url,
+                        worker_id=self.worker.worker_id,
+                    )
+                    raise RuntimeError("Gateway auth rejected worker registration")
+                elif 400 <= response.status_code < 500:
+                    self._record_gateway_registration("client_error")
+                    logger.error(
+                        "Gateway registration failed with non-retriable client error",
+                        status=response.status_code,
+                        response=response.text,
+                        gateway=self.config.router_address,
+                        gateway_url=gateway_url,
+                        worker_id=self.worker.worker_id,
+                    )
+                    raise RuntimeError("Gateway registration failed with non-retriable client error")
+                else:
+                    self._record_gateway_registration("http_error")
+                    logger.warning(
+                        "Gateway registration failed",
+                        status=response.status_code,
+                        response=response.text,
+                    )
 
             except RuntimeError:
                 raise
@@ -337,22 +362,22 @@ class HTTPServer:
         )
 
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.delete(
-                    gateway_url,
-                    headers=self.config.gateway_headers(),
-                    timeout=5.0,
+            client = self._ensure_gateway_client()
+            resp = await client.delete(
+                gateway_url,
+                headers=self.config.gateway_headers(),
+                timeout=5.0,
+            )
+            if resp.is_error:
+                logger.error(
+                    "Failed to deregister from gateway",
+                    status=resp.status_code,
+                    response=resp.text,
                 )
-                if resp.is_error:
-                    logger.error(
-                        "Failed to deregister from gateway",
-                        status=resp.status_code,
-                        response=resp.text,
-                    )
-                    self._gateway_registered = False
-                    return
-                logger.info("Deregistered from gateway")
                 self._gateway_registered = False
+                return
+            logger.info("Deregistered from gateway")
+            self._gateway_registered = False
         except Exception as e:
             self._gateway_registered = False
             logger.warning("Failed to deregister from gateway", error=str(e))
@@ -391,54 +416,54 @@ class HTTPServer:
                     ],
                 }
 
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        gateway_url,
-                        json=heartbeat_data,
-                        headers=self.config.gateway_headers(),
-                        timeout=5.0,
+                client = self._ensure_gateway_client()
+                response = await client.post(
+                    gateway_url,
+                    json=heartbeat_data,
+                    headers=self.config.gateway_headers(),
+                    timeout=5.0,
+                )
+                if response.status_code == 200:
+                    self._record_gateway_heartbeat("success")
+                    self._consecutive_auth_failures = 0
+                    logger.debug("Heartbeat sent successfully")
+                elif response.status_code in (401, 403):
+                    self._record_gateway_heartbeat("auth_rejected")
+                    self._consecutive_auth_failures += 1
+                    logger.warning(
+                        "Heartbeat rejected by gateway auth",
+                        status=response.status_code,
+                        response=response.text,
+                        gateway_url=gateway_url,
+                        worker_id=self.worker.worker_id,
+                        consecutive_failures=self._consecutive_auth_failures,
                     )
-                    if response.status_code == 200:
-                        self._record_gateway_heartbeat("success")
-                        self._consecutive_auth_failures = 0
-                        logger.debug("Heartbeat sent successfully")
-                    elif response.status_code in (401, 403):
-                        self._record_gateway_heartbeat("auth_rejected")
-                        self._consecutive_auth_failures += 1
-                        logger.warning(
-                            "Heartbeat rejected by gateway auth",
-                            status=response.status_code,
-                            response=response.text,
-                            gateway_url=gateway_url,
+                    # Warn at halfway point so operators can act before shutdown.
+                    if self._consecutive_auth_failures == 5:
+                        logger.error(
+                            "Sustained heartbeat auth failures — worker will shut down after 10 consecutive failures",
                             worker_id=self.worker.worker_id,
-                            consecutive_failures=self._consecutive_auth_failures,
-                        )
-                        # Warn at halfway point so operators can act before shutdown.
-                        if self._consecutive_auth_failures == 5:
-                            logger.error(
-                                "Sustained heartbeat auth failures — worker will shut down after 10 consecutive failures",
-                                worker_id=self.worker.worker_id,
-                                gateway_url=gateway_url,
-                            )
-                        if self._consecutive_auth_failures >= 10:
-                            logger.error(
-                                "Stopping heartbeat loop after repeated auth failures",
-                                worker_id=self.worker.worker_id,
-                                failures=self._consecutive_auth_failures,
-                                gateway_url=gateway_url,
-                            )
-                            self.worker.request_shutdown()
-                            break
-                    else:
-                        self._record_gateway_heartbeat("http_error")
-                        self._consecutive_auth_failures = 0
-                        logger.warning(
-                            "Heartbeat failed with non-200 response",
-                            status=response.status_code,
-                            response=response.text,
                             gateway_url=gateway_url,
-                            worker_id=self.worker.worker_id,
                         )
+                    if self._consecutive_auth_failures >= 10:
+                        logger.error(
+                            "Stopping heartbeat loop after repeated auth failures",
+                            worker_id=self.worker.worker_id,
+                            failures=self._consecutive_auth_failures,
+                            gateway_url=gateway_url,
+                        )
+                        self.worker.request_shutdown()
+                        break
+                else:
+                    self._record_gateway_heartbeat("http_error")
+                    self._consecutive_auth_failures = 0
+                    logger.warning(
+                        "Heartbeat failed with non-200 response",
+                        status=response.status_code,
+                        response=response.text,
+                        gateway_url=gateway_url,
+                        worker_id=self.worker.worker_id,
+                    )
 
             except asyncio.CancelledError:
                 break
@@ -613,11 +638,18 @@ class HTTPServer:
         """Handle health check."""
         state = self.worker.get_state()
         stats = self.worker.get_stats()
+        ready = state in {WorkerState.READY, WorkerState.BUSY}
+        live = state not in {WorkerState.ERROR, WorkerState.SHUTTING_DOWN}
 
         return web.json_response({
-            "status": "healthy" if state.value == "ready" else state.value,
+            "status": "healthy" if ready else state.value,
             "worker_id": self.worker.worker_id,
             "state": state.value,
+            "live": live,
+            "ready": ready,
+            "draining": state == WorkerState.DRAINING,
+            "gateway_registered": self._gateway_registered,
+            "startup": self.worker.get_startup_status(),
             "models_loaded": len(self.worker.get_loaded_models()),
             "memory_used_bytes": stats.memory_used_bytes,
             "memory_total_bytes": stats.memory_total_bytes,

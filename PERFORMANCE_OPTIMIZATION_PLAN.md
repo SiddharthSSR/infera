@@ -1,7 +1,7 @@
 # Performance Optimization Plan
 
 > Tracking file for performance work across the Infera stack.
-> Branch: `backend/affinity-routing-and-prefix-cache` | Last updated: 2026-03-21
+> Branch: `task/performance-optimization-execution` | Last updated: 2026-03-21
 
 ---
 
@@ -12,7 +12,8 @@
 - [x] Matching stopped instances are already reused via provider `start` instead of always reprovisioning from scratch.
 - [x] Gateway worker HTTP clients already use keep-alive pooling.
 - [x] Router batching exists, but gateway-to-worker dispatch is still one request per worker call; current batching mainly adds queue/wait behavior before worker selection.
-- [x] Worker startup still blocks on model preload before the HTTP server is started, so readiness is coupled to full model load.
+- [x] Worker HTTP now starts before model preload completes, and `/health` exposes separate `live`, `ready`, and `gateway_registered` fields during startup.
+- [x] Worker `/health` now exposes startup-stage timestamps for `server_started`, `model_load_started`, `model_load_finished`, `worker_ready`, and `gateway_registered`.
 
 ## Planning Corrections
 
@@ -25,40 +26,67 @@
 
 ## 1. Inference Throughput
 
-- [ ] **T1-01: Add missing vLLM tuning knobs to worker config and provider runtime env**
+- [x] **T1-01: Add missing vLLM tuning knobs to worker config and provider runtime env**
   - **What**: Expose `max_num_seqs`, `swap_space`, `enforce_eager`, and runtime-controlled tensor parallelism in the worker and provider preset layer.
   - **Why**: High impact. The current code only exposes part of the vLLM tuning surface, which blocks per-GPU throughput tuning and makes A40/A100/L40S comparisons noisy.
   - **How**: Add new fields to `python/src/infera_worker/config.py`; pass them through `python/src/infera_worker/engines/vllm_engine.py`; add matching env options and preset plumbing in `go/internal/providers/runtime.go`; ensure RunPod and Vast.ai propagate the new env vars.
   - **Measure**: Verify env-to-engine wiring in unit tests, then benchmark `decode tok/s`, TTFT, and GPU memory usage on L40S and A100 before/after.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
-- [ ] **T1-02: Move scheduler-step and batching-token tuning into per-model / per-GPU runtime presets**
+- [x] **T1-02: Move scheduler-step and batching-token tuning into per-model / per-GPU runtime presets**
   - **What**: Tune `num_scheduler_steps`, `max_num_batched_tokens`, and `gpu_memory_utilization` through `runtime.go` presets instead of changing the global worker defaults.
   - **Why**: High impact. Global defaults are too blunt; some GPUs benefit from more aggressive decode amortization while others pay TTFT regression for little gain.
   - **How**: Keep `python/src/infera_worker/config.py` defaults conservative; extend `go/internal/providers/runtime.go` presets for hot models and GPU tiers; document before/after values in this file as changes land.
   - **Measure**: For each preset, record TTFT p50/p95, decode tok/s p50/p95, and peak memory on warm runs.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
-- [ ] **T1-03: Add `max_num_seqs` and KV-cache tuning by GPU tier**
+- [x] **T1-03: Add `max_num_seqs` and KV-cache tuning by GPU tier**
   - **What**: Tune sequence concurrency and KV-cache pressure for RunPod GPU SKUs we actually use.
   - **Why**: High impact on throughput stability. vLLM defaults can overcommit KV cache on single-GPU pods and cause throughput collapse or memory pressure.
   - **How**: Add `vllm_max_num_seqs`; define starting values by model family and GPU tier in `go/internal/providers/runtime.go`; document A40/L40S/A100 recommended ranges and when to raise or lower them.
   - **Measure**: Track tokens/sec, OOM rate, memory used/total, and latency tail under 2x, 4x, and 8x concurrency.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
+
+### Current Runtime Preset Snapshot
+
+| Model / GPU tier | `max_num_batched_tokens` before | `max_num_batched_tokens` after | `num_scheduler_steps` before | `num_scheduler_steps` after | `max_num_seqs` before | `max_num_seqs` after |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen2.5-7B on L40S | 2048 | 2048 | unset | unset | unset | 16 |
+| Qwen2.5-7B on A100 40GB | 2048 | 4096 | unset | 4 | unset | 32 |
+| Qwen2.5-7B on A100 80GB | 2048 | 8192 | unset | 6 | unset | 48 |
+| Qwen2.5-7B on H100 | 2048 | 8192 | unset | 8 | unset | 64 |
+| Qwen3-4B on L40S | 2048 | 2048 | unset | unset | unset | 16 |
+| Qwen3-4B on A100 40GB | 2048 | 4096 | unset | 4 | unset | 32 |
+| Qwen3-4B on A100 80GB | 2048 | 8192 | unset | 6 | unset | 48 |
+| Qwen3-4B on H100 | 2048 | 8192 | unset | 8 | unset | 64 |
+| Kimi-K2.5 on 8xH100 | 4096 | 4096 | 8 | 8 | unset | 16 |
+
+Range notes:
+
+- Unknown OSS models now inherit the GPU-tier fallback preset instead of receiving no runtime tuning at all.
+- Multi-GPU `A100` and `H100` requests now default `tensor_parallel_size` to the requested GPU count; single-GPU and smaller SKUs remain unchanged.
+- Treat `A40` like the `L40S` tier for initial `max_num_seqs` experiments until it is added as a first-class GPU type.
+- Raise `max_num_seqs` only when warm-run memory headroom is stable and TTFT does not regress materially at 4x concurrency.
+- Lower `max_num_seqs` first if OOMs, swap thrash, or P95/P99 latency spikes appear before decode throughput improves.
 
 - [ ] **T1-04: Benchmark quantized variants for hot models**
   - **What**: Create a benchmark matrix for FP16/BF16 versus AWQ/GPTQ/INT4/INT8 variants of the top deployed models.
   - **Why**: Medium to high impact on cost and throughput. Quantization may unlock smaller GPUs or higher concurrency, but only if TTFT and output quality remain acceptable.
-  - **How**: Add candidate quantized model IDs to docs and runtime presets where appropriate; benchmark via `scripts/benchmark-chat.py`; only promote variants that pass latency and quality smoke checks.
+  - **How**: Add candidate quantized model IDs to docs and runtime presets where appropriate; benchmark via `scripts/benchmark-chat.py`; only promote variants that pass latency and quality smoke checks. Track the candidate and result matrix in `docs/QUANTIZATION_BENCHMARK_MATRIX.md`.
   - **Measure**: Compare TTFT, decode tok/s, memory footprint, and cost/query for each quantized candidate against the base model.
-  - **Status**: `[ ]` not started
+  - **Status**: `[ ]`
+  - Progress as of `2026-03-21`:
+  - Live `L40S` warm benchmarks are now recorded in [`docs/QUANTIZATION_BENCHMARK_MATRIX.md`](/Users/siddharthsingh/codingtensor/infera/docs/QUANTIZATION_BENCHMARK_MATRIX.md).
+  - `solidrust/Mistral-7B-Instruct-v0.3-AWQ` and `Qwen/Qwen2.5-7B-Instruct-AWQ` are provisional winners on throughput and cost/query.
+  - `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` is not a good interactive default on `L40S` because TTFT regresses too much.
+  - This item stays open until manual quality smoke checks are recorded and at least one production-like `A100` confirmation run is captured.
 
-- [ ] **T1-05: Enable tensor-parallel presets for multi-GPU pods**
+- [x] **T1-05: Enable tensor-parallel presets for multi-GPU pods**
   - **What**: Use `tensor_parallel_size > 1` when provisioning multi-GPU workers where the model and GPU count justify it.
   - **Why**: Medium impact. Multi-GPU pods are currently under-optimized because tensor parallelism is configurable in the worker but not preset-driven in provisioning.
   - **How**: Add provider preset support for tensor parallel size, starting with multi-GPU A100/H100 requests in `go/internal/providers/runtime.go`; keep single-GPU presets unchanged.
   - **Measure**: Validate successful model load, compare warm TTFT and decode tok/s between TP=1 and TP=N on the same pod size.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
 - [ ] **T1-06: Expand speculative decoding coverage with tested model pairs**
   - **What**: Add tested draft-model and ngram-mode recommendations for the models we actively serve.
@@ -77,13 +105,43 @@
   - **How**: Benchmark `provision`, `stop/start`, and `reused stopped instance` paths; add visibility around reuse in provider-manager logs and docs; verify matching logic in `go/internal/providers/manager.go`.
   - **Measure**: Record cold start to ready, restart to ready, and cache-hit behavior for reused instances.
   - **Status**: `[ ]` not started
+  - Progress as of `2026-03-22`:
+  - Worker `/health` now exposes startup-stage timestamps, so reuse-path runs can capture `server_started`, `model_load_finished`, and `gateway_registered` directly instead of inferring them only from logs.
+  - Progress as of `2026-03-23`:
+  - First live `RunPod A100_80GB` cold-start sample set is now recorded in [`docs/BENCHMARK_BASELINE_CURRENT.md`](/Users/siddharthsingh/codingtensor/infera/docs/BENCHMARK_BASELINE_CURRENT.md).
+  - Measured `provision_to_first_success_ms`:
+    - `fresh_provision`: `605,704 ms`
+    - `stopped_instance_start`: `193,905 ms`
+    - `stopped_instance_reuse`: `114,388 ms`
+  - This confirms the existing reuse path is already materially better than fresh provision and should be optimized before a true warm-pool feature.
+  - Progress as of `2026-03-23` (automated rerun with updated worker image and startup-stage capture):
+  - Latest helper-script sample on `RunPod A100_80GB PCIe` now records:
+    - `fresh_provision`: `96,743 ms` to first success
+    - `stopped_instance_start`: `66,441 ms`
+    - `stopped_instance_reuse`: `63,888 ms`
+  - Worker-reported `server_to_model_ready_ms` is the dominant cost:
+    - `fresh_provision`: `89,853 ms`
+    - `stopped_instance_start`: `58,154 ms`
+    - `stopped_instance_reuse`: `54,119 ms`
+  - The new worker substages show that most of this time is in `vllm_engine_init_finished`, while engine creation is only about `5-6s`.
+  - Async tokenizer warmup now exists in code but still needs a fresh rerun to confirm whether `registered_to_first_success_ms` comes back down.
+  - Progress as of `2026-03-23` (rerun after async tokenizer warmup and helper-script registration fixes):
+  - Latest helper-script sample on `RunPod A100_80GB PCIe` now records:
+    - `fresh_provision`: `335,547 ms` to first success, but this row is skewed by gateway worker-list visibility lag and should not be used as the primary baseline
+    - `stopped_instance_start`: `58,113 ms`
+    - `stopped_instance_reuse`: `56,764 ms`
+  - Worker-reported `server_to_model_ready_ms` on the reliable restart paths is now:
+    - `stopped_instance_start`: `47,320 ms`
+    - `stopped_instance_reuse`: `47,010 ms`
+  - Async tokenizer warmup now completes in background on the measured sample, and `registered_to_first_success_ms` is down to about `1.5-1.8s`.
+  - The dominant remaining cold-start bottleneck is still `vllm_engine_init_finished`, not worker boot, registration, or tokenizer setup.
 
-- [ ] **C2-02: Split liveness and readiness from full model preload**
+- [x] **C2-02: Split liveness and readiness from full model preload**
   - **What**: Start the worker HTTP surface earlier and distinguish process-up from model-ready.
   - **Why**: High impact on perceived cold-start time and operability. Today the server only starts after preload completes, so the platform cannot observe intermediate startup stages.
   - **How**: Change startup order in `python/src/infera_worker/cli.py` and `python/src/infera_worker/worker.py` so the server can report state during model load; add readiness-specific fields to `/health` and heartbeat payloads in `python/src/infera_worker/http_server.py`; keep inference endpoints rejecting requests until ready.
   - **Measure**: Compare provision-to-first-health, provision-to-ready, and gateway registration timing before/after.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
 - [ ] **C2-03: Add persistent-cache strategy for Vast.ai**
   - **What**: Avoid full model redownloads on Vast.ai restart paths.
@@ -110,26 +168,26 @@
 
 ## 3. Gateway & Routing Efficiency
 
-- [ ] **G3-01: Add a fast path that avoids batch wait for lone low-contention requests**
+- [x] **G3-01: Add a fast path that avoids batch wait for lone low-contention requests**
   - **What**: Skip the full `MaxBatchWaitMS` penalty when a request arrives to an empty per-model queue and a healthy worker is available.
   - **Why**: High impact on P50 latency. The current batch manager adds wait time even when there is nothing useful to batch.
-  - **How**: Update `go/internal/router/batcher/batcher.go` and `go/internal/router/router.go` so single-request, non-streaming traffic can route immediately under low contention; keep batching active once queue depth grows.
+  - **How**: Keep requests eligible for batching, but shorten the first-request batch wait window in `batcher.go` so lone requests do not pay the full queue delay while real concurrent arrivals can still share a batch.
   - **Measure**: Compare single-user P50/P95 latency and batch-size distribution before/after.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done — `go/internal/router/batcher/batcher.go`
 
-- [ ] **G3-02: Make gateway audit persistence asynchronous**
+- [x] **G3-02: Make gateway audit persistence asynchronous**
   - **What**: Remove synchronous SQLite audit writes from the inference hot path.
   - **Why**: High impact, low effort. `AppendInference` is currently called synchronously in the request defer path.
-  - **How**: Introduce a buffered audit channel and background flush worker in `go/internal/gateway/gateway.go`; ensure graceful drain on shutdown; keep store semantics unchanged in `go/internal/audit/store.go`.
+  - **How**: Buffered channel (`auditCh`, cap 1024) + background `runAuditWriter` goroutine in `gateway.go`; defer sends to channel; `Stop()` closes channel and waits for drain before HTTP shutdown.
   - **Measure**: Compare gateway-added latency and request throughput before/after under concurrent non-streaming load.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done — `go/internal/gateway/gateway.go`
 
-- [ ] **G3-03: Reuse a shared httpx client for registration, heartbeats, and deregistration**
+- [x] **G3-03: Reuse a shared httpx client for registration, heartbeats, and deregistration**
   - **What**: Stop creating a new `httpx.AsyncClient()` for each worker-to-gateway call.
   - **Why**: Medium impact. This reduces connection churn and removes avoidable overhead from the worker control path.
   - **How**: Create one long-lived client in `python/src/infera_worker/http_server.py`, reuse it for register/heartbeat/deregister, and close it in `stop()`.
   - **Measure**: Confirm reduced connection churn in logs/metrics and no regression in registration or heartbeat behavior.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done — `python/src/infera_worker/http_server.py`
 
 - [ ] **G3-04: Benchmark routing strategy choices under realistic multi-turn load**
   - **What**: Compare least-loaded, latency-based, and affinity-heavy routing using the same concurrent conversation workload.
@@ -188,33 +246,48 @@
 
 ## 5. Benchmarking Harness
 
-- [ ] **B5-01: Add concurrent load mode to the benchmark script**
+- [x] **B5-01: Add concurrent load mode to the benchmark script**
   - **What**: Support multi-client concurrent load instead of only sequential runs.
   - **Why**: High impact. Sequential runs hide the queueing and prefill/decode contention that matter in production.
   - **How**: Extend `scripts/benchmark-chat.py` with `--concurrency N` and asynchronous request execution for streaming and non-streaming runs.
   - **Measure**: Report TTFT p50/p95/p99, aggregate throughput, and per-request latency under 2x, 4x, and 8x concurrency.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
-- [ ] **B5-02: Add warmup and cache-reuse modes**
+- [x] **B5-02: Add warmup and cache-reuse modes**
   - **What**: Support warmup runs and repeated-prefix scenarios in the benchmark harness.
   - **Why**: High impact on measurement quality. Prefix caching and warm KV/cache behavior cannot be reasoned about from one cold request at a time.
   - **How**: Add `--warmup N` and a cache-reuse mode to `scripts/benchmark-chat.py`; update `docs/BENCHMARK_BASELINE_TEMPLATE.md` to capture warm versus cold conditions explicitly.
   - **Measure**: Record TTFT deltas between first-run and warmed or repeated-prefix runs.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
 
-- [ ] **B5-03: Add cold-start benchmark workflow**
+- [x] **B5-03: Add cold-start benchmark workflow**
   - **What**: Standardize how cold-start time is measured for fresh provision, stop/start reuse, and reused stopped-instance flows.
   - **Why**: High impact. Cold-start improvement work is not actionable without a repeatable measurement path.
   - **How**: Expand `docs/BENCHMARK_BASELINE_TEMPLATE.md` and, if helpful, add a helper script that timestamps provision request, first health, registration, and first successful inference.
   - **Measure**: Record provision-to-health, provision-to-ready, and provision-to-first-successful-completion for each provider path.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
+  - Notes:
+  - `docs/COLD_START_BENCHMARK_WORKFLOW.md` now uses worker `/health` startup-stage timestamps to capture `server_started`, `model_load_finished`, and `worker_registered` explicitly.
 
-- [ ] **B5-04: Establish a committed benchmark baseline before any runtime-default changes**
+- [x] **B5-04: Establish a committed benchmark baseline before any runtime-default changes**
   - **What**: Capture a baseline for the current branch using the current production-like image, model, GPU, and routing strategy.
   - **Why**: High impact. Runtime tuning without a committed baseline makes regressions impossible to prove.
-  - **How**: Run the benchmark harness against one standard model/GPU matrix and store the summarized results in this file or an adjacent benchmark doc.
+  - **How**: Run the benchmark harness against one standard model/GPU matrix and store the summarized results in this file or an adjacent benchmark doc such as `docs/BENCHMARK_BASELINE_CURRENT.md`.
   - **Measure**: Baseline must include TTFT p50/p95/p99, decode tok/s p50/p95, cold-start timing, and cost/query.
-  - **Status**: `[ ]` not started
+  - **Status**: `[x]` done
+  - Progress as of `2026-03-21`:
+  - Exploratory live `L40S` warm-run data is now preserved in [`docs/BENCHMARK_BASELINE_CURRENT.md`](/Users/siddharthsingh/codingtensor/infera/docs/BENCHMARK_BASELINE_CURRENT.md).
+  - This did not close the item at that time because the standard `RunPod A100_80GB` warm rows and cold-start timings were still pending.
+  - Progress as of `2026-03-23`:
+  - Warm `RunPod A100_80GB` baseline rows are now recorded in [`docs/BENCHMARK_BASELINE_CURRENT.md`](/Users/siddharthsingh/codingtensor/infera/docs/BENCHMARK_BASELINE_CURRENT.md) for:
+    - `least_loaded + no reuse`
+    - `affinity reuse`
+  - Measured results for `Qwen/Qwen2.5-7B-Instruct`, `runs=3`, `warmup=2`, `concurrency=4`:
+    - no reuse: `TTFT p50=937.8ms`, `decode tok/s p50=152.84`, `aggregate decode tok/s p50=587.77`, cost/query about `$0.000493`
+    - affinity reuse: `TTFT p50=1055.5ms`, `decode tok/s p50=134.32`, `aggregate decode tok/s p50=494.35`, cost/query about `$0.000512`
+  - On this sample, affinity reuse underperformed the default least-loaded path, so it should not be treated as a warm-path default win.
+  - RunPod does not currently offer an `A100_40GB` SKU in the live provider offering set, so `A100_40GB` is not a valid remaining baseline target for this provider.
+  - The active RunPod A100 baseline is now `A100_80GB`; `L40S` is the optional lower-cost comparison SKU.
 
 - [ ] **B5-05: Add CI or scheduled regression checks only after the benchmark harness is stable**
   - **What**: Automate regression detection for key latency and throughput metrics.

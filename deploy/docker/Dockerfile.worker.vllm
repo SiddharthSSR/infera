@@ -1,56 +1,71 @@
 # Infera Worker - vLLM Production Image for RunPod
-# This image includes vLLM for real GPU inference
+#
+# This Dockerfile mirrors the modern worker runtime expectations used by the
+# current branch. It deliberately verifies the installed vLLM API surface at
+# build time so image/code mismatches fail before deployment.
 
-FROM runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04
+FROM --platform=linux/amd64 runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies needed by the worker runtime and health checks.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     curl \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
+# Remove the preinstalled torch stack so vLLM can pull a matching dependency set.
+RUN pip uninstall -y torch torchvision torchaudio 2>/dev/null; true
+
 RUN pip install --upgrade pip
 
-# Install vLLM with CUDA support
-RUN pip install vllm>=0.4.0
+# Install a modern vLLM stack that supports the runtime kwargs used by this branch.
+RUN pip install --no-cache-dir \
+    "vllm>=0.16.0" \
+    "transformers>=4.43.0" \
+    "accelerate>=0.30.0" \
+    "tokenizers>=0.19.0" \
+    "aiohttp>=3.9.0"
 
-# Copy worker source code
 COPY python/pyproject.toml .
+COPY python/README.md .
 COPY python/src/ ./src/
 
-# Install the worker package
-RUN pip install --no-cache-dir .
+# Install the worker package and fail the build if the image cannot satisfy the
+# current vLLM runtime contract.
+RUN pip install --no-cache-dir -e . && \
+    echo "=== Verifying installation ===" && \
+    python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.version.cuda}')" && \
+    python -c "import transformers; print(f'Transformers {transformers.__version__}')" && \
+    python -c "import vllm; print(f'vLLM {vllm.__version__}')" && \
+    python -c "from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams; print('vLLM imports OK')" && \
+    python -c "import inspect; from vllm import AsyncEngineArgs; required = {'model', 'tensor_parallel_size', 'gpu_memory_utilization', 'max_model_len'}; missing = sorted(required.difference(inspect.signature(AsyncEngineArgs).parameters)); assert not missing, f'Missing AsyncEngineArgs kwargs: {missing}'" && \
+    python -c "from infera_worker.engines.vllm_engine import VLLMEngine; print('VLLMEngine OK')"
 
-# Environment variables for vLLM
 ENV INFERA_ENGINE=vllm
 ENV INFERA_HTTP_PORT=8081
 ENV INFERA_GRPC_PORT=50051
 ENV INFERA_LOG_LEVEL=INFO
 ENV INFERA_LOG_FORMAT=json
+
+# Keep model artifacts on the mounted workspace volume when available.
 ENV XDG_CACHE_HOME=/workspace/.cache
 ENV HF_HOME=/workspace/.cache/huggingface
 ENV HUGGINGFACE_HUB_CACHE=/workspace/.cache/huggingface/hub
 ENV TRANSFORMERS_CACHE=/workspace/.cache/huggingface/hub
 ENV TORCH_HOME=/workspace/.cache/torch
 
-# vLLM specific settings
+# vLLM V1 uses multiprocessing; spawn avoids CUDA fork issues in containers.
+ENV VLLM_WORKER_MULTIPROC_METHOD=spawn
 ENV VLLM_USE_MODELSCOPE=false
 
-# Gateway address - will be set at runtime
 ENV INFERA_ROUTER_ADDRESS=""
-
-# Models to preload - can be set at runtime
 ENV INFERA_PRELOAD_MODELS=""
 
-# Expose ports
 EXPOSE 8081 50051
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
     CMD curl -f http://localhost:8081/health || exit 1
 
-# Run the worker
 CMD ["python", "-m", "infera_worker.cli"]

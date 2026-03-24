@@ -27,9 +27,9 @@ func TestShouldBatch(t *testing.T) {
 	defer m.Stop()
 
 	t.Run("normal request should batch", func(t *testing.T) {
-		req := &types.InferenceRequest{Priority: types.PriorityNormal}
+		req := &types.InferenceRequest{ModelID: "model-a", Priority: types.PriorityNormal}
 		if !m.ShouldBatch(req) {
-			t.Error("expected normal request to be batched")
+			t.Error("expected normal request to be eligible for batching")
 		}
 	})
 
@@ -202,6 +202,18 @@ func TestQueueFlush(t *testing.T) {
 	batch = q.Flush()
 	if batch != nil {
 		t.Error("expected nil from empty flush")
+	}
+}
+
+func TestNewBatchUsesShortFirstWaitWindow(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.MaxWaitMS = 50
+
+	q := NewQueue("model", cfg, nil)
+	batch := q.newBatch()
+
+	if batch.MaxWaitMS != fastFirstBatchWaitMS {
+		t.Fatalf("expected first-batch wait %dms, got %dms", fastFirstBatchWaitMS, batch.MaxWaitMS)
 	}
 }
 

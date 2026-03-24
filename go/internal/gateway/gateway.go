@@ -45,6 +45,8 @@ type Gateway struct {
 
 	// Audit (inference usage tracking)
 	auditStore *audit.Store
+	auditCh    chan audit.InferenceAuditRecord
+	auditWg    sync.WaitGroup
 
 	// Deployments (shared deployment history)
 	deploymentStore *deployments.Store
@@ -154,9 +156,23 @@ func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 	g.vaultHandler = h
 }
 
-// SetAuditStore sets the inference audit store.
+// SetAuditStore sets the inference audit store and starts the async writer.
 func (g *Gateway) SetAuditStore(s *audit.Store) {
 	g.auditStore = s
+	g.auditCh = make(chan audit.InferenceAuditRecord, 1024)
+	g.auditWg.Add(1)
+	go g.runAuditWriter()
+}
+
+// runAuditWriter drains auditCh in the background, keeping audit writes off
+// the inference hot path.
+func (g *Gateway) runAuditWriter() {
+	defer g.auditWg.Done()
+	for rec := range g.auditCh {
+		if err := g.auditStore.AppendInference(rec); err != nil {
+			g.log.Warn("inference.audit_persist_failed", slog.String("error", err.Error()))
+		}
+	}
 }
 
 // SetDeploymentStore sets the shared deployment history store.
@@ -252,7 +268,16 @@ func (g *Gateway) Stop(ctx context.Context) error {
 		g.rateLimiter.Stop()
 	}
 	if g.httpServer != nil {
-		return g.httpServer.Shutdown(ctx)
+		if err := g.httpServer.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
+	// Drain the audit channel only after HTTP shutdown has completed so
+	// request handlers can no longer enqueue records into the channel.
+	if g.auditCh != nil {
+		close(g.auditCh)
+		g.auditWg.Wait()
+		g.auditCh = nil
 	}
 	return nil
 }
@@ -580,8 +605,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		}
 		g.log.Info("inference.audit", attrs...)
 
-		if g.auditStore != nil {
-			err := g.auditStore.AppendInference(audit.InferenceAuditRecord{
+		if g.auditCh != nil {
+			rec := audit.InferenceAuditRecord{
 				Timestamp:    requestStart.UTC(),
 				RequestID:    requestID,
 				KeyID:        keyID,
@@ -595,11 +620,12 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				Status:       auditStatus,
 				ErrorCode:    auditErrorCode,
 				LatencyMS:    latencyMS,
-			})
-			if err != nil {
-				g.log.Warn("inference.audit_persist_failed",
+			}
+			select {
+			case g.auditCh <- rec:
+			default:
+				g.log.Warn("inference.audit_dropped",
 					slog.String("request_id", requestID),
-					slog.String("error", err.Error()),
 				)
 			}
 		}
@@ -772,7 +798,8 @@ func (g *Gateway) enforceWorkspaceQuota(w http.ResponseWriter, r *http.Request, 
 
 	now := time.Now().UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	usage, err := g.auditStore.UsageSummary(audit.UsageSummaryQuery{
+
+	result, err := g.auditStore.UsageSummary(audit.UsageSummaryQuery{
 		Start:       monthStart,
 		End:         now,
 		WorkspaceID: key.WorkspaceID,
@@ -783,6 +810,11 @@ func (g *Gateway) enforceWorkspaceQuota(w http.ResponseWriter, r *http.Request, 
 			slog.String("error", err.Error()),
 		)
 		return true
+	}
+
+	var usage audit.UsageSummary
+	if result != nil {
+		usage = *result
 	}
 
 	projectedRequests := usage.RequestCount + 1

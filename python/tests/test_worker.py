@@ -1,8 +1,10 @@
 """Tests for the main worker."""
 
 import asyncio
+from types import SimpleNamespace
 import pytest
 
+from infera_worker import worker as worker_module
 from infera_worker.worker import Worker
 from infera_worker.config import WorkerConfig, ModelConfig
 from infera_worker.types import (
@@ -54,6 +56,83 @@ class TestWorker:
         
         assert worker.state == WorkerState.READY
         assert worker.engine is not None
+        startup = worker.get_startup_status()
+        assert "model_load_started" in startup["stages"]
+        assert "engine_create_started" in startup["stages"]
+        assert "engine_create_finished" in startup["stages"]
+        assert "model_load_finished" in startup["stages"]
+        assert "worker_ready" in startup["stages"]
+        assert startup["durations_ms"]["worker_ready"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_start_worker_records_preload_stages(self):
+        worker = Worker(WorkerConfig(engine="mock", preload_models=["test-model"]))
+
+        await worker.start()
+
+        startup = worker.get_startup_status()
+        assert "preload_model_started" in startup["stages"]
+        assert "preload_model_finished" in startup["stages"]
+
+    @pytest.mark.asyncio
+    async def test_start_worker_schedules_post_ready_warmup(self, monkeypatch):
+        warmed_models: list[str] = []
+
+        class FakeEngine:
+            def __init__(self):
+                self.loaded_models = []
+
+            def set_startup_stage_recorder(self, recorder):
+                self.recorder = recorder
+
+            def set_startup_metadata_recorder(self, recorder):
+                self.metadata_recorder = recorder
+
+            async def load_model(self, config):
+                self.metadata_recorder("model_loads", {config.model_id: {"model_source": "mock"}})
+                model = SimpleNamespace(model_id=config.model_id)
+                self.loaded_models.append(model)
+                return SimpleNamespace(
+                    model_id=config.model_id,
+                    version="1.0.0",
+                    loaded_at=None,
+                    memory_bytes=1,
+                    max_batch_size=config.max_batch_size,
+                    max_sequence_length=config.max_sequence_length,
+                )
+
+            async def unload_model(self, model_id):
+                return True
+
+            def is_model_loaded(self, model_id):
+                return True
+
+            def get_loaded_models(self):
+                return self.loaded_models
+
+            async def infer(self, request):
+                raise NotImplementedError
+
+            async def infer_stream(self, request):
+                raise NotImplementedError
+
+            async def cancel(self, request_id):
+                return False
+
+            def get_memory_usage(self):
+                return (0, 0)
+
+            async def warm_model_runtime(self, model_id):
+                warmed_models.append(model_id)
+
+        monkeypatch.setattr(worker_module, "create_engine", lambda _config: FakeEngine())
+
+        worker = Worker(WorkerConfig(engine="mock", preload_models=["test-model"]))
+        await worker.start()
+        await asyncio.sleep(0)
+
+        assert warmed_models == ["test-model"]
+        assert worker.get_startup_status()["metadata"]["model_loads"]["test-model"]["model_source"] == "mock"
 
     @pytest.mark.asyncio
     async def test_stop_worker(self, worker):
