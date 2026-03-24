@@ -88,6 +88,33 @@ Use the same cold-start scenarios across all engines:
 
 ## Phase 1 Commands
 
+### Engine image preparation
+
+Before benchmarking an engine, build and deploy its dedicated worker image.
+
+Examples:
+
+```bash
+VERSION=engine-phase1 ./scripts/build-docker.sh --worker-vllm --push
+```
+
+```bash
+VERSION=engine-phase1 ./scripts/build-docker.sh --worker-sglang --push
+```
+
+```bash
+VERSION=engine-phase1 ./scripts/build-docker.sh --worker-tensorrt-llm --push
+```
+
+For TensorRT-LLM, the package source can be overridden at build time:
+
+```bash
+WORKER_TENSORRT_LLM_PACKAGE=tensorrt_llm \
+WORKER_TENSORRT_LLM_PYPI_EXTRA_INDEX_URL=https://pypi.nvidia.com \
+VERSION=engine-phase1 \
+./scripts/build-docker.sh --worker-tensorrt-llm --push
+```
+
 ### Orchestrated runner
 
 Use the Phase 1 runner when you want one command per engine instead of invoking the three helper scripts manually:
