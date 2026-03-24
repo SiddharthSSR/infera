@@ -137,11 +137,13 @@ Notes:
 ### 3. Deploy
 
 ```bash
-git checkout v1-production
-git pull origin v1-production
+git checkout main
+git pull --ff-only origin main
 docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml ps
 ```
+
+Before promoting `roadmap` into `main`, use the release checklist in [docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md](/Users/siddharthsingh/codingtensor/infera/docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md).
 
 ### 4. Verify
 
