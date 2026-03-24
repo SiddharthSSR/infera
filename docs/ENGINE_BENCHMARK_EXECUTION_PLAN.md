@@ -88,6 +88,34 @@ Use the same cold-start scenarios across all engines:
 
 ## Phase 1 Commands
 
+### Orchestrated runner
+
+Use the Phase 1 runner when you want one command per engine instead of invoking the three helper scripts manually:
+
+```bash
+python3 scripts/run-engine-benchmark-phase1.py \
+  https://inferai.co.in \
+  --api-key "$INFERA_ADMIN_KEY" \
+  --engine vllm \
+  --provider runpod \
+  --gpu-type A100_80GB \
+  --provider-gpu-type-id "NVIDIA A100 80GB PCIe" \
+  --gpu-count 1 \
+  --model "Qwen/Qwen2.5-7B-Instruct" \
+  --cost-per-hour 1.19 \
+  --health-insecure
+```
+
+This runner:
+
+- executes warm `none`
+- executes warm `affinity`
+- executes the cold-start benchmark
+- executes startup-health capture with `--include-restart`
+- writes a manifest for the full Phase 1 run
+
+It does not deploy engine-specific fleets for you. Before each run, ensure the active fleet for the target model is deployed with only the selected engine.
+
 ### Warm baseline
 
 Run once per engine:
