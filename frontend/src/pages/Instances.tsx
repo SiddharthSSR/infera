@@ -1175,6 +1175,16 @@ export function Instances() {
     };
   }, [latestDeployment, markAutoVerificationRequested, runInferenceVerification, verifyingAttemptID]);
 
+  // Auto-open provision modal if redirected from dashboard or registry.
+  useEffect(() => {
+    if (searchParams.get('provision') === 'true') {
+      const model = searchParams.get('model');
+      if (model) setPreselectedModel(model);
+      setShowProvisionModal(true);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   return (
     <div className="instances-page animate-fade-in">
       {latestDeployment && (
