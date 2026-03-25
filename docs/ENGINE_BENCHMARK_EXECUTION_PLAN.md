@@ -122,6 +122,27 @@ You may need to authenticate to NGC first:
 docker login nvcr.io
 ```
 
+### GitHub Actions build path
+
+If local or ad-hoc VM builds are unreliable, use the manual GitHub Actions workflow at
+[.github/workflows/build-worker-image.yml](/Users/siddharthsingh/codingtensor/infera/.github/workflows/build-worker-image.yml).
+
+Required repository secrets:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+- `NGC_API_KEY` for `tensorrt_llm`
+
+Recommended dispatch inputs for TensorRT-LLM:
+
+- `engine`: `tensorrt_llm`
+- `docker_namespace`: `codingtensor`
+- `cleanup_runner`: `true`
+- `runs_on`: `["ubuntu-latest"]` for hosted runners, or a self-hosted label array if you have a larger runner
+- `tensorrt_base_image`: `nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc7`
+
+The workflow aggressively frees disk on GitHub-hosted runners before building, but TensorRT-LLM images are still large enough that a larger self-hosted runner may be preferable.
+
 ### Orchestrated runner
 
 Use the Phase 1 runner when you want one command per engine instead of invoking the three helper scripts manually:
