@@ -137,6 +137,25 @@ def log_progress(args: argparse.Namespace, message: str) -> None:
         print(f"[startup-health] {message}", flush=True)
 
 
+def summarize_health_poll_error(exc: Exception) -> str:
+    """Classify transient proxy/bootstrap errors so progress logs read as expected startup states."""
+    message = str(exc)
+    normalized = message.lower()
+
+    if "http 404" in normalized:
+        return "bootstrap in progress: worker health route not published yet (HTTP 404)"
+    if "http 502" in normalized:
+        return "bootstrap in progress: proxy upstream not ready yet (HTTP 502)"
+    if "timed out" in normalized:
+        return "bootstrap in progress: worker health endpoint not responding yet (timeout)"
+    if "connection refused" in normalized:
+        return "bootstrap in progress: worker health endpoint not accepting connections yet"
+    if "connection reset" in normalized or "remote end closed connection" in normalized:
+        return "bootstrap in progress: worker health endpoint restarted before responding"
+
+    return message
+
+
 def build_headers(api_key: str, *, content_type: bool = False) -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -369,7 +388,9 @@ def wait_for_health_ready(
             if time.time() >= next_log_at:
                 log_progress(
                     args,
-                    f"worker health {health_url}: waiting... {time.time() - started:.1f}s (last error: {exc})",
+                    "worker health "
+                    f"{health_url}: waiting... {time.time() - started:.1f}s "
+                    f"({summarize_health_poll_error(exc)})",
                 )
                 next_log_at = time.time() + PROGRESS_LOG_INTERVAL_S
             time.sleep(poll_interval_ms / 1000.0)

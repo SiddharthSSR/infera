@@ -224,6 +224,20 @@ def test_fetch_health_falls_back_to_curl_on_1010(monkeypatch):
     assert payload == {"ready": True}
 
 
+def test_summarize_health_poll_error_classifies_bootstrap_failures():
+    module = load_module()
+
+    assert module.summarize_health_poll_error(RuntimeError("GET /health failed with HTTP 404:")) == (
+        "bootstrap in progress: worker health route not published yet (HTTP 404)"
+    )
+    assert module.summarize_health_poll_error(RuntimeError("GET /health failed with HTTP 502: bad gateway")) == (
+        "bootstrap in progress: proxy upstream not ready yet (HTTP 502)"
+    )
+    assert module.summarize_health_poll_error(RuntimeError("The read operation timed out")) == (
+        "bootstrap in progress: worker health endpoint not responding yet (timeout)"
+    )
+
+
 def test_run_ready_path_does_not_block_registration_or_probe_on_health(monkeypatch):
     module = load_module()
     call_order: list[str] = []
