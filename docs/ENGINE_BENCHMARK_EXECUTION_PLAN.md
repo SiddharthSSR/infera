@@ -108,13 +108,18 @@ VERSION=engine-phase1 ./scripts/build-docker.sh --worker-sglang --push
 VERSION=engine-phase1 ./scripts/build-docker.sh --worker-tensorrt-llm --push
 ```
 
-For TensorRT-LLM, the package source can be overridden at build time:
+For TensorRT-LLM, use NVIDIA's official NGC TensorRT-LLM container as the base image. If you need a different official release tag, override it at build time:
 
 ```bash
-WORKER_TENSORRT_LLM_PACKAGE=tensorrt_llm \
-WORKER_TENSORRT_LLM_PYPI_EXTRA_INDEX_URL=https://pypi.nvidia.com \
+WORKER_TENSORRT_LLM_BASE_IMAGE=nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc7 \
 VERSION=engine-phase1 \
 ./scripts/build-docker.sh --worker-tensorrt-llm --push
+```
+
+You may need to authenticate to NGC first:
+
+```bash
+docker login nvcr.io
 ```
 
 ### Orchestrated runner

@@ -60,8 +60,7 @@ BUILD_FRONTEND=false
 PUSH=false
 
 WORKER_SGLANG_PACKAGE="${WORKER_SGLANG_PACKAGE:-sglang}"
-WORKER_TENSORRT_LLM_PACKAGE="${WORKER_TENSORRT_LLM_PACKAGE:-tensorrt_llm}"
-WORKER_TENSORRT_LLM_PYPI_EXTRA_INDEX_URL="${WORKER_TENSORRT_LLM_PYPI_EXTRA_INDEX_URL:-https://pypi.nvidia.com}"
+WORKER_TENSORRT_LLM_BASE_IMAGE="${WORKER_TENSORRT_LLM_BASE_IMAGE:-nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc7}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -127,8 +126,7 @@ while [[ $# -gt 0 ]]; do
             echo "  DOCKER_NAMESPACE  Namespace (default: infera)"
             echo "  VERSION           Image version tag (default: latest)"
             echo "  WORKER_SGLANG_PACKAGE  SGLang package spec (default: sglang)"
-            echo "  WORKER_TENSORRT_LLM_PACKAGE  TensorRT-LLM package spec (default: tensorrt_llm)"
-            echo "  WORKER_TENSORRT_LLM_PYPI_EXTRA_INDEX_URL  Extra index for TensorRT-LLM (default: https://pypi.nvidia.com)"
+            echo "  WORKER_TENSORRT_LLM_BASE_IMAGE  Official NVIDIA TensorRT-LLM base image"
             exit 0
             ;;
         *)
@@ -175,8 +173,7 @@ if $BUILD_WORKER_TENSORRT_LLM; then
         "worker-tensorrt-llm" \
         "deploy/docker/Dockerfile.worker.tensorrt_llm" \
         "." \
-        --build-arg "TENSORRT_LLM_PACKAGE=$WORKER_TENSORRT_LLM_PACKAGE" \
-        --build-arg "TENSORRT_LLM_PYPI_EXTRA_INDEX_URL=$WORKER_TENSORRT_LLM_PYPI_EXTRA_INDEX_URL"
+        --build-arg "TENSORRT_LLM_BASE_IMAGE=$WORKER_TENSORRT_LLM_BASE_IMAGE"
 fi
 
 if $BUILD_FRONTEND; then

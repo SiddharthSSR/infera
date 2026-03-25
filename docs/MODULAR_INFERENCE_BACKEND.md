@@ -182,8 +182,9 @@ This preserves the existing startup instrumentation model and keeps engine-speci
   - minimal translated defaults
 - `sglang` and `tensorrt_llm` require dedicated worker images; the existing vLLM image is not intended to serve them.
 - TensorRT-LLM model loading assumes an LLM API-compatible model or engine path is provided via `model_path` when required by the runtime.
-- TensorRT-LLM packaging may require a non-default package source. The Dockerfile exposes build args for the package name and extra Python package index so deployment environments can override them without editing the image definition.
-- TensorRT-LLM cannot be fully import-verified during a standard CPU-only Docker build because its import path requires `libcuda.so.1`. Final validation for that image must happen as a runtime smoke check on a GPU-backed host.
+- TensorRT-LLM should be built from NVIDIA's official TensorRT-LLM NGC release container rather than by layering the wheel onto a generic PyTorch base image. This keeps the CUDA/cuBLAS/TensorRT userspace aligned with the runtime.
+- TensorRT-LLM image builds may require `docker login nvcr.io` and a valid `WORKER_TENSORRT_LLM_BASE_IMAGE` override if you pin a different official release tag.
+- TensorRT-LLM model/runtime behavior must still be validated on a GPU-backed host after image build.
 - Engine-specific performance tuning is not assumed to be portable across runtimes.
 
 ## Next Steps

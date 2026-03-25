@@ -1,64 +1,39 @@
-# Infera Worker - TensorRT-LLM Production Image for RunPod
+# Infera Worker - TensorRT-LLM worker image
 #
-# This image assumes the selected model path resolves to a TensorRT-LLM
-# compatible engine or artifact path. The package source is configurable via
-# build args because TensorRT-LLM packaging varies by environment.
+# TensorRT-LLM depends on a tightly matched CUDA/cuBLAS/TensorRT userspace.
+# Use NVIDIA's official TensorRT-LLM release container as the base image
+# instead of layering the Python wheel onto a generic PyTorch runtime.
 
-# RunPod appears to publish Python 3.10 tags on the 2.2.x / CUDA 12.1 line,
-# not on the 2.4.0 / CUDA 12.4.1 line used by the vLLM image.
-FROM --platform=linux/amd64 runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04
+ARG TENSORRT_LLM_BASE_IMAGE=nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc7
+FROM --platform=linux/amd64 ${TENSORRT_LLM_BASE_IMAGE}
 
 WORKDIR /app
 
-# Install system dependencies needed by the worker runtime and health checks.
+# Install only the extra utilities and Python package metadata needed by the
+# Infera worker. TensorRT-LLM itself must come from the base image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     curl \
     git \
-    libopenmpi-dev \
-    openmpi-bin \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir "setuptools>=77.0.1,<80" wheel
 
-ARG TENSORRT_LLM_PACKAGE=tensorrt_llm
-ARG TENSORRT_LLM_PYPI_EXTRA_INDEX_URL=https://pypi.nvidia.com
-
-# Install TensorRT-LLM plus the common worker tokenizer / HTTP stack. The extra
-# index defaults to NVIDIA's package index but can be overridden or blanked.
-RUN if [ -n "$TENSORRT_LLM_PYPI_EXTRA_INDEX_URL" ]; then \
-        pip install --no-cache-dir --extra-index-url "$TENSORRT_LLM_PYPI_EXTRA_INDEX_URL" \
-            "${TENSORRT_LLM_PACKAGE}" \
-            "transformers>=4.43.0" \
-            "accelerate>=0.30.0" \
-            "tokenizers>=0.19.0" \
-            "aiohttp>=3.9.0"; \
-    else \
-        pip install --no-cache-dir \
-            "${TENSORRT_LLM_PACKAGE}" \
-            "transformers>=4.43.0" \
-            "accelerate>=0.30.0" \
-            "tokenizers>=0.19.0" \
-            "aiohttp>=3.9.0"; \
-    fi
-
 COPY python/pyproject.toml .
 COPY python/README.md .
 COPY python/src/ ./src/
 
-# Install the worker package and verify package-level wiring. We intentionally
-# avoid importing tensorrt_llm at build time because its import path requires
-# libcuda.so.1 from the NVIDIA runtime, which is not available during a normal
-# docker build on a non-GPU host.
+# Install the worker package and verify TensorRT-LLM package-level wiring.
+# Avoid importing tensorrt_llm during docker build because the full NVIDIA
+# driver runtime is only present on the GPU host.
 RUN pip install --no-cache-dir --no-build-isolation -e . && \
     echo "=== Verifying installation ===" && \
     python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.version.cuda}')" && \
     python -c "import transformers; print(f'Transformers {transformers.__version__}')" && \
-    pip show "${TENSORRT_LLM_PACKAGE}" && \
+    pip show tensorrt_llm && \
     python -c "import importlib.util; assert importlib.util.find_spec('tensorrt_llm') is not None; print('TensorRT-LLM package present')" && \
     python -c "from infera_worker.engine import get_engine_definition; print(f'Engine registry OK: {get_engine_definition(\"tensorrt_llm\").engine_id}')" && \
-    echo "TensorRT-LLM runtime import smoke must run on a GPU host with NVIDIA runtime mounted."
+    echo "TensorRT-LLM model/runtime smoke must run on a GPU host after image build."
 
 ENV INFERA_ENGINE=tensorrt_llm
 ENV INFERA_HTTP_PORT=8081
