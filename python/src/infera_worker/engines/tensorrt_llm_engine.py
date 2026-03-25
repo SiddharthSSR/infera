@@ -14,8 +14,19 @@ from ..types import Choice, InferenceRequest, InferenceResponse, LatencyStats, L
 from .base import TokenizerPromptEngine
 
 try:
-    from tensorrt_llm import LLM, SamplingParams
-    from tensorrt_llm.llmapi import BuildConfig, KvCacheConfig
+    from tensorrt_llm import SamplingParams
+    try:
+        from tensorrt_llm import BuildConfig
+    except ImportError:
+        from tensorrt_llm.llmapi import BuildConfig
+    try:
+        from tensorrt_llm import KvCacheConfig
+    except ImportError:
+        try:
+            from tensorrt_llm.bindings.executor import KvCacheConfig
+        except ImportError:
+            from tensorrt_llm.llmapi import KvCacheConfig
+    from tensorrt_llm._tensorrt_engine import LLM
 
     TENSORRT_LLM_AVAILABLE = True
     TENSORRT_LLM_IMPORT_ERROR: ImportError | None = None
@@ -48,10 +59,16 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
         self._record_model_cache_probe(model_config, model_path)
 
         runtime = self.config.tensorrt_llm_runtime
+        requested_backend = (runtime.backend or "").strip().lower()
+        if requested_backend and requested_backend not in {"tensorrt", "tensorrt_llm", "trt", "trtllm"}:
+            raise ValueError(
+                "TensorRTLLMEngine only supports the TensorRT backend. "
+                "Leave INFERA_TENSORRT_LLM_BACKEND unset or set it to 'tensorrt'."
+            )
+
         llm_kwargs: dict[str, Any] = {"model": model_path}
         optional_kwargs = {
             "tensor_parallel_size": runtime.tensor_parallel_size,
-            "backend": runtime.backend,
         }
 
         llm_signature = inspect.signature(LLM)

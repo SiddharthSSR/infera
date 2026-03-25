@@ -262,6 +262,30 @@ class TestTensorRTLLMEngine:
         assert response.choices[0].message.content == "TensorRT response"
         assert chunks[-1].finish_reason == FinishReason.STOP
 
+    @pytest.mark.asyncio
+    async def test_tensorrt_engine_rejects_pytorch_backend(self, monkeypatch):
+        class FakeLLM:
+            def __init__(self, **kwargs):
+                del kwargs
+
+        class FakeSamplingParams:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        monkeypatch.setattr(tensorrt_module, "TENSORRT_LLM_AVAILABLE", True)
+        monkeypatch.setattr(tensorrt_module, "LLM", FakeLLM)
+        monkeypatch.setattr(tensorrt_module, "SamplingParams", FakeSamplingParams)
+
+        engine = tensorrt_module.TensorRTLLMEngine(
+            WorkerConfig(
+                engine="tensorrt_llm",
+                tensorrt_llm_backend="pytorch",
+            )
+        )
+
+        with pytest.raises(ValueError, match="only supports the TensorRT backend"):
+            await engine.load_model(ModelConfig(model_id="test-model"))
+
     def test_tensorrt_engine_raises_when_dependency_missing(self, monkeypatch):
         monkeypatch.setattr(tensorrt_module, "TENSORRT_LLM_AVAILABLE", False)
         monkeypatch.setattr(tensorrt_module, "TENSORRT_LLM_IMPORT_ERROR", ImportError("libcuda.so.1: cannot open shared object file"))
