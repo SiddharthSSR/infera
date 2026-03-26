@@ -56,6 +56,13 @@ func TestValidateRuntimeOptionsAcceptsRecognizedKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected recognized runtime option to pass validation, got %v", err)
 	}
+
+	err = ValidateRuntimeOptions(EngineVLLM, map[string]string{
+		OptionVLLMEnablePrefixCaching: "true",
+	})
+	if err != nil {
+		t.Fatalf("expected vllm prefix caching option to pass validation, got %v", err)
+	}
 }
 
 func TestValidateRuntimeOptionsRejectsInvalidValue(t *testing.T) {

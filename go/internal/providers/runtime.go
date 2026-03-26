@@ -12,6 +12,7 @@ const (
 	OptionVLLMTensorParallelSize   = "INFERA_VLLM_TENSOR_PARALLEL_SIZE"
 	OptionVLLMMaxModelLen          = "INFERA_VLLM_MAX_MODEL_LEN"
 	OptionVLLMGPUMemoryUtilization = "INFERA_VLLM_GPU_MEMORY_UTILIZATION"
+	OptionVLLMEnablePrefixCaching  = "INFERA_VLLM_ENABLE_PREFIX_CACHING"
 	OptionVLLMEnableChunkedPrefill = "INFERA_VLLM_ENABLE_CHUNKED_PREFILL"
 	OptionVLLMMaxNumBatchedTokens  = "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS"
 	OptionVLLMMaxNumSeqs           = "INFERA_VLLM_MAX_NUM_SEQS"
@@ -365,6 +366,7 @@ func validateRuntimeOptionValue(key string, value string) error {
 	case OptionTensorRTLLMKVCacheFreeGPUMemoryFraction:
 		return validateFloatRange(key, value, 0, 1, true)
 	case OptionVLLMEnableChunkedPrefill,
+		OptionVLLMEnablePrefixCaching,
 		OptionVLLMEnforceEager,
 		OptionSGLangDisableCudaGraph,
 		OptionTensorRTLLMEnableChunkedContext:
@@ -470,6 +472,7 @@ func workerRuntimeOptionKeys(engine InferenceEngine) []string {
 			OptionVLLMTensorParallelSize,
 			OptionVLLMMaxModelLen,
 			OptionVLLMGPUMemoryUtilization,
+			OptionVLLMEnablePrefixCaching,
 			OptionVLLMEnableChunkedPrefill,
 			OptionVLLMMaxNumBatchedTokens,
 			OptionVLLMMaxNumSeqs,

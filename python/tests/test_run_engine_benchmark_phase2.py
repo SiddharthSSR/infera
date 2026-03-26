@@ -36,8 +36,8 @@ def test_build_profiles_merges_baseline_env_and_profile_overrides(tmp_path):
             "engines": {
                 "vllm": {
                     "worker_env": {
-                        "INFERA_ENGINE": "vllm",
                         "INFERA_VLLM_GPU_MEMORY_UTILIZATION": "0.90",
+                        "INFERA_VLLM_ENABLE_PREFIX_CACHING": "true",
                     }
                 }
             }
@@ -82,8 +82,8 @@ def test_build_profiles_merges_baseline_env_and_profile_overrides(tmp_path):
             group="prefill_batching",
             description="Tune batching",
             runtime_options={
-                "INFERA_ENGINE": "vllm",
                 "INFERA_VLLM_GPU_MEMORY_UTILIZATION": "0.90",
+                "INFERA_VLLM_ENABLE_PREFIX_CACHING": "true",
                 "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS": "4096",
             },
         )
@@ -131,7 +131,6 @@ def test_build_phase1_command_includes_profile_metadata_and_runtime_options(tmp_
         group="running_requests",
         description="Limit running requests",
         runtime_options={
-            "INFERA_ENGINE": "sglang",
             "INFERA_SGLANG_MAX_RUNNING_REQUESTS": "32",
         },
     )
@@ -170,3 +169,17 @@ def test_load_profile_config_returns_blocked_reason(tmp_path):
     _baseline_payload, _tuning_payload, blocked_reason = module.load_profile_config(args)
 
     assert blocked_reason == "Provider/runtime blocked."
+
+
+def test_filter_runtime_options_drops_reserved_keys():
+    module = load_module()
+
+    filtered = module.filter_runtime_options(
+        {
+            "INFERA_ENGINE": "vllm",
+            " INFERA_VLLM_MAX_MODEL_LEN ": " 32768 ",
+            "": "ignored",
+        }
+    )
+
+    assert filtered == {"INFERA_VLLM_MAX_MODEL_LEN": "32768"}

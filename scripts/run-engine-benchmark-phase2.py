@@ -21,6 +21,7 @@ DEFAULT_BASELINE_PRESET = Path("scripts/benchmark-presets/engine-phase-1-conserv
 DEFAULT_TUNING_PRESET = Path("scripts/benchmark-presets/engine-phase-2-tuning-space.json")
 DEFAULT_PHASE1_RUNNER = Path("scripts/run-engine-benchmark-phase1.py")
 SUPPORTED_ENGINES = ("vllm", "sglang", "tensorrt_llm")
+RESERVED_RUNTIME_OPTION_KEYS = {"INFERA_ENGINE"}
 
 
 @dataclass
@@ -175,9 +176,22 @@ def load_profile_config(args: argparse.Namespace) -> tuple[dict[str, Any], dict[
     return baseline_payload, tuning_payload, blocked
 
 
+def filter_runtime_options(options: dict[str, Any]) -> dict[str, str]:
+    filtered: dict[str, str] = {}
+    for key, value in options.items():
+        trimmed_key = str(key).strip()
+        if not trimmed_key or trimmed_key in RESERVED_RUNTIME_OPTION_KEYS:
+            continue
+        trimmed_value = str(value).strip()
+        if not trimmed_value:
+            continue
+        filtered[trimmed_key] = trimmed_value
+    return filtered
+
+
 def build_profiles(args: argparse.Namespace, baseline_payload: dict[str, Any], tuning_payload: dict[str, Any]) -> list[Phase2Profile]:
     baseline_engine = ((baseline_payload.get("engines") or {}).get(args.engine) or {})
-    baseline_env = dict((baseline_engine.get("worker_env") or {}))
+    baseline_env = filter_runtime_options(dict((baseline_engine.get("worker_env") or {})))
     tuning_engine = ((tuning_payload.get("engines") or {}).get(args.engine) or {})
     profiles_payload = list(tuning_engine.get("profiles") or [])
     if not profiles_payload:
@@ -206,7 +220,7 @@ def build_profiles(args: argparse.Namespace, baseline_payload: dict[str, Any], t
     for name in selected_names:
         profile_payload = available[name]
         runtime_options = dict(baseline_env)
-        runtime_options.update(profile_payload.get("worker_env") or {})
+        runtime_options.update(filter_runtime_options(dict(profile_payload.get("worker_env") or {})))
         profiles.append(
             Phase2Profile(
                 name=name,
@@ -227,12 +241,12 @@ def render_profiles(engine: str, baseline_payload: dict[str, Any], tuning_payloa
         return "\n".join(lines)
     lines.append(f"Primary metrics: {', '.join(str(metric) for metric in tuning_engine.get('primary_metrics') or [])}")
     lines.append("Profiles:")
-    baseline_env = dict((baseline_engine.get("worker_env") or {}))
+    baseline_env = filter_runtime_options(dict((baseline_engine.get("worker_env") or {})))
     for profile in tuning_engine.get("profiles") or []:
         profile_name = str(profile.get("name") or "")
         group = str(profile.get("group") or "baseline")
         description = str(profile.get("description") or "")
-        overrides = dict(profile.get("worker_env") or {})
+        overrides = filter_runtime_options(dict(profile.get("worker_env") or {}))
         runtime_options = dict(baseline_env)
         runtime_options.update(overrides)
         lines.append(f"- {profile_name}: group={group}; {description}")

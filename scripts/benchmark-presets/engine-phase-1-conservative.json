@@ -6,7 +6,6 @@
     "vllm": {
       "description": "Preserve the current stable vLLM path while avoiding extra speculative or aggressive queue tuning.",
       "worker_env": {
-        "INFERA_ENGINE": "vllm",
         "INFERA_VLLM_TENSOR_PARALLEL_SIZE": "1",
         "INFERA_VLLM_GPU_MEMORY_UTILIZATION": "0.90",
         "INFERA_VLLM_MAX_MODEL_LEN": "32768",
@@ -17,7 +16,6 @@
     "sglang": {
       "description": "Keep SGLang close to stock behavior with only explicit memory and context sizing for comparability.",
       "worker_env": {
-        "INFERA_ENGINE": "sglang",
         "INFERA_SGLANG_TP_SIZE": "1",
         "INFERA_SGLANG_MEM_FRACTION_STATIC": "0.90",
         "INFERA_SGLANG_CONTEXT_LENGTH": "32768"
@@ -30,7 +28,6 @@
         "The provisioned model path points to a TensorRT-LLM-compatible engine or buildable artifact."
       ],
       "worker_env": {
-        "INFERA_ENGINE": "tensorrt_llm",
         "INFERA_TENSORRT_LLM_TENSOR_PARALLEL_SIZE": "1",
         "INFERA_TENSORRT_LLM_ENABLE_CHUNKED_CONTEXT": "true"
       }
