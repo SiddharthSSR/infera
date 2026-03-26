@@ -16,6 +16,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from typing import Any
 
 
 DEFAULT_BASE_URL = "https://inferai.co.in"
@@ -47,6 +48,21 @@ class Phase1StepResult:
     status: str
 
 
+def parse_runtime_options(values: list[str]) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for raw_value in values:
+        entry = str(raw_value).strip()
+        if not entry:
+            continue
+        key, separator, value = entry.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if separator == "" or not key or not value:
+            raise ValueError(f"runtime option must be KEY=VALUE, got: {raw_value}")
+        options[key] = value
+    return options
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the Phase 1 warm/cold/startup benchmark workflow for a single engine.",
@@ -67,8 +83,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--provider", default="runpod", help="Provider label/type (default: %(default)s)")
     parser.add_argument("--gpu-type", required=True, help="Infera GPU type, e.g. A100_80GB")
     parser.add_argument("--provider-gpu-type-id", default="", help="Exact provider GPU type identifier")
+    parser.add_argument(
+        "--runtime-option",
+        action="append",
+        default=[],
+        help="Provision runtime option in KEY=VALUE form. Can be repeated.",
+    )
     parser.add_argument("--gpu-count", type=int, default=1, help="GPU count (default: %(default)s)")
     parser.add_argument("--model", required=True, help="Model ID to benchmark")
+    parser.add_argument(
+        "--phase-label",
+        default="phase1",
+        help="Label used in manifest naming and metadata (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--profile-name",
+        default="",
+        help="Optional profile label appended to output paths and manifest metadata.",
+    )
     parser.add_argument(
         "--preset",
         default="conversation",
@@ -160,7 +192,9 @@ def parse_args() -> argparse.Namespace:
         default=180,
         help="How long to wait for the retained worker to register with the gateway before warm runs (default: %(default)s)",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    parse_runtime_options(args.runtime_option)
+    return args
 
 
 def now_iso() -> str:
@@ -279,13 +313,25 @@ def fetch_health(health_url: str, *, insecure: bool) -> dict[str, object]:
 
 
 def benchmark_output_dir(args: argparse.Namespace) -> Path:
-    return Path(args.output_dir).expanduser() / slugify(args.engine)
+    output_dir = Path(args.output_dir).expanduser() / slugify(args.engine)
+    profile_name = str(getattr(args, "profile_name", "") or "").strip()
+    if profile_name:
+        output_dir = output_dir / slugify(profile_name)
+    return output_dir
 
 
 def build_manifest_path(args: argparse.Namespace) -> Path:
     if args.json_output:
         return Path(args.json_output).expanduser()
-    return benchmark_output_dir(args) / f"phase1-{slugify(args.engine)}-{slugify(args.gpu_type)}-manifest.json"
+    parts = [
+        slugify(str(getattr(args, "phase_label", "phase1") or "phase1")),
+        slugify(args.engine),
+        slugify(args.gpu_type),
+    ]
+    profile_name = str(getattr(args, "profile_name", "") or "").strip()
+    if profile_name:
+        parts.append(slugify(profile_name))
+    return benchmark_output_dir(args) / ("-".join(parts) + "-manifest.json")
 
 
 def retained_health_url_for_step(step_name: str, output_path: str) -> str | None:
@@ -301,6 +347,15 @@ def retained_health_url_for_step(step_name: str, output_path: str) -> str | None
         return None
     value = records[-1].get("health_url")
     return str(value) if value else None
+
+
+def runtime_options_from_args(args: argparse.Namespace) -> dict[str, str]:
+    return parse_runtime_options(list(getattr(args, "runtime_option", []) or []))
+
+
+def append_runtime_options(command: list[str], args: argparse.Namespace) -> None:
+    for key, value in sorted(runtime_options_from_args(args).items()):
+        command.extend(["--runtime-option", f"{key}={value}"])
 
 
 def build_warm_command(
@@ -369,6 +424,7 @@ def build_cold_start_command(args: argparse.Namespace, *, output_path: Path) -> 
     ]
     if args.provider_gpu_type_id:
         command.extend(["--provider-gpu-type-id", args.provider_gpu_type_id])
+    append_runtime_options(command, args)
     if args.health_insecure:
         command.append("--health-insecure")
     if args.quiet_progress:
@@ -403,6 +459,7 @@ def build_startup_health_command(args: argparse.Namespace, *, output_path: Path)
     ]
     if args.provider_gpu_type_id:
         command.extend(["--provider-gpu-type-id", args.provider_gpu_type_id])
+    append_runtime_options(command, args)
     if args.health_insecure:
         command.append("--health-insecure")
     if args.quiet_progress:
@@ -494,6 +551,8 @@ def build_manifest(args: argparse.Namespace, step_results: list[Phase1StepResult
         )
     return {
         "base_url": args.base_url,
+        "phase_label": str(getattr(args, "phase_label", "phase1") or "phase1"),
+        "profile_name": str(getattr(args, "profile_name", "") or ""),
         "engine": args.engine,
         "provider": args.provider,
         "gpu_type": args.gpu_type,
@@ -506,6 +565,7 @@ def build_manifest(args: argparse.Namespace, step_results: list[Phase1StepResult
         "concurrency": args.concurrency,
         "cost_per_hour": args.cost_per_hour,
         "output_dir": str(benchmark_output_dir(args)),
+        "runtime_options": runtime_options_from_args(args),
         "notes": notes,
         "steps": [asdict(result) for result in step_results],
     }

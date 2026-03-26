@@ -141,13 +141,30 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
         try:
             prompt = self._build_prompt(request)
             sampling_params = self._build_sampling_params(request)
-            first_token_time = datetime.now()
-            outputs = await asyncio.to_thread(engine.generate, [prompt], sampling_params)
-            final_output = outputs[0]
-            text = self._extract_text(final_output)
+            generate_async = getattr(engine, "generate_async", None)
+            if callable(generate_async):
+                first_token_time: datetime | None = None
+                final_output = None
+                prev_text = ""
+                async for output in generate_async(prompt, sampling_params, streaming=True):
+                    text_so_far = self._extract_text(output)
+                    if first_token_time is None and text_so_far and text_so_far != prev_text:
+                        first_token_time = datetime.now()
+                    prev_text = text_so_far
+                    final_output = output
+                text = prev_text
+            else:
+                outputs = await asyncio.to_thread(engine.generate, [prompt], sampling_params)
+                final_output = outputs[0]
+                text = self._extract_text(final_output)
+                first_token_time = None
 
             latency_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            ttft_ms = int((first_token_time - start_time).total_seconds() * 1000)
+            ttft_ms = (
+                int((first_token_time - start_time).total_seconds() * 1000)
+                if first_token_time is not None
+                else latency_ms
+            )
             prompt_tokens, completion_tokens = self._estimate_usage(final_output, request, text)
 
             return InferenceResponse(
@@ -190,6 +207,7 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
             sampling_params = self._build_sampling_params(request)
             prev_text = ""
             chunk_index = 0
+            emitted_final_chunk = False
 
             async for output in generate_async(prompt, sampling_params, streaming=True):
                 text = self._extract_text(output)
@@ -199,7 +217,7 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
                     continue
 
                 finish_reason = self._extract_finish_reason(output)
-                is_final = finish_reason is not None and finish_reason.value != "stop" or bool(
+                is_final = (finish_reason is not None and finish_reason.value != "stop") or bool(
                     getattr(output, "finished", False)
                 )
                 yield TokenChunk(
@@ -209,10 +227,13 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
                     finish_reason=finish_reason if is_final else None,
                     usage=self._stream_usage(output, request, text) if is_final else None,
                 )
+                if is_final:
+                    emitted_final_chunk = True
                 chunk_index += 1
 
-            if chunk_index == 0 or prev_text:
-                prompt_tokens, completion_tokens = self._estimate_usage(None, request, prev_text)
+            if not emitted_final_chunk:
+                prompt_tokens = self._count_prompt_tokens_from_prompt(request.model_id, prompt, request)
+                completion_tokens = self._count_completion_tokens(request.model_id, prev_text)
                 yield TokenChunk(
                     request_id=request.request_id,
                     index=chunk_index,
@@ -340,8 +361,9 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
         return self._map_finish_reason("stop")
 
     def _estimate_usage(self, output: Any, request: InferenceRequest, text: str) -> tuple[int, int]:
-        prompt_tokens = request.token_estimate()
-        completion_tokens = max(1, len(text) // 4) if text else 0
+        prompt = self._build_prompt(request)
+        prompt_tokens = self._count_prompt_tokens_from_prompt(request.model_id, prompt, request)
+        completion_tokens = self._count_completion_tokens(request.model_id, text)
         if output is None:
             return prompt_tokens, completion_tokens
 

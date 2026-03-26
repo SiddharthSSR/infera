@@ -153,6 +153,20 @@ async def test_vllm_engine_passes_runtime_tuning_knobs(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vllm_engine_can_disable_trust_remote_code(monkeypatch):
+    monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
+    monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgs)
+    monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
+
+    engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm", trust_remote_code=False))
+
+    await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
+
+    assert FakeAsyncEngineArgs.last_kwargs is not None
+    assert FakeAsyncEngineArgs.last_kwargs["trust_remote_code"] is False
+
+
+@pytest.mark.asyncio
 async def test_vllm_engine_skips_unsupported_optional_knobs(monkeypatch):
     monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
     monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgsWithoutScheduler)
@@ -214,6 +228,41 @@ async def test_vllm_engine_defers_tokenizer_load_until_prompt_build(monkeypatch)
         )
     )
     assert created_tokenizers == ["Qwen/Qwen2.5-7B-Instruct"]
+    assert prompt == "templated:Hello"
+
+
+@pytest.mark.asyncio
+async def test_vllm_tokenizer_respects_trust_remote_code_setting(monkeypatch):
+    monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
+    monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgs)
+    monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
+
+    observed_values: list[bool] = []
+
+    class FakeTokenizer:
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+            return f"templated:{messages[-1]['content']}"
+
+    class FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model_path, trust_remote_code):
+            del model_path
+            observed_values.append(trust_remote_code)
+            return FakeTokenizer()
+
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer))
+
+    engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm", trust_remote_code=False))
+    await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
+
+    prompt = engine._build_prompt(
+        SimpleNamespace(
+            model_id="Qwen/Qwen2.5-7B-Instruct",
+            messages=[SimpleNamespace(role=SimpleNamespace(value="user"), content="Hello")],
+        )
+    )
+
+    assert observed_values == [False]
     assert prompt == "templated:Hello"
 
 

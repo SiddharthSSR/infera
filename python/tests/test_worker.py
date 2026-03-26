@@ -171,6 +171,114 @@ class TestWorker:
         assert len(worker.get_loaded_models()) == 0
 
     @pytest.mark.asyncio
+    async def test_load_model_serializes_duplicate_loads(self):
+        class FakeEngine:
+            def __init__(self):
+                self.loaded = {}
+                self.calls = 0
+
+            async def load_model(self, config):
+                self.calls += 1
+                await asyncio.sleep(0.01)
+                model = SimpleNamespace(
+                    model_id=config.model_id,
+                    version="1.0.0",
+                    loaded_at=None,
+                    memory_bytes=1,
+                    max_batch_size=config.max_batch_size,
+                    max_sequence_length=config.max_sequence_length,
+                )
+                self.loaded[config.model_id] = model
+                return model
+
+            async def unload_model(self, model_id):
+                self.loaded.pop(model_id, None)
+                return True
+
+            def is_model_loaded(self, model_id):
+                return model_id in self.loaded
+
+            def get_loaded_models(self):
+                return list(self.loaded.values())
+
+            async def infer(self, request):
+                raise NotImplementedError
+
+            async def infer_stream(self, request):
+                raise NotImplementedError
+
+            async def cancel(self, request_id):
+                return False
+
+            def get_memory_usage(self):
+                return (0, 0)
+
+        worker = Worker(WorkerConfig(engine="mock"))
+        worker.engine = FakeEngine()
+        worker.state = WorkerState.READY
+
+        first, second = await asyncio.gather(
+            worker.load_model(ModelConfig(model_id="shared-model")),
+            worker.load_model(ModelConfig(model_id="shared-model")),
+        )
+
+        assert first.model_id == "shared-model"
+        assert second.model_id == "shared-model"
+        assert worker.engine.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_unload_model_waits_for_inflight_requests(self):
+        class FakeEngine:
+            def __init__(self):
+                self.loaded = {"test-model": SimpleNamespace(model_id="test-model")}
+                self.unloaded = []
+
+            async def load_model(self, config):
+                raise NotImplementedError
+
+            async def unload_model(self, model_id):
+                self.unloaded.append(model_id)
+                return True
+
+            def is_model_loaded(self, model_id):
+                return model_id in self.loaded
+
+            def get_loaded_models(self):
+                return [SimpleNamespace(model_id="test-model")]
+
+            async def infer(self, request):
+                raise NotImplementedError
+
+            async def infer_stream(self, request):
+                raise NotImplementedError
+
+            async def cancel(self, request_id):
+                return False
+
+            def get_memory_usage(self):
+                return (0, 0)
+
+        worker = Worker(WorkerConfig(engine="mock"))
+        worker.engine = FakeEngine()
+        worker.state = WorkerState.READY
+        worker._active_requests = 1
+        worker._all_requests_idle.clear()
+
+        async def release_idle():
+            await asyncio.sleep(0.01)
+            worker._active_requests = 0
+            worker._all_requests_idle.set()
+
+        release_task = asyncio.create_task(release_idle())
+        try:
+            result = await worker.unload_model("test-model")
+        finally:
+            await release_task
+
+        assert result is True
+        assert worker.engine.unloaded == ["test-model"]
+
+    @pytest.mark.asyncio
     async def test_get_loaded_models_empty(self, worker):
         await worker.start()
         

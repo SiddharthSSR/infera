@@ -112,15 +112,32 @@ class SGLangEngine(TokenizerPromptEngine):
         try:
             prompt = self._build_prompt(request)
             sampling_params = self._build_sampling_params(request)
-
-            first_token_time = datetime.now()
-            outputs = await engine.async_generate([prompt], sampling_params)
-            final_output = outputs[0]
-            text = self._extract_text(final_output)
+            if async_stream_and_merge is None:
+                outputs = await engine.async_generate([prompt], sampling_params)
+                final_output = outputs[0]
+                text = self._extract_text(final_output)
+                first_token_time: datetime | None = None
+                prompt_tokens, completion_tokens = self._estimate_usage(final_output, request, text)
+            else:
+                first_token_time = None
+                chunks: list[str] = []
+                async for chunk_text in async_stream_and_merge(engine, prompt, sampling_params):
+                    if not chunk_text:
+                        continue
+                    if first_token_time is None:
+                        first_token_time = datetime.now()
+                    chunks.append(chunk_text)
+                final_output = None
+                text = "".join(chunks)
+                prompt_tokens = self._count_prompt_tokens_from_prompt(request.model_id, prompt, request)
+                completion_tokens = self._count_completion_tokens(request.model_id, text)
 
             latency_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            ttft_ms = int((first_token_time - start_time).total_seconds() * 1000)
-            prompt_tokens, completion_tokens = self._estimate_usage(final_output, request, text)
+            ttft_ms = (
+                int((first_token_time - start_time).total_seconds() * 1000)
+                if first_token_time is not None
+                else latency_ms
+            )
 
             return InferenceResponse(
                 request_id=request.request_id,
@@ -172,8 +189,8 @@ class SGLangEngine(TokenizerPromptEngine):
                 )
                 chunk_index += 1
 
-            prompt_tokens = request.token_estimate()
-            completion_tokens = max(1, len(accumulated) // 4) if accumulated else 0
+            prompt_tokens = self._count_prompt_tokens_from_prompt(request.model_id, prompt, request)
+            completion_tokens = self._count_completion_tokens(request.model_id, accumulated)
             yield TokenChunk(
                 request_id=request.request_id,
                 index=chunk_index,
@@ -254,8 +271,9 @@ class SGLangEngine(TokenizerPromptEngine):
         return self._map_finish_reason("stop")
 
     def _estimate_usage(self, output: Any, request: InferenceRequest, text: str) -> tuple[int, int]:
-        prompt_tokens = request.token_estimate()
-        completion_tokens = max(1, len(text) // 4) if text else 0
+        prompt = self._build_prompt(request)
+        prompt_tokens = self._count_prompt_tokens_from_prompt(request.model_id, prompt, request)
+        completion_tokens = self._count_completion_tokens(request.model_id, text)
         if isinstance(output, dict):
             meta_info = output.get("meta_info", {})
             prompt_tokens = int(meta_info.get("prompt_tokens", prompt_tokens))

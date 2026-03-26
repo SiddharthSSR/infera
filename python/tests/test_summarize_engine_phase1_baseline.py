@@ -304,6 +304,29 @@ def test_build_report_summarizes_phase1_outputs_and_gaps(tmp_path):
     assert "tensorrt_llm: manifest is missing expected step warm_affinity" in report["gaps"]
 
 
+def test_build_report_marks_blocked_engines_separately(tmp_path):
+    module = load_module()
+    vllm_manifest = create_manifest(tmp_path, "vllm", include_warm=True)
+    create_manifest(tmp_path, "tensorrt_llm", include_warm=False)
+
+    manifest_paths = module.discover_manifest_paths([str(vllm_manifest.parent.parent)])
+    report = module.build_report(
+        manifest_paths,
+        ["vllm", "tensorrt_llm"],
+        {"tensorrt_llm": "Blocked on current RunPod provider/model combination."},
+    )
+
+    assert report["blocked_engines"] == [
+        {
+            "engine": "tensorrt_llm",
+            "reason": "Blocked on current RunPod provider/model combination.",
+            "manifest_path": str((tmp_path / "tensorrt-llm" / "phase1-tensorrt-llm-a100-80gb-manifest.json").resolve()),
+            "step_names": ["cold_start", "startup_health"],
+        }
+    ]
+    assert not any(gap.startswith("tensorrt_llm:") for gap in report["gaps"])
+
+
 def test_render_markdown_includes_all_sections(tmp_path):
     module = load_module()
     manifest_path = create_manifest(tmp_path, "vllm", include_warm=True)
@@ -319,3 +342,19 @@ def test_render_markdown_includes_all_sections(tmp_path):
     assert "vllm" in markdown
     assert "120.0" in markdown
     assert "fresh_provision" in markdown
+
+
+def test_render_markdown_includes_blocked_engines_section(tmp_path):
+    module = load_module()
+    manifest_path = create_manifest(tmp_path, "vllm", include_warm=True)
+    manifest_paths = module.discover_manifest_paths([str(manifest_path.parent.parent)])
+    report = module.build_report(
+        manifest_paths,
+        ["vllm", "tensorrt_llm"],
+        {"tensorrt_llm": "Blocked on current RunPod provider/model combination."},
+    )
+
+    markdown = module.render_markdown(report)
+
+    assert "## Blocked Engines" in markdown
+    assert "Blocked on current RunPod provider/model combination." in markdown

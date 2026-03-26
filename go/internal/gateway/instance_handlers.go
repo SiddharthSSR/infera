@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -152,19 +153,20 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req struct {
-		Name                string   `json:"name"`
-		Provider            string   `json:"provider"`
-		Engine              string   `json:"engine"`
-		GPUType             string   `json:"gpu_type"`
-		ProviderGPUTypeID   string   `json:"provider_gpu_type_id"`
-		GPUCount            int      `json:"gpu_count"`
-		AllowedCudaVersions []string `json:"allowed_cuda_versions"`
-		Region              string   `json:"region"`
-		SpotInstance        bool     `json:"spot_instance"`
-		MaxCostHour         float64  `json:"max_cost_hour"`
-		Models              []string `json:"models"`
-		SelectedModelName   string   `json:"selected_model_name"`
-		GatewayAddress      string   `json:"gateway_address"`
+		Name                string            `json:"name"`
+		Provider            string            `json:"provider"`
+		Engine              string            `json:"engine"`
+		GPUType             string            `json:"gpu_type"`
+		ProviderGPUTypeID   string            `json:"provider_gpu_type_id"`
+		GPUCount            int               `json:"gpu_count"`
+		AllowedCudaVersions []string          `json:"allowed_cuda_versions"`
+		Options             map[string]string `json:"options"`
+		Region              string            `json:"region"`
+		SpotInstance        bool              `json:"spot_instance"`
+		MaxCostHour         float64           `json:"max_cost_hour"`
+		Models              []string          `json:"models"`
+		SelectedModelName   string            `json:"selected_model_name"`
+		GatewayAddress      string            `json:"gateway_address"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -182,6 +184,10 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid_request", "engine must be one of: vllm, sglang, tensorrt_llm, mock")
 		return
 	}
+	if err := providers.ValidateRuntimeOptions(engine, req.Options); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 
 	// Get gateway address from request, env, or default
 	gatewayAddress := req.GatewayAddress
@@ -197,6 +203,7 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		ProviderGPUTypeID:   strings.TrimSpace(req.ProviderGPUTypeID),
 		GPUCount:            req.GPUCount,
 		AllowedCudaVersions: slices.Clone(req.AllowedCudaVersions),
+		Options:             cloneStringMap(req.Options),
 		Region:              req.Region,
 		SpotInstance:        req.SpotInstance,
 		MaxCostHour:         req.MaxCostHour,
@@ -215,32 +222,47 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 	instance, err := h.manager.Provision(r.Context(), provisionReq)
 	if err != nil {
 		if h.deploymentStore != nil {
-			_, _ = h.deploymentStore.RecordFailedAttempt(
+			if _, storeErr := h.deploymentStore.RecordFailedAttempt(
 				currentWorkspaceID(r),
 				currentKeyID(r),
 				*provisionReq,
 				req.SelectedModelName,
 				deploymentFailureReason(err),
-			)
+			); storeErr != nil {
+				slog.Warn("deployments.record_failed_attempt_failed", slog.String("error", storeErr.Error()))
+			}
 		}
 		writeProviderActionError(w, "provision_failed", err)
 		return
 	}
 
 	if h.deploymentStore != nil {
-		_, _ = h.deploymentStore.RecordProvisionedAttempt(
+		if _, storeErr := h.deploymentStore.RecordProvisionedAttempt(
 			currentWorkspaceID(r),
 			currentKeyID(r),
 			*provisionReq,
 			req.SelectedModelName,
 			instance,
-		)
+		); storeErr != nil {
+			slog.Warn("deployments.record_provisioned_attempt_failed", slog.String("error", storeErr.Error()))
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"success":  true,
 		"instance": instanceToMap(instance),
 	})
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (h *InstanceHandlers) handleDeployments(w http.ResponseWriter, r *http.Request) {

@@ -319,6 +319,22 @@ func TestManagerProvision(t *testing.T) {
 			t.Errorf("expected test-instance, got %s", inst.Name)
 		}
 	})
+
+	t.Run("GetInstance returns clone", func(t *testing.T) {
+		inst, exists := mgr.GetInstance(instance.ID)
+		if !exists {
+			t.Fatal("instance should exist")
+		}
+		inst.Name = "mutated"
+
+		reloaded, exists := mgr.GetInstance(instance.ID)
+		if !exists {
+			t.Fatal("instance should still exist")
+		}
+		if reloaded.Name != "test-instance" {
+			t.Fatalf("expected tracked instance to remain unchanged, got %q", reloaded.Name)
+		}
+	})
 }
 
 func TestManagerProvisionWithDefaults(t *testing.T) {

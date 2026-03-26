@@ -206,7 +206,7 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 
 // Terminate destroys an instance.
 func (m *Manager) Terminate(ctx context.Context, instanceID string) error {
-	instance, exists := m.GetInstance(instanceID)
+	instance, exists := m.getTrackedInstance(instanceID)
 	if !exists {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
@@ -236,7 +236,7 @@ func (m *Manager) Terminate(ctx context.Context, instanceID string) error {
 
 // Start starts a stopped instance.
 func (m *Manager) Start(ctx context.Context, instanceID string) error {
-	instance, exists := m.GetInstance(instanceID)
+	instance, exists := m.getTrackedInstance(instanceID)
 	if !exists {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
@@ -279,7 +279,7 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 
 // Stop stops a running instance.
 func (m *Manager) Stop(ctx context.Context, instanceID string) error {
-	instance, exists := m.GetInstance(instanceID)
+	instance, exists := m.getTrackedInstance(instanceID)
 	if !exists {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
@@ -305,12 +305,37 @@ func (m *Manager) Stop(ctx context.Context, instanceID string) error {
 	return nil
 }
 
-// GetInstance returns an instance by ID.
-func (m *Manager) GetInstance(instanceID string) (*Instance, bool) {
+func (m *Manager) getTrackedInstance(instanceID string) (*Instance, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	instance, exists := m.instances[instanceID]
 	return instance, exists
+}
+
+func cloneInstance(instance *Instance) *Instance {
+	if instance == nil {
+		return nil
+	}
+	cloned := *instance
+	if instance.Models != nil {
+		cloned.Models = slices.Clone(instance.Models)
+	}
+	if instance.Metadata != nil {
+		cloned.Metadata = make(map[string]string, len(instance.Metadata))
+		for key, value := range instance.Metadata {
+			cloned.Metadata[key] = value
+		}
+	}
+	return &cloned
+}
+
+// GetInstance returns a defensive copy of an instance by ID.
+func (m *Manager) GetInstance(instanceID string) (*Instance, bool) {
+	instance, exists := m.getTrackedInstance(instanceID)
+	if !exists {
+		return nil, false
+	}
+	return cloneInstance(instance), true
 }
 
 // ListInstances returns all tracked instances.
@@ -320,7 +345,7 @@ func (m *Manager) ListInstances() []*Instance {
 
 	instances := make([]*Instance, 0, len(m.instances))
 	for _, inst := range m.instances {
-		instances = append(instances, inst)
+		instances = append(instances, cloneInstance(inst))
 	}
 	return instances
 }
@@ -333,7 +358,7 @@ func (m *Manager) ListInstancesByProvider(providerType ProviderType) []*Instance
 	var instances []*Instance
 	for _, inst := range m.instances {
 		if inst.Provider == providerType {
-			instances = append(instances, inst)
+			instances = append(instances, cloneInstance(inst))
 		}
 	}
 	return instances
@@ -346,7 +371,7 @@ func (m *Manager) ListInstancesByWorkspace(workspaceID string) []*Instance {
 	var instances []*Instance
 	for _, inst := range m.instances {
 		if inst.WorkspaceID == workspaceID {
-			instances = append(instances, inst)
+			instances = append(instances, cloneInstance(inst))
 		}
 	}
 	return instances
@@ -557,7 +582,7 @@ func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
 
 	for _, inst := range m.instances {
 		if inst.WorkerID == workerID {
-			return inst, true
+			return cloneInstance(inst), true
 		}
 	}
 	return nil, false
@@ -570,7 +595,7 @@ func (m *Manager) GetInstanceByProviderRef(providerType ProviderType, providerID
 
 	for _, inst := range m.instances {
 		if inst.Provider == providerType && inst.ProviderID == providerID {
-			return inst, true
+			return cloneInstance(inst), true
 		}
 	}
 	return nil, false

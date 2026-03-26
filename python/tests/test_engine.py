@@ -133,8 +133,9 @@ class TestSGLangEngine:
             assert sampling_params["temperature"] == 1.0
             assert sampling_params["max_new_tokens"] == 256
             assert "max_tokens" not in sampling_params
+            await asyncio.sleep(0.01)
             yield "SGLang "
-            yield "stream"
+            yield "response"
 
         monkeypatch.setattr(sglang_module, "SGLANG_AVAILABLE", True)
         monkeypatch.setattr(sglang_module, "sgl", SimpleNamespace(Engine=FakeSGLangEngine))
@@ -149,6 +150,13 @@ class TestSGLangEngine:
                 assert tokenize is False
                 assert add_generation_prompt is True
                 return f"templated:{messages[-1]['content']}"
+
+            def encode(self, text, add_special_tokens=False):
+                if text == "templated:Hello, how are you?":
+                    return [1, 2, 3, 4, 5]
+                if text == "SGLang response":
+                    return [1, 2, 3]
+                return [1]
 
         monkeypatch.setattr(sglang_module.TokenizerPromptEngine, "_get_tokenizer", lambda _self, _model_id: FakeTokenizer())
 
@@ -178,7 +186,11 @@ class TestSGLangEngine:
         assert response.choices[0].message.content == "SGLang response"
         assert response.usage.prompt_tokens == 5
         assert response.usage.completion_tokens == 3
+        assert response.latency.time_to_first_token_ms > 0
         assert streamed[-1].finish_reason == FinishReason.STOP
+        assert streamed[-1].usage is not None
+        assert streamed[-1].usage.prompt_tokens == 5
+        assert streamed[-1].usage.completion_tokens == 3
 
     def test_sglang_engine_raises_when_dependency_missing(self, monkeypatch):
         monkeypatch.setattr(sglang_module, "SGLANG_AVAILABLE", False)
@@ -222,9 +234,10 @@ class TestTensorRTLLMEngine:
             async def generate_async(self, prompt, sampling_params, streaming):
                 assert prompt == "templated:Hello, how are you?"
                 assert streaming is True
+                await asyncio.sleep(0.01)
                 yield FakeOutput("Tensor", [1], finish_reason=None, finished=False)
                 yield FakeOutput("TensorRT", [1, 2], finish_reason=None, finished=False)
-                yield FakeOutput("TensorRT stream", [1, 2, 3], finish_reason="stop", finished=True)
+                yield FakeOutput("TensorRT response", [1, 2, 3], finish_reason="stop", finished=True)
 
             def shutdown(self):
                 return None
@@ -268,6 +281,8 @@ class TestTensorRTLLMEngine:
         assert created_kwargs["build_config"].kwargs["max_num_tokens"] == 4096
         assert isinstance(created_kwargs["kv_cache_config"], FakeKvCacheConfig)
         assert response.choices[0].message.content == "TensorRT response"
+        assert response.latency.time_to_first_token_ms > 0
+        assert len(chunks) == 3
         assert chunks[-1].finish_reason == FinishReason.STOP
 
     @pytest.mark.asyncio

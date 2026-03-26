@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 from datetime import datetime
 import inspect
 from typing import Any
+import structlog
 
 from ..config import ModelConfig, WorkerConfig
 from ..engine import EngineCapabilities, EngineDefinition, register_engine
@@ -19,6 +20,8 @@ from ..types import (
     UsageStats,
 )
 from .base import TokenizerPromptEngine
+
+logger = structlog.get_logger()
 
 # vLLM imports are optional - only loaded when engine is used
 try:
@@ -58,10 +61,16 @@ class VLLMEngine(TokenizerPromptEngine):
             "gpu_memory_utilization": runtime.gpu_memory_utilization,
             "max_model_len": runtime.max_model_len,
             "quantization": model_config.quantization,
-            "trust_remote_code": True,
+            "trust_remote_code": self.config.trust_remote_code,
             "enable_prefix_caching": runtime.enable_prefix_caching,
             "enable_chunked_prefill": runtime.enable_chunked_prefill,
         }
+        if self.config.trust_remote_code:
+            logger.warning(
+                "Loading vLLM model with trust_remote_code enabled",
+                model_id=model_config.model_id,
+                model_path=model_path,
+            )
 
         optional_engine_kwargs: dict[str, Any] = {}
         if runtime.max_num_batched_tokens is not None:

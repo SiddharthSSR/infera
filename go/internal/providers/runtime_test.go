@@ -1,6 +1,9 @@
 package providers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestResolveWorkerImage(t *testing.T) {
 	images := map[InferenceEngine]string{
@@ -34,6 +37,42 @@ func TestCloneWorkerImagesNormalizesAndDropsEmptyValues(t *testing.T) {
 	}
 	if got := cloned[EngineTensorRTLLM]; got != "trt-worker:v1" {
 		t.Fatalf("expected normalized TensorRT image, got %q", got)
+	}
+}
+
+func TestValidateRuntimeOptionsRejectsUnknownKeys(t *testing.T) {
+	err := ValidateRuntimeOptions(EngineVLLM, map[string]string{
+		"UNEXPECTED_ENV": "1",
+	})
+	if err == nil {
+		t.Fatal("expected unknown runtime option to be rejected")
+	}
+}
+
+func TestValidateRuntimeOptionsAcceptsRecognizedKeys(t *testing.T) {
+	err := ValidateRuntimeOptions(EngineSGLang, map[string]string{
+		OptionSGLangMaxRunningRequests: "32",
+	})
+	if err != nil {
+		t.Fatalf("expected recognized runtime option to pass validation, got %v", err)
+	}
+}
+
+func TestValidateRuntimeOptionsRejectsInvalidValue(t *testing.T) {
+	err := ValidateRuntimeOptions(EngineVLLM, map[string]string{
+		OptionVLLMGPUMemoryUtilization: "1.5",
+	})
+	if err == nil || !strings.Contains(err.Error(), OptionVLLMGPUMemoryUtilization) {
+		t.Fatalf("expected invalid gpu memory utilization error, got %v", err)
+	}
+}
+
+func TestValidateRuntimeOptionsRejectsUnsafeStringValue(t *testing.T) {
+	err := ValidateRuntimeOptions(EngineVLLM, map[string]string{
+		OptionVLLMSpeculativeModel: "draft-model;rm -rf /",
+	})
+	if err == nil || !strings.Contains(err.Error(), OptionVLLMSpeculativeModel) {
+		t.Fatalf("expected unsafe speculative model error, got %v", err)
 	}
 }
 

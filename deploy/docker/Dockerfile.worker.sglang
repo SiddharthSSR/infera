@@ -43,23 +43,32 @@ RUN pip install --no-cache-dir -e . && \
     python -c "from sglang.utils import async_stream_and_merge; print('SGLang imports OK')" && \
     python -c "from infera_worker.engines.sglang_engine import SGLangEngine; print('SGLangEngine OK')"
 
+RUN groupadd --gid 10001 infera && \
+    useradd --uid 10001 --gid 10001 --create-home --home-dir /home/infera --shell /usr/sbin/nologin infera && \
+    mkdir -p /home/infera/.cache/huggingface/hub /home/infera/.cache/torch && \
+    chown -R infera:infera /app /home/infera
+
 ENV INFERA_ENGINE=sglang
 ENV INFERA_HTTP_PORT=8081
 ENV INFERA_GRPC_PORT=50051
 ENV INFERA_LOG_LEVEL=INFO
 ENV INFERA_LOG_FORMAT=json
 
-# Keep model artifacts on the mounted workspace volume when available.
-ENV XDG_CACHE_HOME=/workspace/.cache
-ENV HF_HOME=/workspace/.cache/huggingface
-ENV HUGGINGFACE_HUB_CACHE=/workspace/.cache/huggingface/hub
-ENV TRANSFORMERS_CACHE=/workspace/.cache/huggingface/hub
-ENV TORCH_HOME=/workspace/.cache/torch
+# Use a user-owned cache location by default. Deployments can still override
+# these paths when they intentionally mount a persistent writable volume.
+ENV HOME=/home/infera
+ENV XDG_CACHE_HOME=/home/infera/.cache
+ENV HF_HOME=/home/infera/.cache/huggingface
+ENV HUGGINGFACE_HUB_CACHE=/home/infera/.cache/huggingface/hub
+ENV TRANSFORMERS_CACHE=/home/infera/.cache/huggingface/hub
+ENV TORCH_HOME=/home/infera/.cache/torch
 
 ENV INFERA_ROUTER_ADDRESS=""
 ENV INFERA_PRELOAD_MODELS=""
 
 EXPOSE 8081 50051
+
+USER infera
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
     CMD curl -f http://localhost:8081/health || exit 1

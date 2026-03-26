@@ -105,6 +105,10 @@ class WorkerConfig(BaseSettings):
     # GPU/Device
     device: str = Field(default="auto", description="Device: auto, cuda, mps, cpu")
     gpu_memory_fraction: float = Field(default=0.9, description="GPU memory fraction to use")
+    trust_remote_code: bool = Field(
+        default=True,
+        description="Allow Hugging Face remote model/tokenizer code when required by the runtime",
+    )
     
     # Health reporting
     health_report_interval_ms: int = Field(default=5000, description="Health report interval")

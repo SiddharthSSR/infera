@@ -42,7 +42,31 @@ Before filling this matrix, follow:
 | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | vllm | runpod | A100_80GB | 1 | Qwen/Qwen2.5-7B-Instruct | conversation | 4 | none |  |  |  |  |  |  |  |  |
 | sglang | runpod | A100_80GB | 1 | Qwen/Qwen2.5-7B-Instruct | conversation | 4 | none |  |  |  |  |  |  |  |  |
-| tensorrt_llm | runpod | A100_80GB | 1 | Qwen/Qwen2.5-7B-Instruct | conversation | 4 | none |  |  |  |  |  |  |  |  |
+
+## Blocked Engines
+
+| Engine | Status | Reason |
+| --- | --- | --- |
+| tensorrt_llm | blocked | Current RunPod A100_80GB Qwen/Qwen2.5-7B-Instruct path does not have a reliable compatible TensorRT-LLM runtime and host combination. |
+
+## Phase 2 Tuning Matrix
+
+| Engine | Profile | Knob Group | Runtime Overrides | Goal | Status | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| vllm | baseline_conservative | baseline | inherit Phase 1 conservative env | comparison anchor | pending |  |
+| vllm | prefill_batching_4096 | prefill_batching | `INFERA_VLLM_MAX_NUM_BATCHED_TOKENS=4096` | improve aggregate throughput without large TTFT regression | pending |  |
+| vllm | prefill_batching_8192 | prefill_batching | `INFERA_VLLM_MAX_NUM_BATCHED_TOKENS=8192` | maximize batching efficiency | pending |  |
+| vllm | concurrency_32 | concurrency | `INFERA_VLLM_MAX_NUM_SEQS=32` | reduce queueing pressure | pending |  |
+| vllm | concurrency_48 | concurrency | `INFERA_VLLM_MAX_NUM_SEQS=48` | improve steady-state throughput | pending |  |
+| vllm | scheduler_steps_2 | scheduler | `INFERA_VLLM_NUM_SCHEDULER_STEPS=2` | lower scheduling overhead | pending |  |
+| vllm | scheduler_steps_4 | scheduler | `INFERA_VLLM_NUM_SCHEDULER_STEPS=4` | test higher batching efficiency | pending |  |
+| sglang | baseline_conservative | baseline | inherit Phase 1 conservative env | comparison anchor | pending |  |
+| sglang | chunked_prefill_2048 | chunked_prefill | `INFERA_SGLANG_CHUNKED_PREFILL_SIZE=2048` | smooth TTFT and tails | pending |  |
+| sglang | chunked_prefill_4096 | chunked_prefill | `INFERA_SGLANG_CHUNKED_PREFILL_SIZE=4096` | test balanced prefill sizing | pending |  |
+| sglang | running_requests_32 | running_requests | `INFERA_SGLANG_MAX_RUNNING_REQUESTS=32` | reduce tail latency and capacity pressure | pending |  |
+| sglang | running_requests_48 | running_requests | `INFERA_SGLANG_MAX_RUNNING_REQUESTS=48` | improve throughput | pending |  |
+| sglang | memory_fraction_085 | memory_fraction | `INFERA_SGLANG_MEM_FRACTION_STATIC=0.85` | recover memory headroom | pending |  |
+| sglang | memory_fraction_094 | memory_fraction | `INFERA_SGLANG_MEM_FRACTION_STATIC=0.94` | push utilization higher | pending |  |
 
 ## Collection Notes
 
@@ -55,6 +79,9 @@ Before filling this matrix, follow:
 
 - To combine all untuned Phase 1 engine runs into one report, use:
   - [/Users/siddharthsingh/codingtensor/infera/scripts/summarize-engine-phase1-baseline.py](/Users/siddharthsingh/codingtensor/infera/scripts/summarize-engine-phase1-baseline.py)
+
+- To execute named Phase 2 tuning profiles, use:
+  - [/Users/siddharthsingh/codingtensor/infera/scripts/run-engine-benchmark-phase2.py](/Users/siddharthsingh/codingtensor/infera/scripts/run-engine-benchmark-phase2.py)
 
 - Always record:
   - engine image / runtime version

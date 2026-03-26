@@ -48,6 +48,7 @@ class Worker:
         )
         self._all_requests_idle = asyncio.Event()
         self._all_requests_idle.set()
+        self._model_lifecycle_lock = asyncio.Lock()
         
         # Lifecycle
         self._shutdown_event = asyncio.Event()
@@ -132,22 +133,47 @@ class Worker:
         """Load a model."""
         if self.engine is None:
             raise RuntimeError("Worker not ready: not initialized")
-        
-        logger.info("Loading model", model_id=config.model_id)
-        model = await self.engine.load_model(config)
-        logger.info("Model loaded", model_id=config.model_id, memory_bytes=model.memory_bytes)
-        return model
+
+        async with self._model_lifecycle_lock:
+            if self.engine.is_model_loaded(config.model_id):
+                for loaded in self.engine.get_loaded_models():
+                    if loaded.model_id == config.model_id:
+                        logger.info("Model already loaded", model_id=config.model_id)
+                        return loaded
+
+            logger.info("Loading model", model_id=config.model_id)
+            model = await self.engine.load_model(config)
+            logger.info("Model loaded", model_id=config.model_id, memory_bytes=model.memory_bytes)
+            return model
 
     async def unload_model(self, model_id: str) -> bool:
         """Unload a model."""
         if self.engine is None:
             raise RuntimeError("Worker not ready: not initialized")
-        
-        logger.info("Unloading model", model_id=model_id)
-        result = await self.engine.unload_model(model_id)
-        if result:
-            logger.info("Model unloaded", model_id=model_id)
-        return result
+
+        async with self._model_lifecycle_lock:
+            if self._active_requests > 0 or self._queued_requests > 0:
+                logger.info(
+                    "Waiting for in-flight requests before unloading model",
+                    model_id=model_id,
+                    active_requests=self._active_requests,
+                    queued_requests=self._queued_requests,
+                )
+                try:
+                    await asyncio.wait_for(
+                        self._all_requests_idle.wait(),
+                        timeout=self.config.drain_timeout_s,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise RuntimeError(
+                        f"timed out waiting for in-flight requests to finish before unloading {model_id}"
+                    ) from exc
+
+            logger.info("Unloading model", model_id=model_id)
+            result = await self.engine.unload_model(model_id)
+            if result:
+                logger.info("Model unloaded", model_id=model_id)
+            return result
 
     def get_loaded_models(self) -> list[LoadedModel]:
         """Get list of loaded models."""

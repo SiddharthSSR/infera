@@ -58,6 +58,7 @@ def test_build_provision_payload_defaults_allowed_cuda_versions_for_tensorrt_run
             "model": "Qwen/Qwen2.5-7B-Instruct",
             "provider_gpu_type_id": "NVIDIA A100 80GB PCIe",
             "allowed_cuda_version": [],
+            "runtime_option": [],
         },
     )()
 
@@ -80,12 +81,42 @@ def test_build_provision_payload_prefers_explicit_allowed_cuda_versions():
             "model": "Qwen/Qwen2.5-7B-Instruct",
             "provider_gpu_type_id": "",
             "allowed_cuda_version": ["12.7", "12.8", "12.8"],
+            "runtime_option": [],
         },
     )()
 
     payload = module.build_provision_payload(args)
 
     assert payload["allowed_cuda_versions"] == ["12.7", "12.8"]
+
+
+def test_build_provision_payload_includes_runtime_options():
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "instance_name": "cache-probe-bench",
+            "provider": "runpod",
+            "engine": "sglang",
+            "gpu_type": "A100_80GB",
+            "gpu_count": 1,
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "provider_gpu_type_id": "",
+            "allowed_cuda_version": [],
+            "runtime_option": [
+                "INFERA_ENGINE=sglang",
+                "INFERA_SGLANG_MAX_RUNNING_REQUESTS=32",
+            ],
+        },
+    )()
+
+    payload = module.build_provision_payload(args)
+
+    assert payload["options"] == {
+        "INFERA_ENGINE": "sglang",
+        "INFERA_SGLANG_MAX_RUNNING_REQUESTS": "32",
+    }
 
 
 def test_build_report_serializes_capture():

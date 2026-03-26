@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
+import threading
 from typing import Any, Callable
 
 import structlog
@@ -187,6 +188,7 @@ class TokenizerPromptEngine(BaseInferenceEngine):
         super().__init__(config)
         self.tokenizers: dict[str, Any] = {}
         self.model_paths: dict[str, str] = {}
+        self._tokenizer_lock = threading.RLock()
 
     def _resolve_model_path(self, model_config: ModelConfig) -> str:
         return model_config.model_path or model_config.model_id
@@ -211,21 +213,69 @@ class TokenizerPromptEngine(BaseInferenceEngine):
         if tokenizer is not _TOKENIZER_UNINITIALIZED:
             return tokenizer
 
-        model_path = self.model_paths.get(model_id)
-        if not model_path:
-            self.tokenizers[model_id] = None
+        with self._tokenizer_lock:
+            tokenizer = self.tokenizers.get(model_id)
+            if tokenizer is not _TOKENIZER_UNINITIALIZED:
+                return tokenizer
+
+            model_path = self.model_paths.get(model_id)
+            if not model_path:
+                self.tokenizers[model_id] = None
+                return None
+
+            self._record_stage("tokenizer_load_started")
+            try:
+                from transformers import AutoTokenizer
+
+                if self.config.trust_remote_code:
+                    logger.warning(
+                        "Loading tokenizer with trust_remote_code enabled",
+                        model_id=model_id,
+                        model_path=model_path,
+                    )
+                tokenizer = AutoTokenizer.from_pretrained(
+                    model_path,
+                    trust_remote_code=self.config.trust_remote_code,
+                )
+            except Exception:
+                tokenizer = None
+            self.tokenizers[model_id] = tokenizer
+            self._record_stage("tokenizer_load_finished")
+            return tokenizer
+
+    def _count_tokens_from_text(self, model_id: str, text: str) -> int | None:
+        if not text:
+            return 0
+        tokenizer = self._get_tokenizer(model_id)
+        if tokenizer is None:
+            return None
+        try:
+            if hasattr(tokenizer, "encode"):
+                token_ids = tokenizer.encode(text, add_special_tokens=False)
+                if isinstance(token_ids, list):
+                    return len(token_ids)
+            encoded = tokenizer(text, add_special_tokens=False)
+            if isinstance(encoded, dict):
+                token_ids = encoded.get("input_ids")
+            else:
+                token_ids = getattr(encoded, "input_ids", None)
+            if token_ids is None:
+                return None
+            return len(token_ids)
+        except Exception:
             return None
 
-        self._record_stage("tokenizer_load_started")
-        try:
-            from transformers import AutoTokenizer
+    def _count_prompt_tokens_from_prompt(self, model_id: str, prompt: str, request: InferenceRequest) -> int:
+        count = self._count_tokens_from_text(model_id, prompt)
+        if count is not None:
+            return count
+        return request.token_estimate()
 
-            tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        except Exception:
-            tokenizer = None
-        self.tokenizers[model_id] = tokenizer
-        self._record_stage("tokenizer_load_finished")
-        return tokenizer
+    def _count_completion_tokens(self, model_id: str, text: str) -> int:
+        count = self._count_tokens_from_text(model_id, text)
+        if count is not None:
+            return count
+        return max(1, len(text) // 4) if text else 0
 
     def _build_prompt(self, request: InferenceRequest) -> str:
         messages = [{"role": msg.role.value, "content": msg.content} for msg in request.messages]

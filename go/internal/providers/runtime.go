@@ -2,6 +2,9 @@ package providers
 
 import (
 	"fmt"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -41,6 +44,8 @@ const (
 	// real draft model. GPUs below this threshold get no speculative decoding.
 	largeGPUVRAMThresholdGB = 40
 )
+
+var runtimeOptionTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._/\-\[\]]+$`)
 
 type modelRuntimePreset struct {
 	TensorParallelSize   int
@@ -300,6 +305,140 @@ func WorkerRuntimeEnv(req *ProvisionRequest) map[string]string {
 		return nil
 	}
 	return env
+}
+
+// AllowedRuntimeOptions returns the recognized runtime option keys for an engine.
+func AllowedRuntimeOptions(engine InferenceEngine) []string {
+	return slices.Clone(workerRuntimeOptionKeys(engine.OrDefault()))
+}
+
+// ValidateRuntimeOptions rejects unknown or empty runtime option entries.
+func ValidateRuntimeOptions(engine InferenceEngine, options map[string]string) error {
+	if len(options) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(workerRuntimeOptionKeys(engine)))
+	for _, key := range workerRuntimeOptionKeys(engine) {
+		allowed[key] = struct{}{}
+	}
+	for key, value := range options {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			return fmt.Errorf("runtime option key must not be empty")
+		}
+		if _, ok := allowed[trimmedKey]; !ok {
+			return fmt.Errorf("unsupported runtime option %q for engine %s", trimmedKey, engine.OrDefault())
+		}
+		trimmedValue := strings.TrimSpace(value)
+		if trimmedValue == "" {
+			return fmt.Errorf("runtime option %q must not be empty", trimmedKey)
+		}
+		if err := validateRuntimeOptionValue(trimmedKey, trimmedValue); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRuntimeOptionValue(key string, value string) error {
+	switch key {
+	case OptionVLLMTensorParallelSize,
+		OptionVLLMMaxModelLen,
+		OptionVLLMMaxNumBatchedTokens,
+		OptionVLLMMaxNumSeqs,
+		OptionSGLangTPSize,
+		OptionSGLangContextLength,
+		OptionSGLangChunkedPrefillSize,
+		OptionSGLangMaxRunningRequests,
+		OptionTensorRTLLMTensorParallelSize,
+		OptionTensorRTLLMMaxBatchSize,
+		OptionTensorRTLLMMaxNumTokens,
+		OptionTensorRTLLMMaxBeamWidth:
+		return validatePositiveInt(key, value)
+	case OptionVLLMNumSchedulerSteps,
+		OptionVLLMNumSpecTokens,
+		OptionVLLMNgramLookup:
+		return validateNonNegativeInt(key, value)
+	case OptionVLLMGPUMemoryUtilization,
+		OptionSGLangMemFractionStatic:
+		return validateFloatRange(key, value, 0, 1, false)
+	case OptionTensorRTLLMKVCacheFreeGPUMemoryFraction:
+		return validateFloatRange(key, value, 0, 1, true)
+	case OptionVLLMEnableChunkedPrefill,
+		OptionVLLMEnforceEager,
+		OptionSGLangDisableCudaGraph,
+		OptionTensorRTLLMEnableChunkedContext:
+		return validateBool(key, value)
+	case OptionVLLMSwapSpace:
+		return validateNonNegativeFloat(key, value)
+	case OptionVLLMSpeculativeModel,
+		OptionSGLangSchedulePolicy,
+		OptionSGLangAttentionBackend,
+		OptionSGLangSamplingBackend:
+		return validateSafeToken(key, value)
+	case OptionTensorRTLLMBackend:
+		if !strings.EqualFold(value, "tensorrt") {
+			return fmt.Errorf("runtime option %q must be \"tensorrt\"", key)
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func validatePositiveInt(key string, value string) error {
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fmt.Errorf("runtime option %q must be a positive integer", key)
+	}
+	return nil
+}
+
+func validateNonNegativeInt(key string, value string) error {
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return fmt.Errorf("runtime option %q must be a non-negative integer", key)
+	}
+	return nil
+}
+
+func validateFloatRange(key string, value string, min float64, max float64, includeZero bool) error {
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fmt.Errorf("runtime option %q must be a decimal number", key)
+	}
+	if includeZero {
+		if parsed < min || parsed > max {
+			return fmt.Errorf("runtime option %q must be between %g and %g", key, min, max)
+		}
+		return nil
+	}
+	if parsed <= min || parsed > max {
+		return fmt.Errorf("runtime option %q must be greater than %g and at most %g", key, min, max)
+	}
+	return nil
+}
+
+func validateNonNegativeFloat(key string, value string) error {
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed < 0 {
+		return fmt.Errorf("runtime option %q must be a non-negative decimal number", key)
+	}
+	return nil
+}
+
+func validateBool(key string, value string) error {
+	if _, err := strconv.ParseBool(value); err != nil {
+		return fmt.Errorf("runtime option %q must be a boolean", key)
+	}
+	return nil
+}
+
+func validateSafeToken(key string, value string) error {
+	if len(value) > 255 || !runtimeOptionTokenPattern.MatchString(value) {
+		return fmt.Errorf("runtime option %q contains unsupported characters", key)
+	}
+	return nil
 }
 
 func workerRuntimeOptionKeys(engine InferenceEngine) []string {

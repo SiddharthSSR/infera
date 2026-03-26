@@ -67,8 +67,11 @@ def test_build_phase1_steps_includes_expected_commands(tmp_path):
             "provider": "runpod",
             "gpu_type": "A100_80GB",
             "provider_gpu_type_id": "NVIDIA A100 80GB PCIe",
+            "runtime_option": [],
             "gpu_count": 1,
             "model": "Qwen/Qwen2.5-7B-Instruct",
+            "phase_label": "phase1",
+            "profile_name": "",
             "preset": "conversation",
             "warm_runs": 3,
             "warmup": 2,
@@ -130,8 +133,11 @@ def test_build_phase1_steps_respects_skip_flags(tmp_path):
             "provider": "runpod",
             "gpu_type": "A100_80GB",
             "provider_gpu_type_id": "",
+            "runtime_option": [],
             "gpu_count": 1,
             "model": "Qwen/Qwen2.5-7B-Instruct",
+            "phase_label": "phase1",
+            "profile_name": "",
             "preset": "conversation",
             "warm_runs": 3,
             "warmup": 2,
@@ -173,8 +179,11 @@ def test_build_phase1_steps_keeps_cold_start_instance_when_warm_follows_and_star
             "provider": "runpod",
             "gpu_type": "A100_80GB",
             "provider_gpu_type_id": "",
+            "runtime_option": [],
             "gpu_count": 1,
             "model": "Qwen/Qwen2.5-7B-Instruct",
+            "phase_label": "phase1",
+            "profile_name": "",
             "preset": "conversation",
             "warm_runs": 3,
             "warmup": 2,
@@ -200,6 +209,58 @@ def test_build_phase1_steps_keeps_cold_start_instance_when_warm_follows_and_star
 
     assert [step.name for step in steps] == ["cold_start", "warm_none", "warm_affinity"]
     assert "--terminate-final-instance" not in steps[0].command
+
+
+def test_build_phase1_steps_applies_profile_output_paths_and_runtime_options(tmp_path):
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "python_bin": sys.executable,
+            "base_url": "https://inferai.co.in",
+            "api_key": "test-key",
+            "engine": "vllm",
+            "provider": "runpod",
+            "gpu_type": "A100_80GB",
+            "provider_gpu_type_id": "",
+            "runtime_option": [
+                "INFERA_ENGINE=vllm",
+                "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS=4096",
+            ],
+            "gpu_count": 1,
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "phase_label": "phase2",
+            "profile_name": "prefill_batching_4096",
+            "preset": "conversation",
+            "warm_runs": 3,
+            "warmup": 2,
+            "concurrency": 4,
+            "cache_key_prefix": "phase2",
+            "cost_per_hour": None,
+            "instance_name_prefix": "engine-phase2",
+            "output_dir": str(tmp_path),
+            "benchmark_header": [],
+            "skip_warm": False,
+            "skip_cold_start": False,
+            "skip_startup_health": False,
+            "terminate_final_instance": False,
+            "health_insecure": False,
+            "quiet_progress": False,
+            "continue_on_error": False,
+            "dry_run": False,
+            "json_output": None,
+            "warm_ready_timeout_s": 180,
+        },
+    )()
+
+    steps = module.build_phase1_steps(args)
+    manifest_path = module.build_manifest_path(args)
+
+    assert str(tmp_path / "vllm" / "prefill-batching-4096") in steps[0].output_path
+    assert str(manifest_path).endswith("phase2-vllm-a100-80gb-prefill-batching-4096-manifest.json")
+    assert "--runtime-option" in steps[0].command
+    assert "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS=4096" in steps[0].command
 
 
 def test_run_step_marks_dry_run():

@@ -2,6 +2,12 @@
 
 Use this plan when comparing `vllm`, `sglang`, and `tensorrt_llm`.
 
+Current status for the RunPod `A100_80GB` / `Qwen/Qwen2.5-7B-Instruct` benchmark target on March 26, 2026:
+
+- `vllm`: active
+- `sglang`: active
+- `tensorrt_llm`: blocked on current provider/runtime compatibility
+
 ## Principle
 
 Benchmark first, tune second.
@@ -59,8 +65,7 @@ Compare:
 - tuned `vllm`
 - baseline `sglang`
 - tuned `sglang`
-- baseline `tensorrt_llm`
-- tuned `tensorrt_llm`
+- blocked `tensorrt_llm` status with reason, until provider/runtime support changes
 
 Use the same matrix format in [ENGINE_BENCHMARK_MATRIX_TEMPLATE.md](/Users/siddharthsingh/codingtensor/infera/docs/ENGINE_BENCHMARK_MATRIX_TEMPLATE.md).
 
@@ -180,11 +185,12 @@ After collecting Phase 1 outputs for each engine, combine them into one untuned 
 ```bash
 python3 scripts/summarize-engine-phase1-baseline.py \
   /tmp/infera-engine-benchmarks \
+  --blocked-engine "tensorrt_llm=Blocked on RunPod A100 80GB PCIe for Qwen/Qwen2.5-7B-Instruct because compatible TensorRT-LLM runtime and model support are not reliably available on the current host pool." \
   --markdown-output /tmp/engine-phase1-baseline.md \
   --json-output /tmp/engine-phase1-baseline.json
 ```
 
-The summarizer auto-discovers `phase1-*-manifest.json` files, renders warm/cold/startup tables, and calls out missing artifacts so incomplete baselines are explicit.
+The summarizer auto-discovers `phase1-*-manifest.json` files, renders warm/cold/startup tables, and can explicitly mark blocked engines so provider/runtime limitations are separated from missing artifacts.
 
 ### Warm baseline
 
@@ -296,6 +302,36 @@ Use the candidate sweep file:
 
 - [/Users/siddharthsingh/codingtensor/infera/scripts/benchmark-presets/engine-phase-2-tuning-space.json](/Users/siddharthsingh/codingtensor/infera/scripts/benchmark-presets/engine-phase-2-tuning-space.json)
 
+Use the Phase 2 runner to execute named profiles systematically:
+
+```bash
+python3 scripts/run-engine-benchmark-phase2.py \
+  https://inferai.co.in \
+  --api-key "$INFERA_ADMIN_KEY" \
+  --engine vllm \
+  --provider runpod \
+  --gpu-type A100_80GB \
+  --provider-gpu-type-id "NVIDIA A100 80GB PCIe" \
+  --gpu-count 1 \
+  --model "Qwen/Qwen2.5-7B-Instruct" \
+  --cost-per-hour 1.19 \
+  --health-insecure \
+  --terminate-final-instance \
+  --profile baseline_conservative \
+  --profile prefill_batching_4096
+```
+
+To inspect the available named profiles before running them:
+
+```bash
+python3 scripts/run-engine-benchmark-phase2.py \
+  --api-key "$INFERA_ADMIN_KEY" \
+  --engine vllm \
+  --gpu-type A100_80GB \
+  --model "Qwen/Qwen2.5-7B-Instruct" \
+  --list-profiles
+```
+
 Recommended order:
 
 #### vLLM
@@ -314,11 +350,7 @@ Recommended order:
 
 #### TensorRT-LLM
 
-1. engine artifact quality / build path
-2. `max_batch_size`
-3. `max_num_tokens`
-4. KV cache sizing
-5. chunked context
+Blocked for the current RunPod `A100_80GB` / `Qwen/Qwen2.5-7B-Instruct` target until a compatible host/runtime path is available.
 
 ### Step 3: rerun the same matrix
 
@@ -345,20 +377,15 @@ Do not accept a tuned preset that improves one metric but causes:
 - materially worse memory pressure
 - materially worse startup behavior
 
-## Important Implementation Caveat
+## Phase 2 Runtime Overrides
 
-The public `/api/instances/provision` API now supports engine selection, but it still does **not** expose arbitrary runtime option overrides for ad hoc sweeps.
+The public `/api/instances/provision` API now accepts `options`, and the benchmark helpers pass those through during fresh provision and restart flows.
 
-That means tuned comparisons currently require one of:
+That means:
 
-- engine-specific benchmark images with the preset baked in
-- temporary control-plane runtime-default overrides
-- direct provider/manager-side request construction in internal tooling
-
-So:
-
-- Phase 1 can use the conservative defaults already wired into the codebase
-- deeper Phase 2 sweeps need either image-level or control-plane-level support
+- Phase 1 can keep using the conservative defaults already wired into the codebase
+- Phase 2 can run named tuning profiles without baking a separate worker image per profile
+- each profile manifest records the explicit runtime options used for that run
 
 ## What to Record Every Time
 

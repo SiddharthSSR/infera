@@ -59,6 +59,7 @@ def test_build_provision_payload_defaults_allowed_cuda_versions_for_tensorrt_run
             "model": "Qwen/Qwen2.5-7B-Instruct",
             "provider_gpu_type_id": "NVIDIA A100 80GB PCIe",
             "allowed_cuda_version": [],
+            "runtime_option": [],
         },
     )()
 
@@ -81,12 +82,42 @@ def test_build_provision_payload_prefers_explicit_allowed_cuda_versions():
             "model": "Qwen/Qwen2.5-7B-Instruct",
             "provider_gpu_type_id": "",
             "allowed_cuda_version": ["12.8", "12.8", "12.9"],
+            "runtime_option": [],
         },
     )()
 
     payload = module.build_provision_payload(args)
 
     assert payload["allowed_cuda_versions"] == ["12.8", "12.9"]
+
+
+def test_build_provision_payload_includes_runtime_options():
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "instance_name": "cold-start-bench",
+            "provider": "runpod",
+            "engine": "vllm",
+            "gpu_type": "A100_80GB",
+            "gpu_count": 1,
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "provider_gpu_type_id": "",
+            "allowed_cuda_version": [],
+            "runtime_option": [
+                "INFERA_ENGINE=vllm",
+                "INFERA_VLLM_MAX_NUM_SEQS=32",
+            ],
+        },
+    )()
+
+    payload = module.build_provision_payload(args)
+
+    assert payload["options"] == {
+        "INFERA_ENGINE": "vllm",
+        "INFERA_VLLM_MAX_NUM_SEQS": "32",
+    }
 
 
 def test_format_health_url_uses_provider_id():

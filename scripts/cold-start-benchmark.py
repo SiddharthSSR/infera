@@ -92,6 +92,12 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Allowed RunPod CUDA version. Can be repeated. Defaults to 12.6+ for TensorRT-LLM on RunPod.",
     )
+    parser.add_argument(
+        "--runtime-option",
+        action="append",
+        default=[],
+        help="Provision runtime option in KEY=VALUE form. Can be repeated.",
+    )
     parser.add_argument("--gpu-count", type=int, default=1, help="GPU count (default: %(default)s)")
     parser.add_argument("--model", required=True, help="Model ID to preload and probe")
     parser.add_argument("--instance-name", default="cold-start-bench", help="Instance name (default: %(default)s)")
@@ -308,6 +314,8 @@ def build_provision_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["provider_gpu_type_id"] = args.provider_gpu_type_id
     if allowed_cuda_versions := resolve_allowed_cuda_versions(args):
         payload["allowed_cuda_versions"] = allowed_cuda_versions
+    if runtime_options := resolve_runtime_options(args):
+        payload["options"] = runtime_options
     return payload
 
 
@@ -318,6 +326,21 @@ def resolve_allowed_cuda_versions(args: argparse.Namespace) -> list[str]:
     if str(args.provider).strip().lower() == "runpod" and str(args.engine).strip().lower() == "tensorrt_llm":
         return list(DEFAULT_TENSORRT_RUNPOD_ALLOWED_CUDA_VERSIONS)
     return []
+
+
+def resolve_runtime_options(args: argparse.Namespace) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for raw_value in getattr(args, "runtime_option", []) or []:
+        entry = str(raw_value).strip()
+        if not entry:
+            continue
+        key, separator, value = entry.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if separator == "" or not key or not value:
+            raise ValueError(f"runtime option must be KEY=VALUE, got: {raw_value}")
+        options[key] = value
+    return options
 
 
 def format_health_url(template: str, instance: dict[str, Any]) -> str | None:

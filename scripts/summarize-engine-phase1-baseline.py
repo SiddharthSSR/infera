@@ -60,6 +60,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional path to write the structured summary JSON.",
     )
+    parser.add_argument(
+        "--blocked-engine",
+        action="append",
+        default=[],
+        help="Mark an engine as blocked in ENGINE=reason form. Can be repeated.",
+    )
     return parser.parse_args()
 
 
@@ -69,6 +75,21 @@ def now_iso() -> str:
 
 def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def parse_blocked_engines(values: list[str]) -> dict[str, str]:
+    blocked: dict[str, str] = {}
+    for raw_value in values:
+        entry = str(raw_value).strip()
+        if not entry:
+            continue
+        engine, separator, reason = entry.partition("=")
+        engine = engine.strip()
+        reason = reason.strip()
+        if separator == "" or engine not in SUPPORTED_ENGINES or not reason:
+            raise ValueError(f"blocked engine must be ENGINE=reason with a supported engine, got: {raw_value}")
+        blocked[engine] = reason
+    return blocked
 
 
 def discover_manifest_paths(inputs: list[str]) -> list[Path]:
@@ -380,16 +401,35 @@ def summarize_engine_manifest(
     return engine_summary, warm_rows, cold_rows, startup_rows, gaps
 
 
-def build_report(manifest_paths: list[Path], expected_engines: list[str]) -> dict[str, Any]:
+def build_report(
+    manifest_paths: list[Path],
+    expected_engines: list[str],
+    blocked_engines: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    blocked_engines = dict(blocked_engines or {})
     selected_manifests, manifest_gaps = collect_manifest_candidates(manifest_paths)
 
     warm_rows: list[dict[str, Any]] = []
     cold_rows: list[dict[str, Any]] = []
     startup_rows: list[dict[str, Any]] = []
     engine_summaries: list[dict[str, Any]] = []
+    blocked_rows: list[dict[str, Any]] = []
     gaps: list[str] = list(manifest_gaps)
 
     for engine in expected_engines:
+        if engine in blocked_engines:
+            selected = selected_manifests.get(engine)
+            manifest_path = str(selected[0]) if selected else ""
+            manifest_payload = selected[1] if selected else {}
+            blocked_rows.append(
+                {
+                    "engine": engine,
+                    "reason": blocked_engines[engine],
+                    "manifest_path": manifest_path,
+                    "step_names": sorted(str(step.get("name")) for step in (manifest_payload.get("steps") or [])),
+                }
+            )
+            continue
         selected = selected_manifests.get(engine)
         if selected is None:
             gaps.append(f"{engine}: no phase 1 manifest discovered")
@@ -409,12 +449,14 @@ def build_report(manifest_paths: list[Path], expected_engines: list[str]) -> dic
     cold_rows.sort(key=lambda row: (expected_engines.index(row["engine"]), SCENARIO_ORDER.get(row["scenario"], 99)))
     startup_rows.sort(key=lambda row: (expected_engines.index(row["engine"]), CAPTURE_ORDER.get(row["capture"], 99)))
     engine_summaries.sort(key=lambda row: expected_engines.index(row["engine"]))
+    blocked_rows.sort(key=lambda row: expected_engines.index(row["engine"]))
 
     return {
         "generated_at": now_iso(),
         "inputs": [str(path) for path in manifest_paths],
         "expected_engines": expected_engines,
         "engines": engine_summaries,
+        "blocked_engines": blocked_rows,
         "warm_matrix": warm_rows,
         "cold_start_matrix": cold_rows,
         "startup_health_matrix": startup_rows,
@@ -476,6 +518,20 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append("Expected engines: " + ", ".join(f"`{engine}`" for engine in report["expected_engines"]))
     lines.append("")
+
+    if report["blocked_engines"]:
+        lines.append("## Blocked Engines")
+        lines.append("")
+        blocked_rows = [
+            [
+                str(row["engine"]),
+                str(row["reason"]),
+                str(row["manifest_path"]),
+            ]
+            for row in report["blocked_engines"]
+        ]
+        lines.extend(render_table(["Engine", "Reason", "Manifest"], blocked_rows))
+        lines.append("")
 
     lines.append("## Warm Baseline")
     lines.append("")
@@ -638,7 +694,13 @@ def main() -> int:
         print("no phase 1 manifests found", file=sys.stderr)
         return 2
 
-    report = build_report(manifest_paths, expected_engines)
+    try:
+        blocked_engines = parse_blocked_engines(args.blocked_engine)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    report = build_report(manifest_paths, expected_engines, blocked_engines)
     markdown = render_markdown(report)
 
     if args.markdown_output:
