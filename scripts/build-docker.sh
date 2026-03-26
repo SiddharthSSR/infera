@@ -60,7 +60,7 @@ BUILD_FRONTEND=false
 PUSH=false
 
 WORKER_SGLANG_PACKAGE="${WORKER_SGLANG_PACKAGE:-sglang}"
-WORKER_TENSORRT_LLM_BASE_IMAGE="${WORKER_TENSORRT_LLM_BASE_IMAGE:-nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc7}"
+WORKER_TENSORRT_LLM_BASE_IMAGE="${WORKER_TENSORRT_LLM_BASE_IMAGE:-nvcr.io/nvidia/tritonserver:24.08-trtllm-python-py3}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in

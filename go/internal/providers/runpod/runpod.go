@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	defaultEndpoint    = "https://api.runpod.io/graphql"
-	pollInterval       = 5 * time.Second
-	readyTimeout       = 10 * time.Minute
-	workspaceMountPath = "/workspace"
+	defaultEndpoint             = "https://api.runpod.io/graphql"
+	pollInterval                = 5 * time.Second
+	readyTimeout                = 10 * time.Minute
+	workspaceMountPath          = "/workspace"
+	metadataAllowedCudaVersions = "allowed_cuda_versions"
 )
 
 // Provider implements the RunPod GPU provider.
@@ -220,6 +221,10 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		"env":               env,
 		"supportPublicIp":   true, // Ensure we get a public IP for worker registration
 	}
+	allowedCudaVersions := sanitizeAllowedCudaVersions(req.AllowedCudaVersions)
+	if len(allowedCudaVersions) > 0 {
+		input["allowedCudaVersions"] = allowedCudaVersions
+	}
 
 	// Log the request for debugging
 	logInput := make(map[string]interface{}, len(input))
@@ -272,6 +277,15 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		}
 		models = []string{defaultModel}
 	}
+	metadata := map[string]string{
+		"machine_id":      pod.MachineID,
+		"image":           pod.ImageName,
+		"workspace_mount": workspaceMountPath,
+		"volume_gb":       fmt.Sprintf("%d", volumeSize),
+	}
+	if len(allowedCudaVersions) > 0 {
+		metadata[metadataAllowedCudaVersions] = strings.Join(allowedCudaVersions, ",")
+	}
 
 	return &providers.Instance{
 		ID:           podID, // Use full ID, not truncated
@@ -285,13 +299,36 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		SpotInstance: req.SpotInstance,
 		Models:       models,
 		CreatedAt:    time.Now(),
-		Metadata: map[string]string{
-			"machine_id":      pod.MachineID,
-			"image":           pod.ImageName,
-			"workspace_mount": workspaceMountPath,
-			"volume_gb":       fmt.Sprintf("%d", volumeSize),
-		},
+		Metadata:     metadata,
 	}, nil
+}
+
+func sanitizeAllowedCudaVersions(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+func allowedCudaVersionsFromMetadata(metadata map[string]string) []string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	raw := strings.TrimSpace(metadata[metadataAllowedCudaVersions])
+	if raw == "" {
+		return nil
+	}
+	return sanitizeAllowedCudaVersions(strings.Split(raw, ","))
 }
 
 func redactEnvForLog(env []map[string]string) []map[string]string {
@@ -351,6 +388,35 @@ func (p *Provider) Start(ctx context.Context, instanceID string) error {
 		gpuCount = instance.GPUCount
 	}
 
+	return p.resumePod(ctx, instanceID, gpuCount, nil)
+}
+
+func (p *Provider) StartWithInstance(ctx context.Context, instance *providers.Instance) error {
+	if instance == nil {
+		return &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorInvalidRequest,
+			Message:  "instance metadata is required",
+		}
+	}
+	instanceID := instance.ProviderID
+	if instanceID == "" {
+		instanceID = instance.ID
+	}
+	gpuCount := instance.GPUCount
+	if gpuCount <= 0 {
+		refreshed, err := p.GetInstance(ctx, instanceID)
+		if err == nil && refreshed.GPUCount > 0 {
+			gpuCount = refreshed.GPUCount
+		}
+	}
+	if gpuCount <= 0 {
+		gpuCount = 1
+	}
+	return p.resumePod(ctx, instanceID, gpuCount, allowedCudaVersionsFromMetadata(instance.Metadata))
+}
+
+func (p *Provider) resumePod(ctx context.Context, instanceID string, gpuCount int, allowedCudaVersions []string) error {
 	query := `
 		mutation ResumePod($input: PodResumeInput!) {
 			podResume(input: $input) {
@@ -366,8 +432,11 @@ func (p *Provider) Start(ctx context.Context, instanceID string) error {
 			"gpuCount": gpuCount,
 		},
 	}
+	if versions := sanitizeAllowedCudaVersions(allowedCudaVersions); len(versions) > 0 {
+		variables["input"].(map[string]interface{})["allowedCudaVersions"] = versions
+	}
 
-	_, err = p.graphQL(ctx, query, variables)
+	_, err := p.graphQL(ctx, query, variables)
 	return err
 }
 

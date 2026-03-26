@@ -24,6 +24,7 @@ DEFAULT_POLL_INTERVAL_MS = 2000
 DEFAULT_TIMEOUT_S = 900
 HEALTH_REQUEST_TIMEOUT_S = 5
 PROGRESS_LOG_INTERVAL_S = 15.0
+DEFAULT_TENSORRT_RUNPOD_ALLOWED_CUDA_VERSIONS = ("12.6", "12.7", "12.8")
 
 
 @dataclass
@@ -53,6 +54,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--engine", default="vllm", help="Inference engine to provision (default: %(default)s)")
     parser.add_argument("--gpu-type", required=True, help="Infera GPU type, e.g. A100_80GB")
     parser.add_argument("--provider-gpu-type-id", default="", help="Exact provider GPU type identifier")
+    parser.add_argument(
+        "--allowed-cuda-version",
+        action="append",
+        default=[],
+        help="Allowed RunPod CUDA version. Can be repeated. Defaults to 12.6+ for TensorRT-LLM on RunPod.",
+    )
     parser.add_argument("--gpu-count", type=int, default=1, help="GPU count (default: %(default)s)")
     parser.add_argument("--model", required=True, help="Model ID to preload")
     parser.add_argument(
@@ -285,7 +292,18 @@ def build_provision_payload(args: argparse.Namespace) -> dict[str, Any]:
     }
     if args.provider_gpu_type_id:
         payload["provider_gpu_type_id"] = args.provider_gpu_type_id
+    if allowed_cuda_versions := resolve_allowed_cuda_versions(args):
+        payload["allowed_cuda_versions"] = allowed_cuda_versions
     return payload
+
+
+def resolve_allowed_cuda_versions(args: argparse.Namespace) -> list[str]:
+    explicit = [str(value).strip() for value in getattr(args, "allowed_cuda_version", []) if str(value).strip()]
+    if explicit:
+        return list(dict.fromkeys(explicit))
+    if str(args.provider).strip().lower() == "runpod" and str(args.engine).strip().lower() == "tensorrt_llm":
+        return list(DEFAULT_TENSORRT_RUNPOD_ALLOWED_CUDA_VERSIONS)
+    return []
 
 
 def wait_for_condition(

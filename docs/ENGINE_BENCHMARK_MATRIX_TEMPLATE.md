@@ -53,6 +53,9 @@ Before filling this matrix, follow:
 - For warm request-path runs, use:
   - [/Users/siddharthsingh/codingtensor/infera/scripts/benchmark-chat.py](/Users/siddharthsingh/codingtensor/infera/scripts/benchmark-chat.py)
 
+- To combine all untuned Phase 1 engine runs into one report, use:
+  - [/Users/siddharthsingh/codingtensor/infera/scripts/summarize-engine-phase1-baseline.py](/Users/siddharthsingh/codingtensor/infera/scripts/summarize-engine-phase1-baseline.py)
+
 - Always record:
   - engine image / runtime version
   - exact worker image

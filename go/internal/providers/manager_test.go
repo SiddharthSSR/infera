@@ -31,9 +31,20 @@ type workspaceConfiguredProvider struct {
 	apiKey string
 }
 
+type instanceAwareStartProvider struct {
+	*mockTestProvider
+	startedWithInstance []string
+}
+
 func newMockTestProvider() *mockTestProvider {
 	return &mockTestProvider{
 		instances: make(map[string]*Instance),
+	}
+}
+
+func newInstanceAwareStartProvider() *instanceAwareStartProvider {
+	return &instanceAwareStartProvider{
+		mockTestProvider: newMockTestProvider(),
 	}
 }
 
@@ -195,6 +206,11 @@ func (p *workspaceConfiguredProvider) GetStatus(ctx context.Context) (*ProviderS
 }
 func (p *workspaceConfiguredProvider) WaitForReady(ctx context.Context, instanceID string) error {
 	return nil
+}
+
+func (p *instanceAwareStartProvider) StartWithInstance(ctx context.Context, instance *Instance) error {
+	p.startedWithInstance = append(p.startedWithInstance, instance.ID)
+	return p.mockTestProvider.Start(ctx, instance.ProviderID)
 }
 
 func TestNewManager(t *testing.T) {
@@ -508,6 +524,29 @@ func TestManagerStartStop(t *testing.T) {
 			t.Fatalf("expected 1 provider start call, got %d", len(provider.started))
 		}
 	})
+}
+
+func TestManagerStartUsesInstanceStarterWhenAvailable(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	provider := newInstanceAwareStartProvider()
+	mgr.RegisterProvider(provider)
+
+	instance := &Instance{
+		ID:         "inst-1",
+		ProviderID: "mock-inst-1",
+		Provider:   ProviderMock,
+		Status:     InstanceStatusStopped,
+		CreatedAt:  time.Now(),
+	}
+	provider.instances[instance.ID] = instance
+	mgr.instances[instance.ID] = instance
+
+	if err := mgr.Start(context.Background(), instance.ID); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if len(provider.startedWithInstance) != 1 || provider.startedWithInstance[0] != instance.ID {
+		t.Fatalf("expected StartWithInstance to be used, got %#v", provider.startedWithInstance)
+	}
 }
 
 func TestManagerStartRejectedForTerminatedInstance(t *testing.T) {

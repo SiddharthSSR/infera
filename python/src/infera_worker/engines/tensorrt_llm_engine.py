@@ -26,7 +26,13 @@ try:
             from tensorrt_llm.bindings.executor import KvCacheConfig
         except ImportError:
             from tensorrt_llm.llmapi import KvCacheConfig
-    from tensorrt_llm._tensorrt_engine import LLM
+    try:
+        from tensorrt_llm._tensorrt_engine import LLM
+    except ImportError:
+        try:
+            from tensorrt_llm import LLM
+        except ImportError:
+            from tensorrt_llm.hlapi.llm import LLM
 
     TENSORRT_LLM_AVAILABLE = True
     TENSORRT_LLM_IMPORT_ERROR: ImportError | None = None

@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     git \
+    libnuma1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip
@@ -37,6 +38,7 @@ RUN pip install --no-cache-dir -e . && \
     echo "=== Verifying installation ===" && \
     python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.version.cuda}')" && \
     python -c "import transformers; print(f'Transformers {transformers.__version__}')" && \
+    python -c "import ctypes; ctypes.CDLL('libnuma.so.1'); print('libnuma OK')" && \
     python -c "import sglang as sgl; print(f'SGLang {getattr(sgl, \"__version__\", \"unknown\")}')" && \
     python -c "from sglang.utils import async_stream_and_merge; print('SGLang imports OK')" && \
     python -c "from infera_worker.engines.sglang_engine import SGLangEngine; print('SGLangEngine OK')"

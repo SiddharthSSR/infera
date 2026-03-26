@@ -150,15 +150,16 @@ type Instance struct {
 
 // ProvisionRequest contains parameters for creating a new instance.
 type ProvisionRequest struct {
-	Name              string       `json:"name"`
-	Provider          ProviderType `json:"provider"`
-	WorkspaceID       string       `json:"workspace_id,omitempty"`
-	GPUType           GPUType      `json:"gpu_type"`
-	ProviderGPUTypeID string       `json:"provider_gpu_type_id,omitempty"`
-	GPUCount          int          `json:"gpu_count"`
-	Region            string       `json:"region,omitempty"`
-	SpotInstance      bool         `json:"spot_instance"`
-	MaxCostHour       float64      `json:"max_cost_hour,omitempty"` // Budget limit
+	Name                string       `json:"name"`
+	Provider            ProviderType `json:"provider"`
+	WorkspaceID         string       `json:"workspace_id,omitempty"`
+	GPUType             GPUType      `json:"gpu_type"`
+	ProviderGPUTypeID   string       `json:"provider_gpu_type_id,omitempty"`
+	GPUCount            int          `json:"gpu_count"`
+	Region              string       `json:"region,omitempty"`
+	SpotInstance        bool         `json:"spot_instance"`
+	MaxCostHour         float64      `json:"max_cost_hour,omitempty"` // Budget limit
+	AllowedCudaVersions []string     `json:"allowed_cuda_versions,omitempty"`
 
 	// Worker configuration
 	Models         []string        `json:"models,omitempty"`

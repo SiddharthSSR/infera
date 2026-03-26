@@ -253,8 +253,14 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 		return err
 	}
 
-	if err := provider.Start(ctx, instance.ProviderID); err != nil {
-		return err
+	if starter, ok := provider.(InstanceStarter); ok {
+		if err := starter.StartWithInstance(ctx, instance); err != nil {
+			return err
+		}
+	} else {
+		if err := provider.Start(ctx, instance.ProviderID); err != nil {
+			return err
+		}
 	}
 
 	// Resume cost tracking

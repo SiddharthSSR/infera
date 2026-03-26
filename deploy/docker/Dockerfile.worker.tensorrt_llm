@@ -1,10 +1,10 @@
 # Infera Worker - TensorRT-LLM worker image
 #
 # TensorRT-LLM depends on a tightly matched CUDA/cuBLAS/TensorRT userspace.
-# Use NVIDIA's official TensorRT-LLM release container as the base image
-# instead of layering the Python wheel onto a generic PyTorch runtime.
+# For older TRT-LLM releases, use NVIDIA's Triton TRT-LLM Python image as the
+# base instead of layering the Python wheel onto a generic PyTorch runtime.
 
-ARG TENSORRT_LLM_BASE_IMAGE=nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc7
+ARG TENSORRT_LLM_BASE_IMAGE=nvcr.io/nvidia/tritonserver:24.08-trtllm-python-py3
 FROM --platform=linux/amd64 ${TENSORRT_LLM_BASE_IMAGE}
 
 WORKDIR /app
@@ -24,15 +24,16 @@ COPY python/README.md .
 COPY python/src/ ./src/
 
 # Install the worker package and verify TensorRT-LLM package-level wiring.
-# Avoid importing tensorrt_llm during docker build because the full NVIDIA
-# driver runtime is only present on the GPU host.
+# Avoid importing TensorRT-LLM or the worker's TensorRT engine module during
+# docker build because older TRT-LLM releases initialize NVML immediately, and
+# the full NVIDIA driver runtime is only present on the GPU host.
 RUN pip install --no-cache-dir --no-build-isolation -e . && \
     echo "=== Verifying installation ===" && \
-    python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.version.cuda}')" && \
-    python -c "import transformers; print(f'Transformers {transformers.__version__}')" && \
+    python3 -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.version.cuda}')" && \
+    python3 -c "import transformers; print(f'Transformers {transformers.__version__}')" && \
     pip show tensorrt_llm && \
-    python -c "import importlib.util; assert importlib.util.find_spec('tensorrt_llm') is not None; print('TensorRT-LLM package present')" && \
-    python -c "from infera_worker.engine import get_engine_definition; print(f'Engine registry OK: {get_engine_definition(\"tensorrt_llm\").engine_id}')" && \
+    python3 -c "import importlib.util; assert importlib.util.find_spec('tensorrt_llm') is not None; print('TensorRT-LLM package present')" && \
+    python3 -c "import importlib.util; assert importlib.util.find_spec('infera_worker.engines.tensorrt_llm_engine') is not None; print('TensorRT engine adapter module present')" && \
     echo "TensorRT-LLM model/runtime smoke must run on a GPU host after image build."
 
 ENV INFERA_ENGINE=tensorrt_llm
@@ -56,4 +57,4 @@ EXPOSE 8081 50051
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
     CMD curl -f http://localhost:8081/health || exit 1
 
-CMD ["python", "-m", "infera_worker.cli"]
+CMD ["python3", "-m", "infera_worker.cli"]

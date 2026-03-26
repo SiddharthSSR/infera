@@ -142,6 +142,51 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	assertEnvContains(t, env, "HUGGINGFACE_HUB_CACHE", "/workspace/.cache/huggingface/hub")
 }
 
+func TestProvisionIncludesAllowedCudaVersions(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var captured graphQLRequest
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA A100 80GB PCIe"}}}}`), nil
+	})
+
+	instance, err := provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:                "worker",
+		GPUType:             providers.GPUA100_80,
+		GPUCount:            1,
+		DockerImage:         "custom/worker:v1",
+		AllowedCudaVersions: []string{"12.6", "12.7", "12.7", "12.8"},
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	input, ok := captured.Variables["input"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graphql input variables, got %#v", captured.Variables)
+	}
+	allowed, ok := input["allowedCudaVersions"].([]interface{})
+	if !ok {
+		t.Fatalf("expected allowedCudaVersions array, got %#v", input["allowedCudaVersions"])
+	}
+	if len(allowed) != 3 || allowed[0] != "12.6" || allowed[1] != "12.7" || allowed[2] != "12.8" {
+		t.Fatalf("unexpected allowedCudaVersions payload: %#v", allowed)
+	}
+	if got := instance.Metadata[metadataAllowedCudaVersions]; got != "12.6,12.7,12.8" {
+		t.Fatalf("expected metadata to persist CUDA versions, got %q", got)
+	}
+}
+
 func TestProvisionAddsRuntimeEnvOverridesForKnownModel(t *testing.T) {
 	t.Setenv("INFERA_WORKER_SHARED_TOKEN", "worker-shared-token")
 
@@ -346,6 +391,49 @@ func TestProvisionPassesThroughUnknownLiveGPUDisplayName(t *testing.T) {
 	}
 	if got := input["gpuTypeId"]; got != "H200 SXM" {
 		t.Fatalf("expected raw gpuTypeId passthrough, got %#v", got)
+	}
+}
+
+func TestStartWithInstanceIncludesAllowedCudaVersions(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var captured graphQLRequest
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		return httpResponse(http.StatusOK, `{"data":{"podResume":{"id":"pod-123","desiredStatus":"RUNNING"}}}`), nil
+	})
+
+	err = provider.StartWithInstance(context.Background(), &providers.Instance{
+		ID:         "inst-1",
+		ProviderID: "pod-123",
+		GPUCount:   1,
+		Metadata: map[string]string{
+			metadataAllowedCudaVersions: "12.6,12.7,12.8",
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartWithInstance: %v", err)
+	}
+
+	input, ok := captured.Variables["input"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graphql input variables, got %#v", captured.Variables)
+	}
+	allowed, ok := input["allowedCudaVersions"].([]interface{})
+	if !ok {
+		t.Fatalf("expected allowedCudaVersions array, got %#v", input["allowedCudaVersions"])
+	}
+	if len(allowed) != 3 || allowed[0] != "12.6" || allowed[1] != "12.7" || allowed[2] != "12.8" {
+		t.Fatalf("unexpected allowedCudaVersions payload: %#v", allowed)
 	}
 }
 

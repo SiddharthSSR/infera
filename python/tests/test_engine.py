@@ -121,6 +121,8 @@ class TestSGLangEngine:
             async def async_generate(self, prompts, sampling_params):
                 assert prompts == ["templated:Hello, how are you?"]
                 assert sampling_params["temperature"] == 1.0
+                assert sampling_params["max_new_tokens"] == 256
+                assert "max_tokens" not in sampling_params
                 return [{"text": "SGLang response", "meta_info": {"prompt_tokens": 5, "completion_tokens": 3}}]
 
             def shutdown(self):
@@ -129,12 +131,18 @@ class TestSGLangEngine:
         async def fake_async_stream_and_merge(engine, prompt, sampling_params):
             assert prompt == "templated:Hello, how are you?"
             assert sampling_params["temperature"] == 1.0
+            assert sampling_params["max_new_tokens"] == 256
+            assert "max_tokens" not in sampling_params
             yield "SGLang "
             yield "stream"
 
         monkeypatch.setattr(sglang_module, "SGLANG_AVAILABLE", True)
         monkeypatch.setattr(sglang_module, "sgl", SimpleNamespace(Engine=FakeSGLangEngine))
         monkeypatch.setattr(sglang_module, "async_stream_and_merge", fake_async_stream_and_merge)
+        async def fail_to_thread(*args, **kwargs):
+            raise AssertionError("SGLang Engine should not be initialized via asyncio.to_thread")
+
+        monkeypatch.setattr(sglang_module.asyncio, "to_thread", fail_to_thread)
 
         class FakeTokenizer:
             def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):

@@ -111,7 +111,7 @@ VERSION=engine-phase1 ./scripts/build-docker.sh --worker-tensorrt-llm --push
 For TensorRT-LLM, use NVIDIA's official NGC TensorRT-LLM container as the base image. If you need a different official release tag, override it at build time:
 
 ```bash
-WORKER_TENSORRT_LLM_BASE_IMAGE=nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc7 \
+WORKER_TENSORRT_LLM_BASE_IMAGE=nvcr.io/nvidia/tritonserver:24.08-trtllm-python-py3 \
 VERSION=engine-phase1 \
 ./scripts/build-docker.sh --worker-tensorrt-llm --push
 ```
@@ -139,7 +139,7 @@ Recommended dispatch inputs for TensorRT-LLM:
 - `docker_namespace`: `codingtensor`
 - `cleanup_runner`: `true`
 - `runs_on`: `["ubuntu-latest"]` for hosted runners, or a self-hosted label array if you have a larger runner
-- `tensorrt_base_image`: `nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc7`
+- `tensorrt_base_image`: `nvcr.io/nvidia/tritonserver:24.08-trtllm-python-py3`
 
 The workflow aggressively frees disk on GitHub-hosted runners before building, but TensorRT-LLM images are still large enough that a larger self-hosted runner may be preferable.
 
@@ -163,13 +163,28 @@ python3 scripts/run-engine-benchmark-phase1.py \
 
 This runner:
 
-- executes warm `none`
-- executes warm `affinity`
 - executes the cold-start benchmark
 - executes startup-health capture with `--include-restart`
+- executes warm `none`
+- executes warm `affinity`
 - writes a manifest for the full Phase 1 run
 
 It does not deploy engine-specific fleets for you. Before each run, ensure the active fleet for the target model is deployed with only the selected engine.
+
+If warm steps are included after lifecycle steps, the runner keeps the final provisioned instance alive for the warm requests even when `--terminate-final-instance` is set. That avoids tearing down the only active worker immediately before the warm benchmark. Clean up the retained instance separately after the run if needed.
+
+### Baseline report generation
+
+After collecting Phase 1 outputs for each engine, combine them into one untuned baseline report:
+
+```bash
+python3 scripts/summarize-engine-phase1-baseline.py \
+  /tmp/infera-engine-benchmarks \
+  --markdown-output /tmp/engine-phase1-baseline.md \
+  --json-output /tmp/engine-phase1-baseline.json
+```
+
+The summarizer auto-discovers `phase1-*-manifest.json` files, renders warm/cold/startup tables, and calls out missing artifacts so incomplete baselines are explicit.
 
 ### Warm baseline
 

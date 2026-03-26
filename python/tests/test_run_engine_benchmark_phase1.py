@@ -93,27 +93,28 @@ def test_build_phase1_steps_includes_expected_commands(tmp_path):
     steps = module.build_phase1_steps(args)
 
     assert [step.name for step in steps] == [
-        "warm_none",
-        "warm_affinity",
         "cold_start",
         "startup_health",
+        "warm_none",
+        "warm_affinity",
     ]
-    assert steps[0].output_path.endswith("/sglang/infera-benchmark-sglang-a100-80gb-none.json")
-    assert steps[1].output_path.endswith("/sglang/infera-benchmark-sglang-a100-80gb-affinity.json")
-    assert "--engine-label" in steps[0].command
-    assert "sglang" in steps[0].command
-    assert "--provider-label" in steps[0].command
-    assert "--gpu-label" in steps[0].command
-    assert "--header" in steps[0].command
-    assert "--cost-per-hour" in steps[0].command
-    assert "--cache-reuse-mode" in steps[0].command
-    assert "none" in steps[0].command
-    assert "--cache-key-prefix" in steps[1].command
-    assert "--engine" in steps[2].command
-    assert "--health-insecure" in steps[2].command
-    assert "--quiet-progress" in steps[2].command
-    assert "--terminate-final-instance" in steps[2].command
-    assert "--include-restart" in steps[3].command
+    assert steps[2].output_path.endswith("/sglang/infera-benchmark-sglang-a100-80gb-none.json")
+    assert steps[3].output_path.endswith("/sglang/infera-benchmark-sglang-a100-80gb-affinity.json")
+    assert "--engine-label" in steps[2].command
+    assert "sglang" in steps[2].command
+    assert "--provider-label" in steps[2].command
+    assert "--gpu-label" in steps[2].command
+    assert "--header" in steps[2].command
+    assert "--cost-per-hour" in steps[2].command
+    assert "--cache-reuse-mode" in steps[2].command
+    assert "none" in steps[2].command
+    assert "--cache-key-prefix" in steps[3].command
+    assert "--engine" in steps[0].command
+    assert "--health-insecure" in steps[0].command
+    assert "--quiet-progress" in steps[0].command
+    assert "--terminate-final-instance" in steps[0].command
+    assert "--include-restart" in steps[1].command
+    assert "--terminate-final-instance" not in steps[1].command
 
 
 def test_build_phase1_steps_respects_skip_flags(tmp_path):
@@ -156,6 +157,49 @@ def test_build_phase1_steps_respects_skip_flags(tmp_path):
 
     assert [step.name for step in steps] == ["cold_start"]
     assert "--cost-per-hour" not in steps[0].command
+    assert "--terminate-final-instance" not in steps[0].command
+
+
+def test_build_phase1_steps_keeps_cold_start_instance_when_warm_follows_and_startup_health_skipped(tmp_path):
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "python_bin": sys.executable,
+            "base_url": "https://inferai.co.in",
+            "api_key": "test-key",
+            "engine": "vllm",
+            "provider": "runpod",
+            "gpu_type": "A100_80GB",
+            "provider_gpu_type_id": "",
+            "gpu_count": 1,
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "preset": "conversation",
+            "warm_runs": 3,
+            "warmup": 2,
+            "concurrency": 4,
+            "cache_key_prefix": "baseline",
+            "cost_per_hour": None,
+            "instance_name_prefix": "engine-phase1",
+            "output_dir": str(tmp_path),
+            "benchmark_header": [],
+            "skip_warm": False,
+            "skip_cold_start": False,
+            "skip_startup_health": True,
+            "terminate_final_instance": True,
+            "health_insecure": False,
+            "quiet_progress": False,
+            "continue_on_error": False,
+            "dry_run": False,
+            "json_output": None,
+        },
+    )()
+
+    steps = module.build_phase1_steps(args)
+
+    assert [step.name for step in steps] == ["cold_start", "warm_none", "warm_affinity"]
+    assert "--terminate-final-instance" not in steps[0].command
 
 
 def test_run_step_marks_dry_run():
@@ -184,3 +228,31 @@ def test_write_json_output_creates_parent_directories(tmp_path):
     written_path = module.write_json_output(output, payload)
     assert written_path == output
     assert json.loads(output.read_text(encoding="utf-8")) == payload
+
+
+def test_retained_health_url_for_startup_health(tmp_path):
+    module = load_module()
+    payload = {
+        "captures": [
+            {"health_url": "https://first.example/health"},
+            {"health_url": "https://last.example/health"},
+        ]
+    }
+    output = tmp_path / "startup.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert module.retained_health_url_for_step("startup_health", str(output)) == "https://last.example/health"
+
+
+def test_retained_health_url_for_cold_start(tmp_path):
+    module = load_module()
+    payload = {
+        "scenarios": [
+            {"health_url": "https://fresh.example/health"},
+            {"health_url": "https://reuse.example/health"},
+        ]
+    }
+    output = tmp_path / "cold.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert module.retained_health_url_for_step("cold_start", str(output)) == "https://reuse.example/health"

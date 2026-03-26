@@ -9,14 +9,20 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shlex
+import shutil
+import ssl
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
 
 DEFAULT_BASE_URL = "https://inferai.co.in"
 DEFAULT_OUTPUT_DIR = Path("/tmp/infera-engine-benchmarks")
 SUPPORTED_ENGINES = ("vllm", "sglang", "tensorrt_llm")
+PROGRESS_LOG_INTERVAL_S = 15.0
+HEALTH_REQUEST_TIMEOUT_S = 5
 
 
 @dataclass
@@ -148,6 +154,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional path to write the orchestration manifest JSON",
     )
+    parser.add_argument(
+        "--warm-ready-timeout-s",
+        type=int,
+        default=180,
+        help="How long to wait for the retained worker to register with the gateway before warm runs (default: %(default)s)",
+    )
     return parser.parse_args()
 
 
@@ -166,6 +178,106 @@ def slugify(value: str) -> str:
     return slug
 
 
+def summarize_health_poll_error(exc: Exception) -> str:
+    message = str(exc)
+    normalized = message.lower()
+
+    if "http 404" in normalized:
+        return "bootstrap in progress: worker health route not published yet (HTTP 404)"
+    if "http 502" in normalized:
+        return "bootstrap in progress: proxy upstream not ready yet (HTTP 502)"
+    if "timed out" in normalized:
+        return "bootstrap in progress: worker health endpoint not responding yet (timeout)"
+    if "connection refused" in normalized:
+        return "bootstrap in progress: worker health endpoint not accepting connections yet"
+    if "connection reset" in normalized or "remote end closed connection" in normalized:
+        return "bootstrap in progress: worker health endpoint restarted before responding"
+
+    return message
+
+
+def request_json(
+    method: str,
+    url: str,
+    *,
+    timeout: int = 60,
+    insecure: bool = False,
+) -> dict[str, object]:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "infera-engine-phase1/1.0",
+            "Accept": "application/json",
+        },
+        method=method,
+    )
+    context = None
+    if insecure and url.startswith("https://"):
+        context = ssl._create_unverified_context()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+            body = response.read()
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"{method} {url} failed with HTTP {exc.code}: {body}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"{method} {url} failed: {exc.reason}") from exc
+
+    if not body:
+        return {}
+    return json.loads(body)
+
+
+def request_json_via_curl(
+    method: str,
+    url: str,
+    *,
+    timeout: int = 60,
+    insecure: bool = False,
+) -> dict[str, object]:
+    curl_path = shutil.which("curl")
+    if curl_path is None:
+        raise RuntimeError("curl is not installed")
+
+    cmd = [
+        curl_path,
+        "-sS",
+        "-X",
+        method,
+        "--max-time",
+        str(timeout),
+        "-H",
+        "User-Agent: infera-engine-phase1/1.0",
+        "-H",
+        "Accept: application/json",
+    ]
+    if insecure and url.startswith("https://"):
+        cmd.append("-k")
+    cmd.append(url)
+
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or "unknown curl error"
+        raise RuntimeError(f"curl {method} {url} failed: {stderr}")
+
+    body = result.stdout.strip()
+    if not body:
+        return {}
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"curl {method} {url} returned non-JSON body: {body[:200]}") from exc
+
+
+def fetch_health(health_url: str, *, insecure: bool) -> dict[str, object]:
+    try:
+        return request_json("GET", health_url, timeout=HEALTH_REQUEST_TIMEOUT_S, insecure=insecure)
+    except Exception as exc:
+        if "HTTP 403" not in str(exc) or "1010" not in str(exc):
+            raise
+    return request_json_via_curl("GET", health_url, timeout=HEALTH_REQUEST_TIMEOUT_S, insecure=insecure)
+
+
 def benchmark_output_dir(args: argparse.Namespace) -> Path:
     return Path(args.output_dir).expanduser() / slugify(args.engine)
 
@@ -174,6 +286,21 @@ def build_manifest_path(args: argparse.Namespace) -> Path:
     if args.json_output:
         return Path(args.json_output).expanduser()
     return benchmark_output_dir(args) / f"phase1-{slugify(args.engine)}-{slugify(args.gpu_type)}-manifest.json"
+
+
+def retained_health_url_for_step(step_name: str, output_path: str) -> str | None:
+    path = Path(output_path).expanduser()
+    if not path.exists():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    records_key = "captures" if step_name == "startup_health" else "scenarios" if step_name == "cold_start" else None
+    if records_key is None:
+        return None
+    records = payload.get(records_key) or []
+    if not records:
+        return None
+    value = records[-1].get("health_url")
+    return str(value) if value else None
 
 
 def build_warm_command(
@@ -246,7 +373,7 @@ def build_cold_start_command(args: argparse.Namespace, *, output_path: Path) -> 
         command.append("--health-insecure")
     if args.quiet_progress:
         command.append("--quiet-progress")
-    if args.terminate_final_instance:
+    if should_terminate_after_cold_start(args):
         command.append("--terminate-final-instance")
     return command
 
@@ -280,9 +407,26 @@ def build_startup_health_command(args: argparse.Namespace, *, output_path: Path)
         command.append("--health-insecure")
     if args.quiet_progress:
         command.append("--quiet-progress")
-    if args.terminate_final_instance:
+    if should_terminate_after_startup_health(args):
         command.append("--terminate-final-instance")
     return command
+
+
+def should_terminate_after_cold_start(args: argparse.Namespace) -> bool:
+    startup_health_requested = not args.skip_startup_health
+    warm_requested = not args.skip_warm
+    if not args.terminate_final_instance:
+        return False
+    if startup_health_requested:
+        return True
+    return not warm_requested
+
+
+def should_terminate_after_startup_health(args: argparse.Namespace) -> bool:
+    warm_requested = not args.skip_warm
+    if not args.terminate_final_instance:
+        return False
+    return not warm_requested
 
 
 def build_phase1_steps(args: argparse.Namespace) -> list[Phase1Step]:
@@ -290,26 +434,6 @@ def build_phase1_steps(args: argparse.Namespace) -> list[Phase1Step]:
     gpu_slug = slugify(args.gpu_type)
     engine_slug = slugify(args.engine)
     steps: list[Phase1Step] = []
-
-    if not args.skip_warm:
-        none_path = out_dir / f"infera-benchmark-{engine_slug}-{gpu_slug}-none.json"
-        affinity_path = out_dir / f"infera-benchmark-{engine_slug}-{gpu_slug}-affinity.json"
-        steps.extend(
-            [
-                Phase1Step(
-                    name="warm_none",
-                    category="warm",
-                    output_path=str(none_path),
-                    command=build_warm_command(args, cache_reuse_mode="none", output_path=none_path),
-                ),
-                Phase1Step(
-                    name="warm_affinity",
-                    category="warm",
-                    output_path=str(affinity_path),
-                    command=build_warm_command(args, cache_reuse_mode="affinity", output_path=affinity_path),
-                ),
-            ]
-        )
 
     if not args.skip_cold_start:
         cold_path = out_dir / f"cold-start-{engine_slug}-{gpu_slug}.json"
@@ -333,10 +457,41 @@ def build_phase1_steps(args: argparse.Namespace) -> list[Phase1Step]:
             )
         )
 
+    if not args.skip_warm:
+        none_path = out_dir / f"infera-benchmark-{engine_slug}-{gpu_slug}-none.json"
+        affinity_path = out_dir / f"infera-benchmark-{engine_slug}-{gpu_slug}-affinity.json"
+        steps.extend(
+            [
+                Phase1Step(
+                    name="warm_none",
+                    category="warm",
+                    output_path=str(none_path),
+                    command=build_warm_command(args, cache_reuse_mode="none", output_path=none_path),
+                ),
+                Phase1Step(
+                    name="warm_affinity",
+                    category="warm",
+                    output_path=str(affinity_path),
+                    command=build_warm_command(args, cache_reuse_mode="affinity", output_path=affinity_path),
+                ),
+            ]
+        )
+
     return steps
 
 
 def build_manifest(args: argparse.Namespace, step_results: list[Phase1StepResult]) -> dict[str, object]:
+    notes = [
+        (
+            "Warm benchmark results are only valid when the active fleet serving the target model "
+            "is deployed with the selected engine."
+        )
+    ]
+    if args.terminate_final_instance and not args.skip_warm:
+        notes.append(
+            "Warm steps follow lifecycle provisioning, so the final startup-health or cold-start instance "
+            "is retained for warm traffic instead of being terminated automatically."
+        )
     return {
         "base_url": args.base_url,
         "engine": args.engine,
@@ -351,12 +506,7 @@ def build_manifest(args: argparse.Namespace, step_results: list[Phase1StepResult
         "concurrency": args.concurrency,
         "cost_per_hour": args.cost_per_hour,
         "output_dir": str(benchmark_output_dir(args)),
-        "notes": [
-            (
-                "Warm benchmark results are only valid when the active fleet serving the target model "
-                "is deployed with the selected engine."
-            )
-        ],
+        "notes": notes,
         "steps": [asdict(result) for result in step_results],
     }
 
@@ -401,6 +551,55 @@ def run_step(step: Phase1Step, *, dry_run: bool) -> Phase1StepResult:
     )
 
 
+def wait_for_warm_registration(step: Phase1Step, args: argparse.Namespace) -> None:
+    health_url = retained_health_url_for_step(step.name, step.output_path)
+    if not health_url:
+        log(f"warm readiness wait skipped after step={step.name}: no retained health_url found")
+        return
+
+    started = time.time()
+    deadline = started + args.warm_ready_timeout_s
+    next_log_at = started
+    last_error: Exception | None = None
+    last_state: str | None = None
+
+    while time.time() < deadline:
+        try:
+            payload = fetch_health(health_url, insecure=args.health_insecure)
+            last_error = None
+        except Exception as exc:
+            last_error = exc
+            if time.time() >= next_log_at:
+                log(
+                    f"warm readiness {health_url}: waiting... {time.time() - started:.1f}s "
+                    f"({summarize_health_poll_error(exc)})"
+                )
+                next_log_at = time.time() + PROGRESS_LOG_INTERVAL_S
+            time.sleep(2.0)
+            continue
+
+        ready = payload.get("ready") is True
+        gateway_registered = payload.get("gateway_registered") is True
+        state = f"ready={payload.get('ready')} gateway_registered={payload.get('gateway_registered')} state={payload.get('state')}"
+        last_state = state
+        if ready and gateway_registered:
+            log(f"warm readiness {health_url}: ready after {time.time() - started:.1f}s ({state})")
+            return
+        if time.time() >= next_log_at:
+            log(f"warm readiness {health_url}: waiting... {time.time() - started:.1f}s ({state})")
+            next_log_at = time.time() + PROGRESS_LOG_INTERVAL_S
+        time.sleep(2.0)
+
+    if last_error is not None:
+        raise RuntimeError(
+            f"timed out waiting for retained worker registration before warm runs; last error: {last_error}"
+        ) from last_error
+    raise RuntimeError(
+        "timed out waiting for retained worker registration before warm runs"
+        + (f"; last state: {last_state}" if last_state else "")
+    )
+
+
 def main() -> int:
     args = parse_args()
     steps = build_phase1_steps(args)
@@ -415,6 +614,11 @@ def main() -> int:
         "Warm results require that only the selected engine is actively serving the target model "
         f"during this run: engine={args.engine} model={args.model}"
     )
+    if args.terminate_final_instance and not args.skip_warm:
+        log(
+            "warm steps are scheduled after lifecycle steps, so the final provisioned instance will be "
+            "kept alive for warm traffic and must be cleaned up separately if needed"
+        )
 
     step_results: list[Phase1StepResult] = []
     exit_code = 0
@@ -423,6 +627,27 @@ def main() -> int:
         log(f"command={shlex.join(step.command)}")
         result = run_step(step, dry_run=args.dry_run)
         step_results.append(result)
+        remaining_steps = steps[len(step_results) :]
+        warm_steps_remaining = any(candidate.category == "warm" for candidate in remaining_steps)
+        lifecycle_steps_remaining = any(
+            candidate.category in {"cold_start", "startup_health"} for candidate in remaining_steps
+        )
+        if (
+            result.status == "ok"
+            and not args.dry_run
+            and step.category in {"cold_start", "startup_health"}
+            and warm_steps_remaining
+            and not lifecycle_steps_remaining
+        ):
+            try:
+                wait_for_warm_registration(step, args)
+            except Exception as exc:
+                result.status = "failed"
+                result.returncode = 1
+                exit_code = 1
+                log(f"step={step.name} warm-readiness check failed: {exc}")
+                if not args.continue_on_error:
+                    break
         if result.status == "failed":
             exit_code = result.returncode or 1
             log(f"step={step.name} failed with returncode={result.returncode}")

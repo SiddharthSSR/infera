@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -151,18 +152,19 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req struct {
-		Name              string   `json:"name"`
-		Provider          string   `json:"provider"`
-		Engine            string   `json:"engine"`
-		GPUType           string   `json:"gpu_type"`
-		ProviderGPUTypeID string   `json:"provider_gpu_type_id"`
-		GPUCount          int      `json:"gpu_count"`
-		Region            string   `json:"region"`
-		SpotInstance      bool     `json:"spot_instance"`
-		MaxCostHour       float64  `json:"max_cost_hour"`
-		Models            []string `json:"models"`
-		SelectedModelName string   `json:"selected_model_name"`
-		GatewayAddress    string   `json:"gateway_address"`
+		Name                string   `json:"name"`
+		Provider            string   `json:"provider"`
+		Engine              string   `json:"engine"`
+		GPUType             string   `json:"gpu_type"`
+		ProviderGPUTypeID   string   `json:"provider_gpu_type_id"`
+		GPUCount            int      `json:"gpu_count"`
+		AllowedCudaVersions []string `json:"allowed_cuda_versions"`
+		Region              string   `json:"region"`
+		SpotInstance        bool     `json:"spot_instance"`
+		MaxCostHour         float64  `json:"max_cost_hour"`
+		Models              []string `json:"models"`
+		SelectedModelName   string   `json:"selected_model_name"`
+		GatewayAddress      string   `json:"gateway_address"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -188,18 +190,19 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 	}
 
 	provisionReq := &providers.ProvisionRequest{
-		Name:              req.Name,
-		Provider:          providers.ProviderType(req.Provider),
-		WorkspaceID:       currentWorkspaceID(r),
-		GPUType:           providers.GPUType(req.GPUType),
-		ProviderGPUTypeID: strings.TrimSpace(req.ProviderGPUTypeID),
-		GPUCount:          req.GPUCount,
-		Region:            req.Region,
-		SpotInstance:      req.SpotInstance,
-		MaxCostHour:       req.MaxCostHour,
-		Models:            req.Models,
-		Engine:            engine,
-		GatewayAddress:    gatewayAddress,
+		Name:                req.Name,
+		Provider:            providers.ProviderType(req.Provider),
+		WorkspaceID:         currentWorkspaceID(r),
+		GPUType:             providers.GPUType(req.GPUType),
+		ProviderGPUTypeID:   strings.TrimSpace(req.ProviderGPUTypeID),
+		GPUCount:            req.GPUCount,
+		AllowedCudaVersions: slices.Clone(req.AllowedCudaVersions),
+		Region:              req.Region,
+		SpotInstance:        req.SpotInstance,
+		MaxCostHour:         req.MaxCostHour,
+		Models:              req.Models,
+		Engine:              engine,
+		GatewayAddress:      gatewayAddress,
 	}
 
 	if provisionReq.Name == "" {

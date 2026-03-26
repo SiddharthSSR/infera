@@ -65,7 +65,9 @@ class SGLangEngine(TokenizerPromptEngine):
                 engine_kwargs[key] = value
 
         self._record_stage("sglang_engine_init_started")
-        engine = await asyncio.to_thread(sgl.Engine, **engine_kwargs)
+        # SGLang configures signal handlers during engine startup, which must
+        # happen on the main interpreter thread.
+        engine = sgl.Engine(**engine_kwargs)
         self._record_stage("sglang_engine_init_finished")
         self.engines[model_config.model_id] = engine
         self._register_model_path(model_config.model_id, model_path)
@@ -109,7 +111,7 @@ class SGLangEngine(TokenizerPromptEngine):
         self.active_requests.add(request.request_id)
         try:
             prompt = self._build_prompt(request)
-            sampling_params = request.parameters.to_sampling_params()
+            sampling_params = self._build_sampling_params(request)
 
             first_token_time = datetime.now()
             outputs = await engine.async_generate([prompt], sampling_params)
@@ -155,7 +157,7 @@ class SGLangEngine(TokenizerPromptEngine):
         self.active_requests.add(request.request_id)
         try:
             prompt = self._build_prompt(request)
-            sampling_params = request.parameters.to_sampling_params()
+            sampling_params = self._build_sampling_params(request)
             chunk_index = 0
             accumulated = ""
 
@@ -224,6 +226,13 @@ class SGLangEngine(TokenizerPromptEngine):
         if used > 0:
             return used
         return 8 * 1024 * 1024 * 1024
+
+    def _build_sampling_params(self, request: InferenceRequest) -> dict[str, Any]:
+        sampling_params = request.parameters.to_sampling_params()
+        max_tokens = sampling_params.pop("max_tokens", None)
+        if max_tokens is not None:
+            sampling_params["max_new_tokens"] = max_tokens
+        return sampling_params
 
     def _extract_text(self, output: Any) -> str:
         if isinstance(output, dict):

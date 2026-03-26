@@ -41,6 +41,51 @@ def test_parse_args_defaults(monkeypatch):
     assert args.engine == "vllm"
     assert args.instance_name == "cache-probe-bench"
     assert args.include_restart is False
+    assert args.allowed_cuda_version == []
+
+
+def test_build_provision_payload_defaults_allowed_cuda_versions_for_tensorrt_runpod():
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "instance_name": "cache-probe-bench",
+            "provider": "runpod",
+            "engine": "tensorrt_llm",
+            "gpu_type": "A100_80GB",
+            "gpu_count": 1,
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "provider_gpu_type_id": "NVIDIA A100 80GB PCIe",
+            "allowed_cuda_version": [],
+        },
+    )()
+
+    payload = module.build_provision_payload(args)
+
+    assert payload["allowed_cuda_versions"] == ["12.6", "12.7", "12.8"]
+
+
+def test_build_provision_payload_prefers_explicit_allowed_cuda_versions():
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "instance_name": "cache-probe-bench",
+            "provider": "runpod",
+            "engine": "tensorrt_llm",
+            "gpu_type": "A100_80GB",
+            "gpu_count": 1,
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "provider_gpu_type_id": "",
+            "allowed_cuda_version": ["12.7", "12.8", "12.8"],
+        },
+    )()
+
+    payload = module.build_provision_payload(args)
+
+    assert payload["allowed_cuda_versions"] == ["12.7", "12.8"]
 
 
 def test_build_report_serializes_capture():
