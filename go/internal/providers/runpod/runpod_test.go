@@ -394,7 +394,7 @@ func TestProvisionPassesThroughUnknownLiveGPUDisplayName(t *testing.T) {
 	}
 }
 
-func TestStartWithInstanceIncludesAllowedCudaVersions(t *testing.T) {
+func TestStartWithInstanceOmitsAllowedCudaVersionsOnResume(t *testing.T) {
 	provider, err := New(Config{APIKey: "test-key"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -428,12 +428,8 @@ func TestStartWithInstanceIncludesAllowedCudaVersions(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected graphql input variables, got %#v", captured.Variables)
 	}
-	allowed, ok := input["allowedCudaVersions"].([]interface{})
-	if !ok {
-		t.Fatalf("expected allowedCudaVersions array, got %#v", input["allowedCudaVersions"])
-	}
-	if len(allowed) != 3 || allowed[0] != "12.6" || allowed[1] != "12.7" || allowed[2] != "12.8" {
-		t.Fatalf("unexpected allowedCudaVersions payload: %#v", allowed)
+	if _, exists := input["allowedCudaVersions"]; exists {
+		t.Fatalf("expected resume payload to omit allowedCudaVersions, got %#v", input["allowedCudaVersions"])
 	}
 }
 

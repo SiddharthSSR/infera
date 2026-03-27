@@ -320,17 +320,6 @@ func sanitizeAllowedCudaVersions(values []string) []string {
 	return result
 }
 
-func allowedCudaVersionsFromMetadata(metadata map[string]string) []string {
-	if len(metadata) == 0 {
-		return nil
-	}
-	raw := strings.TrimSpace(metadata[metadataAllowedCudaVersions])
-	if raw == "" {
-		return nil
-	}
-	return sanitizeAllowedCudaVersions(strings.Split(raw, ","))
-}
-
 func redactEnvForLog(env []map[string]string) []map[string]string {
 	secretKeys := map[string]struct{}{
 		"INFERA_WORKER_SHARED_TOKEN": {},
@@ -388,7 +377,7 @@ func (p *Provider) Start(ctx context.Context, instanceID string) error {
 		gpuCount = instance.GPUCount
 	}
 
-	return p.resumePod(ctx, instanceID, gpuCount, nil)
+	return p.resumePod(ctx, instanceID, gpuCount)
 }
 
 func (p *Provider) StartWithInstance(ctx context.Context, instance *providers.Instance) error {
@@ -413,10 +402,10 @@ func (p *Provider) StartWithInstance(ctx context.Context, instance *providers.In
 	if gpuCount <= 0 {
 		gpuCount = 1
 	}
-	return p.resumePod(ctx, instanceID, gpuCount, allowedCudaVersionsFromMetadata(instance.Metadata))
+	return p.resumePod(ctx, instanceID, gpuCount)
 }
 
-func (p *Provider) resumePod(ctx context.Context, instanceID string, gpuCount int, allowedCudaVersions []string) error {
+func (p *Provider) resumePod(ctx context.Context, instanceID string, gpuCount int) error {
 	query := `
 		mutation ResumePod($input: PodResumeInput!) {
 			podResume(input: $input) {
@@ -431,9 +420,6 @@ func (p *Provider) resumePod(ctx context.Context, instanceID string, gpuCount in
 			"podId":    instanceID,
 			"gpuCount": gpuCount,
 		},
-	}
-	if versions := sanitizeAllowedCudaVersions(allowedCudaVersions); len(versions) > 0 {
-		variables["input"].(map[string]interface{})["allowedCudaVersions"] = versions
 	}
 
 	_, err := p.graphQL(ctx, query, variables)
