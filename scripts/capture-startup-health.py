@@ -169,6 +169,34 @@ def summarize_health_poll_error(exc: Exception) -> str:
     return message
 
 
+def fatal_health_payload_reason(payload: dict[str, Any] | None) -> str | None:
+    """Return a fatal startup reason when the worker has already entered an error state."""
+    if not isinstance(payload, dict):
+        return None
+
+    state = str(payload.get("state") or "")
+    live = payload.get("live")
+    if state != "error" and live is not False:
+        return None
+
+    startup = payload.get("startup") or {}
+    metadata = startup.get("metadata") or {}
+    gpu_preflight = metadata.get("gpu_preflight") or {}
+    startup_error = metadata.get("startup_error") or {}
+
+    if isinstance(gpu_preflight, dict) and gpu_preflight.get("status") == "failed":
+        error_type = str(gpu_preflight.get("error_type") or "RuntimeError")
+        error_message = str(gpu_preflight.get("error") or "unknown GPU runtime failure")
+        return f"worker entered error state during startup: gpu_preflight failed: {error_type}: {error_message}"
+
+    if isinstance(startup_error, dict) and startup_error.get("message"):
+        error_type = str(startup_error.get("type") or "RuntimeError")
+        error_message = str(startup_error.get("message") or "unknown startup failure")
+        return f"worker entered error state during startup: {error_type}: {error_message}"
+
+    return f"worker entered error state during startup: state={state or 'error'}"
+
+
 def build_headers(api_key: str, *, content_type: bool = False) -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -441,6 +469,9 @@ def wait_for_health_ready(
         stages = startup.get("stages") or {}
         t2 = parse_stage_timestamp_ms(stages.get("server_started"))
         t3 = parse_stage_timestamp_ms(stages.get("model_load_finished"))
+        fatal_reason = fatal_health_payload_reason(latest_payload)
+        if fatal_reason:
+            raise RuntimeError(fatal_reason)
         if latest_payload.get("ready") is True:
             log_progress(args, f"worker health {health_url}: ready=true")
             return t2, t3, latest_payload, notes

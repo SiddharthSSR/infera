@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -182,6 +183,59 @@ def test_wait_for_health_ready_returns_ready_payload(monkeypatch):
     assert t3 == 1774269679475
     assert snapshot == payload
     assert notes == []
+
+
+def test_fatal_health_payload_reason_reports_gpu_preflight_failure():
+    module = load_module()
+    payload = {
+        "state": "error",
+        "live": False,
+        "startup": {
+            "metadata": {
+                "gpu_preflight": {
+                    "status": "failed",
+                    "error_type": "RuntimeError",
+                    "error": "CUDA unknown error",
+                }
+            }
+        },
+    }
+
+    reason = module.fatal_health_payload_reason(payload)
+
+    assert reason == (
+        "worker entered error state during startup: gpu_preflight failed: "
+        "RuntimeError: CUDA unknown error"
+    )
+
+
+def test_wait_for_health_ready_raises_on_fatal_startup_payload(monkeypatch):
+    module = load_module()
+    payload = {
+        "ready": False,
+        "state": "error",
+        "live": False,
+        "startup": {
+            "metadata": {
+                "gpu_preflight": {
+                    "status": "failed",
+                    "error_type": "RuntimeError",
+                    "error": "CUDA unknown error",
+                }
+            }
+        },
+    }
+
+    monkeypatch.setattr(module, "fetch_health", lambda *args, **kwargs: payload)
+
+    args = type("Args", (), {"health_insecure": True, "quiet_progress": True})()
+    with pytest.raises(RuntimeError, match="gpu_preflight failed"):
+        module.wait_for_health_ready(
+            "https://pod-1-8081.proxy.runpod.net/health",
+            timeout_s=1,
+            poll_interval_ms=1,
+            args=args,
+        )
 
 
 def test_summarize_health_poll_error_classifies_bootstrap_failures():

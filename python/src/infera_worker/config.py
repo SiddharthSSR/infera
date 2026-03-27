@@ -105,6 +105,14 @@ class WorkerConfig(BaseSettings):
     # GPU/Device
     device: str = Field(default="auto", description="Device: auto, cuda, mps, cpu")
     gpu_memory_fraction: float = Field(default=0.9, description="GPU memory fraction to use")
+    gpu_preflight_enabled: bool = Field(
+        default=True,
+        description="Run a subprocess CUDA preflight before model loading on GPU-backed engines",
+    )
+    gpu_preflight_timeout_s: int = Field(
+        default=20,
+        description="Timeout in seconds for the startup GPU preflight subprocess",
+    )
     trust_remote_code: bool = Field(
         default=True,
         description="Allow Hugging Face remote model/tokenizer code when required by the runtime",

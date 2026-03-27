@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -211,6 +212,46 @@ def test_compute_durations_omits_negative_running_to_server_started():
         "request_to_server_started_ms": 2000,
         "server_to_model_ready_ms": 6000,
     }
+
+
+def test_fatal_health_payload_reason_reports_gpu_preflight_failure():
+    module = load_module()
+    payload = {
+        "state": "error",
+        "live": False,
+        "startup": {
+            "metadata": {
+                "gpu_preflight": {
+                    "status": "failed",
+                    "error_type": "RuntimeError",
+                    "error": "CUDA unknown error",
+                }
+            }
+        },
+    }
+
+    reason = module.fatal_health_payload_reason(payload)
+
+    assert reason == (
+        "worker entered error state during startup: gpu_preflight failed: "
+        "RuntimeError: CUDA unknown error"
+    )
+
+
+def test_wait_for_condition_aborts_on_fatal_reason():
+    module = load_module()
+    args = type("Args", (), {"quiet_progress": True})()
+
+    with pytest.raises(RuntimeError, match="gpu_preflight failed"):
+        module.wait_for_condition(
+            lambda: {"workers": [], "total": 0},
+            lambda _payload: False,
+            description="worker registration for instance test",
+            timeout_s=1,
+            poll_interval_ms=1,
+            args=args,
+            abort_fn=lambda: "worker entered error state during startup: gpu_preflight failed: RuntimeError: CUDA unknown error",
+        )
 
 
 def test_build_report_serializes_probe():

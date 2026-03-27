@@ -75,6 +75,35 @@ class TestWorker:
         assert "preload_model_finished" in startup["stages"]
 
     @pytest.mark.asyncio
+    async def test_start_worker_records_startup_error_for_gpu_preflight_failure(self, monkeypatch):
+        async def fail_preflight(self):
+            self.record_startup_stage("gpu_preflight_started")
+            self.record_startup_metadata(
+                "gpu_preflight",
+                {
+                    "status": "failed",
+                    "error_type": "RuntimeError",
+                    "error": "CUDA unknown error",
+                },
+            )
+            raise RuntimeError("GPU preflight failed: RuntimeError: CUDA unknown error")
+
+        monkeypatch.setattr(Worker, "_run_gpu_preflight", fail_preflight)
+
+        worker = Worker(WorkerConfig(engine="vllm"))
+
+        with pytest.raises(RuntimeError, match="GPU preflight failed"):
+            await worker.start()
+
+        assert worker.state == WorkerState.ERROR
+        startup = worker.get_startup_status()
+        assert "gpu_preflight_started" in startup["stages"]
+        assert "worker_error" in startup["stages"]
+        assert startup["metadata"]["gpu_preflight"]["status"] == "failed"
+        assert startup["metadata"]["startup_error"]["type"] == "RuntimeError"
+        assert "GPU preflight failed" in startup["metadata"]["startup_error"]["message"]
+
+    @pytest.mark.asyncio
     async def test_start_worker_schedules_post_ready_warmup(self, monkeypatch):
         warmed_models: list[str] = []
 

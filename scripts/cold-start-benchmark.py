@@ -70,6 +70,7 @@ class HealthPollState:
     latest_payload: dict[str, Any] | None = None
     notes: list[str] = field(default_factory=list)
     last_error: str | None = None
+    fatal_reason: str | None = None
     finished: bool = False
 
 
@@ -204,6 +205,34 @@ def summarize_health_poll_error(exc: Exception) -> str:
         return "bootstrap in progress: worker health endpoint restarted before responding"
 
     return message
+
+
+def fatal_health_payload_reason(payload: dict[str, Any] | None) -> str | None:
+    """Return a fatal startup reason when the worker has already entered an error state."""
+    if not isinstance(payload, dict):
+        return None
+
+    state = str(payload.get("state") or "")
+    live = payload.get("live")
+    if state != "error" and live is not False:
+        return None
+
+    startup = payload.get("startup") or {}
+    metadata = startup.get("metadata") or {}
+    gpu_preflight = metadata.get("gpu_preflight") or {}
+    startup_error = metadata.get("startup_error") or {}
+
+    if isinstance(gpu_preflight, dict) and gpu_preflight.get("status") == "failed":
+        error_type = str(gpu_preflight.get("error_type") or "RuntimeError")
+        error_message = str(gpu_preflight.get("error") or "unknown GPU runtime failure")
+        return f"worker entered error state during startup: gpu_preflight failed: {error_type}: {error_message}"
+
+    if isinstance(startup_error, dict) and startup_error.get("message"):
+        error_type = str(startup_error.get("type") or "RuntimeError")
+        error_message = str(startup_error.get("message") or "unknown startup failure")
+        return f"worker entered error state during startup: {error_type}: {error_message}"
+
+    return f"worker entered error state during startup: state={state or 'error'}"
 
 
 def build_headers(api_key: str, *, content_type: bool = False) -> dict[str, str]:
@@ -369,6 +398,7 @@ def wait_for_condition(
     poll_interval_ms: int,
     args: argparse.Namespace,
     summarize_fn=None,
+    abort_fn=None,
 ) -> tuple[int, Any]:
     deadline = time.time() + timeout_s
     last_error: Exception | None = None
@@ -376,6 +406,10 @@ def wait_for_condition(
     next_log_at = started
     last_summary: str | None = None
     while time.time() < deadline:
+        if abort_fn is not None:
+            abort_reason = abort_fn()
+            if abort_reason:
+                raise RuntimeError(abort_reason)
         try:
             value = fetch_fn()
             if predicate_fn(value):
@@ -475,6 +509,13 @@ def wait_for_health_stages(
             payload = fetch_health(health_url, timeout=HEALTH_REQUEST_TIMEOUT_S, insecure=args.health_insecure)
             state.latest_payload = payload
             last_error = None
+            fatal_reason = fatal_health_payload_reason(payload)
+            if fatal_reason:
+                state.fatal_reason = fatal_reason
+                state.last_error = fatal_reason
+                state.notes.append(fatal_reason)
+                log_progress(args, f"worker health {health_url}: {fatal_reason}")
+                break
         except Exception:
             last_error = sys.exc_info()[1]
             state.last_error = str(last_error)
@@ -586,6 +627,7 @@ def wait_for_worker_registration(
     *,
     scenario_start_ms: int,
     previous_worker_id: str | None,
+    health_state: HealthPollState | None,
     args: argparse.Namespace,
     timeout_s: int,
     poll_interval_ms: int,
@@ -604,6 +646,7 @@ def wait_for_worker_registration(
         poll_interval_ms=poll_interval_ms,
         args=args,
         summarize_fn=lambda payload: f"workers={payload.get('total')}",
+        abort_fn=lambda: health_state.fatal_reason if health_state is not None else None,
     )
 
 
@@ -754,6 +797,7 @@ def run_ready_path(
         args=args,
         timeout_s=args.timeout_s,
         poll_interval_ms=args.poll_interval_ms,
+        health_state=health_state,
     )
     times.t4_worker_registered = t4
     worker = match_worker(
