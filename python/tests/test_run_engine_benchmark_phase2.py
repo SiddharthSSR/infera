@@ -38,6 +38,7 @@ def test_build_profiles_merges_baseline_env_and_profile_overrides(tmp_path):
                     "worker_env": {
                         "INFERA_VLLM_GPU_MEMORY_UTILIZATION": "0.90",
                         "INFERA_VLLM_ENABLE_PREFIX_CACHING": "true",
+                        "INFERA_VLLM_MAX_NUM_SEQS": "48",
                     }
                 }
             }
@@ -84,6 +85,7 @@ def test_build_profiles_merges_baseline_env_and_profile_overrides(tmp_path):
             runtime_options={
                 "INFERA_VLLM_GPU_MEMORY_UTILIZATION": "0.90",
                 "INFERA_VLLM_ENABLE_PREFIX_CACHING": "true",
+                "INFERA_VLLM_MAX_NUM_SEQS": "48",
                 "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS": "4096",
             },
         )
@@ -183,3 +185,63 @@ def test_filter_runtime_options_drops_reserved_keys():
     )
 
     assert filtered == {"INFERA_VLLM_MAX_MODEL_LEN": "32768"}
+
+
+def test_build_profile_run_spec_preserves_phase2_metadata(tmp_path):
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "engine": "vllm",
+            "gpu_type": "A100_80GB",
+            "gpu_count": 1,
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "provider": "runpod",
+            "provider_gpu_type_id": "NVIDIA A100 80GB PCIe",
+            "preset": "conversation",
+            "warm_runs": 3,
+            "warmup": 2,
+            "concurrency": 4,
+            "cache_key_prefix": "phase2",
+            "instance_name_prefix": "engine-phase2",
+            "output_dir": str(tmp_path),
+            "benchmark_header": ["X-Debug: on"],
+        },
+    )()
+    profile = module.Phase2Profile(
+        name="scheduler_steps_4",
+        group="scheduler",
+        description="Test scheduler steps 4",
+        runtime_options={"INFERA_VLLM_NUM_SCHEDULER_STEPS": "4"},
+    )
+
+    run_spec = module.build_profile_run_spec(args, profile)
+
+    assert run_spec.run_id == "phase2-vllm-a100-80gb-scheduler-steps-4"
+    assert run_spec.output_dir.endswith("/vllm/scheduler-steps-4")
+    assert run_spec.runtime_options == {"INFERA_VLLM_NUM_SCHEDULER_STEPS": "4"}
+    assert run_spec.generic_parameters["legacy_prompt_preset"] == "conversation"
+    assert run_spec.attach_target is not None
+    assert run_spec.attach_target.cache_key_prefix == "phase2"
+
+
+def test_build_phase2_benchmark_profile_respects_skip_flags(monkeypatch):
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "skip_cold_start": True,
+            "skip_startup_health": False,
+            "skip_warm": False,
+            "warm_ready_timeout_s": 240,
+        },
+    )()
+
+    profile = module.build_phase2_benchmark_profile(args)
+
+    assert "cold_start" not in profile.stages
+    assert "startup_health" in profile.stages
+    assert "warm_none" in profile.stages
+    assert profile.warm_ready_timeout_s == 240

@@ -16,14 +16,23 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import ssl
 import statistics
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from typing import Any
 
 DEFAULT_BASE_URL = "https://inferai.co.in"
+DEFAULT_WORKLOAD_FILE = Path(__file__).resolve().parents[1] / "configs" / "benchmark_lab" / "workloads.json"
+DEFAULT_RUNS = 3
+DEFAULT_CONCURRENCY = 1
+DEFAULT_WARMUP = 0
+DEFAULT_MAX_TOKENS = 256
+DEFAULT_TEMPERATURE = 0.2
 
 PROMPTS = {
     "short": "What is the capital of France? Answer in one short sentence.",
@@ -78,6 +87,7 @@ class StreamResult:
     ttft_ms: float
     total_ms: float
     content: str
+    event_intervals_ms: list[float]
 
 
 @dataclass
@@ -87,6 +97,44 @@ class NonStreamResult:
     completion_tokens: int
     total_tokens: int
     content: str
+
+
+@dataclass
+class HealthSamplingSummary:
+    sample_count: int = 0
+    error_count: int = 0
+    peak_memory_used_bytes: int = 0
+
+
+class HealthSampler:
+    def __init__(self, url: str, *, insecure: bool, interval_ms: int):
+        self.url = url
+        self.insecure = insecure
+        self.interval_ms = max(interval_ms, 200)
+        self.summary = HealthSamplingSummary()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> HealthSamplingSummary:
+        self._stop.set()
+        self._thread.join(timeout=max(self.interval_ms / 1000.0, 2.0))
+        return self.summary
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                payload = request_json("GET", self.url, timeout=5, insecure=self.insecure)
+                self.summary.sample_count += 1
+                self.summary.peak_memory_used_bytes = max(
+                    self.summary.peak_memory_used_bytes,
+                    int(payload.get("memory_used_bytes") or 0),
+                )
+            except Exception:
+                self.summary.error_count += 1
+            self._stop.wait(self.interval_ms / 1000.0)
 
 
 def parse_args() -> argparse.Namespace:
@@ -129,21 +177,31 @@ def parse_args() -> argparse.Namespace:
         help="Prompt preset to run (default: %(default)s)",
     )
     parser.add_argument(
+        "--workload-file",
+        default=str(DEFAULT_WORKLOAD_FILE),
+        help="Optional workload catalog JSON file (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--workload",
+        default="",
+        help="Optional workload ID from the workload catalog. When set, its prompt and default run settings are used.",
+    )
+    parser.add_argument(
         "--runs",
         type=int,
-        default=3,
+        default=DEFAULT_RUNS,
         help="Number of repetitions per preset (default: %(default)s)",
     )
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=1,
+        default=DEFAULT_CONCURRENCY,
         help="Number of concurrent clients per run group (default: %(default)s)",
     )
     parser.add_argument(
         "--warmup",
         type=int,
-        default=0,
+        default=DEFAULT_WARMUP,
         help="Number of warmup run groups to execute and discard before measuring (default: %(default)s)",
     )
     parser.add_argument(
@@ -160,13 +218,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=256,
+        default=DEFAULT_MAX_TOKENS,
         help="Completion token limit (default: %(default)s)",
     )
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.2,
+        default=DEFAULT_TEMPERATURE,
         help="Temperature (default: %(default)s)",
     )
     parser.add_argument(
@@ -192,6 +250,22 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Optional extra HTTP header in 'Name: Value' form. Can be repeated.",
     )
+    parser.add_argument(
+        "--sample-health-url",
+        default="",
+        help="Optional worker /health URL to sample while the warm benchmark is running.",
+    )
+    parser.add_argument(
+        "--health-sample-interval-ms",
+        type=int,
+        default=5000,
+        help="Sampling interval for --sample-health-url (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--health-insecure",
+        action="store_true",
+        help="Disable TLS verification for --sample-health-url polling",
+    )
     return parser.parse_args()
 
 
@@ -203,6 +277,38 @@ def parse_extra_headers(raw_headers: list[str]) -> dict[str, str]:
             raise ValueError(f"invalid header {raw_header!r}; expected 'Name: Value'")
         headers[name.strip()] = value.strip()
     return headers
+
+
+def request_json(method: str, url: str, *, timeout: int, insecure: bool) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "infera-benchmark-chat/1.0", "Accept": "application/json"},
+        method=method,
+    )
+    context = None
+    if insecure and url.startswith("https://"):
+        context = ssl._create_unverified_context()
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        body = response.read()
+    if not body:
+        return {}
+    return json.loads(body)
+
+
+def load_workloads(path: str) -> dict[str, dict[str, Any]]:
+    payload = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    workloads = payload.get("workloads") or []
+    return {str(item.get("id")): dict(item) for item in workloads if item.get("id")}
+
+
+def resolve_prompt_text(prompt_source: dict[str, Any]) -> str:
+    prompt_text = str(prompt_source.get("prompt_text") or "").strip()
+    if prompt_text:
+        return prompt_text
+    preset = str(prompt_source.get("prompt_preset") or "").strip()
+    if preset and preset in PROMPTS:
+        return PROMPTS[preset]
+    raise ValueError("workload does not define prompt_text or a known prompt_preset")
 
 
 def build_headers(api_key: str | None, stream: bool, extra_headers: dict[str, str] | None = None) -> dict[str, str]:
@@ -296,6 +402,7 @@ def run_stream(
     started = time.perf_counter()
     first_content_ms: float | None = None
     pieces: list[str] = []
+    event_times_ms: list[float] = []
     with urllib.request.urlopen(request, timeout=timeout) as response:
         for raw_line in response:
             line = raw_line.decode("utf-8", errors="replace").strip()
@@ -310,13 +417,21 @@ def run_stream(
                 content = delta.get("content")
                 if content:
                     pieces.append(content)
+                    event_time_ms = (time.perf_counter() - started) * 1000.0
+                    event_times_ms.append(event_time_ms)
                     if first_content_ms is None:
-                        first_content_ms = (time.perf_counter() - started) * 1000.0
+                        first_content_ms = event_time_ms
     total_ms = (time.perf_counter() - started) * 1000.0
+    event_intervals_ms = [
+        round(event_times_ms[index] - event_times_ms[index - 1], 2)
+        for index in range(1, len(event_times_ms))
+        if event_times_ms[index] - event_times_ms[index - 1] >= 0
+    ]
     return StreamResult(
         ttft_ms=first_content_ms or total_ms,
         total_ms=total_ms,
         content="".join(pieces),
+        event_intervals_ms=event_intervals_ms,
     )
 
 
@@ -351,6 +466,8 @@ def summarize_rows(rows: list[dict[str, float | int | str]]) -> dict[str, float]
     stream_total_values = [float(row["stream_total_ms"]) for row in rows]
     non_stream_values = [float(row["non_stream_total_ms"]) for row in rows]
     decode_values = [float(row["decode_tok_s"]) for row in rows if float(row["decode_tok_s"]) > 0]
+    tpot_values = [float(row.get("tpot_ms", 0.0)) for row in rows if float(row.get("tpot_ms", 0.0)) > 0]
+    itl_values = [float(row.get("itl_ms", 0.0)) for row in rows if float(row.get("itl_ms", 0.0)) > 0]
     group_rows = _group_representatives(rows)
     aggregate_decode_values = [
         float(row["aggregate_decode_tok_s"])
@@ -380,6 +497,8 @@ def summarize_rows(rows: list[dict[str, float | int | str]]) -> dict[str, float]
         "aggregate_decode_tok_s_p95": pct(aggregate_decode_values, 0.95),
         "aggregate_total_tok_s_p50": median(aggregate_total_values),
         "contention_ratio_p50": median(contention_values),
+        "tpot_p50_ms": median(tpot_values),
+        "itl_p50_ms": median(itl_values),
     }
 
 
@@ -412,6 +531,12 @@ def print_summary(name: str, rows: list[dict[str, float | int | str]]) -> None:
             f"aggregate_total_tok/s p50={summary['aggregate_total_tok_s_p50']:.2f} "
             f"contention_ratio p50={summary['contention_ratio_p50']:.3f}"
         )
+    if summary["tpot_p50_ms"] > 0:
+        print(
+            "  "
+            f"tpot p50={summary['tpot_p50_ms']:.2f}ms "
+            f"itl p50={summary['itl_p50_ms']:.2f}ms"
+        )
 
 
 def build_result_row(
@@ -425,6 +550,12 @@ def build_result_row(
     decode_window_s = max((stream.total_ms - stream.ttft_ms) / 1000.0, 0.001)
     decode_tok_s = non_stream.completion_tokens / decode_window_s if non_stream.completion_tokens else 0.0
     total_tok_s = non_stream.total_tokens / max(non_stream.total_ms / 1000.0, 0.001) if non_stream.total_tokens else 0.0
+    tpot_ms = (
+        max(stream.total_ms - stream.ttft_ms, 0.0) / max(non_stream.completion_tokens, 1)
+        if non_stream.completion_tokens
+        else 0.0
+    )
+    itl_ms = median(stream.event_intervals_ms) if stream.event_intervals_ms else tpot_ms
     row: dict[str, float | int | str] = {
         "run": run_index,
         "group_run": run_index,
@@ -438,6 +569,9 @@ def build_result_row(
         "total_tokens": non_stream.total_tokens,
         "decode_tok_s": round(decode_tok_s, 4),
         "total_tok_s": round(total_tok_s, 4),
+        "tpot_ms": round(tpot_ms, 4),
+        "itl_ms": round(itl_ms, 4),
+        "stream_event_count": len(stream.event_intervals_ms) + (1 if stream.content else 0),
     }
     if cost_per_hour is not None:
         query_cost = cost_per_hour * (non_stream.total_ms / 1000.0) / 3600.0
@@ -488,7 +622,10 @@ def _run_phase_concurrently(
         return [(client_index, future.result()) for client_index, future in futures]
 
 
-def annotate_group_metrics(rows: list[dict[str, float | int | str]]) -> None:
+def annotate_group_metrics(
+    rows: list[dict[str, float | int | str]],
+    health_summary: HealthSamplingSummary | None,
+) -> None:
     if not rows:
         return
     aggregate_decode_tok_s = sum(float(row["completion_tokens"]) for row in rows) / max(
@@ -503,6 +640,10 @@ def annotate_group_metrics(rows: list[dict[str, float | int | str]]) -> None:
         row["aggregate_decode_tok_s"] = round(aggregate_decode_tok_s, 4)
         row["aggregate_total_tok_s"] = round(aggregate_total_tok_s, 4)
         row["contention_ratio"] = round(contention_ratio, 4)
+        if health_summary is not None:
+            row["peak_memory_used_bytes"] = health_summary.peak_memory_used_bytes
+            row["health_sample_count"] = health_summary.sample_count
+            row["health_sample_error_count"] = health_summary.error_count
 
 
 def run_benchmark_group(
@@ -520,7 +661,18 @@ def run_benchmark_group(
     cache_key_prefix: str,
     preset: str,
     cost_per_hour: float | None,
-) -> list[dict[str, float | int | str]]:
+    sample_health_url: str | None,
+    health_insecure: bool,
+    health_sample_interval_ms: int,
+) -> tuple[list[dict[str, float | int | str]], HealthSamplingSummary]:
+    sampler: HealthSampler | None = None
+    if sample_health_url:
+        sampler = HealthSampler(
+            sample_health_url,
+            insecure=health_insecure,
+            interval_ms=health_sample_interval_ms,
+        )
+        sampler.start()
     non_stream_results = _run_phase_concurrently(
         run_non_stream,
         concurrency,
@@ -563,8 +715,9 @@ def run_benchmark_group(
         )
         for client_index, non_stream_result in non_stream_results
     ]
-    annotate_group_metrics(rows)
-    return rows
+    health_summary = sampler.stop() if sampler is not None else HealthSamplingSummary()
+    annotate_group_metrics(rows, health_summary)
+    return rows, health_summary
 
 
 def build_output_payload(
@@ -579,6 +732,7 @@ def build_output_payload(
     cache_reuse_mode: str,
     results: dict[str, list[dict[str, float | int | str]]],
     cost_per_hour: float | None,
+    health_sampling: dict[str, int],
 ) -> dict[str, object]:
     return {
         "base_url": base_url,
@@ -592,6 +746,7 @@ def build_output_payload(
         "cache_reuse_mode": cache_reuse_mode,
         "presets": results,
         "cost_per_hour": cost_per_hour,
+        "health_sampling": health_sampling,
     }
 
 
@@ -610,11 +765,38 @@ def main() -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    presets = list(PROMPTS) if args.preset == "all" else [args.preset]
+    workload_config: dict[str, Any] | None = None
+    prompt_lookup = dict(PROMPTS)
+    if args.workload:
+        workloads = load_workloads(args.workload_file)
+        workload_config = workloads.get(args.workload)
+        if workload_config is None:
+            print(f"unknown workload {args.workload!r} in {args.workload_file}", file=sys.stderr)
+            return 1
+        prompt_lookup = {args.workload: resolve_prompt_text(workload_config)}
+        if args.runs == DEFAULT_RUNS:
+            args.runs = int(workload_config.get("measured_runs") or args.runs)
+        if args.warmup == DEFAULT_WARMUP:
+            args.warmup = int(workload_config.get("warmup_runs") or args.warmup)
+        if args.concurrency == DEFAULT_CONCURRENCY:
+            args.concurrency = int(workload_config.get("concurrency") or args.concurrency)
+        if args.max_tokens == DEFAULT_MAX_TOKENS:
+            args.max_tokens = int(workload_config.get("max_tokens") or args.max_tokens)
+        if args.temperature == DEFAULT_TEMPERATURE:
+            args.temperature = float(workload_config.get("temperature") or args.temperature)
+        if not extra_headers and workload_config.get("headers"):
+            extra_headers = {
+                str(key): str(value)
+                for key, value in dict(workload_config.get("headers") or {}).items()
+            }
+        presets = [args.workload]
+    else:
+        presets = list(prompt_lookup) if args.preset == "all" else [args.preset]
     results: dict[str, list[dict[str, float | int | str]]] = {}
+    aggregate_health = {"sample_count": 0, "error_count": 0, "peak_memory_used_bytes": 0}
 
     for preset in presets:
-        prompt = PROMPTS[preset]
+        prompt = prompt_lookup[preset]
         rows: list[dict[str, float | int | str]] = []
         print(
             f"Running preset={preset} runs={args.runs} warmup={args.warmup} "
@@ -622,7 +804,7 @@ def main() -> int:
         )
         for warmup_index in range(1, args.warmup + 1):
             try:
-                run_benchmark_group(
+                _warmup_rows, warmup_health = run_benchmark_group(
                     warmup_index,
                     args.concurrency,
                     args.base_url,
@@ -637,6 +819,15 @@ def main() -> int:
                     args.cache_key_prefix,
                     preset,
                     args.cost_per_hour,
+                    args.sample_health_url or None,
+                    args.health_insecure,
+                    args.health_sample_interval_ms,
+                )
+                aggregate_health["sample_count"] += warmup_health.sample_count
+                aggregate_health["error_count"] += warmup_health.error_count
+                aggregate_health["peak_memory_used_bytes"] = max(
+                    aggregate_health["peak_memory_used_bytes"],
+                    warmup_health.peak_memory_used_bytes,
                 )
             except urllib.error.HTTPError as exc:
                 print(f"warmup {warmup_index}: HTTP {exc.code} {exc.reason}", file=sys.stderr)
@@ -647,7 +838,7 @@ def main() -> int:
             print(f"  warmup={warmup_index}/{args.warmup} complete")
         for run_index in range(1, args.runs + 1):
             try:
-                group_rows = run_benchmark_group(
+                group_rows, group_health = run_benchmark_group(
                     run_index,
                     args.concurrency,
                     args.base_url,
@@ -662,6 +853,9 @@ def main() -> int:
                     args.cache_key_prefix,
                     preset,
                     args.cost_per_hour,
+                    args.sample_health_url or None,
+                    args.health_insecure,
+                    args.health_sample_interval_ms,
                 )
             except urllib.error.HTTPError as exc:
                 print(f"run {run_index}: HTTP {exc.code} {exc.reason}", file=sys.stderr)
@@ -671,6 +865,12 @@ def main() -> int:
                 return 1
 
             rows.extend(group_rows)
+            aggregate_health["sample_count"] += group_health.sample_count
+            aggregate_health["error_count"] += group_health.error_count
+            aggregate_health["peak_memory_used_bytes"] = max(
+                aggregate_health["peak_memory_used_bytes"],
+                group_health.peak_memory_used_bytes,
+            )
             if args.concurrency == 1:
                 row = group_rows[0]
                 print(
@@ -709,6 +909,7 @@ def main() -> int:
                 args.cache_reuse_mode,
                 results,
                 args.cost_per_hour,
+                aggregate_health,
             ),
         )
         print(f"\nWrote JSON results to {output_path}")

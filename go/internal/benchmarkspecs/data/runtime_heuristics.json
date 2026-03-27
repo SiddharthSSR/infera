@@ -1,0 +1,99 @@
+{
+  "gpu_defaults": {
+    "RTX_4080": {
+      "gpu_memory_utilization": "0.90",
+      "enable_chunked_prefill": true,
+      "max_num_batched_tokens": 2048,
+      "max_num_seqs": 8
+    },
+    "RTX_4090": {
+      "gpu_memory_utilization": "0.90",
+      "enable_chunked_prefill": true,
+      "max_num_batched_tokens": 2048,
+      "max_num_seqs": 8
+    },
+    "L40S": {
+      "gpu_memory_utilization": "0.94",
+      "enable_chunked_prefill": true,
+      "max_num_batched_tokens": 2048,
+      "max_num_seqs": 16
+    },
+    "A100_40GB": {
+      "gpu_memory_utilization": "0.94",
+      "enable_chunked_prefill": true,
+      "max_num_batched_tokens": 4096,
+      "max_num_seqs": 32,
+      "num_scheduler_steps": 4
+    },
+    "A100_80GB": {
+      "gpu_memory_utilization": "0.94",
+      "enable_chunked_prefill": true,
+      "max_num_batched_tokens": 8192,
+      "max_num_seqs": 48,
+      "num_scheduler_steps": 6
+    },
+    "H100": {
+      "gpu_memory_utilization": "0.95",
+      "enable_chunked_prefill": true,
+      "max_num_batched_tokens": 8192,
+      "max_num_seqs": 64,
+      "num_scheduler_steps": 8
+    }
+  },
+  "model_overrides": {
+    "Qwen/Qwen2.5-7B-Instruct": {
+      "base": {
+        "max_model_len": 32768,
+        "gpu_memory_utilization": "0.94",
+        "enable_chunked_prefill": true,
+        "max_num_batched_tokens": 2048,
+        "max_num_seqs": 8
+      },
+      "overrides": [
+        {"gpu_type": "L40S", "gpu_min_count": 1, "preset": {"max_model_len": 32768, "gpu_memory_utilization": "0.94", "enable_chunked_prefill": true, "max_num_batched_tokens": 2048, "max_num_seqs": 16}},
+        {"gpu_type": "A100_40GB", "gpu_min_count": 1, "preset": {"max_model_len": 32768, "gpu_memory_utilization": "0.94", "enable_chunked_prefill": true, "max_num_batched_tokens": 4096, "max_num_seqs": 32, "num_scheduler_steps": 4}},
+        {"gpu_type": "A100_80GB", "gpu_min_count": 1, "preset": {"max_model_len": 32768, "gpu_memory_utilization": "0.94", "enable_chunked_prefill": true, "max_num_batched_tokens": 8192, "max_num_seqs": 48, "num_scheduler_steps": 6}},
+        {"gpu_type": "H100", "gpu_min_count": 1, "preset": {"max_model_len": 32768, "gpu_memory_utilization": "0.94", "enable_chunked_prefill": true, "max_num_batched_tokens": 8192, "max_num_seqs": 64, "num_scheduler_steps": 8}}
+      ],
+      "spec_decoding": {"draft_model": "Qwen/Qwen2.5-0.5B-Instruct", "num_spec_tokens": 5}
+    },
+    "Qwen/Qwen3-4B-Thinking-2507": {
+      "base": {
+        "max_model_len": 65536,
+        "gpu_memory_utilization": "0.94",
+        "enable_chunked_prefill": true,
+        "max_num_batched_tokens": 2048,
+        "max_num_seqs": 8
+      },
+      "overrides": [
+        {"gpu_type": "L40S", "gpu_min_count": 1, "preset": {"max_model_len": 65536, "gpu_memory_utilization": "0.94", "enable_chunked_prefill": true, "max_num_batched_tokens": 2048, "max_num_seqs": 16}},
+        {"gpu_type": "A100_40GB", "gpu_min_count": 1, "preset": {"max_model_len": 65536, "gpu_memory_utilization": "0.94", "enable_chunked_prefill": true, "max_num_batched_tokens": 4096, "max_num_seqs": 32, "num_scheduler_steps": 4}},
+        {"gpu_type": "A100_80GB", "gpu_min_count": 1, "preset": {"max_model_len": 65536, "gpu_memory_utilization": "0.94", "enable_chunked_prefill": true, "max_num_batched_tokens": 8192, "max_num_seqs": 48, "num_scheduler_steps": 6}},
+        {"gpu_type": "H100", "gpu_min_count": 1, "preset": {"max_model_len": 65536, "gpu_memory_utilization": "0.94", "enable_chunked_prefill": true, "max_num_batched_tokens": 8192, "max_num_seqs": 64, "num_scheduler_steps": 8}}
+      ],
+      "spec_decoding": {"draft_model": "", "num_spec_tokens": 4, "ngram_lookup": 4}
+    },
+    "Qwen/Qwen2.5-14B-Instruct": {
+      "spec_decoding": {"draft_model": "Qwen/Qwen2.5-0.5B-Instruct", "num_spec_tokens": 5}
+    },
+    "Qwen/Qwen2.5-32B-Instruct": {
+      "spec_decoding": {"draft_model": "Qwen/Qwen2.5-1.5B-Instruct", "num_spec_tokens": 5}
+    },
+    "meta-llama/Meta-Llama-3.1-8B-Instruct": {
+      "spec_decoding": {"draft_model": "", "num_spec_tokens": 4, "ngram_lookup": 4}
+    },
+    "mistralai/Mistral-7B-Instruct-v0.2": {
+      "spec_decoding": {"draft_model": "", "num_spec_tokens": 4, "ngram_lookup": 4}
+    },
+    "mistralai/Mistral-7B-Instruct-v0.3": {
+      "spec_decoding": {"draft_model": "", "num_spec_tokens": 4, "ngram_lookup": 4}
+    },
+    "moonshotai/Kimi-K2.5-Instruct": {
+      "base": {"max_model_len": 16384, "gpu_memory_utilization": "0.95", "enable_chunked_prefill": true, "max_num_batched_tokens": 2048, "max_num_seqs": 4},
+      "overrides": [
+        {"gpu_type": "H100", "gpu_min_count": 8, "preset": {"max_model_len": 32768, "gpu_memory_utilization": "0.95", "enable_chunked_prefill": true, "max_num_batched_tokens": 4096, "max_num_seqs": 16, "num_scheduler_steps": 8}}
+      ],
+      "spec_decoding": {"draft_model": "", "num_spec_tokens": 4, "ngram_lookup": 4}
+    }
+  }
+}

@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/infera/infera/go/internal/benchmarkspecs"
 )
 
 const (
@@ -91,8 +93,7 @@ func applyVLLMRuntimeDefaults(req *ProvisionRequest) {
 		return
 	}
 
-	entry := modelRuntimePresetEntryForRequest(req)
-	preset, found := runtimePresetForRequest(req)
+	preset, spec, found := runtimePresetForRequest(req)
 	if !found {
 		return
 	}
@@ -133,15 +134,14 @@ func applyVLLMRuntimeDefaults(req *ProvisionRequest) {
 		req.Options[OptionVLLMNumSchedulerSteps] = fmt.Sprintf("%d", preset.NumSchedulerSteps)
 	}
 
-	applySpecDecodingDefaults(req, entry.SpecDecoding)
+	applySpecDecodingDefaults(req, spec)
 }
 
 func applySGLangRuntimeDefaults(req *ProvisionRequest) {
 	if req == nil {
 		return
 	}
-	entry := modelRuntimePresetEntryForRequest(req)
-	preset, found := runtimePresetForRequest(req)
+	preset, _, found := runtimePresetForRequest(req)
 	if !found {
 		return
 	}
@@ -167,7 +167,7 @@ func applySGLangRuntimeDefaults(req *ProvisionRequest) {
 	if strings.TrimSpace(req.Options[OptionSGLangMaxRunningRequests]) == "" && preset.MaxNumSeqs > 0 {
 		req.Options[OptionSGLangMaxRunningRequests] = fmt.Sprintf("%d", preset.MaxNumSeqs)
 	}
-	if entry.Base.EnableChunkedPrefill != nil && strings.TrimSpace(req.Options[OptionSGLangDisableCudaGraph]) == "" && preset.EnforceEager != nil {
+	if preset.EnableChunkedPrefill != nil && strings.TrimSpace(req.Options[OptionSGLangDisableCudaGraph]) == "" && preset.EnforceEager != nil {
 		req.Options[OptionSGLangDisableCudaGraph] = fmt.Sprintf("%t", *preset.EnforceEager)
 	}
 }
@@ -176,8 +176,7 @@ func applyTensorRTLLMRuntimeDefaults(req *ProvisionRequest) {
 	if req == nil {
 		return
 	}
-	entry := modelRuntimePresetEntryForRequest(req)
-	preset, found := runtimePresetForRequest(req)
+	preset, _, found := runtimePresetForRequest(req)
 	if !found {
 		return
 	}
@@ -197,52 +196,9 @@ func applyTensorRTLLMRuntimeDefaults(req *ProvisionRequest) {
 	if strings.TrimSpace(req.Options[OptionTensorRTLLMMaxBatchSize]) == "" && preset.MaxNumSeqs > 0 {
 		req.Options[OptionTensorRTLLMMaxBatchSize] = fmt.Sprintf("%d", preset.MaxNumSeqs)
 	}
-	if strings.TrimSpace(req.Options[OptionTensorRTLLMEnableChunkedContext]) == "" && entry.Base.EnableChunkedPrefill != nil {
-		req.Options[OptionTensorRTLLMEnableChunkedContext] = fmt.Sprintf("%t", *entry.Base.EnableChunkedPrefill)
+	if strings.TrimSpace(req.Options[OptionTensorRTLLMEnableChunkedContext]) == "" && preset.EnableChunkedPrefill != nil {
+		req.Options[OptionTensorRTLLMEnableChunkedContext] = fmt.Sprintf("%t", *preset.EnableChunkedPrefill)
 	}
-}
-
-func modelRuntimePresetEntryForRequest(req *ProvisionRequest) modelRuntimePresetEntry {
-	if req == nil || len(req.Models) == 0 {
-		return modelRuntimePresetEntry{}
-	}
-	entry, ok := modelRuntimePresets[strings.TrimSpace(req.Models[0])]
-	if !ok {
-		return modelRuntimePresetEntry{}
-	}
-	return entry
-}
-
-func mergeRuntimePreset(base modelRuntimePreset, overlay modelRuntimePreset) modelRuntimePreset {
-	merged := base
-	if overlay.TensorParallelSize > 0 {
-		merged.TensorParallelSize = overlay.TensorParallelSize
-	}
-	if overlay.MaxModelLen > 0 {
-		merged.MaxModelLen = overlay.MaxModelLen
-	}
-	if overlay.GPUMemoryUtilization != "" {
-		merged.GPUMemoryUtilization = overlay.GPUMemoryUtilization
-	}
-	if overlay.EnableChunkedPrefill != nil {
-		merged.EnableChunkedPrefill = overlay.EnableChunkedPrefill
-	}
-	if overlay.MaxNumBatchedTokens > 0 {
-		merged.MaxNumBatchedTokens = overlay.MaxNumBatchedTokens
-	}
-	if overlay.MaxNumSeqs > 0 {
-		merged.MaxNumSeqs = overlay.MaxNumSeqs
-	}
-	if overlay.SwapSpace > 0 {
-		merged.SwapSpace = overlay.SwapSpace
-	}
-	if overlay.EnforceEager != nil {
-		merged.EnforceEager = overlay.EnforceEager
-	}
-	if overlay.NumSchedulerSteps > 0 {
-		merged.NumSchedulerSteps = overlay.NumSchedulerSteps
-	}
-	return merged
 }
 
 func defaultTensorParallelSize(req *ProvisionRequest) int {
@@ -536,289 +492,40 @@ func ValidateWorkerImageRef(image string) error {
 	return nil
 }
 
-// modelRuntimePresetOverride is a GPU-aware preset override for a specific tier.
-type modelRuntimePresetOverride struct {
-	GPUType     GPUType
-	GPUMinCount int
-	Preset      modelRuntimePreset
-}
-
-// modelRuntimePresetEntry is a static preset row. For models that need GPU-aware
-// tuning, provide one or more overrides. The base preset is used when none match.
-// SpecDecoding is applied automatically on large GPUs (VRAM >= largeGPUVRAMThresholdGB).
-type modelRuntimePresetEntry struct {
-	Base         modelRuntimePreset
-	Overrides    []modelRuntimePresetOverride
-	SpecDecoding *specDecodingConfig
-}
-
-// modelRuntimePresets maps a HuggingFace model ID to its runtime preset.
-// Add new entries here when onboarding a model — no Go logic changes required.
-//
-// SpecDecoding is injected automatically on large GPUs (VRAM >= largeGPUVRAMThresholdGB).
-// DraftModel must share the same vocabulary and tokenizer as the target model.
-// Use DraftModel="" for ngram mode when no architecture-compatible draft exists.
-var modelRuntimePresets = map[string]modelRuntimePresetEntry{
-	"Qwen/Qwen2.5-7B-Instruct": {
-		Base: modelRuntimePreset{
-			MaxModelLen:          32768,
-			GPUMemoryUtilization: "0.94",
-			EnableChunkedPrefill: boolPtr(true),
-			MaxNumBatchedTokens:  2048,
-			MaxNumSeqs:           8,
-		},
-		Overrides: []modelRuntimePresetOverride{
-			{
-				GPUType:     GPUL40S,
-				GPUMinCount: 1,
-				Preset: modelRuntimePreset{
-					MaxModelLen:          32768,
-					GPUMemoryUtilization: "0.94",
-					EnableChunkedPrefill: boolPtr(true),
-					MaxNumBatchedTokens:  2048,
-					MaxNumSeqs:           16,
-				},
-			},
-			{
-				GPUType:     GPUA100_40,
-				GPUMinCount: 1,
-				Preset: modelRuntimePreset{
-					MaxModelLen:          32768,
-					GPUMemoryUtilization: "0.94",
-					EnableChunkedPrefill: boolPtr(true),
-					MaxNumBatchedTokens:  4096,
-					MaxNumSeqs:           32,
-					NumSchedulerSteps:    4,
-				},
-			},
-			{
-				GPUType:     GPUA100_80,
-				GPUMinCount: 1,
-				Preset: modelRuntimePreset{
-					MaxModelLen:          32768,
-					GPUMemoryUtilization: "0.94",
-					EnableChunkedPrefill: boolPtr(true),
-					MaxNumBatchedTokens:  8192,
-					MaxNumSeqs:           48,
-					NumSchedulerSteps:    6,
-				},
-			},
-			{
-				GPUType:     GPUH100,
-				GPUMinCount: 1,
-				Preset: modelRuntimePreset{
-					MaxModelLen:          32768,
-					GPUMemoryUtilization: "0.94",
-					EnableChunkedPrefill: boolPtr(true),
-					MaxNumBatchedTokens:  8192,
-					MaxNumSeqs:           64,
-					NumSchedulerSteps:    8,
-				},
-			},
-		},
-		// Qwen2.5-0.5B shares the same tokenizer and architecture family.
-		SpecDecoding: &specDecodingConfig{
-			DraftModel:    "Qwen/Qwen2.5-0.5B-Instruct",
-			NumSpecTokens: 5,
-		},
-	},
-	"Qwen/Qwen3-4B-Thinking-2507": {
-		Base: modelRuntimePreset{
-			MaxModelLen:          65536,
-			GPUMemoryUtilization: "0.94",
-			EnableChunkedPrefill: boolPtr(true),
-			MaxNumBatchedTokens:  2048,
-			MaxNumSeqs:           8,
-		},
-		Overrides: []modelRuntimePresetOverride{
-			{
-				GPUType:     GPUL40S,
-				GPUMinCount: 1,
-				Preset: modelRuntimePreset{
-					MaxModelLen:          65536,
-					GPUMemoryUtilization: "0.94",
-					EnableChunkedPrefill: boolPtr(true),
-					MaxNumBatchedTokens:  2048,
-					MaxNumSeqs:           16,
-				},
-			},
-			{
-				GPUType:     GPUA100_40,
-				GPUMinCount: 1,
-				Preset: modelRuntimePreset{
-					MaxModelLen:          65536,
-					GPUMemoryUtilization: "0.94",
-					EnableChunkedPrefill: boolPtr(true),
-					MaxNumBatchedTokens:  4096,
-					MaxNumSeqs:           32,
-					NumSchedulerSteps:    4,
-				},
-			},
-			{
-				GPUType:     GPUA100_80,
-				GPUMinCount: 1,
-				Preset: modelRuntimePreset{
-					MaxModelLen:          65536,
-					GPUMemoryUtilization: "0.94",
-					EnableChunkedPrefill: boolPtr(true),
-					MaxNumBatchedTokens:  8192,
-					MaxNumSeqs:           48,
-					NumSchedulerSteps:    6,
-				},
-			},
-			{
-				GPUType:     GPUH100,
-				GPUMinCount: 1,
-				Preset: modelRuntimePreset{
-					MaxModelLen:          65536,
-					GPUMemoryUtilization: "0.94",
-					EnableChunkedPrefill: boolPtr(true),
-					MaxNumBatchedTokens:  8192,
-					MaxNumSeqs:           64,
-					NumSchedulerSteps:    8,
-				},
-			},
-		},
-		// No confirmed Qwen3 draft model yet; use ngram drafting as a safe fallback.
-		SpecDecoding: &specDecodingConfig{
-			DraftModel:    "",
-			NumSpecTokens: 4,
-			NgramLookup:   4,
-		},
-	},
-	"Qwen/Qwen2.5-14B-Instruct": {
-		SpecDecoding: &specDecodingConfig{
-			DraftModel:    "Qwen/Qwen2.5-0.5B-Instruct",
-			NumSpecTokens: 5,
-		},
-	},
-	"Qwen/Qwen2.5-32B-Instruct": {
-		SpecDecoding: &specDecodingConfig{
-			DraftModel:    "Qwen/Qwen2.5-1.5B-Instruct",
-			NumSpecTokens: 5,
-		},
-	},
-	"meta-llama/Meta-Llama-3.1-8B-Instruct": {
-		SpecDecoding: &specDecodingConfig{
-			DraftModel:    "",
-			NumSpecTokens: 4,
-			NgramLookup:   4,
-		},
-	},
-	"mistralai/Mistral-7B-Instruct-v0.2": {
-		SpecDecoding: &specDecodingConfig{
-			DraftModel:    "",
-			NumSpecTokens: 4,
-			NgramLookup:   4,
-		},
-	},
-	"mistralai/Mistral-7B-Instruct-v0.3": {
-		SpecDecoding: &specDecodingConfig{
-			DraftModel:    "",
-			NumSpecTokens: 4,
-			NgramLookup:   4,
-		},
-	},
-	"moonshotai/Kimi-K2.5-Instruct": {
-		Base: modelRuntimePreset{
-			MaxModelLen:          16384,
-			GPUMemoryUtilization: "0.95",
-			EnableChunkedPrefill: boolPtr(true),
-			MaxNumBatchedTokens:  2048,
-			MaxNumSeqs:           4,
-		},
-		Overrides: []modelRuntimePresetOverride{
-			{
-				GPUType:     GPUH100,
-				GPUMinCount: 8,
-				Preset: modelRuntimePreset{
-					MaxModelLen:          32768,
-					GPUMemoryUtilization: "0.95",
-					EnableChunkedPrefill: boolPtr(true),
-					MaxNumBatchedTokens:  4096,
-					MaxNumSeqs:           16,
-					NumSchedulerSteps:    8,
-				},
-			},
-		},
-		// No public draft model; ngram drafting only.
-		SpecDecoding: &specDecodingConfig{
-			DraftModel:    "",
-			NumSpecTokens: 4,
-			NgramLookup:   4,
-		},
-	},
-}
-
-var gpuRuntimePresets = map[GPUType]modelRuntimePreset{
-	GPURTX4080: {
-		GPUMemoryUtilization: "0.90",
-		EnableChunkedPrefill: boolPtr(true),
-		MaxNumBatchedTokens:  2048,
-		MaxNumSeqs:           8,
-	},
-	GPURTX4090: {
-		GPUMemoryUtilization: "0.90",
-		EnableChunkedPrefill: boolPtr(true),
-		MaxNumBatchedTokens:  2048,
-		MaxNumSeqs:           8,
-	},
-	GPUL40S: {
-		GPUMemoryUtilization: "0.94",
-		EnableChunkedPrefill: boolPtr(true),
-		MaxNumBatchedTokens:  2048,
-		MaxNumSeqs:           16,
-	},
-	GPUA100_40: {
-		GPUMemoryUtilization: "0.94",
-		EnableChunkedPrefill: boolPtr(true),
-		MaxNumBatchedTokens:  4096,
-		MaxNumSeqs:           32,
-		NumSchedulerSteps:    4,
-	},
-	GPUA100_80: {
-		GPUMemoryUtilization: "0.94",
-		EnableChunkedPrefill: boolPtr(true),
-		MaxNumBatchedTokens:  8192,
-		MaxNumSeqs:           48,
-		NumSchedulerSteps:    6,
-	},
-	GPUH100: {
-		GPUMemoryUtilization: "0.95",
-		EnableChunkedPrefill: boolPtr(true),
-		MaxNumBatchedTokens:  8192,
-		MaxNumSeqs:           64,
-		NumSchedulerSteps:    8,
-	},
-}
-
-func runtimePresetForRequest(req *ProvisionRequest) (modelRuntimePreset, bool) {
+func runtimePresetForRequest(req *ProvisionRequest) (modelRuntimePreset, *specDecodingConfig, bool) {
 	if req == nil {
-		return modelRuntimePreset{}, false
+		return modelRuntimePreset{}, nil, false
 	}
 
-	preset, ok := gpuRuntimePresets[req.GPUType]
-	if !ok {
-		preset = modelRuntimePreset{}
+	modelID := ""
+	if len(req.Models) > 0 {
+		modelID = strings.TrimSpace(req.Models[0])
 	}
 
-	entry := modelRuntimePresetEntryForRequest(req)
-	if entry.Base != (modelRuntimePreset{}) || entry.SpecDecoding != nil || len(entry.Overrides) > 0 {
-		preset = mergeRuntimePreset(preset, entry.Base)
-		for _, override := range entry.Overrides {
-			if req.GPUType == override.GPUType && req.GPUCount >= override.GPUMinCount {
-				preset = mergeRuntimePreset(preset, override.Preset)
-				break
-			}
+	resolved, found, err := benchmarkspecs.ResolveRuntimeHeuristic(modelID, string(req.GPUType), req.GPUCount)
+	if err != nil || !found {
+		return modelRuntimePreset{}, nil, false
+	}
+
+	preset := modelRuntimePreset{
+		TensorParallelSize:   resolved.TensorParallelSize,
+		MaxModelLen:          resolved.MaxModelLen,
+		GPUMemoryUtilization: resolved.GPUMemoryUtilization,
+		EnableChunkedPrefill: resolved.EnableChunkedPrefill,
+		MaxNumBatchedTokens:  resolved.MaxNumBatchedTokens,
+		MaxNumSeqs:           resolved.MaxNumSeqs,
+		SwapSpace:            resolved.SwapSpace,
+		EnforceEager:         resolved.EnforceEager,
+		NumSchedulerSteps:    resolved.NumSchedulerSteps,
+	}
+
+	var spec *specDecodingConfig
+	if resolved.SpecDecoding != nil {
+		spec = &specDecodingConfig{
+			DraftModel:    resolved.SpecDecoding.DraftModel,
+			NumSpecTokens: resolved.SpecDecoding.NumSpecTokens,
+			NgramLookup:   resolved.SpecDecoding.NgramLookup,
 		}
 	}
-
-	if preset == (modelRuntimePreset{}) {
-		return modelRuntimePreset{}, false
-	}
-	return preset, true
-}
-
-func boolPtr(v bool) *bool {
-	return &v
+	return preset, spec, true
 }

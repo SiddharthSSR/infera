@@ -17,12 +17,16 @@ import (
 )
 
 type InstanceHandlers struct {
-	manager         *providers.Manager
-	deploymentStore *deployments.Store
+	manager          *providers.Manager
+	deploymentStore  *deployments.Store
+	benchmarkService BenchmarkService
 }
 
 func NewInstanceHandlers(manager *providers.Manager) *InstanceHandlers {
-	return &InstanceHandlers{manager: manager}
+	return &InstanceHandlers{
+		manager:          manager,
+		benchmarkService: defaultBenchmarkService{},
+	}
 }
 
 func (h *InstanceHandlers) SetDeploymentStore(store *deployments.Store) {
@@ -33,6 +37,9 @@ func (h *InstanceHandlers) RegisterRoutes(mux *http.ServeMux, corsHandler func(h
 	mux.HandleFunc("/api/instances", corsHandler(h.handleInstances))
 	mux.HandleFunc("/api/instances/", corsHandler(h.handleInstanceByID))
 	mux.HandleFunc("/api/instances/provision", corsHandler(h.handleProvision))
+	mux.HandleFunc("/api/benchmarks/catalog", corsHandler(h.handleBenchmarkCatalog))
+	mux.HandleFunc("/api/benchmarks/validate", corsHandler(h.handleBenchmarkValidate))
+	mux.HandleFunc("/api/benchmarks/compare", corsHandler(h.handleBenchmarkCompare))
 	mux.HandleFunc("/api/deployments", corsHandler(h.handleDeployments))
 	mux.HandleFunc("/api/deployments/", corsHandler(h.handleDeploymentByID))
 	mux.HandleFunc("/api/offerings", corsHandler(h.handleOfferings))

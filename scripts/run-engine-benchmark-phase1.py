@@ -18,9 +18,27 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PYTHON_SRC = REPO_ROOT / "python" / "src"
+if str(PYTHON_SRC) not in sys.path:
+    sys.path.insert(0, str(PYTHON_SRC))
+
+from infera_bench.catalog import default_catalog_root
+from infera_bench.execution import (
+    ExecutionStep as SharedExecutionStep,
+    build_cold_start_command as build_shared_cold_start_command,
+    build_startup_health_command as build_shared_startup_health_command,
+    build_warm_command as build_shared_warm_command,
+    retained_health_url_for_step as shared_retained_health_url_for_step,
+    run_step as shared_run_step,
+    wait_for_warm_registration as shared_wait_for_warm_registration,
+    write_json_output as shared_write_json_output,
+)
+from infera_bench.schema import AttachTargetSpec, ResolvedRunSpec
 
 DEFAULT_BASE_URL = "https://inferai.co.in"
 DEFAULT_OUTPUT_DIR = Path("/tmp/infera-engine-benchmarks")
+DEFAULT_WORKLOAD_FILE = default_catalog_root() / "workloads.json"
 SUPPORTED_ENGINES = ("vllm", "sglang", "tensorrt_llm")
 PROGRESS_LOG_INTERVAL_S = 15.0
 HEALTH_REQUEST_TIMEOUT_S = 5
@@ -335,22 +353,68 @@ def build_manifest_path(args: argparse.Namespace) -> Path:
 
 
 def retained_health_url_for_step(step_name: str, output_path: str) -> str | None:
-    path = Path(output_path).expanduser()
-    if not path.exists():
-        return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    records_key = "captures" if step_name == "startup_health" else "scenarios" if step_name == "cold_start" else None
-    if records_key is None:
-        return None
-    records = payload.get(records_key) or []
-    if not records:
-        return None
-    value = records[-1].get("health_url")
-    return str(value) if value else None
+    return shared_retained_health_url_for_step(step_name, output_path)
 
 
 def runtime_options_from_args(args: argparse.Namespace) -> dict[str, str]:
     return parse_runtime_options(list(getattr(args, "runtime_option", []) or []))
+
+
+def benchmark_headers_from_args(args: argparse.Namespace) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for raw_value in list(getattr(args, "benchmark_header", []) or []):
+        entry = str(raw_value).strip()
+        if not entry:
+            continue
+        name, separator, value = entry.partition(":")
+        if separator == "":
+            raise ValueError(f"benchmark header must be 'Name: Value', got: {raw_value}")
+        trimmed_name = name.strip()
+        trimmed_value = value.strip()
+        if not trimmed_name or not trimmed_value:
+            raise ValueError(f"benchmark header must be 'Name: Value', got: {raw_value}")
+        headers[trimmed_name] = trimmed_value
+    return headers
+
+
+def build_phase1_run_spec(args: argparse.Namespace) -> ResolvedRunSpec:
+    phase_label = str(getattr(args, "phase_label", "phase1") or "phase1")
+    profile_name = str(getattr(args, "profile_name", "") or "").strip()
+    run_id_parts = [phase_label, args.engine, args.gpu_type]
+    if profile_name:
+        run_id_parts.append(profile_name)
+
+    return ResolvedRunSpec(
+        suite_id=phase_label,
+        run_id=slugify("-".join(run_id_parts)),
+        engine_id=args.engine,
+        hardware_id=args.gpu_type,
+        gpu_count=args.gpu_count,
+        model_id=args.model,
+        workload_id=args.preset,
+        benchmark_profile_id="provision_full",
+        runtime_preset_id=profile_name or "baseline",
+        provider=args.provider,
+        provider_gpu_type=args.provider_gpu_type_id or None,
+        provider_gpu_type_id=args.provider_gpu_type_id or None,
+        allowed_cuda_versions=[],
+        execution_mode="provision",
+        compatibility_status="ready",
+        compatibility_issues=[],
+        generic_parameters={
+            "legacy_prompt_preset": args.preset,
+            "warm_runs": args.warm_runs,
+            "warmup": args.warmup,
+            "concurrency": args.concurrency,
+            "instance_name_prefix": f"{args.instance_name_prefix}-{slugify(args.engine)}",
+        },
+        runtime_options=runtime_options_from_args(args),
+        output_dir=str(benchmark_output_dir(args)),
+        benchmark_headers=benchmark_headers_from_args(args),
+        workload_headers={},
+        attach_target=AttachTargetSpec(cache_key_prefix=args.cache_key_prefix),
+        tags=[args.engine, args.gpu_type, args.model, args.preset],
+    )
 
 
 def append_runtime_options(command: list[str], args: argparse.Namespace) -> None:
@@ -364,109 +428,45 @@ def build_warm_command(
     cache_reuse_mode: str,
     output_path: Path,
 ) -> list[str]:
-    command = [
-        args.python_bin,
-        "scripts/benchmark-chat.py",
-        args.base_url,
-        "--api-key",
-        args.api_key,
-        "--model",
-        args.model,
-        "--engine-label",
-        args.engine,
-        "--provider-label",
-        args.provider,
-        "--gpu-label",
-        args.gpu_type,
-        "--preset",
-        args.preset,
-        "--runs",
-        str(args.warm_runs),
-        "--warmup",
-        str(args.warmup),
-        "--concurrency",
-        str(args.concurrency),
-        "--cache-reuse-mode",
-        cache_reuse_mode,
-        "--json-output",
-        str(output_path),
-    ]
-    if cache_reuse_mode == "affinity":
-        command.extend(["--cache-key-prefix", args.cache_key_prefix])
-    if args.cost_per_hour is not None:
-        command.extend(["--cost-per-hour", str(args.cost_per_hour)])
-    for header in args.benchmark_header:
-        command.extend(["--header", header])
-    return command
+    return build_shared_warm_command(
+        build_phase1_run_spec(args),
+        python_bin=args.python_bin,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        workload_file=DEFAULT_WORKLOAD_FILE,
+        cache_reuse_mode=cache_reuse_mode,
+        output_path=output_path,
+        cost_per_hour=args.cost_per_hour,
+        health_url=None,
+        health_insecure=args.health_insecure,
+        health_sample_interval_ms=5000,
+    )
 
 
 def build_cold_start_command(args: argparse.Namespace, *, output_path: Path) -> list[str]:
-    command = [
-        args.python_bin,
-        "scripts/cold-start-benchmark.py",
-        args.base_url,
-        "--api-key",
-        args.api_key,
-        "--provider",
-        args.provider,
-        "--engine",
-        args.engine,
-        "--gpu-type",
-        args.gpu_type,
-        "--gpu-count",
-        str(args.gpu_count),
-        "--model",
-        args.model,
-        "--instance-name",
-        f"{args.instance_name_prefix}-{slugify(args.engine)}-cold",
-        "--json-output",
-        str(output_path),
-    ]
-    if args.provider_gpu_type_id:
-        command.extend(["--provider-gpu-type-id", args.provider_gpu_type_id])
-    append_runtime_options(command, args)
-    if args.health_insecure:
-        command.append("--health-insecure")
-    if args.quiet_progress:
-        command.append("--quiet-progress")
-    if should_terminate_after_cold_start(args):
-        command.append("--terminate-final-instance")
-    return command
+    return build_shared_cold_start_command(
+        build_phase1_run_spec(args),
+        python_bin=args.python_bin,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        output_path=output_path,
+        health_insecure=args.health_insecure,
+        quiet_progress=args.quiet_progress,
+        terminate_final_instance=should_terminate_after_cold_start(args),
+    )
 
 
 def build_startup_health_command(args: argparse.Namespace, *, output_path: Path) -> list[str]:
-    command = [
-        args.python_bin,
-        "scripts/capture-startup-health.py",
-        args.base_url,
-        "--api-key",
-        args.api_key,
-        "--provider",
-        args.provider,
-        "--engine",
-        args.engine,
-        "--gpu-type",
-        args.gpu_type,
-        "--gpu-count",
-        str(args.gpu_count),
-        "--model",
-        args.model,
-        "--instance-name",
-        f"{args.instance_name_prefix}-{slugify(args.engine)}-startup",
-        "--include-restart",
-        "--json-output",
-        str(output_path),
-    ]
-    if args.provider_gpu_type_id:
-        command.extend(["--provider-gpu-type-id", args.provider_gpu_type_id])
-    append_runtime_options(command, args)
-    if args.health_insecure:
-        command.append("--health-insecure")
-    if args.quiet_progress:
-        command.append("--quiet-progress")
-    if should_terminate_after_startup_health(args):
-        command.append("--terminate-final-instance")
-    return command
+    return build_shared_startup_health_command(
+        build_phase1_run_spec(args),
+        python_bin=args.python_bin,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        output_path=output_path,
+        health_insecure=args.health_insecure,
+        quiet_progress=args.quiet_progress,
+        terminate_final_instance=should_terminate_after_startup_health(args),
+    )
 
 
 def should_terminate_after_cold_start(args: argparse.Namespace) -> bool:
@@ -572,43 +572,20 @@ def build_manifest(args: argparse.Namespace, step_results: list[Phase1StepResult
 
 
 def write_json_output(path: Path, payload: dict[str, object]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return path
+    return shared_write_json_output(path, payload)
 
 
 def run_step(step: Phase1Step, *, dry_run: bool) -> Phase1StepResult:
-    started_at = now_iso()
-    if dry_run:
-        return Phase1StepResult(
+    result = shared_run_step(
+        SharedExecutionStep(
             name=step.name,
             category=step.category,
             output_path=step.output_path,
             command=step.command,
-            command_display=shlex.join(step.command),
-            started_at=started_at,
-            finished_at=started_at,
-            duration_ms=0,
-            returncode=None,
-            status="dry_run",
-        )
-
-    start_perf = time.perf_counter()
-    completed = subprocess.run(step.command, check=False)
-    finished_at = now_iso()
-    duration_ms = int((time.perf_counter() - start_perf) * 1000)
-    return Phase1StepResult(
-        name=step.name,
-        category=step.category,
-        output_path=step.output_path,
-        command=step.command,
-        command_display=shlex.join(step.command),
-        started_at=started_at,
-        finished_at=finished_at,
-        duration_ms=duration_ms,
-        returncode=completed.returncode,
-        status="ok" if completed.returncode == 0 else "failed",
+        ),
+        dry_run=dry_run,
     )
+    return Phase1StepResult(**result.model_dump())
 
 
 def wait_for_warm_registration(step: Phase1Step, args: argparse.Namespace) -> None:
@@ -616,47 +593,11 @@ def wait_for_warm_registration(step: Phase1Step, args: argparse.Namespace) -> No
     if not health_url:
         log(f"warm readiness wait skipped after step={step.name}: no retained health_url found")
         return
-
-    started = time.time()
-    deadline = started + args.warm_ready_timeout_s
-    next_log_at = started
-    last_error: Exception | None = None
-    last_state: str | None = None
-
-    while time.time() < deadline:
-        try:
-            payload = fetch_health(health_url, insecure=args.health_insecure)
-            last_error = None
-        except Exception as exc:
-            last_error = exc
-            if time.time() >= next_log_at:
-                log(
-                    f"warm readiness {health_url}: waiting... {time.time() - started:.1f}s "
-                    f"({summarize_health_poll_error(exc)})"
-                )
-                next_log_at = time.time() + PROGRESS_LOG_INTERVAL_S
-            time.sleep(2.0)
-            continue
-
-        ready = payload.get("ready") is True
-        gateway_registered = payload.get("gateway_registered") is True
-        state = f"ready={payload.get('ready')} gateway_registered={payload.get('gateway_registered')} state={payload.get('state')}"
-        last_state = state
-        if ready and gateway_registered:
-            log(f"warm readiness {health_url}: ready after {time.time() - started:.1f}s ({state})")
-            return
-        if time.time() >= next_log_at:
-            log(f"warm readiness {health_url}: waiting... {time.time() - started:.1f}s ({state})")
-            next_log_at = time.time() + PROGRESS_LOG_INTERVAL_S
-        time.sleep(2.0)
-
-    if last_error is not None:
-        raise RuntimeError(
-            f"timed out waiting for retained worker registration before warm runs; last error: {last_error}"
-        ) from last_error
-    raise RuntimeError(
-        "timed out waiting for retained worker registration before warm runs"
-        + (f"; last state: {last_state}" if last_state else "")
+    shared_wait_for_warm_registration(
+        health_url=health_url,
+        timeout_s=args.warm_ready_timeout_s,
+        insecure=args.health_insecure,
+        log_prefix="engine-phase1",
     )
 
 

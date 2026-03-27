@@ -62,7 +62,7 @@ infera-worker = "infera_worker.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["infera_worker*"]
+include = ["infera_worker*", "infera_bench*"]
 
 [tool.ruff]
 target-version = "py310"

@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "model_id": "Qwen/Qwen2.5-7B-Instruct",
+      "display_name": "Qwen2.5 7B Instruct (BF16)",
+      "source_uri": "hf://Qwen/Qwen2.5-7B-Instruct",
+      "family": "qwen2.5",
+      "parameter_scale": "7b",
+      "parameter_count_billions": 7.0,
+      "precision": "bf16",
+      "quantization": "none",
+      "max_context": 32768,
+      "artifact_kind": "hf_model",
+      "aliases": ["qwen2.5-7b-instruct-bf16"],
+      "engine_compatibility": {
+        "vllm": {"status": "supported", "supported_precisions": ["bf16"], "supported_quantizations": ["none"]},
+        "sglang": {"status": "supported", "supported_precisions": ["bf16"], "supported_quantizations": ["none"]},
+        "tensorrt_llm": {"status": "unverified", "notes": ["Requires a runtime/image combination with Qwen2 support."]}
+      }
+    },
+    {
+      "model_id": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+      "display_name": "Qwen2.5 7B Instruct (AWQ)",
+      "source_uri": "hf://Qwen/Qwen2.5-7B-Instruct-AWQ",
+      "family": "qwen2.5",
+      "parameter_scale": "7b",
+      "parameter_count_billions": 7.0,
+      "precision": "int4",
+      "quantization": "awq",
+      "max_context": 32768,
+      "artifact_kind": "hf_model",
+      "aliases": ["qwen2.5-7b-instruct-awq"],
+      "engine_compatibility": {
+        "vllm": {"status": "unverified", "supported_quantizations": ["awq"]},
+        "sglang": {"status": "unverified"},
+        "tensorrt_llm": {"status": "unverified"}
+      }
+    },
+    {
+      "model_id": "Qwen/Qwen3-4B-Thinking-2507",
+      "display_name": "Qwen3 4B Thinking",
+      "source_uri": "hf://Qwen/Qwen3-4B-Thinking-2507",
+      "family": "qwen3",
+      "parameter_scale": "4b",
+      "parameter_count_billions": 4.0,
+      "precision": "bf16",
+      "quantization": "none",
+      "max_context": 65536,
+      "artifact_kind": "hf_model",
+      "aliases": ["qwen3-4b-thinking-bf16"],
+      "engine_compatibility": {
+        "vllm": {"status": "supported", "supported_precisions": ["bf16"]},
+        "sglang": {"status": "unverified"},
+        "tensorrt_llm": {"status": "unverified"}
+      }
+    },
+    {
+      "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "display_name": "Llama 3.1 8B Instruct",
+      "source_uri": "hf://meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "family": "llama3.1",
+      "parameter_scale": "8b",
+      "parameter_count_billions": 8.0,
+      "precision": "bf16",
+      "quantization": "none",
+      "max_context": 131072,
+      "artifact_kind": "hf_model",
+      "aliases": ["llama3.1-8b-instruct-bf16"],
+      "engine_compatibility": {
+        "vllm": {"status": "supported", "supported_precisions": ["bf16"]},
+        "sglang": {"status": "supported", "supported_precisions": ["bf16"]},
+        "tensorrt_llm": {"status": "supported", "supported_precisions": ["bf16"]}
+      }
+    },
+    {
+      "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+      "display_name": "Mistral 7B Instruct v0.3",
+      "source_uri": "hf://mistralai/Mistral-7B-Instruct-v0.3",
+      "family": "mistral",
+      "parameter_scale": "7b",
+      "parameter_count_billions": 7.0,
+      "precision": "bf16",
+      "quantization": "none",
+      "max_context": 32768,
+      "artifact_kind": "hf_model",
+      "aliases": ["mistral-7b-instruct-bf16"],
+      "engine_compatibility": {
+        "vllm": {"status": "supported", "supported_precisions": ["bf16"]},
+        "sglang": {"status": "supported", "supported_precisions": ["bf16"]},
+        "tensorrt_llm": {"status": "supported", "supported_precisions": ["bf16"]}
+      }
+    }
+  ]
+}

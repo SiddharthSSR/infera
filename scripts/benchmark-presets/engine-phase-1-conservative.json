@@ -7,18 +7,23 @@
       "description": "Preserve the current stable vLLM path while avoiding extra speculative or aggressive queue tuning.",
       "worker_env": {
         "INFERA_VLLM_TENSOR_PARALLEL_SIZE": "1",
-        "INFERA_VLLM_GPU_MEMORY_UTILIZATION": "0.90",
+        "INFERA_VLLM_GPU_MEMORY_UTILIZATION": "0.94",
         "INFERA_VLLM_MAX_MODEL_LEN": "32768",
         "INFERA_VLLM_ENABLE_PREFIX_CACHING": "true",
-        "INFERA_VLLM_ENABLE_CHUNKED_PREFILL": "true"
+        "INFERA_VLLM_ENABLE_CHUNKED_PREFILL": "true",
+        "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS": "8192",
+        "INFERA_VLLM_MAX_NUM_SEQS": "48",
+        "INFERA_VLLM_NUM_SCHEDULER_STEPS": "6"
       }
     },
     "sglang": {
       "description": "Keep SGLang close to stock behavior with only explicit memory and context sizing for comparability.",
       "worker_env": {
         "INFERA_SGLANG_TP_SIZE": "1",
-        "INFERA_SGLANG_MEM_FRACTION_STATIC": "0.90",
-        "INFERA_SGLANG_CONTEXT_LENGTH": "32768"
+        "INFERA_SGLANG_MEM_FRACTION_STATIC": "0.94",
+        "INFERA_SGLANG_CONTEXT_LENGTH": "32768",
+        "INFERA_SGLANG_CHUNKED_PREFILL_SIZE": "8192",
+        "INFERA_SGLANG_MAX_RUNNING_REQUESTS": "48"
       }
     },
     "tensorrt_llm": {

@@ -9,17 +9,25 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shlex
-import subprocess
 import sys
-import time
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PYTHON_SRC = REPO_ROOT / "python" / "src"
+if str(PYTHON_SRC) not in sys.path:
+    sys.path.insert(0, str(PYTHON_SRC))
+
+from infera_bench.catalog import default_catalog_root
+from infera_bench.execution import ProvisionExecutor
+from infera_bench.lab import BenchmarkLab
+from infera_bench.schema import AttachTargetSpec, BenchmarkProfile, ResolvedRunSpec
 
 DEFAULT_BASE_URL = "https://inferai.co.in"
 DEFAULT_OUTPUT_DIR = Path("/tmp/infera-engine-benchmarks-phase2")
 DEFAULT_BASELINE_PRESET = Path("scripts/benchmark-presets/engine-phase-1-conservative.json")
 DEFAULT_TUNING_PRESET = Path("scripts/benchmark-presets/engine-phase-2-tuning-space.json")
 DEFAULT_PHASE1_RUNNER = Path("scripts/run-engine-benchmark-phase1.py")
+DEFAULT_WORKLOAD_FILE = default_catalog_root() / "workloads.json"
 SUPPORTED_ENGINES = ("vllm", "sglang", "tensorrt_llm")
 RESERVED_RUNTIME_OPTION_KEYS = {"INFERA_ENGINE"}
 
@@ -189,6 +197,23 @@ def filter_runtime_options(options: dict[str, Any]) -> dict[str, str]:
     return filtered
 
 
+def benchmark_headers_from_args(args: argparse.Namespace) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for raw_value in list(getattr(args, "benchmark_header", []) or []):
+        entry = str(raw_value).strip()
+        if not entry:
+            continue
+        name, separator, value = entry.partition(":")
+        if separator == "":
+            raise ValueError(f"benchmark header must be 'Name: Value', got: {raw_value}")
+        trimmed_name = name.strip()
+        trimmed_value = value.strip()
+        if not trimmed_name or not trimmed_value:
+            raise ValueError(f"benchmark header must be 'Name: Value', got: {raw_value}")
+        headers[trimmed_name] = trimmed_value
+    return headers
+
+
 def build_profiles(args: argparse.Namespace, baseline_payload: dict[str, Any], tuning_payload: dict[str, Any]) -> list[Phase2Profile]:
     baseline_engine = ((baseline_payload.get("engines") or {}).get(args.engine) or {})
     baseline_env = filter_runtime_options(dict((baseline_engine.get("worker_env") or {})))
@@ -230,6 +255,60 @@ def build_profiles(args: argparse.Namespace, baseline_payload: dict[str, Any], t
             )
         )
     return profiles
+
+
+def build_profile_run_spec(args: argparse.Namespace, profile: Phase2Profile) -> ResolvedRunSpec:
+    profile_slug = slugify(profile.name)
+    output_dir = Path(args.output_dir).expanduser() / slugify(args.engine) / profile_slug
+    return ResolvedRunSpec(
+        suite_id="phase2",
+        run_id=f"phase2-{slugify(args.engine)}-{slugify(args.gpu_type)}-{profile_slug}",
+        engine_id=args.engine,
+        hardware_id=args.gpu_type,
+        gpu_count=args.gpu_count,
+        model_id=args.model,
+        workload_id=args.preset,
+        benchmark_profile_id="provision_full",
+        runtime_preset_id=profile.name,
+        provider=args.provider,
+        provider_gpu_type=args.provider_gpu_type_id or None,
+        provider_gpu_type_id=args.provider_gpu_type_id or None,
+        allowed_cuda_versions=[],
+        execution_mode="provision",
+        compatibility_status="ready",
+        compatibility_issues=[],
+        generic_parameters={
+            "legacy_prompt_preset": args.preset,
+            "warm_runs": args.warm_runs,
+            "warmup": args.warmup,
+            "concurrency": args.concurrency,
+            "instance_name_prefix": f"{args.instance_name_prefix}-{slugify(args.engine)}",
+        },
+        runtime_options=dict(profile.runtime_options),
+        output_dir=str(output_dir),
+        benchmark_headers=benchmark_headers_from_args(args),
+        workload_headers={},
+        attach_target=AttachTargetSpec(cache_key_prefix=args.cache_key_prefix),
+        tags=[args.engine, args.gpu_type, args.model, args.preset, profile.name],
+    )
+
+
+def build_phase2_benchmark_profile(args: argparse.Namespace) -> BenchmarkProfile:
+    catalog = BenchmarkLab.default().load_catalog()
+    base_profile = catalog.resolve_benchmark_profile("provision_full")
+    stages = list(base_profile.stages)
+    if args.skip_cold_start:
+        stages = [stage for stage in stages if stage != "cold_start"]
+    if args.skip_startup_health:
+        stages = [stage for stage in stages if stage != "startup_health"]
+    if args.skip_warm:
+        stages = [stage for stage in stages if stage not in {"warm_none", "warm_affinity"}]
+    return base_profile.model_copy(
+        update={
+            "stages": stages,
+            "warm_ready_timeout_s": args.warm_ready_timeout_s,
+        }
+    )
 
 
 def render_profiles(engine: str, baseline_payload: dict[str, Any], tuning_payload: dict[str, Any]) -> str:
@@ -321,42 +400,92 @@ def build_phase1_command(args: argparse.Namespace, profile: Phase2Profile) -> li
     return command
 
 
+def build_profile_manifest(
+    args: argparse.Namespace,
+    profile: Phase2Profile,
+    execution,
+) -> dict[str, Any]:
+    notes = [
+        (
+            "Warm benchmark results are only valid when the active fleet serving the target model "
+            "is deployed with the selected engine."
+        )
+    ]
+    if args.terminate_final_instance and not args.skip_warm:
+        notes.append(
+            "Warm steps follow lifecycle provisioning, so the final startup-health or cold-start instance "
+            "is retained for warm traffic instead of being terminated automatically."
+        )
+    return {
+        "base_url": args.base_url,
+        "phase_label": "phase2",
+        "profile_name": profile.name,
+        "engine": args.engine,
+        "provider": args.provider,
+        "gpu_type": args.gpu_type,
+        "provider_gpu_type_id": args.provider_gpu_type_id,
+        "gpu_count": args.gpu_count,
+        "model": args.model,
+        "preset": args.preset,
+        "warm_runs": args.warm_runs,
+        "warmup": args.warmup,
+        "concurrency": args.concurrency,
+        "cost_per_hour": args.cost_per_hour,
+        "output_dir": execution.run_spec.output_dir,
+        "runtime_options": dict(profile.runtime_options),
+        "notes": notes,
+        "steps": [step.model_dump() for step in execution.steps],
+    }
+
+
+def summarize_execution(execution) -> tuple[str | None, str | None, int | None]:
+    if not execution.steps:
+        return execution.generated_at, execution.generated_at, 0
+    started_at = execution.steps[0].started_at
+    finished_at = execution.steps[-1].finished_at
+    duration_ms = sum(step.duration_ms or 0 for step in execution.steps)
+    return started_at, finished_at, duration_ms
+
+
 def run_profile(args: argparse.Namespace, profile: Phase2Profile) -> Phase2ProfileResult:
     command = build_phase1_command(args, profile)
-    started_at = now_iso()
-    if args.dry_run:
-        return Phase2ProfileResult(
-            profile_name=profile.name,
-            group=profile.group,
-            description=profile.description,
-            runtime_options=profile.runtime_options,
-            manifest_path=str(manifest_path_for_profile(args, profile.name)),
-            command=command,
-            command_display=shlex.join(command),
-            started_at=started_at,
-            finished_at=started_at,
-            duration_ms=0,
-            returncode=None,
-            status="dry_run",
-        )
+    run_spec = build_profile_run_spec(args, profile)
+    benchmark_profile = build_phase2_benchmark_profile(args)
+    execution = ProvisionExecutor(
+        base_url=args.base_url,
+        api_key=args.api_key,
+        workload_file=DEFAULT_WORKLOAD_FILE,
+        python_bin=args.python_bin,
+        cost_per_hour=args.cost_per_hour,
+        health_insecure=args.health_insecure,
+        quiet_progress=args.quiet_progress,
+        terminate_final_instance=args.terminate_final_instance,
+        dry_run=args.dry_run,
+        continue_on_error=args.continue_on_error,
+    ).execute(run_spec, benchmark_profile)
 
-    start_perf = time.perf_counter()
-    completed = subprocess.run(command, check=False)
-    finished_at = now_iso()
-    duration_ms = int((time.perf_counter() - start_perf) * 1000)
+    legacy_manifest_path = manifest_path_for_profile(args, profile.name)
+    write_output(legacy_manifest_path, build_profile_manifest(args, profile, execution))
+    started_at, finished_at, duration_ms = summarize_execution(execution)
+    returncode = None
+    if execution.status == "failed":
+        returncode = 1
+    elif execution.status in {"blocked", "skipped"}:
+        returncode = 2
+
     return Phase2ProfileResult(
         profile_name=profile.name,
         group=profile.group,
         description=profile.description,
         runtime_options=profile.runtime_options,
-        manifest_path=str(manifest_path_for_profile(args, profile.name)),
+        manifest_path=str(legacy_manifest_path),
         command=command,
         command_display=shlex.join(command),
         started_at=started_at,
         finished_at=finished_at,
         duration_ms=duration_ms,
-        returncode=completed.returncode,
-        status="ok" if completed.returncode == 0 else "failed",
+        returncode=returncode,
+        status=execution.status,
     )
 
 
@@ -420,6 +549,11 @@ def main() -> int:
         if result.status == "failed":
             exit_code = result.returncode or 1
             log(f"profile={profile.name} failed with returncode={result.returncode}")
+            if not args.continue_on_error:
+                break
+        if result.status in {"blocked", "skipped"} and exit_code == 0:
+            exit_code = result.returncode or 2
+            log(f"profile={profile.name} {result.status}")
             if not args.continue_on_error:
                 break
 
