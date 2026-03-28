@@ -353,5 +353,31 @@ class ResultComparison(BenchmarkBaseModel):
     entries: list[ResultComparisonEntry]
 
 
+class EvalIteration(BenchmarkBaseModel):
+    iteration_id: str
+    generated_at: str
+    label: str = ""
+    eval_command: list[str] = Field(default_factory=list)
+    eval_command_display: str = ""
+    cwd: str = ""
+    status: Literal["ok", "failed", "parse_failed"] = "ok"
+    change_summary: str = ""
+    bottleneck: str = ""
+    overall_score: float | None = None
+    llm_average_score: float | None = None
+    overall_target: float = 90.0
+    llm_average_target: float = 90.0
+    raw_output_path: str = ""
+    artifact_paths: list[str] = Field(default_factory=list)
+    remaining_risks: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class EvalHistory(BenchmarkBaseModel):
+    history_id: str
+    generated_at: str
+    iterations: list[EvalIteration] = Field(default_factory=list)
+
+
 def utc_now_iso() -> str:
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"

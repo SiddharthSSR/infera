@@ -215,6 +215,7 @@ def expand_suite(
                 engine_id,
                 hardware_id,
                 str(gpu_count),
+                model_id,
                 workload_id,
                 benchmark_profile_id,
                 runtime_preset_id,

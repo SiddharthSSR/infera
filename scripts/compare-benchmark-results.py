@@ -27,6 +27,8 @@ def parse_args() -> argparse.Namespace:
         help="Ranking objective",
     )
     parser.add_argument("--json-output", default="", help="Optional JSON output path")
+    parser.add_argument("--markdown-output", default="", help="Optional Markdown output path")
+    parser.add_argument("--top-k", type=int, default=10, help="Number of ranked entries to include in Markdown output")
     return parser.parse_args()
 
 
@@ -40,7 +42,9 @@ def main() -> int:
         output_path = Path(args.json_output).expanduser()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    else:
+    if args.markdown_output:
+        lab.write_comparison_markdown(comparison, Path(args.markdown_output).expanduser(), top_k=args.top_k)
+    if not args.json_output and not args.markdown_output:
         print(json.dumps(payload, indent=2))
     return 0
 

@@ -56,6 +56,43 @@
       }
     },
     {
+      "model_id": "Qwen/Qwen3.5-9B",
+      "display_name": "Qwen3.5 9B",
+      "source_uri": "hf://Qwen/Qwen3.5-9B",
+      "family": "qwen3.5",
+      "parameter_scale": "9b",
+      "parameter_count_billions": 9.0,
+      "precision": "bf16",
+      "quantization": "none",
+      "max_context": 262144,
+      "artifact_kind": "hf_model",
+      "aliases": ["qwen3.5-9b-bf16"],
+      "engine_compatibility": {
+        "vllm": {
+          "status": "unverified",
+          "supported_precisions": ["bf16"],
+          "notes": [
+            "Official Hugging Face model card says the artifacts are compatible with vLLM.",
+            "This model is not yet benchmarked in the current worker image path."
+          ]
+        },
+        "sglang": {
+          "status": "unverified",
+          "supported_precisions": ["bf16"],
+          "notes": [
+            "Official Hugging Face model card says the artifacts are compatible with SGLang.",
+            "This model is not yet benchmarked in the current worker image path."
+          ]
+        },
+        "tensorrt_llm": {
+          "status": "unverified",
+          "notes": [
+            "No TensorRT-LLM benchmark has been run for Qwen3.5 in this repo."
+          ]
+        }
+      }
+    },
+    {
       "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
       "display_name": "Llama 3.1 8B Instruct",
       "source_uri": "hf://meta-llama/Meta-Llama-3.1-8B-Instruct",

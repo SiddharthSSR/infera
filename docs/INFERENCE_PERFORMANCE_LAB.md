@@ -90,7 +90,22 @@ Compare result indexes:
 ```bash
 python3 scripts/compare-benchmark-results.py \
   /tmp/infera-benchmark-lab/cross-engine-baseline/cross-engine-baseline-result-index.json \
+  --markdown-output /tmp/infera-benchmark-lab/cross-engine-baseline/cross-engine-baseline-comparison.md \
   --objective balanced
+```
+
+Record one eval iteration and keep a running optimization log:
+
+```bash
+python3 scripts/run-eval-iteration.py \
+  --history-file /tmp/infera-evals/ui-history.json \
+  --summary-file /tmp/infera-evals/ui-summary.md \
+  --label "iteration-3" \
+  --change-summary "Reduced stale worker carryover between workload runs" \
+  --bottleneck "LLM score still constrained by repeated-prefix tail latency" \
+  --remaining-risk "Inspect visual artifacts before promoting the change" \
+  --artifact-path /tmp/infera-benchmark-lab/a100-summary.md \
+  --eval-command "make eval-ui"
 ```
 
 ### API
@@ -112,6 +127,7 @@ What is generic now:
 - model variants with precision and quantization metadata
 - workload-driven benchmark execution
 - result indexing and objective-based comparison
+- eval iteration logging with current best scores, major iteration history, and remaining risks
 
 What is still engine-specific by design:
 
@@ -124,3 +140,19 @@ What still remains incremental:
 - the older Phase 1 and Phase 2 scripts remain available for compatibility and legacy artifact formats
 - provider runtime defaults in the Go provision path still need full migration onto the new heuristic catalogs
 - richer workload arrival models and multi-profile mixed-request distributions can be added without changing orchestration code
+
+### Eval Loop
+
+When iterating on benchmark-related code changes, use a single-change loop:
+
+1. Make one focused improvement.
+2. Re-run the eval command.
+3. Record the iteration with [run-eval-iteration.py](/Users/siddharthsingh/codingtensor/infera/scripts/run-eval-iteration.py).
+4. Inspect any generated artifacts directly before continuing.
+5. Keep iterating until both `overall` and `LLM average` clear the target threshold you set.
+
+The eval history summary intentionally reports:
+
+- current best scores
+- major iteration log
+- remaining risks or weak spots

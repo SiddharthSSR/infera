@@ -19,10 +19,16 @@ from .catalog import (
     load_catalog_bundle,
     load_suite,
 )
+from .evals import (
+    load_eval_history,
+    record_eval_iteration,
+    summarize_eval_history,
+    write_eval_summary,
+)
 from .matrix import expand_suite
 from .orchestration import execute_suite
-from .results import compare_result_indexes
-from .schema import ExperimentResultIndex, ExperimentSuite, ResultComparison
+from .results import compare_result_indexes, format_comparison_markdown, write_comparison_markdown
+from .schema import EvalHistory, EvalIteration, ExperimentResultIndex, ExperimentSuite, ResultComparison
 
 
 @dataclass(frozen=True)
@@ -106,3 +112,47 @@ class BenchmarkLab:
 
     def compare_indexes(self, indexes: list[ExperimentResultIndex], objective: str) -> ResultComparison:
         return compare_result_indexes(indexes, objective)
+
+    def format_comparison_markdown(self, comparison: ResultComparison, *, top_k: int = 10) -> str:
+        return format_comparison_markdown(comparison, top_k=top_k)
+
+    def write_comparison_markdown(self, comparison: ResultComparison, path: Path, *, top_k: int = 10) -> Path:
+        return write_comparison_markdown(comparison, path, top_k=top_k)
+
+    def load_eval_history(self, path: Path, *, history_id: str | None = None) -> EvalHistory:
+        return load_eval_history(path, history_id=history_id)
+
+    def record_eval_iteration(
+        self,
+        *,
+        history_path: Path,
+        summary_path: Path | None,
+        label: str,
+        eval_command: list[str],
+        cwd: Path,
+        change_summary: str,
+        bottleneck: str,
+        artifact_paths: list[str],
+        remaining_risks: list[str],
+        overall_target: float = 90.0,
+        llm_average_target: float = 90.0,
+    ) -> tuple[EvalHistory, EvalIteration, int]:
+        return record_eval_iteration(
+            history_path=history_path,
+            summary_path=summary_path,
+            label=label,
+            eval_command=eval_command,
+            cwd=cwd,
+            change_summary=change_summary,
+            bottleneck=bottleneck,
+            artifact_paths=artifact_paths,
+            remaining_risks=remaining_risks,
+            overall_target=overall_target,
+            llm_average_target=llm_average_target,
+        )
+
+    def summarize_eval_history(self, history: EvalHistory) -> str:
+        return summarize_eval_history(history)
+
+    def write_eval_summary(self, path: Path, history: EvalHistory) -> Path:
+        return write_eval_summary(path, history)

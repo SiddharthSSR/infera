@@ -214,6 +214,56 @@ def compare_result_indexes(indexes: list[ExperimentResultIndex], objective: str)
     return ResultComparison(generated_at=utc_now_iso(), objective=objective, entries=entries)
 
 
+def _comparison_winner_groups(comparison: ResultComparison) -> dict[tuple[str, str, str], ResultComparisonEntry]:
+    winners: dict[tuple[str, str, str], ResultComparisonEntry] = {}
+    for entry in comparison.entries:
+        key = (
+            entry.record.model_id,
+            entry.record.hardware_id,
+            entry.record.workload_id,
+        )
+        winners.setdefault(key, entry)
+    return winners
+
+
+def format_comparison_markdown(comparison: ResultComparison, *, top_k: int = 10) -> str:
+    lines = [
+        f"# Benchmark Comparison: {comparison.objective}",
+        "",
+        f"Generated: {comparison.generated_at}",
+        "",
+        "## Overall Ranking",
+        "",
+    ]
+    if not comparison.entries:
+        lines.append("- no comparable results")
+    for idx, entry in enumerate(comparison.entries[:top_k], start=1):
+        record = entry.record
+        lines.append(
+            f"{idx}. `{record.run_id}` "
+            f"(engine={record.engine_id}, hardware={record.hardware_id}, model={record.model_id}, "
+            f"workload={record.workload_id}, preset={record.runtime_preset_id}) "
+            f"score={entry.score:.4f}"
+        )
+    lines.extend(["", "## Winners By Model / Hardware / Workload", ""])
+    winners = _comparison_winner_groups(comparison)
+    if not winners:
+        lines.append("- no winners available")
+    for (model_id, hardware_id, workload_id), entry in sorted(winners.items()):
+        record = entry.record
+        lines.append(
+            f"- model={model_id} hardware={hardware_id} workload={workload_id}: "
+            f"`{record.run_id}` (engine={record.engine_id}, preset={record.runtime_preset_id}, score={entry.score:.4f})"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def write_comparison_markdown(comparison: ResultComparison, path: Path, *, top_k: int = 10) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(format_comparison_markdown(comparison, top_k=top_k), encoding="utf-8")
+    return path
+
+
 def write_result_artifacts(index: ExperimentResultIndex, output_root: Path) -> dict[str, Path]:
     output_root.mkdir(parents=True, exist_ok=True)
     json_path = output_root / f"{index.suite_id}-result-index.json"
