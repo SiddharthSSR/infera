@@ -164,6 +164,8 @@ class BenchmarkProfile(BenchmarkBaseModel):
     objective_weights: dict[RankingObjective, ObjectiveWeights] = Field(default_factory=dict)
     health_sample_interval_ms: int = 5000
     warm_ready_timeout_s: int = 180
+    registry_drain_timeout_s: int = 45
+    registry_drain_poll_interval_ms: int = 2000
     benchmark_headers: dict[str, str] = Field(default_factory=dict)
 
 

@@ -46,13 +46,23 @@ def summarize_health_poll_error(exc: Exception) -> str:
     return message
 
 
-def request_json(method: str, url: str, *, timeout: int = 60, insecure: bool = False) -> dict[str, Any]:
+def request_json(
+    method: str,
+    url: str,
+    *,
+    timeout: int = 60,
+    insecure: bool = False,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    request_headers = {
+        "User-Agent": "infera-bench/1.0",
+        "Accept": "application/json",
+    }
+    if headers:
+        request_headers.update(headers)
     request = urllib.request.Request(
         url,
-        headers={
-            "User-Agent": "infera-bench/1.0",
-            "Accept": "application/json",
-        },
+        headers=request_headers,
         method=method,
     )
     context = None
@@ -71,7 +81,14 @@ def request_json(method: str, url: str, *, timeout: int = 60, insecure: bool = F
     return json.loads(body)
 
 
-def request_json_via_curl(method: str, url: str, *, timeout: int = 60, insecure: bool = False) -> dict[str, Any]:
+def request_json_via_curl(
+    method: str,
+    url: str,
+    *,
+    timeout: int = 60,
+    insecure: bool = False,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     curl_path = shutil.which("curl")
     if curl_path is None:
         raise RuntimeError("curl is not installed")
@@ -87,6 +104,8 @@ def request_json_via_curl(method: str, url: str, *, timeout: int = 60, insecure:
         "-H",
         "Accept: application/json",
     ]
+    for name, value in sorted((headers or {}).items()):
+        cmd.extend(["-H", f"{name}: {value}"])
     if insecure and url.startswith("https://"):
         cmd.append("-k")
     cmd.append(url)
@@ -112,7 +131,29 @@ def fetch_health(health_url: str, *, insecure: bool) -> dict[str, Any]:
     return request_json_via_curl("GET", health_url, timeout=HEALTH_REQUEST_TIMEOUT_S, insecure=insecure)
 
 
-def retained_health_url_for_step(step_name: str, output_path: str) -> str | None:
+def fetch_gateway_workers(base_url: str, api_key: str) -> dict[str, Any]:
+    url = f"{base_url.rstrip('/')}/api/workers"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        return request_json("GET", url, timeout=HEALTH_REQUEST_TIMEOUT_S, headers=headers)
+    except Exception as exc:
+        if "HTTP 403" not in str(exc) or "1010" not in str(exc):
+            raise
+    return request_json_via_curl("GET", url, timeout=HEALTH_REQUEST_TIMEOUT_S, headers=headers)
+
+
+def terminate_instance(base_url: str, api_key: str, instance_id: str) -> dict[str, Any]:
+    headers = {"Authorization": f"Bearer {api_key}"}
+    url = f"{base_url.rstrip('/')}/api/instances/{instance_id}"
+    try:
+        return request_json("DELETE", url, timeout=60, headers=headers)
+    except Exception as exc:
+        if "pod not found to terminate" in str(exc).lower():
+            return {"instance_id": instance_id, "success": False, "note": "already_absent"}
+        raise
+
+
+def lifecycle_record_for_step(step_name: str, output_path: str) -> dict[str, Any] | None:
     path = Path(output_path).expanduser()
     if not path.exists():
         return None
@@ -123,7 +164,22 @@ def retained_health_url_for_step(step_name: str, output_path: str) -> str | None
     records = payload.get(records_key) or []
     if not records:
         return None
-    value = records[-1].get("health_url")
+    return records[-1]
+
+
+def retained_health_url_for_step(step_name: str, output_path: str) -> str | None:
+    record = lifecycle_record_for_step(step_name, output_path)
+    if not record:
+        return None
+    value = record.get("health_url")
+    return str(value) if value else None
+
+
+def retained_instance_id_for_step(step_name: str, output_path: str) -> str | None:
+    record = lifecycle_record_for_step(step_name, output_path)
+    if not record:
+        return None
+    value = record.get("instance_id")
     return str(value) if value else None
 
 
@@ -407,6 +463,69 @@ def wait_for_warm_registration(
     )
 
 
+def wait_for_model_registry_drain(
+    *,
+    base_url: str,
+    api_key: str,
+    model_id: str,
+    timeout_s: int,
+    poll_interval_ms: int,
+    log_prefix: str,
+) -> None:
+    started = time.time()
+    deadline = started + timeout_s
+    next_log_at = started
+    last_error: Exception | None = None
+    last_state: str | None = None
+
+    while time.time() < deadline:
+        try:
+            payload = fetch_gateway_workers(base_url, api_key)
+            last_error = None
+        except Exception as exc:
+            last_error = exc
+            if time.time() >= next_log_at:
+                print(
+                    f"[{log_prefix}] gateway drain for model={model_id}: waiting... {time.time() - started:.1f}s "
+                    f"({exc})",
+                    flush=True,
+                )
+                next_log_at = time.time() + PROGRESS_LOG_INTERVAL_S
+            time.sleep(poll_interval_ms / 1000.0)
+            continue
+
+        workers = payload.get("workers") or []
+        matching = [
+            worker
+            for worker in workers
+            if model_id in [str(model) for model in (worker.get("models") or [])]
+        ]
+        addresses = [str(worker.get("address") or "") for worker in matching if worker.get("address")]
+        last_state = f"matching_workers={len(matching)} total={payload.get('total')} addresses={addresses[:3]}"
+        if not matching:
+            print(
+                f"[{log_prefix}] gateway drain for model={model_id}: ready after {time.time() - started:.1f}s "
+                f"({last_state})",
+                flush=True,
+            )
+            return
+        if time.time() >= next_log_at:
+            print(
+                f"[{log_prefix}] gateway drain for model={model_id}: waiting... {time.time() - started:.1f}s "
+                f"({last_state})",
+                flush=True,
+            )
+            next_log_at = time.time() + PROGRESS_LOG_INTERVAL_S
+        time.sleep(poll_interval_ms / 1000.0)
+
+    if last_error is not None:
+        raise RuntimeError(f"timed out waiting for gateway drain; last error: {last_error}") from last_error
+    raise RuntimeError(
+        "timed out waiting for gateway drain"
+        + (f"; last state: {last_state}" if last_state else "")
+    )
+
+
 class ProvisionExecutor:
     """Execute a resolved run by provisioning a fresh worker lifecycle."""
 
@@ -521,6 +640,7 @@ class ProvisionExecutor:
         ]
         steps = self.build_steps(run_spec, benchmark_profile)
         retained_health_url: str | None = run_spec.attach_target.health_url if run_spec.attach_target else None
+        retained_instance_id: str | None = None
         exit_status = "ok"
 
         for index, step in enumerate(steps):
@@ -531,6 +651,7 @@ class ProvisionExecutor:
                     for previous in reversed(step_results):
                         if previous.category in {"cold_start", "startup_health"} and previous.status == "ok":
                             retained_health_url = retained_health_url_for_step(previous.name, previous.output_path)
+                            retained_instance_id = retained_instance_id_for_step(previous.name, previous.output_path)
                             if retained_health_url:
                                 break
                 if retained_health_url:
@@ -570,6 +691,26 @@ class ProvisionExecutor:
                 and not any(candidate.category in {"cold_start", "startup_health"} for candidate in steps[index + 1 :])
             ):
                 retained_health_url = retained_health_url_for_step(step.name, step.output_path)
+                retained_instance_id = retained_instance_id_for_step(step.name, step.output_path)
+
+        warm_steps_ran = any(step.category == "warm" for step in steps)
+        if (
+            not self.dry_run
+            and self.terminate_final_instance
+            and warm_steps_ran
+            and retained_instance_id
+        ):
+            try:
+                print(
+                    f"[infera-bench] terminating retained lifecycle instance instance_id={retained_instance_id}",
+                    flush=True,
+                )
+                terminate_instance(self.base_url, self.api_key, retained_instance_id)
+            except Exception as exc:
+                exit_status = "blocked"
+                notes.append(
+                    f"Failed to terminate retained lifecycle instance {retained_instance_id}: {exc}"
+                )
 
         execution = ExperimentExecutionResult(
             run_spec=run_spec,

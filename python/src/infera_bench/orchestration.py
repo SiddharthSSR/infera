@@ -7,7 +7,12 @@ import sys
 
 from .adapters import build_adapter_registry
 from .catalog import BenchmarkCatalogBundle
-from .execution import AttachExecutor, ProvisionExecutor
+from .execution import (
+    AttachExecutor,
+    ProvisionExecutor,
+    wait_for_model_registry_drain,
+    write_json_output,
+)
 from .matrix import expand_suite
 from .results import build_result_index, write_result_artifacts
 from .schema import ExperimentExecutionResult, ExperimentResultIndex, ExperimentSuite
@@ -31,7 +36,7 @@ def execute_suite(
     adapters = build_adapter_registry(catalog)
     run_specs = expand_suite(suite, catalog, adapters)
     execution_results: list[ExperimentExecutionResult] = []
-    for run_spec in run_specs:
+    for index, run_spec in enumerate(run_specs):
         benchmark_profile = catalog.resolve_benchmark_profile(run_spec.benchmark_profile_id)
         if run_spec.execution_mode == "attach":
             executor = AttachExecutor(
@@ -56,7 +61,33 @@ def execute_suite(
                 dry_run=dry_run,
                 continue_on_error=continue_on_error,
             )
-        execution_results.append(executor.execute(run_spec, benchmark_profile))
+        execution = executor.execute(run_spec, benchmark_profile)
+        execution_results.append(execution)
+        has_following_run = index < len(run_specs) - 1
+        if (
+            has_following_run
+            and terminate_final_instance
+            and not dry_run
+            and run_spec.execution_mode == "provision"
+            and execution.status == "ok"
+        ):
+            try:
+                wait_for_model_registry_drain(
+                    base_url=base_url,
+                    api_key=api_key,
+                    model_id=run_spec.model_id,
+                    timeout_s=benchmark_profile.registry_drain_timeout_s,
+                    poll_interval_ms=benchmark_profile.registry_drain_poll_interval_ms,
+                    log_prefix="benchmark-suite",
+                )
+            except Exception as exc:
+                execution.status = "blocked"
+                execution.notes.append(
+                    "Post-run gateway drain failed before the next suite run could start: "
+                    f"{exc}"
+                )
+                write_json_output(Path(execution.manifest_path), execution.model_dump())
+                break
     index = build_result_index(
         suite_id=suite.suite_id,
         catalog_root=catalog.root,

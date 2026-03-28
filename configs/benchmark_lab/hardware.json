@@ -47,6 +47,18 @@
       "attributes": {"memory_class": "datacenter", "arch": "ampere"}
     },
     {
+      "hardware_id": "a100_sxm4_80gb",
+      "display_name": "A100 SXM4 80GB",
+      "aliases": ["A100_80GB_SXM4", "A100_SXM4_80GB"],
+      "accelerators": [{"family": "A100", "memory_gb": 80, "memory_bandwidth_gbps": 2039, "tensor_core": true}],
+      "provider_selectors": [
+        {"provider": "mock", "gpu_type": "A100_SXM4_80GB", "provider_gpu_type_id": "mock-a100-sxm4-80"},
+        {"provider": "runpod", "gpu_type": "A100_SXM4_80GB", "provider_gpu_type_id": "NVIDIA A100-SXM4-80GB"},
+        {"provider": "vastai", "gpu_type": "A100_SXM4_80GB"}
+      ],
+      "attributes": {"memory_class": "datacenter", "arch": "ampere", "form_factor": "sxm4"}
+    },
+    {
       "hardware_id": "h100_80gb",
       "display_name": "H100 80GB",
       "aliases": ["H100"],
