@@ -161,6 +161,7 @@ class BenchmarkProfile(BenchmarkBaseModel):
     description: str = ""
     execution_mode: ExecutionMode = "provision"
     stages: list[StageName] = Field(default_factory=lambda: ["cold_start", "startup_health", "warm_none", "warm_affinity"])
+    lifecycle_timeout_s: int = 900
     objective_weights: dict[RankingObjective, ObjectiveWeights] = Field(default_factory=dict)
     health_sample_interval_ms: int = 5000
     warm_ready_timeout_s: int = 180

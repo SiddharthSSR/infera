@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "policy_id": "runpod-a100-sxm4-engine-rollout-2026-03-30",
+  "display_name": "RunPod A100 SXM4 Engine Rollout",
+  "description": "Benchmark-backed deployment policy for the current RunPod A100 SXM4 80GB campaign.",
+  "scope": {
+    "provider": "runpod",
+    "hardware": ["a100_sxm4_80gb"],
+    "benchmarked_workloads": ["mixed", "repeated_prefix"]
+  },
+  "default_selection": {
+    "engine_id": "vllm",
+    "runtime_preset_id": "baseline",
+    "reason": "Keep vLLM as the general fallback/default for unbenchmarked or ambiguous traffic."
+  },
+  "routing_policy": {
+    "selection_level": "deployment",
+    "request_level_split_allowed_for_workloads": ["mixed", "repeated_prefix"],
+    "default_workload_class": "mixed",
+    "notes": [
+      "Prefer fleet-level engine selection for known model and workload classes.",
+      "Only use request-level engine routing when the workload class is explicit and benchmark-backed.",
+      "Do not force a single universal engine across all models."
+    ]
+  },
+  "engine_status": [
+    {
+      "engine_id": "vllm",
+      "status": "active_default",
+      "notes": [
+        "General fallback/default engine.",
+        "Best current fit for Qwen2.5 7B mixed traffic and Llama 3.1 8B mixed and repeated-prefix."
+      ]
+    },
+    {
+      "engine_id": "sglang",
+      "status": "active_override",
+      "notes": [
+        "Use where benchmark-backed overrides are clearly better than the default vLLM path."
+      ]
+    },
+    {
+      "engine_id": "tensorrt_llm",
+      "status": "blocked",
+      "notes": [
+        "Blocked in the current provider/runtime path; not part of this rollout."
+      ]
+    }
+  ],
+  "overrides": [
+    {
+      "hardware_id": "a100_sxm4_80gb",
+      "model_id": "Qwen/Qwen2.5-7B-Instruct",
+      "workload_id": "mixed",
+      "engine_id": "vllm",
+      "runtime_preset_id": "baseline",
+      "decision_status": "active",
+      "confidence": "benchmark_backed"
+    },
+    {
+      "hardware_id": "a100_sxm4_80gb",
+      "model_id": "Qwen/Qwen2.5-7B-Instruct",
+      "workload_id": "repeated_prefix",
+      "engine_id": "sglang",
+      "runtime_preset_id": "chunked_prefill_4096",
+      "decision_status": "active",
+      "confidence": "benchmark_backed"
+    },
+    {
+      "hardware_id": "a100_sxm4_80gb",
+      "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+      "workload_id": "mixed",
+      "engine_id": "sglang",
+      "runtime_preset_id": "baseline",
+      "decision_status": "active",
+      "confidence": "benchmark_backed"
+    },
+    {
+      "hardware_id": "a100_sxm4_80gb",
+      "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+      "workload_id": "repeated_prefix",
+      "engine_id": "sglang",
+      "runtime_preset_id": "chunked_prefill_4096",
+      "decision_status": "active",
+      "confidence": "benchmark_backed"
+    },
+    {
+      "hardware_id": "a100_sxm4_80gb",
+      "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "workload_id": "mixed",
+      "engine_id": "vllm",
+      "runtime_preset_id": "baseline",
+      "decision_status": "active",
+      "confidence": "benchmark_backed"
+    },
+    {
+      "hardware_id": "a100_sxm4_80gb",
+      "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "workload_id": "repeated_prefix",
+      "engine_id": "vllm",
+      "runtime_preset_id": "scheduler_4",
+      "decision_status": "active",
+      "confidence": "benchmark_backed"
+    }
+  ],
+  "tracked_candidates": [
+    {
+      "model_id": "Qwen/Qwen3.5-9B",
+      "status": "experimental",
+      "notes": [
+        "Runnable on the current A100 SXM vLLM path, but materially slower to initialize and below the current default set."
+      ]
+    },
+    {
+      "model_id": "MiniMax-M2.7",
+      "status": "tracked_api_candidate",
+      "notes": [
+        "Added to the catalog as a provider-managed API candidate.",
+        "Not schedulable into the current self-hosted vLLM or SGLang benchmark suites."
+      ]
+    }
+  ]
+}

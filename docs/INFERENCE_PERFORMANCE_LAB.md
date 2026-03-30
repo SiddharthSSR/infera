@@ -18,6 +18,7 @@ These catalogs define:
 - engines and engine-specific tunables
 - hardware IDs and provider selectors
 - model variants with precision and quantization metadata
+- deployment rollout policy and benchmark-backed overrides in [configs/benchmark_lab/rollout_policy.json](/Users/siddharthsingh/codingtensor/infera/configs/benchmark_lab/rollout_policy.json)
 - workload profiles and traffic shapes
 - benchmark execution profiles
 - experiment suites and cross-product sweeps
@@ -134,6 +135,10 @@ What is still engine-specific by design:
 - worker runtime option names
 - adapter-level tunable translation
 - engine-specific compatibility hints
+
+Current benchmark-backed SXM decisions are summarized in:
+
+- [docs/A100_SXM4_BENCHMARK_DECISION_SUMMARY.md](/Users/siddharthsingh/codingtensor/infera/docs/A100_SXM4_BENCHMARK_DECISION_SUMMARY.md)
 
 What still remains incremental:
 

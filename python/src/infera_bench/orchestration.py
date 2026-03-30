@@ -69,7 +69,6 @@ def execute_suite(
             and terminate_final_instance
             and not dry_run
             and run_spec.execution_mode == "provision"
-            and execution.status == "ok"
         ):
             try:
                 wait_for_model_registry_drain(

@@ -271,6 +271,7 @@ def build_cold_start_command(
     base_url: str,
     api_key: str,
     output_path: Path,
+    lifecycle_timeout_s: int,
     health_insecure: bool,
     quiet_progress: bool,
     terminate_final_instance: bool,
@@ -296,6 +297,8 @@ def build_cold_start_command(
         f"{instance_name_prefix}-cold",
         "--json-output",
         str(output_path),
+        "--timeout-s",
+        str(lifecycle_timeout_s),
     ]
     if run_spec.provider_gpu_type_id:
         command.extend(["--provider-gpu-type-id", run_spec.provider_gpu_type_id])
@@ -318,6 +321,7 @@ def build_startup_health_command(
     base_url: str,
     api_key: str,
     output_path: Path,
+    lifecycle_timeout_s: int,
     health_insecure: bool,
     quiet_progress: bool,
     terminate_final_instance: bool,
@@ -344,6 +348,8 @@ def build_startup_health_command(
         "--include-restart",
         "--json-output",
         str(output_path),
+        "--timeout-s",
+        str(lifecycle_timeout_s),
     ]
     if run_spec.provider_gpu_type_id:
         command.extend(["--provider-gpu-type-id", run_spec.provider_gpu_type_id])
@@ -574,6 +580,7 @@ class ProvisionExecutor:
                         base_url=self.base_url,
                         api_key=self.api_key,
                         output_path=cold_path,
+                        lifecycle_timeout_s=benchmark_profile.lifecycle_timeout_s,
                         health_insecure=self.health_insecure,
                         quiet_progress=self.quiet_progress,
                         terminate_final_instance=should_terminate_after_cold_start(
@@ -596,6 +603,7 @@ class ProvisionExecutor:
                         base_url=self.base_url,
                         api_key=self.api_key,
                         output_path=startup_path,
+                        lifecycle_timeout_s=benchmark_profile.lifecycle_timeout_s,
                         health_insecure=self.health_insecure,
                         quiet_progress=self.quiet_progress,
                         terminate_final_instance=should_terminate_after_startup(
@@ -642,6 +650,7 @@ class ProvisionExecutor:
         retained_health_url: str | None = run_spec.attach_target.health_url if run_spec.attach_target else None
         retained_instance_id: str | None = None
         exit_status = "ok"
+        skipped_warm_due_to_lifecycle = False
 
         for index, step in enumerate(steps):
             if step.category == "warm":
@@ -654,6 +663,30 @@ class ProvisionExecutor:
                             retained_instance_id = retained_instance_id_for_step(previous.name, previous.output_path)
                             if retained_health_url:
                                 break
+                if retained_health_url is None:
+                    skipped_warm_due_to_lifecycle = True
+                    exit_status = "failed" if exit_status == "ok" else exit_status
+                    step_results.append(
+                        ExecutionStepResult(
+                            name=step.name,
+                            category=step.category,
+                            output_path=step.output_path,
+                            command=step.command,
+                            command_display="",
+                            started_at=utc_now_iso(),
+                            finished_at=utc_now_iso(),
+                            duration_ms=0,
+                            returncode=None,
+                            status="skipped",
+                        )
+                    )
+                    skip_note = (
+                        "Skipped warm benchmark steps because no successful lifecycle step produced "
+                        "a retained health URL."
+                    )
+                    if skip_note not in notes:
+                        notes.append(skip_note)
+                    continue
                 if retained_health_url:
                     wait_for_warm_registration(
                         health_url=retained_health_url,
@@ -692,6 +725,16 @@ class ProvisionExecutor:
             ):
                 retained_health_url = retained_health_url_for_step(step.name, step.output_path)
                 retained_instance_id = retained_instance_id_for_step(step.name, step.output_path)
+
+        if skipped_warm_due_to_lifecycle and retained_instance_id is None:
+            retained_instance_id = next(
+                (
+                    retained_instance_id_for_step(previous.name, previous.output_path)
+                    for previous in reversed(step_results)
+                    if previous.category in {"cold_start", "startup_health"}
+                ),
+                None,
+            )
 
         warm_steps_ran = any(step.category == "warm" for step in steps)
         if (

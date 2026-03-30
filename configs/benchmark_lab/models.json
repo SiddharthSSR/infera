@@ -93,6 +93,42 @@
       }
     },
     {
+      "model_id": "MiniMax-M2.7",
+      "display_name": "MiniMax M2.7",
+      "source_uri": "api://minimax/MiniMax-M2.7",
+      "family": "minimax",
+      "parameter_scale": "provider_managed",
+      "parameter_count_billions": null,
+      "precision": "provider_managed",
+      "quantization": "provider_managed",
+      "max_context": 0,
+      "artifact_kind": "provider_api_model",
+      "aliases": ["minimax-m2.7"],
+      "tags": ["candidate", "provider_managed", "api_model"],
+      "engine_compatibility": {
+        "vllm": {
+          "status": "unsupported",
+          "notes": [
+            "MiniMax M2.7 is currently exposed as a MiniMax-hosted API model, not a self-hosted Hugging Face artifact in this benchmark lab.",
+            "Track this model for a future provider-api benchmark path rather than the current vLLM worker path."
+          ]
+        },
+        "sglang": {
+          "status": "unsupported",
+          "notes": [
+            "MiniMax M2.7 is currently exposed as a MiniMax-hosted API model, not a self-hosted Hugging Face artifact in this benchmark lab.",
+            "Track this model for a future provider-api benchmark path rather than the current SGLang worker path."
+          ]
+        },
+        "tensorrt_llm": {
+          "status": "unsupported",
+          "notes": [
+            "MiniMax M2.7 is not currently a TensorRT-LLM candidate in this repo."
+          ]
+        }
+      }
+    },
+    {
       "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
       "display_name": "Llama 3.1 8B Instruct",
       "source_uri": "hf://meta-llama/Meta-Llama-3.1-8B-Instruct",

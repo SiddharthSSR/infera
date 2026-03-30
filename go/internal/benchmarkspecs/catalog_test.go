@@ -16,6 +16,15 @@ func TestLoadCatalogSet(t *testing.T) {
 	if got := set.HardwareAliases["A100_80GB"]; got != "a100_80gb" {
 		t.Fatalf("expected A100_80GB alias to resolve to a100_80gb, got %q", got)
 	}
+	if got := set.HardwareAliases["A100_80GB_SXM4"]; got != "a100_sxm4_80gb" {
+		t.Fatalf("expected A100_80GB_SXM4 alias to resolve to a100_sxm4_80gb, got %q", got)
+	}
+	if got := set.BenchmarkProfiles["provision_tuning"]; got != "provision" {
+		t.Fatalf("expected provision_tuning benchmark profile, got %q", got)
+	}
+	if status := set.Models["MiniMax-M2.7"]["vllm"]; status != "unsupported" {
+		t.Fatalf("expected MiniMax-M2.7 vllm status unsupported, got %q", status)
+	}
 }
 
 func TestValidateSuite(t *testing.T) {
