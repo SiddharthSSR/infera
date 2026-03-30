@@ -23,7 +23,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 DEFAULT_BASE_URL = "https://inferai.co.in"
@@ -87,7 +87,7 @@ class StreamResult:
     ttft_ms: float
     total_ms: float
     content: str
-    event_intervals_ms: list[float]
+    event_intervals_ms: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -661,10 +661,12 @@ def run_benchmark_group(
     cache_key_prefix: str,
     preset: str,
     cost_per_hour: float | None,
-    sample_health_url: str | None,
-    health_insecure: bool,
-    health_sample_interval_ms: int,
-) -> tuple[list[dict[str, float | int | str]], HealthSamplingSummary]:
+    sample_health_url: str | None = None,
+    health_insecure: bool = False,
+    health_sample_interval_ms: int = 5000,
+    *,
+    return_health_summary: bool = False,
+) -> list[dict[str, float | int | str]] | tuple[list[dict[str, float | int | str]], HealthSamplingSummary]:
     sampler: HealthSampler | None = None
     if sample_health_url:
         sampler = HealthSampler(
@@ -717,7 +719,9 @@ def run_benchmark_group(
     ]
     health_summary = sampler.stop() if sampler is not None else HealthSamplingSummary()
     annotate_group_metrics(rows, health_summary)
-    return rows, health_summary
+    if return_health_summary:
+        return rows, health_summary
+    return rows
 
 
 def build_output_payload(
@@ -732,7 +736,7 @@ def build_output_payload(
     cache_reuse_mode: str,
     results: dict[str, list[dict[str, float | int | str]]],
     cost_per_hour: float | None,
-    health_sampling: dict[str, int],
+    health_sampling: dict[str, int] | None = None,
 ) -> dict[str, object]:
     return {
         "base_url": base_url,
@@ -746,7 +750,7 @@ def build_output_payload(
         "cache_reuse_mode": cache_reuse_mode,
         "presets": results,
         "cost_per_hour": cost_per_hour,
-        "health_sampling": health_sampling,
+        "health_sampling": health_sampling or {},
     }
 
 
@@ -822,6 +826,7 @@ def main() -> int:
                     args.sample_health_url or None,
                     args.health_insecure,
                     args.health_sample_interval_ms,
+                    return_health_summary=True,
                 )
                 aggregate_health["sample_count"] += warmup_health.sample_count
                 aggregate_health["error_count"] += warmup_health.error_count
@@ -856,6 +861,7 @@ def main() -> int:
                     args.sample_health_url or None,
                     args.health_insecure,
                     args.health_sample_interval_ms,
+                    return_health_summary=True,
                 )
             except urllib.error.HTTPError as exc:
                 print(f"run {run_index}: HTTP {exc.code} {exc.reason}", file=sys.stderr)
