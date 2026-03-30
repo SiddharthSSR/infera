@@ -26,6 +26,7 @@ DEFAULT_TIMEOUT_S = 900
 PROBE_PROMPT = "Reply with the single word OK."
 PROGRESS_LOG_INTERVAL_S = 15.0
 HEALTH_REQUEST_TIMEOUT_S = 5
+DEFAULT_TENSORRT_RUNPOD_ALLOWED_CUDA_VERSIONS = ("12.6", "12.7", "12.8")
 
 
 @dataclass
@@ -69,6 +70,7 @@ class HealthPollState:
     latest_payload: dict[str, Any] | None = None
     notes: list[str] = field(default_factory=list)
     last_error: str | None = None
+    fatal_reason: str | None = None
     finished: bool = False
 
 
@@ -82,8 +84,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--api-key", required=True, help="Gateway bearer token")
     parser.add_argument("--provider", default="runpod", help="Provider type (default: %(default)s)")
+    parser.add_argument("--engine", default="vllm", help="Inference engine to provision (default: %(default)s)")
     parser.add_argument("--gpu-type", required=True, help="Infera GPU type, e.g. A100_80GB")
     parser.add_argument("--provider-gpu-type-id", default="", help="Exact provider GPU type identifier")
+    parser.add_argument(
+        "--allowed-cuda-version",
+        action="append",
+        default=[],
+        help="Allowed RunPod CUDA version. Can be repeated. Defaults to 12.6+ for TensorRT-LLM on RunPod.",
+    )
+    parser.add_argument(
+        "--runtime-option",
+        action="append",
+        default=[],
+        help="Provision runtime option in KEY=VALUE form. Can be repeated.",
+    )
     parser.add_argument("--gpu-count", type=int, default=1, help="GPU count (default: %(default)s)")
     parser.add_argument("--model", required=True, help="Model ID to preload and probe")
     parser.add_argument("--instance-name", default="cold-start-bench", help="Instance name (default: %(default)s)")
@@ -171,6 +186,53 @@ def log_progress(args: argparse.Namespace, message: str) -> None:
     if args.quiet_progress:
         return
     print(f"[cold-start] {message}", flush=True)
+
+
+def summarize_health_poll_error(exc: Exception) -> str:
+    """Classify transient proxy/bootstrap errors so progress logs read as expected startup states."""
+    message = str(exc)
+    normalized = message.lower()
+
+    if "http 404" in normalized:
+        return "bootstrap in progress: worker health route not published yet (HTTP 404)"
+    if "http 502" in normalized:
+        return "bootstrap in progress: proxy upstream not ready yet (HTTP 502)"
+    if "timed out" in normalized:
+        return "bootstrap in progress: worker health endpoint not responding yet (timeout)"
+    if "connection refused" in normalized:
+        return "bootstrap in progress: worker health endpoint not accepting connections yet"
+    if "connection reset" in normalized or "remote end closed connection" in normalized:
+        return "bootstrap in progress: worker health endpoint restarted before responding"
+
+    return message
+
+
+def fatal_health_payload_reason(payload: dict[str, Any] | None) -> str | None:
+    """Return a fatal startup reason when the worker has already entered an error state."""
+    if not isinstance(payload, dict):
+        return None
+
+    state = str(payload.get("state") or "")
+    live = payload.get("live")
+    if state != "error" and live is not False:
+        return None
+
+    startup = payload.get("startup") or {}
+    metadata = startup.get("metadata") or {}
+    gpu_preflight = metadata.get("gpu_preflight") or {}
+    startup_error = metadata.get("startup_error") or {}
+
+    if isinstance(gpu_preflight, dict) and gpu_preflight.get("status") == "failed":
+        error_type = str(gpu_preflight.get("error_type") or "RuntimeError")
+        error_message = str(gpu_preflight.get("error") or "unknown GPU runtime failure")
+        return f"worker entered error state during startup: gpu_preflight failed: {error_type}: {error_message}"
+
+    if isinstance(startup_error, dict) and startup_error.get("message"):
+        error_type = str(startup_error.get("type") or "RuntimeError")
+        error_message = str(startup_error.get("message") or "unknown startup failure")
+        return f"worker entered error state during startup: {error_type}: {error_message}"
+
+    return f"worker entered error state during startup: state={state or 'error'}"
 
 
 def build_headers(api_key: str, *, content_type: bool = False) -> dict[str, str]:
@@ -272,13 +334,42 @@ def build_provision_payload(args: argparse.Namespace) -> dict[str, Any]:
     payload = {
         "name": args.instance_name,
         "provider": args.provider,
+        "engine": args.engine,
         "gpu_type": args.gpu_type,
         "gpu_count": args.gpu_count,
         "models": [args.model],
     }
     if args.provider_gpu_type_id:
         payload["provider_gpu_type_id"] = args.provider_gpu_type_id
+    if allowed_cuda_versions := resolve_allowed_cuda_versions(args):
+        payload["allowed_cuda_versions"] = allowed_cuda_versions
+    if runtime_options := resolve_runtime_options(args):
+        payload["options"] = runtime_options
     return payload
+
+
+def resolve_allowed_cuda_versions(args: argparse.Namespace) -> list[str]:
+    explicit = [str(value).strip() for value in getattr(args, "allowed_cuda_version", []) if str(value).strip()]
+    if explicit:
+        return list(dict.fromkeys(explicit))
+    if str(args.provider).strip().lower() == "runpod" and str(args.engine).strip().lower() == "tensorrt_llm":
+        return list(DEFAULT_TENSORRT_RUNPOD_ALLOWED_CUDA_VERSIONS)
+    return []
+
+
+def resolve_runtime_options(args: argparse.Namespace) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for raw_value in getattr(args, "runtime_option", []) or []:
+        entry = str(raw_value).strip()
+        if not entry:
+            continue
+        key, separator, value = entry.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if separator == "" or not key or not value:
+            raise ValueError(f"runtime option must be KEY=VALUE, got: {raw_value}")
+        options[key] = value
+    return options
 
 
 def format_health_url(template: str, instance: dict[str, Any]) -> str | None:
@@ -307,6 +398,7 @@ def wait_for_condition(
     poll_interval_ms: int,
     args: argparse.Namespace,
     summarize_fn=None,
+    abort_fn=None,
 ) -> tuple[int, Any]:
     deadline = time.time() + timeout_s
     last_error: Exception | None = None
@@ -314,6 +406,10 @@ def wait_for_condition(
     next_log_at = started
     last_summary: str | None = None
     while time.time() < deadline:
+        if abort_fn is not None:
+            abort_reason = abort_fn()
+            if abort_reason:
+                raise RuntimeError(abort_reason)
         try:
             value = fetch_fn()
             if predicate_fn(value):
@@ -331,7 +427,11 @@ def wait_for_condition(
         except Exception as exc:  # pragma: no cover - exercised via polling loops
             last_error = exc
             if time.time() >= next_log_at:
-                log_progress(args, f"{description}: waiting... {time.time() - started:.1f}s (last error: {exc})")
+                log_progress(
+                    args,
+                    f"{description}: waiting... {time.time() - started:.1f}s "
+                    f"({summarize_health_poll_error(exc)})",
+                )
                 next_log_at = time.time() + PROGRESS_LOG_INTERVAL_S
         time.sleep(poll_interval_ms / 1000.0)
     if last_error is not None:
@@ -409,6 +509,13 @@ def wait_for_health_stages(
             payload = fetch_health(health_url, timeout=HEALTH_REQUEST_TIMEOUT_S, insecure=args.health_insecure)
             state.latest_payload = payload
             last_error = None
+            fatal_reason = fatal_health_payload_reason(payload)
+            if fatal_reason:
+                state.fatal_reason = fatal_reason
+                state.last_error = fatal_reason
+                state.notes.append(fatal_reason)
+                log_progress(args, f"worker health {health_url}: {fatal_reason}")
+                break
         except Exception:
             last_error = sys.exc_info()[1]
             state.last_error = str(last_error)
@@ -423,7 +530,7 @@ def wait_for_health_stages(
                 log_progress(
                     args,
                     f"worker health {health_url}: waiting... {time.time() - started:.1f}s "
-                    f"(last error: {last_error})",
+                    f"({summarize_health_poll_error(last_error)})",
                 )
                 next_log_at = time.time() + PROGRESS_LOG_INTERVAL_S
             time.sleep(poll_interval_ms / 1000.0)
@@ -520,6 +627,7 @@ def wait_for_worker_registration(
     *,
     scenario_start_ms: int,
     previous_worker_id: str | None,
+    health_state: HealthPollState | None,
     args: argparse.Namespace,
     timeout_s: int,
     poll_interval_ms: int,
@@ -538,6 +646,7 @@ def wait_for_worker_registration(
         poll_interval_ms=poll_interval_ms,
         args=args,
         summarize_fn=lambda payload: f"workers={payload.get('total')}",
+        abort_fn=lambda: health_state.fatal_reason if health_state is not None else None,
     )
 
 
@@ -688,6 +797,7 @@ def run_ready_path(
         args=args,
         timeout_s=args.timeout_s,
         poll_interval_ms=args.poll_interval_ms,
+        health_state=health_state,
     )
     times.t4_worker_registered = t4
     worker = match_worker(
@@ -850,6 +960,7 @@ def build_report(args: argparse.Namespace, scenarios: list[ScenarioResult]) -> d
     return {
         "base_url": args.base_url,
         "provider": args.provider,
+        "engine": args.engine,
         "gpu_type": args.gpu_type,
         "provider_gpu_type_id": args.provider_gpu_type_id,
         "gpu_count": args.gpu_count,

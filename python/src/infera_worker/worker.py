@@ -4,6 +4,9 @@ import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator
 from datetime import datetime
+import json
+import os
+import sys
 from typing import Any
 import uuid
 import structlog
@@ -20,6 +23,48 @@ from .types import (
 from .engine import InferenceEngine, create_engine
 
 logger = structlog.get_logger()
+
+GPU_PREFLIGHT_SCRIPT = r"""
+import json
+import os
+import sys
+
+result = {
+    "status": "ok",
+    "python_executable": sys.executable,
+    "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+}
+
+try:
+    import torch
+
+    result["torch_version"] = getattr(torch, "__version__", "")
+    result["cuda_version"] = str(getattr(getattr(torch, "version", None), "cuda", "") or "")
+    result["cuda_available"] = bool(torch.cuda.is_available())
+    result["device_count"] = int(torch.cuda.device_count())
+    if not result["cuda_available"] or result["device_count"] < 1:
+        raise RuntimeError(
+            f"torch.cuda reports no available devices (available={result['cuda_available']} "
+            f"device_count={result['device_count']})"
+        )
+
+    torch.cuda.init()
+    torch.cuda.set_device(0)
+    props = torch.cuda.get_device_properties(0)
+    result["device_name"] = props.name
+    result["device_total_memory_bytes"] = int(props.total_memory)
+    probe_tensor = torch.zeros(1, device="cuda")
+    torch.cuda.synchronize()
+    result["probe_tensor_device"] = str(probe_tensor.device)
+except Exception as exc:
+    result["status"] = "failed"
+    result["error_type"] = type(exc).__name__
+    result["error"] = str(exc)
+    print(json.dumps(result))
+    raise
+else:
+    print(json.dumps(result))
+"""
 
 
 class Worker:
@@ -48,6 +93,7 @@ class Worker:
         )
         self._all_requests_idle = asyncio.Event()
         self._all_requests_idle.set()
+        self._model_lifecycle_lock = asyncio.Lock()
         
         # Lifecycle
         self._shutdown_event = asyncio.Event()
@@ -59,6 +105,7 @@ class Worker:
         
         try:
             self.record_startup_stage("model_load_started")
+            await self._run_gpu_preflight()
             self.record_startup_stage("engine_create_started")
 
             # Create inference engine
@@ -81,6 +128,14 @@ class Worker:
             logger.info("Worker ready", worker_id=self.worker_id)
             
         except Exception as e:
+            self.record_startup_stage("worker_error")
+            self.record_startup_metadata(
+                "startup_error",
+                {
+                    "type": type(e).__name__,
+                    "message": str(e),
+                },
+            )
             logger.error("Failed to start worker", error=str(e))
             self.state = WorkerState.ERROR
             raise
@@ -132,22 +187,47 @@ class Worker:
         """Load a model."""
         if self.engine is None:
             raise RuntimeError("Worker not ready: not initialized")
-        
-        logger.info("Loading model", model_id=config.model_id)
-        model = await self.engine.load_model(config)
-        logger.info("Model loaded", model_id=config.model_id, memory_bytes=model.memory_bytes)
-        return model
+
+        async with self._model_lifecycle_lock:
+            if self.engine.is_model_loaded(config.model_id):
+                for loaded in self.engine.get_loaded_models():
+                    if loaded.model_id == config.model_id:
+                        logger.info("Model already loaded", model_id=config.model_id)
+                        return loaded
+
+            logger.info("Loading model", model_id=config.model_id)
+            model = await self.engine.load_model(config)
+            logger.info("Model loaded", model_id=config.model_id, memory_bytes=model.memory_bytes)
+            return model
 
     async def unload_model(self, model_id: str) -> bool:
         """Unload a model."""
         if self.engine is None:
             raise RuntimeError("Worker not ready: not initialized")
-        
-        logger.info("Unloading model", model_id=model_id)
-        result = await self.engine.unload_model(model_id)
-        if result:
-            logger.info("Model unloaded", model_id=model_id)
-        return result
+
+        async with self._model_lifecycle_lock:
+            if self._active_requests > 0 or self._queued_requests > 0:
+                logger.info(
+                    "Waiting for in-flight requests before unloading model",
+                    model_id=model_id,
+                    active_requests=self._active_requests,
+                    queued_requests=self._queued_requests,
+                )
+                try:
+                    await asyncio.wait_for(
+                        self._all_requests_idle.wait(),
+                        timeout=self.config.drain_timeout_s,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise RuntimeError(
+                        f"timed out waiting for in-flight requests to finish before unloading {model_id}"
+                    ) from exc
+
+            logger.info("Unloading model", model_id=model_id)
+            result = await self.engine.unload_model(model_id)
+            if result:
+                logger.info("Model unloaded", model_id=model_id)
+            return result
 
     def get_loaded_models(self) -> list[LoadedModel]:
         """Get list of loaded models."""
@@ -334,6 +414,85 @@ class Worker:
     def get_state(self) -> WorkerState:
         """Get current worker state."""
         return self.state
+
+    async def _run_gpu_preflight(self) -> None:
+        """Fail fast on broken GPU nodes before engine/model initialization."""
+        if not self.config.gpu_preflight_enabled:
+            return
+        if self.config.engine == "mock":
+            return
+        if str(self.config.device).strip().lower() == "cpu":
+            return
+
+        self.record_startup_stage("gpu_preflight_started")
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            GPU_PREFLIGHT_SCRIPT,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(),
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=self.config.gpu_preflight_timeout_s,
+            )
+        except TimeoutError:
+            process.kill()
+            await process.communicate()
+            payload = {
+                "status": "failed",
+                "error_type": "TimeoutError",
+                "error": (
+                    f"GPU preflight timed out after {self.config.gpu_preflight_timeout_s}s"
+                ),
+            }
+            self.record_startup_metadata("gpu_preflight", payload)
+            self.record_startup_stage("gpu_preflight_failed")
+            raise RuntimeError(payload["error"]) from None
+
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        payload = self._parse_gpu_preflight_output(stdout_text)
+        if stderr_text:
+            payload["stderr"] = stderr_text[-1000:]
+        self.record_startup_metadata("gpu_preflight", payload)
+
+        if process.returncode != 0 or payload.get("status") != "ok":
+            self.record_startup_stage("gpu_preflight_failed")
+            error_type = str(payload.get("error_type") or "RuntimeError")
+            error_message = str(payload.get("error") or "unknown GPU preflight failure")
+            raise RuntimeError(f"GPU preflight failed: {error_type}: {error_message}")
+
+        self.record_startup_stage("gpu_preflight_finished")
+
+    def _parse_gpu_preflight_output(self, stdout_text: str) -> dict[str, Any]:
+        """Parse JSON payload emitted by the GPU preflight subprocess."""
+        if not stdout_text:
+            return {
+                "status": "failed",
+                "error_type": "RuntimeError",
+                "error": "GPU preflight produced no output",
+            }
+
+        for line in reversed(stdout_text.splitlines()):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+
+        return {
+            "status": "failed",
+            "error_type": "RuntimeError",
+            "error": "GPU preflight did not emit valid JSON",
+            "stdout": stdout_text[-1000:],
+        }
 
     def record_startup_stage(self, stage: str) -> None:
         """Record a startup-stage timestamp if it has not been recorded yet."""

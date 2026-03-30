@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "phase": "baseline_before_tuning",
+  "description": "Conservative, production-safe starting presets for cross-engine comparison on Qwen/Qwen2.5-7B-Instruct.",
+  "engines": {
+    "vllm": {
+      "description": "Preserve the current stable vLLM path while avoiding extra speculative or aggressive queue tuning.",
+      "worker_env": {
+        "INFERA_VLLM_TENSOR_PARALLEL_SIZE": "1",
+        "INFERA_VLLM_GPU_MEMORY_UTILIZATION": "0.94",
+        "INFERA_VLLM_MAX_MODEL_LEN": "32768",
+        "INFERA_VLLM_ENABLE_PREFIX_CACHING": "true",
+        "INFERA_VLLM_ENABLE_CHUNKED_PREFILL": "true",
+        "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS": "8192",
+        "INFERA_VLLM_MAX_NUM_SEQS": "48",
+        "INFERA_VLLM_NUM_SCHEDULER_STEPS": "6"
+      }
+    },
+    "sglang": {
+      "description": "Keep SGLang close to stock behavior with only explicit memory and context sizing for comparability.",
+      "worker_env": {
+        "INFERA_SGLANG_TP_SIZE": "1",
+        "INFERA_SGLANG_MEM_FRACTION_STATIC": "0.94",
+        "INFERA_SGLANG_CONTEXT_LENGTH": "32768",
+        "INFERA_SGLANG_CHUNKED_PREFILL_SIZE": "8192",
+        "INFERA_SGLANG_MAX_RUNNING_REQUESTS": "48"
+      }
+    },
+    "tensorrt_llm": {
+      "description": "Assumes a TensorRT-LLM-compatible model or engine artifact path is already available; keep batch sizing mostly default.",
+      "assumptions": [
+        "The worker image includes tensorrt_llm and compatible CUDA dependencies.",
+        "The provisioned model path points to a TensorRT-LLM-compatible engine or buildable artifact."
+      ],
+      "worker_env": {
+        "INFERA_TENSORRT_LLM_TENSOR_PARALLEL_SIZE": "1",
+        "INFERA_TENSORRT_LLM_ENABLE_CHUNKED_CONTEXT": "true"
+      }
+    }
+  }
+}

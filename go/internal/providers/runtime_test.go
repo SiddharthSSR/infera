@@ -1,6 +1,87 @@
 package providers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestResolveWorkerImage(t *testing.T) {
+	images := map[InferenceEngine]string{
+		EngineSGLang:      "sglang-worker:v1",
+		EngineTensorRTLLM: "trt-worker:v1",
+	}
+
+	if got := resolveWorkerImage(EngineSGLang, "default-worker:v1", images); got != "sglang-worker:v1" {
+		t.Fatalf("expected engine-specific sglang image, got %q", got)
+	}
+	if got := resolveWorkerImage(EngineVLLM, "default-worker:v1", images); got != "default-worker:v1" {
+		t.Fatalf("expected fallback default image, got %q", got)
+	}
+	if got := resolveWorkerImage("tensorrt-llm", "default-worker:v1", images); got != "trt-worker:v1" {
+		t.Fatalf("expected normalized TensorRT image, got %q", got)
+	}
+}
+
+func TestCloneWorkerImagesNormalizesAndDropsEmptyValues(t *testing.T) {
+	cloned := cloneWorkerImages(map[InferenceEngine]string{
+		EngineSGLang:   " sglang-worker:v1 ",
+		"tensorrt-llm": "trt-worker:v1",
+		EngineVLLM:     "   ",
+	})
+
+	if len(cloned) != 2 {
+		t.Fatalf("expected 2 worker images, got %d", len(cloned))
+	}
+	if got := cloned[EngineSGLang]; got != "sglang-worker:v1" {
+		t.Fatalf("expected trimmed sglang image, got %q", got)
+	}
+	if got := cloned[EngineTensorRTLLM]; got != "trt-worker:v1" {
+		t.Fatalf("expected normalized TensorRT image, got %q", got)
+	}
+}
+
+func TestValidateRuntimeOptionsRejectsUnknownKeys(t *testing.T) {
+	err := ValidateRuntimeOptions(EngineVLLM, map[string]string{
+		"UNEXPECTED_ENV": "1",
+	})
+	if err == nil {
+		t.Fatal("expected unknown runtime option to be rejected")
+	}
+}
+
+func TestValidateRuntimeOptionsAcceptsRecognizedKeys(t *testing.T) {
+	err := ValidateRuntimeOptions(EngineSGLang, map[string]string{
+		OptionSGLangMaxRunningRequests: "32",
+	})
+	if err != nil {
+		t.Fatalf("expected recognized runtime option to pass validation, got %v", err)
+	}
+
+	err = ValidateRuntimeOptions(EngineVLLM, map[string]string{
+		OptionVLLMEnablePrefixCaching: "true",
+	})
+	if err != nil {
+		t.Fatalf("expected vllm prefix caching option to pass validation, got %v", err)
+	}
+}
+
+func TestValidateRuntimeOptionsRejectsInvalidValue(t *testing.T) {
+	err := ValidateRuntimeOptions(EngineVLLM, map[string]string{
+		OptionVLLMGPUMemoryUtilization: "1.5",
+	})
+	if err == nil || !strings.Contains(err.Error(), OptionVLLMGPUMemoryUtilization) {
+		t.Fatalf("expected invalid gpu memory utilization error, got %v", err)
+	}
+}
+
+func TestValidateRuntimeOptionsRejectsUnsafeStringValue(t *testing.T) {
+	err := ValidateRuntimeOptions(EngineVLLM, map[string]string{
+		OptionVLLMSpeculativeModel: "draft-model;rm -rf /",
+	})
+	if err == nil || !strings.Contains(err.Error(), OptionVLLMSpeculativeModel) {
+		t.Fatalf("expected unsafe speculative model error, got %v", err)
+	}
+}
 
 func TestApplyRuntimeDefaultsForKnownModel(t *testing.T) {
 	req := &ProvisionRequest{
@@ -466,5 +547,76 @@ func TestWorkerRuntimeEnvIncludesChunkedPrefillTunables(t *testing.T) {
 	}
 	if got := env[OptionVLLMNumSchedulerSteps]; got != "8" {
 		t.Fatalf("expected num scheduler steps env 8, got %q", got)
+	}
+}
+
+func TestApplyRuntimeDefaultsForSGLang(t *testing.T) {
+	req := &ProvisionRequest{
+		Engine:   EngineSGLang,
+		GPUType:  GPUA100_80,
+		GPUCount: 1,
+		Models:   []string{"Qwen/Qwen2.5-7B-Instruct"},
+	}
+
+	ApplyRuntimeDefaults(req)
+
+	if got := req.Options[OptionSGLangContextLength]; got != "32768" {
+		t.Fatalf("expected sglang context length 32768, got %q", got)
+	}
+	if got := req.Options[OptionSGLangMemFractionStatic]; got != "0.94" {
+		t.Fatalf("expected sglang mem fraction 0.94, got %q", got)
+	}
+	if got := req.Options[OptionSGLangChunkedPrefillSize]; got != "8192" {
+		t.Fatalf("expected sglang chunked prefill 8192, got %q", got)
+	}
+	if got := req.Options[OptionSGLangMaxRunningRequests]; got != "48" {
+		t.Fatalf("expected sglang max running requests 48, got %q", got)
+	}
+}
+
+func TestApplyRuntimeDefaultsForTensorRTLLM(t *testing.T) {
+	req := &ProvisionRequest{
+		Engine:   EngineTensorRTLLM,
+		GPUType:  GPUA100_80,
+		GPUCount: 2,
+		Models:   []string{"Qwen/Qwen2.5-7B-Instruct"},
+	}
+
+	ApplyRuntimeDefaults(req)
+
+	if got := req.Options[OptionTensorRTLLMTensorParallelSize]; got != "2" {
+		t.Fatalf("expected TensorRT-LLM TP size 2, got %q", got)
+	}
+	if got := req.Options[OptionTensorRTLLMMaxNumTokens]; got != "8192" {
+		t.Fatalf("expected TensorRT-LLM max tokens 8192, got %q", got)
+	}
+	if got := req.Options[OptionTensorRTLLMMaxBatchSize]; got != "48" {
+		t.Fatalf("expected TensorRT-LLM max batch size 48, got %q", got)
+	}
+}
+
+func TestWorkerRuntimeEnvUsesEngineSpecificKeys(t *testing.T) {
+	req := &ProvisionRequest{
+		Engine: EngineSGLang,
+		Options: map[string]string{
+			OptionSGLangTPSize:             "2",
+			OptionSGLangContextLength:      "32768",
+			OptionSGLangMaxRunningRequests: "64",
+			OptionVLLMTensorParallelSize:   "8",
+		},
+	}
+
+	env := WorkerRuntimeEnv(req)
+	if got := env[OptionSGLangTPSize]; got != "2" {
+		t.Fatalf("expected sglang tp env 2, got %q", got)
+	}
+	if got := env[OptionSGLangContextLength]; got != "32768" {
+		t.Fatalf("expected sglang context env 32768, got %q", got)
+	}
+	if got := env[OptionSGLangMaxRunningRequests]; got != "64" {
+		t.Fatalf("expected sglang max running requests env 64, got %q", got)
+	}
+	if _, exists := env[OptionVLLMTensorParallelSize]; exists {
+		t.Fatalf("expected vllm env keys to be omitted for sglang engine")
 	}
 }

@@ -1,0 +1,125 @@
+{
+  "engines": {
+    "version": 1,
+    "engines": [
+      {"id": "vllm"},
+      {"id": "sglang"},
+      {"id": "tensorrt_llm"}
+    ]
+  },
+  "hardware": {
+    "version": 1,
+    "hardware": [
+      {
+        "hardware_id": "rtx_4090_24gb",
+        "aliases": ["RTX_4090"],
+        "provider_selectors": [{"provider": "mock"}, {"provider": "vastai"}]
+      },
+      {
+        "hardware_id": "l40s_48gb",
+        "aliases": ["L40S"],
+        "provider_selectors": [{"provider": "mock"}, {"provider": "runpod"}]
+      },
+      {
+        "hardware_id": "a100_40gb",
+        "aliases": ["A100_40GB"],
+        "provider_selectors": [{"provider": "mock"}, {"provider": "runpod"}]
+      },
+      {
+        "hardware_id": "a100_80gb",
+        "aliases": ["A100_80GB"],
+        "provider_selectors": [{"provider": "mock"}, {"provider": "runpod"}, {"provider": "vastai"}]
+      },
+      {
+        "hardware_id": "a100_sxm4_80gb",
+        "aliases": ["A100_80GB_SXM4", "A100_SXM4_80GB"],
+        "provider_selectors": [{"provider": "mock"}, {"provider": "runpod"}, {"provider": "vastai"}]
+      },
+      {
+        "hardware_id": "h100_80gb",
+        "aliases": ["H100"],
+        "provider_selectors": [{"provider": "mock"}, {"provider": "runpod"}]
+      }
+    ]
+  },
+  "models": {
+    "version": 1,
+    "models": [
+      {
+        "model_id": "Qwen/Qwen2.5-7B-Instruct",
+        "engine_compatibility": {
+          "vllm": {"status": "supported"},
+          "sglang": {"status": "supported"},
+          "tensorrt_llm": {"status": "unverified"}
+        }
+      },
+      {
+        "model_id": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+        "engine_compatibility": {
+          "vllm": {"status": "unverified"},
+          "sglang": {"status": "unverified"},
+          "tensorrt_llm": {"status": "unverified"}
+        }
+      },
+      {
+        "model_id": "Qwen/Qwen3-4B-Thinking-2507",
+        "engine_compatibility": {
+          "vllm": {"status": "supported"},
+          "sglang": {"status": "unverified"},
+          "tensorrt_llm": {"status": "unverified"}
+        }
+      },
+      {
+        "model_id": "Qwen/Qwen3.5-9B",
+        "engine_compatibility": {
+          "vllm": {"status": "unverified"},
+          "sglang": {"status": "unverified"},
+          "tensorrt_llm": {"status": "unverified"}
+        }
+      },
+      {
+        "model_id": "MiniMax-M2.7",
+        "engine_compatibility": {
+          "vllm": {"status": "unsupported"},
+          "sglang": {"status": "unsupported"},
+          "tensorrt_llm": {"status": "unsupported"}
+        }
+      },
+      {
+        "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "engine_compatibility": {
+          "vllm": {"status": "supported"},
+          "sglang": {"status": "supported"},
+          "tensorrt_llm": {"status": "supported"}
+        }
+      },
+      {
+        "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+        "engine_compatibility": {
+          "vllm": {"status": "supported"},
+          "sglang": {"status": "supported"},
+          "tensorrt_llm": {"status": "supported"}
+        }
+      }
+    ]
+  },
+  "workloads": {
+    "version": 1,
+    "workloads": [
+      {"id": "latency_sensitive_chat"},
+      {"id": "throughput_high_concurrency"},
+      {"id": "long_context"},
+      {"id": "repeated_prefix"},
+      {"id": "decode_heavy"},
+      {"id": "mixed"}
+    ]
+  },
+  "benchmark_profiles": {
+    "version": 1,
+    "benchmark_profiles": [
+      {"id": "provision_full", "execution_mode": "provision"},
+      {"id": "attach_warm_only", "execution_mode": "attach"},
+      {"id": "provision_tuning", "execution_mode": "provision"}
+    ]
+  }
+}

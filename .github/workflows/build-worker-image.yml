@@ -1,0 +1,171 @@
+name: Build Worker Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      engine:
+        description: Worker engine image to build
+        required: true
+        type: choice
+        options:
+          - vllm
+          - sglang
+          - tensorrt_llm
+      version:
+        description: Image tag to push. Leave blank to use the short commit SHA.
+        required: false
+        type: string
+        default: ""
+      docker_registry:
+        description: Registry hostname
+        required: true
+        type: string
+        default: docker.io
+      docker_namespace:
+        description: Registry namespace or organization
+        required: true
+        type: string
+        default: codingtensor
+      push_image:
+        description: Push the built image after a successful build
+        required: true
+        type: boolean
+        default: true
+      cleanup_runner:
+        description: Reclaim runner disk before building
+        required: true
+        type: boolean
+        default: true
+      runs_on:
+        description: JSON array of runner labels, e.g. ["ubuntu-latest"] or ["self-hosted","linux","x64"]
+        required: true
+        type: string
+        default: '["ubuntu-latest"]'
+      tensorrt_base_image:
+        description: Official TensorRT-LLM base image for TensorRT builds
+        required: true
+        type: string
+        default: nvcr.io/nvidia/tritonserver:24.08-trtllm-python-py3
+
+concurrency:
+  group: build-worker-image-${{ github.ref }}-${{ inputs.engine }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ inputs.engine }} worker image
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show initial disk usage
+        shell: bash
+        run: |
+          df -h
+          docker system df || true
+
+      - name: Free runner disk space
+        if: ${{ inputs.cleanup_runner }}
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/share/swift || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo swapoff -a || true
+          sudo rm -f /swapfile || true
+          sudo apt-get clean || true
+          docker system prune -af || true
+          docker builder prune -af || true
+          df -h
+          docker system df || true
+
+      - name: Resolve image metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ -n "${{ inputs.version }}" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_SHA::12}"
+          fi
+
+          case "${{ inputs.engine }}" in
+            vllm)
+              build_flag="--worker-vllm"
+              image_name="worker-vllm"
+              ;;
+            sglang)
+              build_flag="--worker-sglang"
+              image_name="worker-sglang"
+              ;;
+            tensorrt_llm)
+              build_flag="--worker-tensorrt-llm"
+              image_name="worker-tensorrt-llm"
+              ;;
+            *)
+              echo "Unsupported engine: ${{ inputs.engine }}" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build_flag=$build_flag" >> "$GITHUB_OUTPUT"
+          echo "image_name=$image_name" >> "$GITHUB_OUTPUT"
+          echo "image_ref=${{ inputs.docker_registry }}/${{ inputs.docker_namespace }}/${image_name}:${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Docker registry
+        if: ${{ inputs.push_image }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.docker_registry }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to NVIDIA NGC
+        if: ${{ inputs.engine == 'tensorrt_llm' }}
+        uses: docker/login-action@v3
+        with:
+          registry: nvcr.io
+          username: $oauthtoken
+          password: ${{ secrets.NGC_API_KEY }}
+
+      - name: Build image
+        shell: bash
+        env:
+          DOCKER_REGISTRY: ${{ inputs.docker_registry }}
+          DOCKER_NAMESPACE: ${{ inputs.docker_namespace }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          WORKER_TENSORRT_LLM_BASE_IMAGE: ${{ inputs.tensorrt_base_image }}
+        run: |
+          cmd=(./scripts/build-docker.sh "${{ steps.meta.outputs.build_flag }}")
+          if [[ "${{ inputs.push_image }}" == "true" ]]; then
+            cmd+=(--push)
+          fi
+          printf 'Running command:'
+          printf ' %q' "${cmd[@]}"
+          printf '\n'
+          "${cmd[@]}"
+
+      - name: Build summary
+        shell: bash
+        run: |
+          {
+            echo "## Worker image build"
+            echo
+            echo "- Engine: \`${{ inputs.engine }}\`"
+            echo "- Image: \`${{ steps.meta.outputs.image_ref }}\`"
+            echo "- Runner: \`${{ inputs.runs_on }}\`"
+            echo "- Push enabled: \`${{ inputs.push_image }}\`"
+            if [[ "${{ inputs.engine }}" == "tensorrt_llm" ]]; then
+              echo "- TensorRT base image: \`${{ inputs.tensorrt_base_image }}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

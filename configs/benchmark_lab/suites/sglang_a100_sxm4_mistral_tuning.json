@@ -1,0 +1,102 @@
+{
+  "suite_id": "sglang-a100-sxm4-mistral-tuning",
+  "description": "Focused SGLang tuning sweep for Mistral 7B on A100 SXM4 80GB across the winning baseline workloads.",
+  "matrix": {
+    "engines": ["sglang"],
+    "hardware": ["a100_sxm4_80gb"],
+    "gpu_counts": [1],
+    "models": ["mistralai/Mistral-7B-Instruct-v0.3"],
+    "workloads": ["mixed", "repeated_prefix"],
+    "benchmark_profiles": ["provision_tuning"],
+    "runtime_presets": [
+      "baseline",
+      "explicit_conservative",
+      "chunked_prefill_4096",
+      "running_requests_32",
+      "running_requests_64",
+      "memory_fraction_090",
+      "memory_fraction_096"
+    ]
+  },
+  "runtime_presets": [
+    {
+      "id": "baseline",
+      "display_name": "Baseline",
+      "description": "Current default path with no explicit runtime overrides.",
+      "parameters": {}
+    },
+    {
+      "id": "explicit_conservative",
+      "display_name": "Explicit Conservative",
+      "description": "Make the current A100 80GB conservative envelope explicit in the suite.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48
+      }
+    },
+    {
+      "id": "chunked_prefill_4096",
+      "display_name": "Chunked Prefill 4096",
+      "description": "Lower the prefill chunk size to test whether latency improves without losing too much throughput.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 4096,
+        "max_concurrency": 48
+      }
+    },
+    {
+      "id": "running_requests_32",
+      "display_name": "Running Requests 32",
+      "description": "Cap active running requests to test whether TTFT tails improve on Mistral.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 8192,
+        "max_concurrency": 32
+      }
+    },
+    {
+      "id": "running_requests_64",
+      "display_name": "Running Requests 64",
+      "description": "Raise active running requests to probe a higher-throughput envelope.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 8192,
+        "max_concurrency": 64
+      }
+    },
+    {
+      "id": "memory_fraction_090",
+      "display_name": "Memory Fraction 0.90",
+      "description": "Recover memory headroom to test whether stability or latency improves.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.90,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48
+      }
+    },
+    {
+      "id": "memory_fraction_096",
+      "display_name": "Memory Fraction 0.96",
+      "description": "Probe a denser memory envelope for additional throughput.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.96,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48
+      }
+    }
+  ],
+  "output_root": "/tmp/infera-benchmark-lab"
+}

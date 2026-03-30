@@ -1,0 +1,120 @@
+{
+  "suite_id": "vllm-a100-sxm4-llama31-repeated-prefix-tuning",
+  "description": "Focused vLLM tuning sweep for Llama 3.1 8B repeated-prefix traffic on A100 SXM4 80GB.",
+  "matrix": {
+    "engines": ["vllm"],
+    "hardware": ["a100_sxm4_80gb"],
+    "gpu_counts": [1],
+    "models": ["meta-llama/Meta-Llama-3.1-8B-Instruct"],
+    "workloads": ["repeated_prefix"],
+    "benchmark_profiles": ["provision_tuning"],
+    "runtime_presets": [
+      "baseline",
+      "explicit_conservative",
+      "scheduler_4",
+      "prefill_4096_scheduler_4",
+      "concurrency_64_scheduler_4",
+      "concurrency_32_scheduler_4",
+      "memory_095_concurrency_64"
+    ]
+  },
+  "runtime_presets": [
+    {
+      "id": "baseline",
+      "display_name": "Baseline",
+      "description": "Current default path with no explicit runtime overrides.",
+      "parameters": {}
+    },
+    {
+      "id": "explicit_conservative",
+      "display_name": "Explicit Conservative",
+      "description": "Make the current A100 80GB conservative envelope explicit for Llama 3.1 repeated-prefix traffic.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.94,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48,
+        "scheduler_steps": 6
+      }
+    },
+    {
+      "id": "scheduler_4",
+      "display_name": "Scheduler 4",
+      "description": "Reduce scheduler steps while keeping the same queue envelope.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.94,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48,
+        "scheduler_steps": 4
+      }
+    },
+    {
+      "id": "prefill_4096_scheduler_4",
+      "display_name": "Prefill 4096 Scheduler 4",
+      "description": "Lower the prefill batch budget to test whether latency improves without collapsing throughput.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.94,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 4096,
+        "max_concurrency": 48,
+        "scheduler_steps": 4
+      }
+    },
+    {
+      "id": "concurrency_64_scheduler_4",
+      "display_name": "Concurrency 64 Scheduler 4",
+      "description": "Raise active sequences to probe throughput headroom on SXM.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.94,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 8192,
+        "max_concurrency": 64,
+        "scheduler_steps": 4
+      }
+    },
+    {
+      "id": "concurrency_32_scheduler_4",
+      "display_name": "Concurrency 32 Scheduler 4",
+      "description": "Lower active sequences to probe latency tails.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.94,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 8192,
+        "max_concurrency": 32,
+        "scheduler_steps": 4
+      }
+    },
+    {
+      "id": "memory_095_concurrency_64",
+      "display_name": "Memory 0.95 Concurrency 64",
+      "description": "Probe a denser memory envelope alongside the higher queue target.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.95,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 8192,
+        "max_concurrency": 64,
+        "scheduler_steps": 4
+      }
+    }
+  ],
+  "output_root": "/tmp/infera-benchmark-lab"
+}

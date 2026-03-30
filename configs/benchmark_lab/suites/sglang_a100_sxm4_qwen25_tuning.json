@@ -1,0 +1,102 @@
+{
+  "suite_id": "sglang-a100-sxm4-qwen25-tuning",
+  "description": "Focused SGLang tuning sweep for Qwen2.5 7B on A100 SXM4 80GB across the baseline winning workloads.",
+  "matrix": {
+    "engines": ["sglang"],
+    "hardware": ["a100_sxm4_80gb"],
+    "gpu_counts": [1],
+    "models": ["Qwen/Qwen2.5-7B-Instruct"],
+    "workloads": ["mixed", "repeated_prefix"],
+    "benchmark_profiles": ["provision_tuning"],
+    "runtime_presets": [
+      "baseline",
+      "explicit_conservative",
+      "chunked_prefill_4096",
+      "running_requests_32",
+      "running_requests_64",
+      "memory_fraction_090",
+      "memory_fraction_096"
+    ]
+  },
+  "runtime_presets": [
+    {
+      "id": "baseline",
+      "display_name": "Baseline",
+      "description": "Current default path with no explicit runtime overrides.",
+      "parameters": {}
+    },
+    {
+      "id": "explicit_conservative",
+      "display_name": "Explicit Conservative",
+      "description": "Make the current A100 80GB conservative SGLang envelope explicit in the suite.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48
+      }
+    },
+    {
+      "id": "chunked_prefill_4096",
+      "display_name": "Chunked Prefill 4096",
+      "description": "Lower the prefill chunk size to test whether TTFT improves without giving up too much throughput.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 4096,
+        "max_concurrency": 48
+      }
+    },
+    {
+      "id": "running_requests_32",
+      "display_name": "Running Requests 32",
+      "description": "Tighten active requests to probe lower TTFT tails on Qwen.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 8192,
+        "max_concurrency": 32
+      }
+    },
+    {
+      "id": "running_requests_64",
+      "display_name": "Running Requests 64",
+      "description": "Raise active requests to test whether SXM bandwidth gives a useful throughput envelope.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 8192,
+        "max_concurrency": 64
+      }
+    },
+    {
+      "id": "memory_fraction_090",
+      "display_name": "Memory Fraction 0.90",
+      "description": "Recover memory headroom to test whether stability and latency improve.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.90,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48
+      }
+    },
+    {
+      "id": "memory_fraction_096",
+      "display_name": "Memory Fraction 0.96",
+      "description": "Probe a denser memory envelope for higher steady-state throughput.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.96,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48
+      }
+    }
+  ],
+  "output_root": "/tmp/infera-benchmark-lab"
+}

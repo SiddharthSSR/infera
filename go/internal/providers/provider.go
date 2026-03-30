@@ -17,6 +17,12 @@ type Provider interface {
 	WaitForReady(ctx context.Context, instanceID string) error
 }
 
+// InstanceStarter is an optional provider capability for start operations that
+// need the tracked instance metadata in addition to the provider instance ID.
+type InstanceStarter interface {
+	StartWithInstance(ctx context.Context, instance *Instance) error
+}
+
 // ProviderConfig contains configuration for a provider.
 type ProviderConfig struct {
 	Type        ProviderType

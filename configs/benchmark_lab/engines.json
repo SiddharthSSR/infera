@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "engines": [
+    {
+      "id": "vllm",
+      "display_name": "vLLM",
+      "adapter": "vllm",
+      "description": "General-purpose vLLM serving backend.",
+      "supported_features": [
+        "prefix_caching",
+        "chunked_prefill",
+        "speculative_decoding",
+        "attention_backend",
+        "tensor_parallelism"
+      ],
+      "runtime_parameters": [
+        {"id": "tensor_parallelism", "env_key": "INFERA_VLLM_TENSOR_PARALLEL_SIZE", "value_type": "int", "min_value": 1},
+        {"id": "context_length", "env_key": "INFERA_VLLM_MAX_MODEL_LEN", "value_type": "int", "min_value": 1},
+        {"id": "gpu_memory_utilization", "env_key": "INFERA_VLLM_GPU_MEMORY_UTILIZATION", "value_type": "float", "min_value": 0.01, "max_value": 1.0},
+        {"id": "prefix_caching", "env_key": "INFERA_VLLM_ENABLE_PREFIX_CACHING", "value_type": "bool"},
+        {"id": "chunked_prefill", "env_key": "INFERA_VLLM_ENABLE_CHUNKED_PREFILL", "value_type": "bool"},
+        {"id": "batch_token_budget", "env_key": "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS", "value_type": "int", "min_value": 1},
+        {"id": "max_concurrency", "env_key": "INFERA_VLLM_MAX_NUM_SEQS", "value_type": "int", "min_value": 1},
+        {"id": "swap_space_gb", "env_key": "INFERA_VLLM_SWAP_SPACE", "value_type": "float", "min_value": 0.0},
+        {"id": "enforce_eager", "env_key": "INFERA_VLLM_ENFORCE_EAGER", "value_type": "bool"},
+        {"id": "scheduler_steps", "env_key": "INFERA_VLLM_NUM_SCHEDULER_STEPS", "value_type": "int", "min_value": 0},
+        {"id": "speculative_model", "env_key": "INFERA_VLLM_SPECULATIVE_MODEL", "value_type": "string"},
+        {"id": "speculative_num_tokens", "env_key": "INFERA_VLLM_NUM_SPECULATIVE_TOKENS", "value_type": "int", "min_value": 0},
+        {"id": "speculative_ngram_lookup_tokens", "env_key": "INFERA_VLLM_NGRAM_PROMPT_LOOKUP_NUM_TOKENS", "value_type": "int", "min_value": 0}
+      ]
+    },
+    {
+      "id": "sglang",
+      "display_name": "SGLang",
+      "adapter": "sglang",
+      "description": "SGLang serving backend.",
+      "supported_features": [
+        "chunked_prefill",
+        "attention_backend",
+        "tensor_parallelism"
+      ],
+      "runtime_parameters": [
+        {"id": "tensor_parallelism", "env_key": "INFERA_SGLANG_TP_SIZE", "value_type": "int", "min_value": 1},
+        {"id": "gpu_memory_utilization", "env_key": "INFERA_SGLANG_MEM_FRACTION_STATIC", "value_type": "float", "min_value": 0.01, "max_value": 1.0},
+        {"id": "context_length", "env_key": "INFERA_SGLANG_CONTEXT_LENGTH", "value_type": "int", "min_value": 1},
+        {"id": "batch_token_budget", "env_key": "INFERA_SGLANG_CHUNKED_PREFILL_SIZE", "value_type": "int", "min_value": 1},
+        {"id": "max_concurrency", "env_key": "INFERA_SGLANG_MAX_RUNNING_REQUESTS", "value_type": "int", "min_value": 1},
+        {"id": "schedule_policy", "env_key": "INFERA_SGLANG_SCHEDULE_POLICY", "value_type": "string"},
+        {"id": "attention_backend", "env_key": "INFERA_SGLANG_ATTENTION_BACKEND", "value_type": "string"},
+        {"id": "sampling_backend", "env_key": "INFERA_SGLANG_SAMPLING_BACKEND", "value_type": "string"},
+        {"id": "disable_cuda_graph", "env_key": "INFERA_SGLANG_DISABLE_CUDA_GRAPH", "value_type": "bool"}
+      ]
+    },
+    {
+      "id": "tensorrt_llm",
+      "display_name": "TensorRT-LLM",
+      "adapter": "tensorrt_llm",
+      "description": "TensorRT-LLM worker runtime.",
+      "supported_features": [
+        "tensor_parallelism",
+        "chunked_context"
+      ],
+      "runtime_parameters": [
+        {"id": "tensor_parallelism", "env_key": "INFERA_TENSORRT_LLM_TENSOR_PARALLEL_SIZE", "value_type": "int", "min_value": 1},
+        {"id": "max_batch_size", "env_key": "INFERA_TENSORRT_LLM_MAX_BATCH_SIZE", "value_type": "int", "min_value": 1},
+        {"id": "batch_token_budget", "env_key": "INFERA_TENSORRT_LLM_MAX_NUM_TOKENS", "value_type": "int", "min_value": 1},
+        {"id": "max_beam_width", "env_key": "INFERA_TENSORRT_LLM_MAX_BEAM_WIDTH", "value_type": "int", "min_value": 1},
+        {"id": "kv_cache_free_gpu_memory_fraction", "env_key": "INFERA_TENSORRT_LLM_KV_CACHE_FREE_GPU_MEMORY_FRACTION", "value_type": "float", "min_value": 0.0, "max_value": 1.0},
+        {"id": "chunked_context", "env_key": "INFERA_TENSORRT_LLM_ENABLE_CHUNKED_CONTEXT", "value_type": "bool"},
+        {"id": "backend", "env_key": "INFERA_TENSORRT_LLM_BACKEND", "value_type": "string", "allowed_values": ["tensorrt"]}
+      ]
+    }
+  ]
+}

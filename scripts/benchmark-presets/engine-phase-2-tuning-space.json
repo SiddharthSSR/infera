@@ -1,0 +1,172 @@
+{
+  "version": 2,
+  "phase": "engine_specific_tuning",
+  "description": "Named Phase 2 tuning profiles and candidate knob groups after baseline numbers exist.",
+  "blocked_engines": {
+    "tensorrt_llm": {
+      "reason": "Blocked on the current RunPod A100 80GB PCIe Qwen/Qwen2.5-7B-Instruct benchmark path because compatible TensorRT-LLM runtime and model support are not reliably available on the host pool."
+    }
+  },
+  "engines": {
+    "vllm": {
+      "primary_metrics": [
+        "ttft_p50_ms",
+        "aggregate_decode_tok_s_p50",
+        "server_to_model_ready_ms"
+      ],
+      "profiles": [
+        {
+          "name": "baseline_conservative",
+          "group": "baseline",
+          "description": "Phase 1 conservative baseline with no Phase 2 overrides.",
+          "worker_env": {}
+        },
+        {
+          "name": "prefill_batching_4096",
+          "group": "prefill_batching",
+          "description": "Raise batched prefill tokens to 4096 to test higher prefill packing without the most aggressive queue size.",
+          "worker_env": {
+            "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS": "4096"
+          }
+        },
+        {
+          "name": "prefill_batching_8192",
+          "group": "prefill_batching",
+          "description": "Push batched prefill tokens to 8192 to see if throughput improves before TTFT regresses materially.",
+          "worker_env": {
+            "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS": "8192"
+          }
+        },
+        {
+          "name": "concurrency_32",
+          "group": "concurrency",
+          "description": "Cap active sequences at 32 to test whether queueing and fragmentation improve versus the baseline.",
+          "worker_env": {
+            "INFERA_VLLM_MAX_NUM_SEQS": "32"
+          }
+        },
+        {
+          "name": "concurrency_48",
+          "group": "concurrency",
+          "description": "Raise active sequences to 48 to probe higher steady-state throughput at the same external concurrency.",
+          "worker_env": {
+            "INFERA_VLLM_MAX_NUM_SEQS": "48"
+          }
+        },
+        {
+          "name": "scheduler_steps_2",
+          "group": "scheduler",
+          "description": "Enable a small number of scheduler steps to reduce overhead without committing to an aggressive scheduling policy.",
+          "worker_env": {
+            "INFERA_VLLM_NUM_SCHEDULER_STEPS": "2"
+          }
+        },
+        {
+          "name": "scheduler_steps_4",
+          "group": "scheduler",
+          "description": "Increase scheduler steps to 4 to test whether batching efficiency improves enough to offset extra per-step work.",
+          "worker_env": {
+            "INFERA_VLLM_NUM_SCHEDULER_STEPS": "4"
+          }
+        }
+      ],
+      "sweeps": [
+        {
+          "group": "prefill_batching",
+          "env": "INFERA_VLLM_MAX_NUM_BATCHED_TOKENS",
+          "values": ["2048", "4096", "8192"]
+        },
+        {
+          "group": "concurrency",
+          "env": "INFERA_VLLM_MAX_NUM_SEQS",
+          "values": ["16", "32", "48", "64"]
+        },
+        {
+          "group": "scheduler",
+          "env": "INFERA_VLLM_NUM_SCHEDULER_STEPS",
+          "values": ["0", "2", "4", "6", "8"]
+        }
+      ]
+    },
+    "sglang": {
+      "primary_metrics": [
+        "ttft_p50_ms",
+        "aggregate_decode_tok_s_p50",
+        "memory_used_bytes"
+      ],
+      "profiles": [
+        {
+          "name": "baseline_conservative",
+          "group": "baseline",
+          "description": "Phase 1 conservative baseline with no Phase 2 overrides.",
+          "worker_env": {}
+        },
+        {
+          "name": "chunked_prefill_2048",
+          "group": "chunked_prefill",
+          "description": "Set chunked prefill to 2048 to reduce long-prefill bursts and observe TTFT stability.",
+          "worker_env": {
+            "INFERA_SGLANG_CHUNKED_PREFILL_SIZE": "2048"
+          }
+        },
+        {
+          "name": "chunked_prefill_4096",
+          "group": "chunked_prefill",
+          "description": "Set chunked prefill to 4096 to test a middle ground between latency smoothing and prefill efficiency.",
+          "worker_env": {
+            "INFERA_SGLANG_CHUNKED_PREFILL_SIZE": "4096"
+          }
+        },
+        {
+          "name": "running_requests_32",
+          "group": "running_requests",
+          "description": "Limit concurrently running requests to 32 to see whether tail latency improves at the same outer concurrency.",
+          "worker_env": {
+            "INFERA_SGLANG_MAX_RUNNING_REQUESTS": "32"
+          }
+        },
+        {
+          "name": "running_requests_48",
+          "group": "running_requests",
+          "description": "Allow 48 running requests to probe higher throughput while watching for capacity pressure.",
+          "worker_env": {
+            "INFERA_SGLANG_MAX_RUNNING_REQUESTS": "48"
+          }
+        },
+        {
+          "name": "memory_fraction_085",
+          "group": "memory_fraction",
+          "description": "Reduce static memory fraction to 0.85 to recover headroom and watch whether throughput suffers.",
+          "worker_env": {
+            "INFERA_SGLANG_MEM_FRACTION_STATIC": "0.85"
+          }
+        },
+        {
+          "name": "memory_fraction_094",
+          "group": "memory_fraction",
+          "description": "Raise static memory fraction to 0.94 to test whether higher utilization improves throughput without destabilizing the worker.",
+          "worker_env": {
+            "INFERA_SGLANG_MEM_FRACTION_STATIC": "0.94"
+          }
+        }
+      ],
+      "sweeps": [
+        {
+          "group": "chunked_prefill",
+          "env": "INFERA_SGLANG_CHUNKED_PREFILL_SIZE",
+          "values": ["2048", "4096", "8192"]
+        },
+        {
+          "group": "running_requests",
+          "env": "INFERA_SGLANG_MAX_RUNNING_REQUESTS",
+          "values": ["16", "32", "48", "64"]
+        },
+        {
+          "group": "memory_fraction",
+          "env": "INFERA_SGLANG_MEM_FRACTION_STATIC",
+          "values": ["0.85", "0.90", "0.94"]
+        }
+      ]
+    }
+  }
+}

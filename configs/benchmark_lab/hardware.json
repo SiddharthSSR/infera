@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "hardware": [
+    {
+      "hardware_id": "rtx_4090_24gb",
+      "display_name": "RTX 4090 24GB",
+      "aliases": ["RTX_4090"],
+      "accelerators": [{"family": "RTX_4090", "memory_gb": 24, "memory_bandwidth_gbps": 1008, "tensor_core": true}],
+      "provider_selectors": [
+        {"provider": "mock", "gpu_type": "RTX_4090", "provider_gpu_type_id": "mock-rtx4090"},
+        {"provider": "vastai", "gpu_type": "RTX_4090"}
+      ],
+      "attributes": {"memory_class": "consumer", "arch": "ada"}
+    },
+    {
+      "hardware_id": "l40s_48gb",
+      "display_name": "L40S 48GB",
+      "aliases": ["L40S"],
+      "accelerators": [{"family": "L40S", "memory_gb": 48, "memory_bandwidth_gbps": 864, "tensor_core": true}],
+      "provider_selectors": [
+        {"provider": "mock", "gpu_type": "L40S", "provider_gpu_type_id": "mock-l40s"},
+        {"provider": "runpod", "gpu_type": "L40S", "provider_gpu_type_id": "NVIDIA L40S"}
+      ],
+      "attributes": {"memory_class": "datacenter", "arch": "ada"}
+    },
+    {
+      "hardware_id": "a100_40gb",
+      "display_name": "A100 40GB",
+      "aliases": ["A100_40GB"],
+      "accelerators": [{"family": "A100", "memory_gb": 40, "memory_bandwidth_gbps": 1555, "tensor_core": true}],
+      "provider_selectors": [
+        {"provider": "mock", "gpu_type": "A100_40GB", "provider_gpu_type_id": "mock-a100-40"},
+        {"provider": "runpod", "gpu_type": "A100_40GB", "provider_gpu_type_id": "NVIDIA A100 40GB PCIe"}
+      ],
+      "attributes": {"memory_class": "datacenter", "arch": "ampere"}
+    },
+    {
+      "hardware_id": "a100_80gb",
+      "display_name": "A100 80GB",
+      "aliases": ["A100_80GB"],
+      "accelerators": [{"family": "A100", "memory_gb": 80, "memory_bandwidth_gbps": 2039, "tensor_core": true}],
+      "provider_selectors": [
+        {"provider": "mock", "gpu_type": "A100_80GB", "provider_gpu_type_id": "mock-a100-80"},
+        {"provider": "runpod", "gpu_type": "A100_80GB", "provider_gpu_type_id": "NVIDIA A100 80GB PCIe", "allowed_cuda_versions": ["12.6", "12.7", "12.8"]},
+        {"provider": "vastai", "gpu_type": "A100_80GB"}
+      ],
+      "attributes": {"memory_class": "datacenter", "arch": "ampere"}
+    },
+    {
+      "hardware_id": "a100_sxm4_80gb",
+      "display_name": "A100 SXM4 80GB",
+      "aliases": ["A100_80GB_SXM4", "A100_SXM4_80GB"],
+      "accelerators": [{"family": "A100", "memory_gb": 80, "memory_bandwidth_gbps": 2039, "tensor_core": true}],
+      "provider_selectors": [
+        {"provider": "mock", "gpu_type": "A100_SXM4_80GB", "provider_gpu_type_id": "mock-a100-sxm4-80"},
+        {"provider": "runpod", "gpu_type": "A100_SXM4_80GB", "provider_gpu_type_id": "NVIDIA A100-SXM4-80GB"},
+        {"provider": "vastai", "gpu_type": "A100_SXM4_80GB"}
+      ],
+      "attributes": {"memory_class": "datacenter", "arch": "ampere", "form_factor": "sxm4"}
+    },
+    {
+      "hardware_id": "h100_80gb",
+      "display_name": "H100 80GB",
+      "aliases": ["H100"],
+      "accelerators": [{"family": "H100", "memory_gb": 80, "memory_bandwidth_gbps": 3350, "tensor_core": true}],
+      "provider_selectors": [
+        {"provider": "mock", "gpu_type": "H100", "provider_gpu_type_id": "mock-h100"},
+        {"provider": "runpod", "gpu_type": "H100", "provider_gpu_type_id": "NVIDIA H100 PCIe"}
+      ],
+      "attributes": {"memory_class": "datacenter", "arch": "hopper"}
+    }
+  ]
+}

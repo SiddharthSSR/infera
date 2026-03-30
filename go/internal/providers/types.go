@@ -1,7 +1,10 @@
 // Package providers defines types for GPU cloud providers.
 package providers
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // ProviderType identifies a GPU cloud provider.
 type ProviderType string
@@ -12,6 +15,52 @@ const (
 	ProviderLambda ProviderType = "lambda"
 	ProviderMock   ProviderType = "mock"
 )
+
+// InferenceEngine identifies a worker inference runtime.
+type InferenceEngine string
+
+const (
+	EngineVLLM        InferenceEngine = "vllm"
+	EngineSGLang      InferenceEngine = "sglang"
+	EngineTensorRTLLM InferenceEngine = "tensorrt_llm"
+	EngineMock        InferenceEngine = "mock"
+)
+
+var inferenceEngineAliases = map[string]InferenceEngine{
+	"":             EngineVLLM,
+	"vllm":         EngineVLLM,
+	"sglang":       EngineSGLang,
+	"mock":         EngineMock,
+	"tensorrt_llm": EngineTensorRTLLM,
+	"tensorrt-llm": EngineTensorRTLLM,
+	"trtllm":       EngineTensorRTLLM,
+	"trt-llm":      EngineTensorRTLLM,
+}
+
+func NormalizeInferenceEngine(value string) InferenceEngine {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if engine, ok := inferenceEngineAliases[normalized]; ok {
+		return engine
+	}
+	return InferenceEngine(normalized)
+}
+
+func (e InferenceEngine) Valid() bool {
+	switch e {
+	case EngineVLLM, EngineSGLang, EngineTensorRTLLM, EngineMock:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e InferenceEngine) OrDefault() InferenceEngine {
+	normalized := NormalizeInferenceEngine(string(e))
+	if normalized.Valid() {
+		return normalized
+	}
+	return EngineVLLM
+}
 
 // GPUType represents a GPU model.
 type GPUType string
@@ -79,8 +128,9 @@ type Instance struct {
 	HTTPPort int    `json:"http_port,omitempty"`
 
 	// Infera
-	WorkerID string   `json:"worker_id,omitempty"`
-	Models   []string `json:"models,omitempty"`
+	WorkerID string          `json:"worker_id,omitempty"`
+	Models   []string        `json:"models,omitempty"`
+	Engine   InferenceEngine `json:"engine,omitempty"`
 
 	// Cost
 	CostPerHour  float64 `json:"cost_per_hour"`
@@ -100,20 +150,22 @@ type Instance struct {
 
 // ProvisionRequest contains parameters for creating a new instance.
 type ProvisionRequest struct {
-	Name              string       `json:"name"`
-	Provider          ProviderType `json:"provider"`
-	WorkspaceID       string       `json:"workspace_id,omitempty"`
-	GPUType           GPUType      `json:"gpu_type"`
-	ProviderGPUTypeID string       `json:"provider_gpu_type_id,omitempty"`
-	GPUCount          int          `json:"gpu_count"`
-	Region            string       `json:"region,omitempty"`
-	SpotInstance      bool         `json:"spot_instance"`
-	MaxCostHour       float64      `json:"max_cost_hour,omitempty"` // Budget limit
+	Name                string       `json:"name"`
+	Provider            ProviderType `json:"provider"`
+	WorkspaceID         string       `json:"workspace_id,omitempty"`
+	GPUType             GPUType      `json:"gpu_type"`
+	ProviderGPUTypeID   string       `json:"provider_gpu_type_id,omitempty"`
+	GPUCount            int          `json:"gpu_count"`
+	Region              string       `json:"region,omitempty"`
+	SpotInstance        bool         `json:"spot_instance"`
+	MaxCostHour         float64      `json:"max_cost_hour,omitempty"` // Budget limit
+	AllowedCudaVersions []string     `json:"allowed_cuda_versions,omitempty"`
 
 	// Worker configuration
-	Models         []string `json:"models,omitempty"`
-	DockerImage    string   `json:"docker_image,omitempty"`
-	GatewayAddress string   `json:"gateway_address,omitempty"` // Address for worker to connect back
+	Models         []string        `json:"models,omitempty"`
+	Engine         InferenceEngine `json:"engine,omitempty"`
+	DockerImage    string          `json:"docker_image,omitempty"`
+	GatewayAddress string          `json:"gateway_address,omitempty"` // Address for worker to connect back
 
 	// SSH key for access
 	SSHPublicKey string `json:"ssh_public_key,omitempty"`

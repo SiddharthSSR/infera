@@ -31,9 +31,20 @@ type workspaceConfiguredProvider struct {
 	apiKey string
 }
 
+type instanceAwareStartProvider struct {
+	*mockTestProvider
+	startedWithInstance []string
+}
+
 func newMockTestProvider() *mockTestProvider {
 	return &mockTestProvider{
 		instances: make(map[string]*Instance),
+	}
+}
+
+func newInstanceAwareStartProvider() *instanceAwareStartProvider {
+	return &instanceAwareStartProvider{
+		mockTestProvider: newMockTestProvider(),
 	}
 }
 
@@ -197,11 +208,19 @@ func (p *workspaceConfiguredProvider) WaitForReady(ctx context.Context, instance
 	return nil
 }
 
+func (p *instanceAwareStartProvider) StartWithInstance(ctx context.Context, instance *Instance) error {
+	p.startedWithInstance = append(p.startedWithInstance, instance.ID)
+	return p.mockTestProvider.Start(ctx, instance.ProviderID)
+}
+
 func TestNewManager(t *testing.T) {
 	config := ManagerConfig{
 		DefaultProvider: ProviderMock,
 		WorkerImage:     "test-image:latest",
-		GatewayAddress:  "localhost:8080",
+		WorkerImages: map[InferenceEngine]string{
+			EngineSGLang: "sglang-worker:v1",
+		},
+		GatewayAddress: "localhost:8080",
 	}
 
 	mgr := newTestManager(t, config)
@@ -214,6 +233,9 @@ func TestNewManager(t *testing.T) {
 	}
 	if mgr.workerImage != "test-image:latest" {
 		t.Errorf("expected test-image:latest, got %s", mgr.workerImage)
+	}
+	if got := mgr.workerImages[EngineSGLang]; got != "sglang-worker:v1" {
+		t.Errorf("expected cloned engine-specific image, got %q", got)
 	}
 }
 
@@ -297,6 +319,22 @@ func TestManagerProvision(t *testing.T) {
 			t.Errorf("expected test-instance, got %s", inst.Name)
 		}
 	})
+
+	t.Run("GetInstance returns clone", func(t *testing.T) {
+		inst, exists := mgr.GetInstance(instance.ID)
+		if !exists {
+			t.Fatal("instance should exist")
+		}
+		inst.Name = "mutated"
+
+		reloaded, exists := mgr.GetInstance(instance.ID)
+		if !exists {
+			t.Fatal("instance should still exist")
+		}
+		if reloaded.Name != "test-instance" {
+			t.Fatalf("expected tracked instance to remain unchanged, got %q", reloaded.Name)
+		}
+	})
 }
 
 func TestManagerProvisionWithDefaults(t *testing.T) {
@@ -321,6 +359,64 @@ func TestManagerProvisionWithDefaults(t *testing.T) {
 
 	if instance.Provider != ProviderMock {
 		t.Errorf("expected default provider mock, got %s", instance.Provider)
+	}
+}
+
+func TestManagerProvisionUsesEngineSpecificWorkerImage(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{
+		DefaultProvider: ProviderMock,
+		WorkerImage:     "default-worker:v1",
+		WorkerImages: map[InferenceEngine]string{
+			EngineSGLang: "sglang-worker:v2",
+		},
+	})
+	provider := newMockTestProvider()
+	mgr.RegisterProvider(provider)
+
+	req := &ProvisionRequest{
+		Name:     "sglang-test",
+		Provider: ProviderMock,
+		Engine:   EngineSGLang,
+		GPUType:  GPURTX4090,
+	}
+
+	if _, err := mgr.Provision(context.Background(), req); err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+	if provider.lastReq == nil {
+		t.Fatal("expected provider to receive provision request")
+	}
+	if provider.lastReq.DockerImage != "sglang-worker:v2" {
+		t.Fatalf("expected engine-specific image, got %q", provider.lastReq.DockerImage)
+	}
+}
+
+func TestManagerProvisionFallsBackToDefaultWorkerImage(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{
+		DefaultProvider: ProviderMock,
+		WorkerImage:     "default-worker:v1",
+		WorkerImages: map[InferenceEngine]string{
+			EngineSGLang: "sglang-worker:v2",
+		},
+	})
+	provider := newMockTestProvider()
+	mgr.RegisterProvider(provider)
+
+	req := &ProvisionRequest{
+		Name:     "vllm-test",
+		Provider: ProviderMock,
+		Engine:   EngineVLLM,
+		GPUType:  GPURTX4090,
+	}
+
+	if _, err := mgr.Provision(context.Background(), req); err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+	if provider.lastReq == nil {
+		t.Fatal("expected provider to receive provision request")
+	}
+	if provider.lastReq.DockerImage != "default-worker:v1" {
+		t.Fatalf("expected default worker image, got %q", provider.lastReq.DockerImage)
 	}
 }
 
@@ -444,6 +540,29 @@ func TestManagerStartStop(t *testing.T) {
 			t.Fatalf("expected 1 provider start call, got %d", len(provider.started))
 		}
 	})
+}
+
+func TestManagerStartUsesInstanceStarterWhenAvailable(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	provider := newInstanceAwareStartProvider()
+	mgr.RegisterProvider(provider)
+
+	instance := &Instance{
+		ID:         "inst-1",
+		ProviderID: "mock-inst-1",
+		Provider:   ProviderMock,
+		Status:     InstanceStatusStopped,
+		CreatedAt:  time.Now(),
+	}
+	provider.instances[instance.ID] = instance
+	mgr.instances[instance.ID] = instance
+
+	if err := mgr.Start(context.Background(), instance.ID); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if len(provider.startedWithInstance) != 1 || provider.startedWithInstance[0] != instance.ID {
+		t.Fatalf("expected StartWithInstance to be used, got %#v", provider.startedWithInstance)
+	}
 }
 
 func TestManagerStartRejectedForTerminatedInstance(t *testing.T) {
