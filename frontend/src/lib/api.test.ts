@@ -7,7 +7,11 @@ import {
   fetchWorkspaces,
   fetchWorkers,
   fetchModels,
+  fetchAgents,
   fetchStats,
+  createAgentRun,
+  fetchAgentRunDetail,
+  cancelAgentRun,
   fetchInstances,
   fetchOfferings,
   fetchProviders,
@@ -163,6 +167,96 @@ describe('API Functions', () => {
       await expect(fetchOfferings()).resolves.toHaveLength(1)
       await expect(fetchProviders()).resolves.toHaveLength(1)
       await expect(fetchCosts()).resolves.toEqual(expect.objectContaining({ current_hourly: 1.5 }))
+    })
+
+    it('fetchAgents/createAgentRun/fetchAgentRunDetail/cancelAgentRun should parse agent payloads', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            default_agent_id: 'hermes',
+            agents: [{ id: 'hermes', name: 'Hermes', description: 'ops assistant', default_max_steps: 8, tools: [] }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            run: {
+              id: 'run_1',
+              workspace_id: 'ws_alpha',
+              agent_id: 'hermes',
+              model: 'Qwen/Qwen2.5-7B-Instruct',
+              input: 'inspect workers',
+              status: 'queued',
+              max_steps: 8,
+              current_step: 0,
+              created_at: '2026-03-31T12:00:00Z',
+              updated_at: '2026-03-31T12:00:00Z',
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            run: {
+              id: 'run_1',
+              workspace_id: 'ws_alpha',
+              agent_id: 'hermes',
+              model: 'Qwen/Qwen2.5-7B-Instruct',
+              input: 'inspect workers',
+              status: 'succeeded',
+              max_steps: 8,
+              current_step: 2,
+              final_output: 'done',
+              created_at: '2026-03-31T12:00:00Z',
+              updated_at: '2026-03-31T12:00:02Z',
+            },
+            steps: [
+              {
+                id: 1,
+                run_id: 'run_1',
+                index: 0,
+                type: 'tool_call',
+                tool_name: 'list_workers',
+                payload: {},
+                created_at: '2026-03-31T12:00:01Z',
+              },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            run: {
+              id: 'run_1',
+              workspace_id: 'ws_alpha',
+              agent_id: 'hermes',
+              model: 'Qwen/Qwen2.5-7B-Instruct',
+              input: 'inspect workers',
+              status: 'canceled',
+              max_steps: 8,
+              current_step: 1,
+              created_at: '2026-03-31T12:00:00Z',
+              updated_at: '2026-03-31T12:00:01Z',
+            },
+          }),
+        })
+
+      await expect(fetchAgents()).resolves.toEqual(expect.objectContaining({
+        default_agent_id: 'hermes',
+        agents: [expect.objectContaining({ id: 'hermes' })],
+      }))
+      await expect(createAgentRun({
+        agent_id: 'hermes',
+        model: 'Qwen/Qwen2.5-7B-Instruct',
+        input: 'inspect workers',
+        max_steps: 8,
+      })).resolves.toEqual(expect.objectContaining({ id: 'run_1', status: 'queued' }))
+      await expect(fetchAgentRunDetail('run_1')).resolves.toEqual(expect.objectContaining({
+        run: expect.objectContaining({ id: 'run_1', status: 'succeeded' }),
+        steps: [expect.objectContaining({ type: 'tool_call', tool_name: 'list_workers' })],
+      }))
+      await expect(cancelAgentRun('run_1')).resolves.toEqual(expect.objectContaining({ id: 'run_1', status: 'canceled' }))
     })
 
     it('provision/start/stop/terminate should hit expected methods', async () => {

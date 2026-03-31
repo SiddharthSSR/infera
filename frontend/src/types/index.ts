@@ -88,6 +88,57 @@ export interface ChatCompletionResponse {
   };
 }
 
+export type PlaygroundMode = 'chat' | 'agent';
+
+export interface AgentToolDescriptor {
+  name: string;
+  description: string;
+}
+
+export interface AgentDescriptor {
+  id: string;
+  name: string;
+  description: string;
+  default_max_steps: number;
+  tools: AgentToolDescriptor[];
+}
+
+export type AgentRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
+export type AgentRunStepType = 'tool_call' | 'tool_result' | 'final' | 'error';
+
+export interface AgentRun {
+  id: string;
+  workspace_id: string;
+  created_by_key_id?: string;
+  agent_id: string;
+  model: string;
+  input: string;
+  status: AgentRunStatus;
+  max_steps: number;
+  current_step: number;
+  final_output?: string;
+  failure_reason?: string;
+  created_at: string;
+  updated_at: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+export interface AgentRunStep {
+  id: number;
+  run_id: string;
+  index: number;
+  type: AgentRunStepType;
+  tool_name?: string;
+  payload: unknown;
+  created_at: string;
+}
+
+export interface AgentRunDetail {
+  run: AgentRun;
+  steps: AgentRunStep[];
+}
+
 // GPU Provider Types
 
 export type ProviderType = 'e2e' | 'runpod' | 'vastai' | 'lambda' | 'mock';

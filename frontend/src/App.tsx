@@ -297,6 +297,9 @@ function AppContent() {
   // Chat state - persisted across page switches
   const [messages, setMessages] = useState<Message[]>([]);
   const [history, setHistory] = useState<PlaygroundHistoryEntry[]>([]);
+  const [playgroundMode, setPlaygroundMode] = useState<'chat' | 'agent'>('chat');
+  const [selectedAgentID, setSelectedAgentID] = useState('hermes');
+  const [agentMaxSteps, setAgentMaxSteps] = useState(8);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
@@ -333,6 +336,9 @@ function AppContent() {
   const handleLogout = useCallback(() => {
     setMessages([]);
     setHistory([]);
+    setPlaygroundMode('chat');
+    setSelectedAgentID('hermes');
+    setAgentMaxSteps(8);
     setSelectedModel('');
     setTemperature(0.7);
     setMaxTokens(2048);
@@ -361,6 +367,9 @@ function AppContent() {
       }
       setMessages([]);
       setHistory([]);
+      setPlaygroundMode('chat');
+      setSelectedAgentID('hermes');
+      setAgentMaxSteps(8);
       setSelectedModel('');
       setTemperature(0.7);
       setMaxTokens(2048);
@@ -482,6 +491,12 @@ function AppContent() {
     setMessages,
     history,
     setHistory,
+    playgroundMode,
+    setPlaygroundMode,
+    selectedAgentID,
+    setSelectedAgentID,
+    agentMaxSteps,
+    setAgentMaxSteps,
     selectedModel,
     setSelectedModel,
     temperature,
