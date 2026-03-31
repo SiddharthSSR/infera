@@ -20,6 +20,7 @@ import (
 	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/gateway"
 	"github.com/infera/infera/go/internal/providers"
+	_ "github.com/infera/infera/go/internal/providers/e2e"
 	"github.com/infera/infera/go/internal/providers/mock"
 	_ "github.com/infera/infera/go/internal/providers/runpod"
 	_ "github.com/infera/infera/go/internal/providers/vastai"
@@ -209,15 +210,16 @@ func main() {
 	authHandler.SetSecure(os.Getenv("INFERA_DEV_MODE") != "1")
 	gw.SetAuthHandler(authHandler)
 	instanceMgr.SetWorkspaceProviderConfigResolver(func(workspaceID string, providerType providers.ProviderType) (*providers.ProviderConfig, error) {
-		apiKey, apiSecret, endpoint, err := authStore.ResolveWorkspaceProviderConfig(workspaceID, string(providerType))
+		apiKey, apiSecret, endpoint, options, err := authStore.ResolveWorkspaceProviderConfig(workspaceID, string(providerType))
 		if err != nil {
 			return nil, err
 		}
 		return &providers.ProviderConfig{
-			Type:      providerType,
-			APIKey:    apiKey,
-			APISecret: apiSecret,
-			Endpoint:  endpoint,
+			Type:        providerType,
+			APIKey:      apiKey,
+			APISecret:   apiSecret,
+			Endpoint:    endpoint,
+			DefaultOpts: options,
 		}, nil
 	})
 

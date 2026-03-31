@@ -16,6 +16,7 @@ export interface WorkspaceActivityItem {
 }
 
 function providerLabel(provider: string): string {
+  if (provider === 'e2e') return 'E2E TIR';
   if (provider === 'runpod') return 'RunPod';
   if (provider === 'vastai') return 'Vast.ai';
   return provider;

@@ -20,7 +20,7 @@ import { useAuthSession } from '../lib/auth-context';
 
 const FAMILY_OPTIONS = ['mistral', 'llama', 'qwen', 'phi', 'gemma', 'deepseek', 'falcon', 'mixtral', 'yi', 'command-r'];
 const QUANT_OPTIONS = ['none', 'GPTQ', 'AWQ', 'GGUF', 'FP8', 'INT8', 'INT4'];
-const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai'] as const;
+const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai', 'e2e'] as const;
 const RECOMMENDED_MODEL_IDS = [
   'Qwen/Qwen3-4B-Thinking-2507',
   'moonshotai/Kimi-K2.5-Instruct',

@@ -90,7 +90,7 @@ export interface ChatCompletionResponse {
 
 // GPU Provider Types
 
-export type ProviderType = 'runpod' | 'vastai' | 'lambda' | 'mock';
+export type ProviderType = 'e2e' | 'runpod' | 'vastai' | 'lambda' | 'mock';
 export type KnownGPUType = 'RTX_4090' | 'RTX_4080' | 'A100_40GB' | 'A100_80GB' | 'H100' | 'L40S';
 export type GPUType = KnownGPUType | (string & {});
 export type InstanceStatus = 'pending' | 'provisioning' | 'running' | 'stopping' | 'stopped' | 'terminating' | 'terminated' | 'error';

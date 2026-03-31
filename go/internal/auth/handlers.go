@@ -184,9 +184,10 @@ func (h *Handler) handleWorkspaceProviderByID(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusOK, map[string]interface{}{"provider": config})
 	case http.MethodPut:
 		var req struct {
-			APIKey    string `json:"api_key"`
-			APISecret string `json:"api_secret"`
-			Endpoint  string `json:"endpoint"`
+			APIKey    string            `json:"api_key"`
+			APISecret string            `json:"api_secret"`
+			Endpoint  string            `json:"endpoint"`
+			Options   map[string]string `json:"options"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
@@ -194,7 +195,7 @@ func (h *Handler) handleWorkspaceProviderByID(w http.ResponseWriter, r *http.Req
 			})
 			return
 		}
-		config, err := h.store.UpsertWorkspaceProviderConfig(workspaceID, providerName, req.APIKey, req.APISecret, req.Endpoint)
+		config, err := h.store.UpsertWorkspaceProviderConfig(workspaceID, providerName, req.APIKey, req.APISecret, req.Endpoint, req.Options)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 				"error": map[string]string{"message": err.Error()},

@@ -34,10 +34,73 @@ import { buildWorkspaceActivityItems } from '../lib/workspaceActivity';
 const assignableInviteRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
 const serviceAccountRoles = ['operator', 'developer', 'read_only', 'billing'] as const;
 const workspaceMemberRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
-const configurableProviders = [
+type ProviderOptionField = {
+  key: string;
+  label: string;
+  placeholder: string;
+  defaultValue?: string;
+  required?: boolean;
+};
+
+type ConfigurableProvider = {
+  id: 'runpod' | 'vastai' | 'e2e';
+  name: string;
+  endpointPlaceholder: string;
+  apiSecretLabel?: string;
+  apiSecretPlaceholder?: string;
+  optionFields?: ProviderOptionField[];
+};
+
+const configurableProviders: ConfigurableProvider[] = [
   { id: 'runpod', name: 'RunPod', endpointPlaceholder: 'https://api.runpod.io/graphql' },
   { id: 'vastai', name: 'Vast.ai', endpointPlaceholder: 'Optional custom endpoint' },
-] as const;
+  {
+    id: 'e2e',
+    name: 'E2E TIR',
+    endpointPlaceholder: 'https://tir.e2enetworks.com/api/v1',
+    apiSecretLabel: 'AUTH TOKEN',
+    apiSecretPlaceholder: 'Write-only auth token',
+    optionFields: [
+      { key: 'active_iam', label: 'ACTIVE IAM', placeholder: 'Required TIR IAM identifier', required: true },
+      { key: 'team_id', label: 'TEAM ID', placeholder: 'Required team id', required: true },
+      { key: 'project_id', label: 'PROJECT ID', placeholder: 'Required project id', required: true },
+      { key: 'location', label: 'LOCATION', placeholder: 'Delhi', defaultValue: 'Delhi' },
+      { key: 'image_type', label: 'IMAGE TYPE', placeholder: 'public', defaultValue: 'public' },
+      { key: 'enable_ssh', label: 'ENABLE SSH', placeholder: 'true or false' },
+      { key: 'ingress_host', label: 'INGRESS HOST', placeholder: 'Optional routable host override' },
+      { key: 'worker_address', label: 'WORKER ADDRESS', placeholder: 'Optional host:port override' },
+    ],
+  },
+];
+
+function buildProviderOptionDefaults(providerId: ConfigurableProvider['id']): Record<string, string> {
+  const provider = configurableProviders.find((candidate) => candidate.id === providerId);
+  return Object.fromEntries(
+    (provider?.optionFields || [])
+      .filter((field) => field.defaultValue != null)
+      .map((field) => [field.key, field.defaultValue ?? ''] as const),
+  );
+}
+
+function validateProviderConfigDraft(
+  provider: ConfigurableProvider,
+  apiKey: string,
+  apiSecret: string,
+  options: Record<string, string>,
+): string | null {
+  if (!apiKey.trim()) {
+    return 'Provider API key is required.';
+  }
+  if (provider.id === 'e2e' && !apiSecret.trim()) {
+    return 'E2E auth token is required.';
+  }
+  for (const field of provider.optionFields || []) {
+    if (field.required && !options[field.key]?.trim()) {
+      return `${field.label} is required for ${provider.name}.`;
+    }
+  }
+  return null;
+}
 
 function formatDate(dateStr?: string | null) {
   if (!dateStr) return 'Never';
@@ -185,10 +248,11 @@ export function WorkspaceAdmin() {
   const [inviteRole, setInviteRole] = useState<typeof assignableInviteRoles[number]>('developer');
   const [newServiceAccountName, setNewServiceAccountName] = useState('');
   const [newServiceAccountRole, setNewServiceAccountRole] = useState<typeof serviceAccountRoles[number]>('operator');
-  const [selectedProvider, setSelectedProvider] = useState<typeof configurableProviders[number]['id']>('runpod');
+  const [selectedProvider, setSelectedProvider] = useState<ConfigurableProvider['id']>('runpod');
   const [providerAPIKey, setProviderAPIKey] = useState('');
   const [providerAPISecret, setProviderAPISecret] = useState('');
   const [providerEndpoint, setProviderEndpoint] = useState('');
+  const [providerOptions, setProviderOptions] = useState<Record<string, string>>(buildProviderOptionDefaults('runpod'));
   const [memberRoles, setMemberRoles] = useState<Record<string, string>>({});
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [createdInviteToken, setCreatedInviteToken] = useState<string | null>(null);
@@ -280,6 +344,14 @@ export function WorkspaceAdmin() {
       };
     });
   }, [providerConfigs, providerStatuses]);
+  useEffect(() => {
+    const existing = providerConfigs.find((config) => config.provider === selectedProvider);
+    setProviderEndpoint(existing?.endpoint || '');
+    setProviderOptions({
+      ...buildProviderOptionDefaults(selectedProvider),
+      ...(existing?.options || {}),
+    });
+  }, [providerConfigs, selectedProvider]);
   const memberCounts = useMemo(() => ({
     total: members.length,
     admins: members.filter((record) => record.role === 'admin' || record.role === 'owner').length,
@@ -563,8 +635,14 @@ export function WorkspaceAdmin() {
   };
 
   const handleSaveProviderConfig = async () => {
-    if (!providerAPIKey.trim()) {
-      toast.error('Provider API key is required.');
+    const validationError = validateProviderConfigDraft(
+      selectedProviderMeta,
+      providerAPIKey,
+      providerAPISecret,
+      providerOptions,
+    );
+    if (validationError) {
+      toast.error(validationError);
       return;
     }
     setSavingProviderConfig(true);
@@ -573,10 +651,10 @@ export function WorkspaceAdmin() {
         api_key: providerAPIKey.trim(),
         api_secret: providerAPISecret.trim() || undefined,
         endpoint: providerEndpoint.trim() || undefined,
+        options: providerOptions,
       });
       setProviderAPIKey('');
       setProviderAPISecret('');
-      setProviderEndpoint('');
       setProviderConfigs(await fetchWorkspaceProviderConfigs(workspaceId));
       toast.success(`${selectedProviderMeta.name} config saved.`);
     } catch (error) {
@@ -919,7 +997,7 @@ export function WorkspaceAdmin() {
               <div style={{ display: 'grid', gap: '1rem' }}>
                 <div>
                   <div className="label-text">PROVIDER</div>
-                  <select className="control-input" value={selectedProvider} onChange={(e) => setSelectedProvider(e.target.value as typeof configurableProviders[number]['id'])}>
+                  <select className="control-input" value={selectedProvider} onChange={(e) => setSelectedProvider(e.target.value as ConfigurableProvider['id'])}>
                     {configurableProviders.map((provider) => (
                       <option key={provider.id} value={provider.id}>{provider.name}</option>
                     ))}
@@ -930,15 +1008,31 @@ export function WorkspaceAdmin() {
                   <input className="control-input" type="password" value={providerAPIKey} onChange={(e) => setProviderAPIKey(e.target.value)} placeholder="Write-only" />
                 </div>
                 <div>
-                  <div className="label-text">API SECRET</div>
-                  <input className="control-input" type="password" value={providerAPISecret} onChange={(e) => setProviderAPISecret(e.target.value)} placeholder="Optional write-only secret" />
+                  <div className="label-text">{selectedProviderMeta.apiSecretLabel || 'API SECRET'}</div>
+                  <input className="control-input" type="password" value={providerAPISecret} onChange={(e) => setProviderAPISecret(e.target.value)} placeholder={selectedProviderMeta.apiSecretPlaceholder || 'Optional write-only secret'} />
                 </div>
                 <div>
                   <div className="label-text">ENDPOINT</div>
                   <input className="control-input" value={providerEndpoint} onChange={(e) => setProviderEndpoint(e.target.value)} placeholder={selectedProviderMeta.endpointPlaceholder} />
                 </div>
+                {(selectedProviderMeta.optionFields || []).map((field) => (
+                  <div key={field.key}>
+                    <div className="label-text">{field.label}</div>
+                    <input
+                      className="control-input"
+                      value={providerOptions[field.key] || ''}
+                      onChange={(e) => setProviderOptions((current) => ({ ...current, [field.key]: e.target.value }))}
+                      placeholder={field.placeholder}
+                    />
+                  </div>
+                ))}
+                {selectedProvider === 'e2e' && (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.6 }}>
+                    E2E requires an API key, auth token, and the target IAM/team/project identifiers. Leave endpoint blank to use the default TIR API base, and keep location set unless your project is pinned elsewhere.
+                  </div>
+                )}
                 <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                  Stored secrets are never shown again after save. Update a provider by submitting a new key/secret for the selected provider.
+                  Stored secrets are never shown again after save. Update a provider by submitting a new key or token for the selected provider. Non-secret options reload when you revisit the provider.
                 </div>
                 <div>
                   <button className="btn-primary" disabled={savingProviderConfig} onClick={handleSaveProviderConfig}>
