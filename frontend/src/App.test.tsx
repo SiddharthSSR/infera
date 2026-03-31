@@ -157,12 +157,12 @@ describe('App workspace switcher', () => {
     const openButton = await screen.findByLabelText('Open navigation');
     fireEvent.click(openButton);
 
-    expect(screen.getByRole('link', { name: 'MODELS' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Models' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText('Close navigation'));
 
     await waitFor(() => {
-      expect(screen.queryByRole('link', { name: 'MODELS' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'Models' })).not.toBeInTheDocument();
     });
   });
 
