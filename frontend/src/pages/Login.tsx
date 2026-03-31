@@ -81,96 +81,51 @@ export function Login({ onAuthenticated }: LoginProps) {
     }
   };
 
+  const featureHighlights = [
+    { label: 'OPEN SOURCE', desc: 'Run anywhere: cloud, bare metal, or hybrid. Keep the control plane in your hands.' },
+    { label: 'OPENAI COMPATIBLE', desc: 'Point existing clients at your Infera base URL and keep the rest of the integration surface familiar.' },
+    { label: 'MULTI-PROVIDER', desc: 'Provision across provider backends while keeping one workspace-level operator experience.' },
+  ];
+
   return (
     <div className="login-page">
       <div className="login-shell animate-fade-in">
-      {/* Left Panel — Branding */}
-      <div className="login-brand-panel" style={{
-        backgroundColor: 'var(--bg-accent)',
-        borderRight: 'var(--grid-line)',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'space-between',
-        padding: '3rem',
-      }}>
-        <div>
-          <div className="display-text" style={{
-            fontSize: '7rem',
-            textAlign: 'left',
-            border: 'none',
-            padding: 0,
-            lineHeight: 0.85,
-          }}>
-            INFERA
+        <section className="login-brand-panel">
+          <div className="login-brand-content">
+            <div className="login-kicker">Inference control plane</div>
+            <h1 className="login-brand-title">INFERA</h1>
+            <p className="login-brand-subtitle">
+              Self-hosted inference infrastructure with a product-grade operator surface.
+            </p>
           </div>
-          <div style={{
-            fontSize: '1.05rem',
-            color: 'var(--text-secondary)',
-            marginTop: '1.5rem',
-            fontWeight: 400,
-            letterSpacing: '-0.01em',
-          }}>
-            Self-hosted inference at scale
+
+          <div className="login-feature-list">
+            {featureHighlights.map((feature) => (
+              <div key={feature.label} className="login-feature-item">
+                <div className="login-feature-title">{feature.label}</div>
+                <div className="login-feature-copy">{feature.desc}</div>
+              </div>
+            ))}
           </div>
-        </div>
 
-        {/* Feature highlights */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {[
-            { label: 'OPEN SOURCE', desc: 'Run anywhere — cloud, on-prem, or hybrid. No vendor lock-in.' },
-            { label: 'OPENAI COMPATIBLE', desc: 'Drop-in replacement. Change base_url and use your inf_ key.' },
-            { label: 'MULTI-PROVIDER', desc: 'Provision workers across RunPod, Lambda, and bare metal.' },
-          ].map((f, i) => (
-            <div key={f.label} style={{
-              padding: '1.25rem 0',
-              borderTop: i > 0 ? 'var(--grid-line)' : 'none',
-            }}>
-              <div className="label-text" style={{ marginBottom: '0.4rem' }}>{f.label}</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{f.desc}</div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-        }}>
-          <span className="label-text mono" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }}>
+          <div className="login-brand-footer">
+            <span className="label-text mono">
             {healthData?.version ? `v${healthData.version}` : 'v0.1.0'}
-          </span>
-          <span className="label-text" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }}>
-            OPEN SOURCE INFERENCE GATEWAY
-          </span>
-        </div>
-      </div>
+            </span>
+            <span className="label-text">Open source inference gateway</span>
+          </div>
+        </section>
 
-      {/* Right Panel — Connect Form */}
-      <div className="login-form-panel" style={{
-        backgroundColor: 'var(--bg-paper)',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        padding: '3rem',
-      }}>
-        <div style={{ maxWidth: 380, width: '100%', margin: '0 auto' }}>
-          {/* Gateway Status */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            marginBottom: '3rem',
-          }}>
+        <section className="login-form-panel">
+          <div className="login-form-card">
+            <div className="login-status-row">
             <span
               className={health === 'offline' ? 'status-dot inactive' : 'status-dot'}
               style={health === 'checking' ? {
                 animation: 'skeleton-pulse 1.5s ease-in-out infinite',
               } : undefined}
             />
-            <span className="mono" style={{
-              fontSize: '0.75rem',
-              color: 'var(--text-secondary)',
-            }}>
+              <span className="mono login-status-copy">
               {health === 'checking' && 'Checking gateway...'}
               {health === 'online' && (
                 <>
@@ -184,68 +139,60 @@ export function Login({ onAuthenticated }: LoginProps) {
                 </>
               )}
               {health === 'offline' && 'Gateway unreachable'}
-            </span>
-          </div>
+              </span>
+            </div>
 
-          {/* Section Header */}
-          <div className="label-text" style={{ marginBottom: '2rem' }}>
-            CONNECT
-          </div>
+            <div className="login-form-copy">
+              <div className="label-text">Connect</div>
+              <h2 className="login-form-title">Sign in with an admin key</h2>
+              <p className="login-form-description">
+                Enter a valid admin key to open the workspace console and manage models, nodes, access, and usage.
+              </p>
+            </div>
 
-          {/* Form */}
-          <form onSubmit={handleSubmit}>
-            <div className="label-text" style={{ marginBottom: '0.75rem' }}>API KEY</div>
-            <input
-              type="password"
-              className="control-input"
-              placeholder="inf_..."
-              value={key}
-              onChange={e => { setKey(e.target.value); setError(''); }}
-              autoFocus
-              style={{ marginBottom: '1.5rem' }}
-            />
+            <form onSubmit={handleSubmit} className="login-form-fields">
+              <div className="login-field">
+                <div className="label-text">API key</div>
+                <input
+                  type="password"
+                  className="control-input"
+                  placeholder="inf_..."
+                  value={key}
+                  onChange={e => { setKey(e.target.value); setError(''); }}
+                  autoFocus
+                  autoComplete="current-password"
+                />
+              </div>
 
             {error && (
-              <div style={{
-                color: 'var(--color-error)',
-                fontSize: '0.85rem',
-                marginBottom: '1.5rem',
-              }}>
-                {error}
-              </div>
+                <div className="login-error">{error}</div>
             )}
 
-            <button
-              className="btn-primary"
-              type="submit"
-              disabled={loading || connected}
-              style={{ width: '100%', padding: '0.8rem' }}
-            >
-              {connected ? (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                  <span className="status-dot" style={{ width: 6, height: 6 }} />
-                  CONNECTED
-                </span>
-              ) : loading ? 'CONNECTING...' : 'CONNECT'}
-            </button>
-          </form>
+              <button
+                className="btn-primary login-submit"
+                type="submit"
+                disabled={loading || connected}
+              >
+                {connected ? (
+                  <span className="login-submit-state">
+                    <span className="status-dot" />
+                    Connected
+                  </span>
+                ) : loading ? 'Connecting...' : 'Connect'}
+              </button>
+            </form>
 
-          {/* Help Text */}
-          <div style={{
-            marginTop: '3rem',
-            fontSize: '0.8rem',
-            color: 'var(--text-secondary)',
-            lineHeight: 1.6,
-          }}>
-            Enter your API key to access the dashboard. Keys are generated by your gateway admin.
-            <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-              <Link className="nav-link" to="/docs">API DOCS</Link>
-              <Link className="nav-link" to="/getting-started">GETTING STARTED</Link>
+            <div className="login-help">
+              <div>
+                Keys are generated by your gateway admin. The session is stored server-side and scoped to the workspace attached to the key you use.
+              </div>
+              <div className="login-help-links">
+                <Link className="nav-link" to="/docs">API Docs</Link>
+                <Link className="nav-link" to="/getting-started">Getting Started</Link>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
-
+        </section>
       </div>
     </div>
   );

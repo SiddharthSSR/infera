@@ -50,7 +50,7 @@ describe('Login', () => {
     })
 
     expect(screen.getByText('INFERA')).toBeInTheDocument()
-    expect(screen.getByText('API KEY')).toBeInTheDocument()
+    expect(screen.getByText('API key')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('inf_...')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /connect/i })).toBeInTheDocument()
   })

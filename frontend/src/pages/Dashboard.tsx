@@ -589,7 +589,7 @@ export function Dashboard() {
 
   const dashboardGuideCopy = liveWorkspaceOperations.show
     ? 'Use workspace state for the top-level health signal, live operations for day-two serving health, and the attention queue for what needs operator action right now.'
-    : 'Serving verified means runtime state looks healthy and the latest worker heartbeat is fresh. Inference verified means a real chat-completions request succeeded. Use the attention queue for what needs action now, then use recent deployment activity to see what changed most recently.';
+    : 'Use the attention queue for what needs action now, then use recent deployment activity to see what changed most recently.';
 
   const handleDashboardAction = (action: DashboardAction) => {
     switch (action) {
@@ -711,7 +711,7 @@ export function Dashboard() {
                 <button className="action-btn" onClick={() => handleDashboardAction(workspaceMaturity.action)}>
                   {workspaceMaturity.actionLabel}
                 </button>
-                {workspaceMaturity.state !== 'serving_verified' && (
+                {workspaceMaturity.state !== 'serving_verified' && workspaceMaturity.action !== 'open_workspace' && (
                   <button className="action-btn" onClick={() => navigate('/workspace')}>
                     OPEN WORKSPACE
                   </button>

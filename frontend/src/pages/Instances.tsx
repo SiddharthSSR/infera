@@ -728,7 +728,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
                 >
                   <div className="label-text" style={{ marginBottom: '0.4rem' }}>PRESET CAPACITY GAP</div>
                   <div style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                    {presetCapacityWarning(selectedPreset)} Open clusters after more capacity appears, or choose a smaller reasoning model if you need an immediate single-node deployment.
+                    {presetCapacityWarning(selectedPreset)} Open Nodes after more capacity appears, or choose a smaller reasoning model if you need an immediate single-node deployment.
                   </div>
                 </div>
               )}
@@ -1248,7 +1248,7 @@ export function Instances() {
       <div className="grid-row">
         <div className="cell" style={{ gridColumn: 'span 4' }}>
           <div className="help-callout">
-            <div className="label-text">CLUSTER STATUS GUIDE</div>
+            <div className="label-text">NODE STATUS GUIDE</div>
             <div className="help-callout-copy">
               <strong>Connected provider</strong> means the workspace credentials are valid and the provider can return live status. <strong>Serving verified</strong> means the worker heartbeat is fresh and runtime looks ready. <strong>Inference verified</strong> means a real chat-completions request passed. Treat the latest deployment banner as the fastest path from provisioned node to confirmed serving.
             </div>
@@ -1493,7 +1493,7 @@ export function Instances() {
 
         {/* Sidebar */}
         <div className="cell instances-sidebar-cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
-          <div className="label-text" style={{ marginBottom: '2rem' }}>CLUSTER INFO</div>
+          <div className="label-text" style={{ marginBottom: '2rem' }}>WORKSPACE INFRASTRUCTURE</div>
 
           <div style={{ marginBottom: '2.5rem' }}>
             <div className="label-text">PROVIDERS</div>
@@ -1535,7 +1535,7 @@ export function Instances() {
           </div>
 
           <div style={{ marginTop: '4rem', borderTop: '1px solid var(--border-color)', paddingTop: '2rem' }}>
-            <div className="label-text">CLUSTER HEALTH</div>
+            <div className="label-text">PLATFORM HEALTH</div>
             <div style={{ marginTop: '1rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
                 <span>Gateway</span>

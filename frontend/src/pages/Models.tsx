@@ -584,33 +584,22 @@ export function Models() {
   };
 
   return (
-    <div className="animate-fade-in">
-      <div style={{
-        padding: isMobile ? '0.95rem 1rem' : '1rem 2rem',
-        display: 'flex',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '1rem',
-        alignItems: 'center',
-        borderBottom: 'var(--grid-line)',
-      }}>
-        <div style={{ display: 'grid', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+    <div className="models-page animate-fade-in">
+      <div className="models-toolbar">
+        <div className="models-toolbar-copy">
+          <label className="models-search-shell">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
             <input
               type="text"
+              className="models-search-input"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               placeholder="Filter by model name or provider..."
-              style={{
-                background: 'transparent', border: 'none', fontFamily: 'var(--font-main)',
-                fontSize: '0.9rem', width: isMobile ? 'min(100%, 92vw)' : 'min(320px, 70vw)', outline: 'none', color: 'var(--text-primary)',
-              }}
             />
-          </div>
-          <div className="chip-row">
+          </label>
+          <div className="chip-row models-summary-strip">
             <span className="badge">{displayModels.length} REGISTRY MODELS</span>
             <span className="badge">{activeCount} ACTIVE</span>
             <span className="badge">{readyCount} READY TO DEPLOY</span>
@@ -694,7 +683,7 @@ export function Models() {
       )}
 
       {isMobile ? (
-        <div className="mobile-data-list" style={{ padding: '1rem' }}>
+        <div className="mobile-data-list models-list-section">
           {filtered.length === 0 ? (
             <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
               {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
@@ -816,7 +805,7 @@ export function Models() {
           )}
         </div>
       ) : (
-        <div style={{ padding: '1rem 1.25rem 1.25rem' }}>
+        <div className="models-list-section">
           <div className="stack-list">
             {filtered.length === 0 ? (
               <div className="stack-item" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>

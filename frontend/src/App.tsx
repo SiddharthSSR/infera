@@ -38,27 +38,68 @@ const queryClient = new QueryClient({
 
 // Navigation items — primary (always visible) and secondary (utility)
 const primaryNavItems = [
-  { path: '/', label: 'DASHBOARD' },
-  { path: '/models', label: 'MODELS' },
-  { path: '/instances', label: 'NODES' },
-  { path: '/playground', label: 'PLAYGROUND' },
+  { path: '/', label: 'Dashboard' },
+  { path: '/models', label: 'Models' },
+  { path: '/instances', label: 'Nodes' },
+  { path: '/playground', label: 'Playground' },
 ];
 
 const secondaryNavItems = [
-  { path: '/logs', label: 'LOGS' },
-  { path: '/api-keys', label: 'API KEYS' },
-  { path: '/workspace', label: 'SETTINGS' },
+  { path: '/logs', label: 'Logs' },
+  { path: '/api-keys', label: 'API Keys' },
+  { path: '/workspace', label: 'Settings' },
 ];
 
-// Page display titles
-const pageTitles: Record<string, string> = {
-  '/': 'INFERENCE',
-  '/models': 'MODELS',
-  '/instances': 'NODES',
-  '/playground': 'PLAYGROUND',
-  '/logs': 'LOGS',
-  '/api-keys': 'API KEYS',
-  '/workspace': 'SETTINGS',
+type PageMeta = {
+  title: string;
+  navLabel: string;
+  eyebrow: string;
+  description: string;
+};
+
+const pageMeta: Record<string, PageMeta> = {
+  '/': {
+    title: 'Inference',
+    navLabel: 'Inference',
+    eyebrow: 'Workspace command center',
+    description: 'Track deployment readiness, serving health, usage, and the next action for the active workspace.',
+  },
+  '/models': {
+    title: 'Models',
+    navLabel: 'Models',
+    eyebrow: 'Registry and serving state',
+    description: 'Curate the model catalog, inspect verification freshness, and move from registry to live serving without losing runtime context.',
+  },
+  '/instances': {
+    title: 'Nodes',
+    navLabel: 'Nodes',
+    eyebrow: 'Infrastructure operations',
+    description: 'Provision, inspect, and recover the infrastructure that runs your serving workloads.',
+  },
+  '/playground': {
+    title: 'Playground',
+    navLabel: 'Playground',
+    eyebrow: 'Live request testing',
+    description: 'Run real requests against the workspace and inspect output behavior, latency, and model response quality.',
+  },
+  '/logs': {
+    title: 'Logs',
+    navLabel: 'Logs',
+    eyebrow: 'Operational history',
+    description: 'Review runtime events, request traces, and recent operational signals without leaving the control surface.',
+  },
+  '/api-keys': {
+    title: 'API Keys',
+    navLabel: 'API Keys',
+    eyebrow: 'Access and automation',
+    description: 'Manage access keys for people, services, and integrations while keeping scope and ownership clear.',
+  },
+  '/workspace': {
+    title: 'Workspace',
+    navLabel: 'Settings',
+    eyebrow: 'Admin and configuration',
+    description: 'Configure providers, quota, memberships, and invitations for the active workspace.',
+  },
 };
 
 // Top Navigation
@@ -67,6 +108,7 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
   const isMobile = useIsMobile(900);
   const { session, availableWorkspaces, switchWorkspace, switchingWorkspace } = useAuthSession();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const currentPage = pageMeta[location.pathname];
   const workspaceNavLabel = session?.workspace?.slug
     ? session.workspace.slug.replace(/[-_]+/g, ' ').toUpperCase()
     : session?.workspace?.name?.toUpperCase();
@@ -156,10 +198,8 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
       <nav className="top-nav top-nav-mobile">
         <div className="top-nav-mobile-bar">
           <div className="nav-brand-block">
-            <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
-            <div className="nav-mobile-route-label">
-              {(pageTitles[location.pathname] || 'INFERA').replace(/_/g, ' ')}
-            </div>
+            <div className="nav-brand-mark">INFERA.AI</div>
+            <div className="nav-mobile-route-label">{currentPage?.navLabel || 'Infera'}</div>
           </div>
           <div className="nav-mobile-utility">
             <div className="nav-group nav-auth-group nav-auth-group-mobile">
@@ -188,7 +228,10 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
 
   return (
     <nav className="top-nav">
-      <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
+      <div className="nav-brand-block nav-brand-block-desktop">
+        <div className="nav-brand-mark">INFERA.AI</div>
+        <div className="nav-brand-caption">Inference control plane</div>
+      </div>
       <div className="nav-group nav-links-group">
         {primaryNavItems.map((item, i) => (
           <span key={item.path} className="contents">
@@ -218,7 +261,7 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
           ))}
         </span>
       </div>
-      <div className="nav-group nav-auth-group" style={{ gap: '1rem' }}>
+      <div className="nav-group nav-auth-group">
         {workspaceUtility}
       </div>
     </nav>
@@ -424,7 +467,12 @@ function AppContent() {
     );
   }
 
-  const pageTitle = pageTitles[location.pathname] || 'INFERA';
+  const currentPage = pageMeta[location.pathname] ?? {
+    title: 'Infera',
+    navLabel: 'Infera',
+    eyebrow: 'Workspace console',
+    description: 'Monitor the platform, operating state, and user-facing surfaces from one place.',
+  };
   const docsRoutes = ['/docs', '/getting-started'];
   const hideAppChrome = docsRoutes.includes(location.pathname);
   const hideDisplayHeader = hideAppChrome || location.pathname === '/playground';
@@ -457,7 +505,11 @@ function AppContent() {
       <div className="app-shell app-shell-auth">
         {!hideAppChrome && <TopNav onLogout={handleLogout} />}
         {!hideDisplayHeader && (
-          <header className="display-text">{pageTitle}</header>
+          <header className="page-header">
+            <div className="page-header-eyebrow">{currentPage.eyebrow}</div>
+            <div className="page-header-title">{currentPage.title}</div>
+            <p className="page-header-description">{currentPage.description}</p>
+          </header>
         )}
         <Suspense fallback={<RouteLoader />}>
           <Routes>
