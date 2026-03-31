@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/infera/infera/go/internal/agents"
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/deployments"
@@ -235,6 +236,19 @@ func main() {
 	} else {
 		defer deploymentStore.Close()
 		gw.SetDeploymentStore(deploymentStore)
+	}
+
+	agentStore, err := agents.NewStore("data/agents.db")
+	if err != nil {
+		log.Warn("failed to initialize agents store", slog.String("error", err.Error()))
+	} else {
+		defer agentStore.Close()
+		agentRuntime, err := gw.NewAgentsRuntime(agentStore)
+		if err != nil {
+			log.Warn("failed to initialize agents runtime", slog.String("error", err.Error()))
+		} else {
+			gw.SetAgentRuntime(agentRuntime)
+		}
 	}
 
 	// Handle shutdown

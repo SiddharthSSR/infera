@@ -47,15 +47,7 @@ func (h *InstanceHandlers) handleInstances(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	current := auth.KeyFromContext(r.Context())
-	instances := h.manager.ListInstances()
-	if current != nil && effectiveWorkspaceID(current) != auth.DefaultWorkspaceID {
-		instances = h.manager.ListInstancesByWorkspace(effectiveWorkspaceID(current))
-	}
-	response := make([]map[string]interface{}, 0, len(instances))
-	for _, inst := range instances {
-		response = append(response, instanceToMap(inst))
-	}
+	response := h.listInstanceEntriesForWorkspace(currentWorkspaceID(r))
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"instances": response, "total": len(response)})
 }
@@ -246,7 +238,7 @@ func (h *InstanceHandlers) handleDeployments(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	attempts, err := h.deploymentStore.ListAttempts(currentWorkspaceID(r), 25)
+	attempts, err := h.listDeploymentEntries(currentWorkspaceID(r), 25)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "deployment_history_failed", "Failed to load deployment history")
 		return
@@ -392,18 +384,7 @@ func (h *InstanceHandlers) handleProviders(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	statuses := h.manager.GetProviderStatusForWorkspace(r.Context(), currentWorkspaceID(r))
-
-	response := make([]map[string]interface{}, 0, len(statuses))
-	for _, s := range statuses {
-		response = append(response, map[string]interface{}{
-			"provider": s.Provider, "connected": s.Connected, "account_id": s.AccountID,
-			"balance": s.Balance, "active_instances": s.ActiveCount,
-			"quota_limit": s.QuotaLimit, "error": s.ErrorMessage, "error_code": s.ErrorCode,
-			"capabilities": s.Capabilities,
-		})
-	}
-
+	response := h.listProviderEntries(r.Context(), currentWorkspaceID(r))
 	writeJSON(w, http.StatusOK, map[string]interface{}{"providers": response})
 }
 
