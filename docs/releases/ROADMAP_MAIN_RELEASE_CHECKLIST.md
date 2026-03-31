@@ -42,7 +42,7 @@ These should be confirmed before merging `roadmap` into `main`:
 
 1. Pin the production worker image.
    - Confirm [deploy/docker/Dockerfile.worker.vllm](/Users/siddharthsingh/codingtensor/infera/deploy/docker/Dockerfile.worker.vllm) has produced the intended image.
-   - Set `INFERA_WORKER_IMAGE` in production to a pinned tag or digest, not `latest`.
+   - Set `INFERA_WORKER_IMAGE` or the engine-specific `INFERA_WORKER_IMAGE_<ENGINE>` values in production to pinned tags or digests, not `latest`.
 
 2. Confirm required production env values.
    Required by [docker-compose.prod.yml](/Users/siddharthsingh/codingtensor/infera/docker-compose.prod.yml):
@@ -50,7 +50,11 @@ These should be confirmed before merging `roadmap` into `main`:
    - `INFERA_ALLOWED_ORIGINS`
    - `INFERA_GATEWAY_ADDRESS`
    - `INFERA_WORKER_SHARED_TOKEN`
-   - `INFERA_WORKER_IMAGE`
+   - at least one of:
+     - `INFERA_WORKER_IMAGE`
+     - `INFERA_WORKER_IMAGE_VLLM`
+     - `INFERA_WORKER_IMAGE_SGLANG`
+     - `INFERA_WORKER_IMAGE_TENSORRT_LLM`
    - `GRAFANA_ADMIN_USER`
    - `GRAFANA_ADMIN_PASSWORD`
    - `ALERT_EMAIL_TO`
@@ -135,7 +139,7 @@ Use this immediately before opening the final `roadmap -> main` PR or merge:
 - [ ] Go validation pass is green
 - [ ] frontend tests and production build are green
 - [ ] production compose renders with real env
-- [ ] worker image tag/digest is pinned
+- [ ] worker image tag/digest is pinned globally or per engine
 - [ ] canary deployment passed
 - [ ] release notes below are adjusted for the final version number
 - [ ] tag plan is prepared

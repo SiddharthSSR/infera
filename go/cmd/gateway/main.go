@@ -67,10 +67,16 @@ func main() {
 	r := router.New(routerConfig)
 
 	// Create instance manager
-	// Prefer an explicitly pinned worker image for reproducible warm restarts.
+	// Prefer explicitly pinned worker images for reproducible warm restarts.
 	workerImage := strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE"))
-	if workerImage == "" {
-		log.Warn("INFERA_WORKER_IMAGE is not set; non-mock provisioning will fail until a pinned worker image tag or digest is configured")
+	workerImages := map[providers.InferenceEngine]string{
+		providers.EngineVLLM:        strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE_VLLM")),
+		providers.EngineSGLang:      strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE_SGLANG")),
+		providers.EngineTensorRTLLM: strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE_TENSORRT_LLM")),
+		providers.EngineMock:        strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE_MOCK")),
+	}
+	if workerImage == "" && allWorkerImagesEmpty(workerImages) {
+		log.Warn("no worker image is configured; set INFERA_WORKER_IMAGE or engine-specific INFERA_WORKER_IMAGE_<ENGINE> values before non-mock provisioning")
 	}
 	enableMockProvider := os.Getenv("INFERA_DEV_MODE") == "1" || os.Getenv("INFERA_ENABLE_MOCK_PROVIDER") == "1"
 	gatewayAddress := strings.TrimSpace(os.Getenv("INFERA_GATEWAY_ADDRESS"))
@@ -85,6 +91,7 @@ func main() {
 	instanceMgr, err := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider: providers.ProviderMock,
 		WorkerImage:     workerImage,
+		WorkerImages:    workerImages,
 		GatewayAddress:  gatewayAddress,
 		CostDBPath:      "data/costs.db",
 	})
@@ -316,6 +323,15 @@ func parseAllowedOrigins(raw string) []string {
 		}
 	}
 	return out
+}
+
+func allWorkerImagesEmpty(images map[providers.InferenceEngine]string) bool {
+	for _, image := range images {
+		if strings.TrimSpace(image) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func parseBoolEnv(raw string, fallback bool) bool {

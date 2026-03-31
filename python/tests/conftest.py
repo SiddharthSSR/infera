@@ -2,6 +2,14 @@
 
 import pytest
 import asyncio
+from pathlib import Path
+import sys
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PYTHON_SRC = REPO_ROOT / "python" / "src"
+if str(PYTHON_SRC) not in sys.path:
+    sys.path.insert(0, str(PYTHON_SRC))
 
 
 @pytest.fixture(scope="session")

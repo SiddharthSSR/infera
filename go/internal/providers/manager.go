@@ -23,6 +23,7 @@ type Manager struct {
 	// Configuration
 	defaultProvider ProviderType
 	workerImage     string
+	workerImages    map[InferenceEngine]string
 	gatewayAddress  string
 
 	workspaceProviderConfigResolver func(workspaceID string, providerType ProviderType) (*ProviderConfig, error)
@@ -31,9 +32,10 @@ type Manager struct {
 // ManagerConfig configures the instance manager.
 type ManagerConfig struct {
 	DefaultProvider ProviderType
-	WorkerImage     string // Docker image for workers
-	GatewayAddress  string // Gateway address for workers to connect
-	CostDBPath      string // Path to SQLite DB for persistent cost tracking (empty = in-memory)
+	WorkerImage     string                     // Default Docker image for workers
+	WorkerImages    map[InferenceEngine]string // Engine-specific worker images
+	GatewayAddress  string                     // Gateway address for workers to connect
+	CostDBPath      string                     // Path to SQLite DB for persistent cost tracking (empty = in-memory)
 }
 
 // NewManager creates a new instance manager.
@@ -55,6 +57,7 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		costs:           costs,
 		defaultProvider: config.DefaultProvider,
 		workerImage:     config.WorkerImage,
+		workerImages:    cloneWorkerImages(config.WorkerImages),
 		gatewayAddress:  config.GatewayAddress,
 	}, nil
 }
@@ -145,11 +148,12 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	}
 
 	// Set defaults
-	if req.DockerImage == "" {
-		req.DockerImage = m.workerImage
-	}
 	if req.GPUCount == 0 {
 		req.GPUCount = 1
+	}
+	req.Engine = req.Engine.OrDefault()
+	if req.DockerImage == "" {
+		req.DockerImage = resolveWorkerImage(req.Engine, m.workerImage, m.workerImages)
 	}
 	if req.GatewayAddress == "" {
 		req.GatewayAddress = m.gatewayAddress
@@ -185,6 +189,9 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	if instance.WorkspaceID == "" {
 		instance.WorkspaceID = req.WorkspaceID
 	}
+	if instance.Engine == "" {
+		instance.Engine = req.Engine
+	}
 
 	// Track instance
 	m.mu.Lock()
@@ -199,7 +206,7 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 
 // Terminate destroys an instance.
 func (m *Manager) Terminate(ctx context.Context, instanceID string) error {
-	instance, exists := m.GetInstance(instanceID)
+	instance, exists := m.getTrackedInstance(instanceID)
 	if !exists {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
@@ -229,7 +236,7 @@ func (m *Manager) Terminate(ctx context.Context, instanceID string) error {
 
 // Start starts a stopped instance.
 func (m *Manager) Start(ctx context.Context, instanceID string) error {
-	instance, exists := m.GetInstance(instanceID)
+	instance, exists := m.getTrackedInstance(instanceID)
 	if !exists {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
@@ -246,8 +253,14 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 		return err
 	}
 
-	if err := provider.Start(ctx, instance.ProviderID); err != nil {
-		return err
+	if starter, ok := provider.(InstanceStarter); ok {
+		if err := starter.StartWithInstance(ctx, instance); err != nil {
+			return err
+		}
+	} else {
+		if err := provider.Start(ctx, instance.ProviderID); err != nil {
+			return err
+		}
 	}
 
 	// Resume cost tracking
@@ -266,7 +279,7 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 
 // Stop stops a running instance.
 func (m *Manager) Stop(ctx context.Context, instanceID string) error {
-	instance, exists := m.GetInstance(instanceID)
+	instance, exists := m.getTrackedInstance(instanceID)
 	if !exists {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
@@ -292,12 +305,37 @@ func (m *Manager) Stop(ctx context.Context, instanceID string) error {
 	return nil
 }
 
-// GetInstance returns an instance by ID.
-func (m *Manager) GetInstance(instanceID string) (*Instance, bool) {
+func (m *Manager) getTrackedInstance(instanceID string) (*Instance, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	instance, exists := m.instances[instanceID]
 	return instance, exists
+}
+
+func cloneInstance(instance *Instance) *Instance {
+	if instance == nil {
+		return nil
+	}
+	cloned := *instance
+	if instance.Models != nil {
+		cloned.Models = slices.Clone(instance.Models)
+	}
+	if instance.Metadata != nil {
+		cloned.Metadata = make(map[string]string, len(instance.Metadata))
+		for key, value := range instance.Metadata {
+			cloned.Metadata[key] = value
+		}
+	}
+	return &cloned
+}
+
+// GetInstance returns a defensive copy of an instance by ID.
+func (m *Manager) GetInstance(instanceID string) (*Instance, bool) {
+	instance, exists := m.getTrackedInstance(instanceID)
+	if !exists {
+		return nil, false
+	}
+	return cloneInstance(instance), true
 }
 
 // ListInstances returns all tracked instances.
@@ -307,7 +345,7 @@ func (m *Manager) ListInstances() []*Instance {
 
 	instances := make([]*Instance, 0, len(m.instances))
 	for _, inst := range m.instances {
-		instances = append(instances, inst)
+		instances = append(instances, cloneInstance(inst))
 	}
 	return instances
 }
@@ -320,7 +358,7 @@ func (m *Manager) ListInstancesByProvider(providerType ProviderType) []*Instance
 	var instances []*Instance
 	for _, inst := range m.instances {
 		if inst.Provider == providerType {
-			instances = append(instances, inst)
+			instances = append(instances, cloneInstance(inst))
 		}
 	}
 	return instances
@@ -333,7 +371,7 @@ func (m *Manager) ListInstancesByWorkspace(workspaceID string) []*Instance {
 	var instances []*Instance
 	for _, inst := range m.instances {
 		if inst.WorkspaceID == workspaceID {
-			instances = append(instances, inst)
+			instances = append(instances, cloneInstance(inst))
 		}
 	}
 	return instances
@@ -356,6 +394,9 @@ func (m *Manager) findReusableStoppedInstance(providerType ProviderType, req *Pr
 			continue
 		}
 		if inst.GPUType != req.GPUType || inst.GPUCount != req.GPUCount {
+			continue
+		}
+		if inst.Engine.OrDefault() != req.Engine.OrDefault() {
 			continue
 		}
 		if !sameModels(inst.Models, req.Models) {
@@ -541,7 +582,7 @@ func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
 
 	for _, inst := range m.instances {
 		if inst.WorkerID == workerID {
-			return inst, true
+			return cloneInstance(inst), true
 		}
 	}
 	return nil, false
@@ -554,7 +595,7 @@ func (m *Manager) GetInstanceByProviderRef(providerType ProviderType, providerID
 
 	for _, inst := range m.instances {
 		if inst.Provider == providerType && inst.ProviderID == providerID {
-			return inst, true
+			return cloneInstance(inst), true
 		}
 	}
 	return nil, false
