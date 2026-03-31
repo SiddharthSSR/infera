@@ -17,10 +17,10 @@ import { deriveModelRuntimeDrilldown } from '../lib/modelRuntimeDrilldown';
 import { useDeploymentAttempts, useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel, useOfferings, useProviders, useInstances, useUpdateDeploymentVerification, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useAuthSession } from '../lib/auth-context';
+import { getProviderDisplayName, isInventoryProviderType } from '../lib/providerInventory';
 
 const FAMILY_OPTIONS = ['mistral', 'llama', 'qwen', 'phi', 'gemma', 'deepseek', 'falcon', 'mixtral', 'yi', 'command-r'];
 const QUANT_OPTIONS = ['none', 'GPTQ', 'AWQ', 'GGUF', 'FP8', 'INT8', 'INT4'];
-const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai', 'e2e'] as const;
 const RECOMMENDED_MODEL_IDS = [
   'Qwen/Qwen3-4B-Thinking-2507',
   'moonshotai/Kimi-K2.5-Instruct',
@@ -62,7 +62,7 @@ function describeDeployReadiness(model: Model, offerings: GPUOffering[], provide
     if (!best || offering.cost_per_hour < best.cost_per_hour) return offering;
     return best;
   }, null);
-  const providerNames = [...new Set(compatibleOfferings.map((offering) => offering.provider))];
+  const providerNames = [...new Set(compatibleOfferings.map((offering) => getProviderDisplayName(offering.provider)))];
 
   if (model.loaded !== false) {
     return {
@@ -485,11 +485,11 @@ export function Models() {
   });
 
   const visibleProviders = useMemo(
-    () => (providers || []).filter((provider) => CONFIGURABLE_PROVIDERS.includes(provider.provider as typeof CONFIGURABLE_PROVIDERS[number])),
+    () => (providers || []).filter((provider) => isInventoryProviderType(provider.provider)),
     [providers],
   );
   const visibleOfferings = useMemo(
-    () => (offerings || []).filter((offering) => CONFIGURABLE_PROVIDERS.includes(offering.provider as typeof CONFIGURABLE_PROVIDERS[number])),
+    () => (offerings || []).filter((offering) => isInventoryProviderType(offering.provider)),
     [offerings],
   );
   const modelOverviewByID = useMemo(() => {
@@ -608,7 +608,7 @@ export function Models() {
         </div>
         <ActionGroup compact>
           <button className="btn-primary" onClick={() => setShowRegisterModal(true)}>
-            ADD MODEL
+            REGISTER MODEL
           </button>
         </ActionGroup>
       </div>

@@ -7,6 +7,7 @@ import { CollapsibleSection } from '../components/CollapsibleSection';
 import { MetadataList } from '../components/MetadataList';
 import { SectionHeader } from '../components/SectionHeader';
 import { useAuthSession } from '../lib/auth-context';
+import { isInventoryProviderType } from '../lib/providerInventory';
 import {
   fetchAuditUsage,
   fetchApiKeys,
@@ -30,13 +31,35 @@ import { buildLiveWorkspaceOperations } from '../lib/liveWorkspaceOperations';
 import { buildWorkspaceMaturity } from '../lib/workspaceMaturity';
 import type { Instance, Model, Worker } from '../types';
 
-function ChartBars({ heights, activeIndex }: { heights: number[]; activeIndex?: number }) {
+function normalizeMetricSamples(samples: number[], minimumBars = 6) {
+  const normalized = samples
+    .filter((sample) => Number.isFinite(sample))
+    .slice(-minimumBars)
+    .map((sample) => (sample > 0 ? sample : 0));
+
+  while (normalized.length < minimumBars) normalized.unshift(0);
+
+  return normalized;
+}
+
+function ChartBars({ samples }: { samples: number[] }) {
+  const normalized = normalizeMetricSamples(samples);
+  const max = Math.max(...normalized, 0);
+  const activeIndex = normalized.reduce((lastPositiveIndex, sample, index) => (
+    sample > 0 ? index : lastPositiveIndex
+  ), -1);
+  const heights = normalized.map((sample) => {
+    if (max <= 0) return 18;
+    if (sample <= 0) return 16;
+    return Math.max(22, Math.round((sample / max) * 100));
+  });
+
   return (
     <div className="metric-chart">
       {heights.map((h, i) => (
         <div
           key={i}
-          className={`chart-bar ${i === (activeIndex ?? heights.length - 1) ? 'active' : ''}`}
+          className={`chart-bar ${i === (activeIndex >= 0 ? activeIndex : heights.length - 1) ? 'active' : ''}`}
           style={{ height: `${h}%` }}
         />
       ))}
@@ -447,7 +470,7 @@ export function Dashboard() {
   const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];
   const loadedModels = models?.filter(m => m.loaded !== false) || [];
   const visibleProviders = useMemo(
-    () => (providers || []).filter((provider) => provider.provider !== 'mock' && provider.provider !== 'lambda'),
+    () => (providers || []).filter((provider) => isInventoryProviderType(provider.provider)),
     [providers],
   );
   const connectedProviders = visibleProviders.filter((provider) => provider.connected);
@@ -532,6 +555,62 @@ export function Dashboard() {
     () => usageTrend.reduce((max, entry) => Math.max(max, entry.requests), 0),
     [usageTrend],
   );
+  const usageSummary = useMemo(
+    () => usageRows.reduce((acc, row) => {
+      acc.requests += row.requests;
+      acc.tokens += row.tokens;
+      return acc;
+    }, { requests: 0, tokens: 0 }),
+    [usageRows],
+  );
+  const requestMetricSamples = useMemo(
+    () => usageTrend.length > 0
+      ? usageTrend.map((entry) => entry.requests)
+      : (stats?.requests?.per_second != null ? [stats.requests.per_second] : []),
+    [stats?.requests?.per_second, usageTrend],
+  );
+  const latencyMetricSamples = useMemo(() => {
+    const workerSamples = (workers || [])
+      .map((worker) => worker.avg_latency_ms)
+      .filter((sample): sample is number => Number.isFinite(sample) && sample > 0);
+    if (workerSamples.length > 0) return workerSamples;
+
+    const verificationSamples = deploymentSummaries
+      .map((summary) => summary.attempt.inference_verification?.latency_ms)
+      .filter((sample): sample is number => typeof sample === 'number' && Number.isFinite(sample) && sample > 0);
+    if (verificationSamples.length > 0) return verificationSamples;
+
+    return stats?.latency?.avg_ms && stats.latency.avg_ms > 0 ? [stats.latency.avg_ms] : [];
+  }, [deploymentSummaries, stats?.latency?.avg_ms, workers]);
+  const throughputMetricSamples = useMemo(() => {
+    const workerSamples = (workers || [])
+      .map((worker) => worker.requests_per_sec)
+      .filter((sample): sample is number => Number.isFinite(sample) && sample >= 0);
+    if (workerSamples.length > 0) return workerSamples;
+
+    const tokenSamples = usageTrend
+      .map((entry) => entry.tokens)
+      .filter((sample) => sample > 0);
+    if (tokenSamples.length > 0) return tokenSamples;
+
+    return stats?.requests?.per_second != null ? [stats.requests.per_second] : [];
+  }, [stats?.requests?.per_second, usageTrend, workers]);
+  const latencyDisplay = useMemo(() => {
+    if (latencyMetricSamples.length > 0) {
+      const total = latencyMetricSamples.reduce((sum, sample) => sum + sample, 0);
+      return `${Math.round(total / latencyMetricSamples.length)}ms`;
+    }
+
+    return '-';
+  }, [latencyMetricSamples]);
+  const requestVolumeDisplay = useMemo(() => {
+    if (usageSummary.requests > 0) return formatCompactCount(usageSummary.requests);
+    if (stats?.requests?.per_second) return `${(stats.requests.per_second * 86400 / 1000).toFixed(1)}K`;
+    return '0';
+  }, [stats?.requests?.per_second, usageSummary.requests]);
+  const throughputDisplay = stats?.requests?.per_second != null
+    ? `${stats.requests.per_second.toFixed(1)} r/s`
+    : '-';
   const hasInferenceVerifiedDeployment = useMemo(
     () => deploymentSummaries.some((summary) => summary.attempt.inference_verification?.status === 'passed'),
     [deploymentSummaries],
@@ -803,40 +882,49 @@ export function Dashboard() {
       </div>
 
       <div className="grid-row dashboard-metrics-row">
-        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
+        <div className="cell dashboard-metric-card">
           <div className="label-text">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M12 2v20M2 12h20" />
             </svg>
             TOTAL REQUESTS
           </div>
-          <div className="value-text">{stats?.requests?.per_second ? `${(stats.requests.per_second * 86400 / 1000).toFixed(1)}K` : '0'}</div>
-          <ChartBars heights={[30, 50, 40, 80, 60, 90]} />
+          <div className="value-text">{requestVolumeDisplay}</div>
+          <ChartBars samples={requestMetricSamples} />
+          <div className="dashboard-metric-note">
+            {usageTrend.length > 0 ? 'Last 7 days of recorded workspace usage.' : 'Usage history will appear here after the first requests land.'}
+          </div>
         </div>
 
-        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
+        <div className="cell dashboard-metric-card">
           <div className="label-text">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
             </svg>
             AVG LATENCY
           </div>
-          <div className="value-text">{stats?.latency?.avg_ms != null ? `${Math.round(stats.latency.avg_ms)}ms` : '-'}</div>
-          <ChartBars heights={[20, 25, 22, 20, 30, 25]} activeIndex={3} />
+          <div className="value-text">{latencyDisplay}</div>
+          <ChartBars samples={latencyMetricSamples} />
+          <div className="dashboard-metric-note">
+            {latencyMetricSamples.length > 0 ? 'Based on recent worker or verification telemetry.' : 'Latency samples appear once live inference or worker telemetry is available.'}
+          </div>
         </div>
 
-        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
+        <div className="cell dashboard-metric-card">
           <div className="label-text">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
             </svg>
             THROUGHPUT
           </div>
-          <div className="value-text">{stats?.requests?.per_second ? `${stats.requests.per_second.toFixed(1)} r/s` : '-'}</div>
-          <ChartBars heights={[40, 60, 85, 70, 60, 55]} activeIndex={2} />
+          <div className="value-text">{throughputDisplay}</div>
+          <ChartBars samples={throughputMetricSamples} />
+          <div className="dashboard-metric-note">
+            {(workers?.length || 0) > 0 ? 'Current requests per second across registered workers.' : 'Throughput will reflect worker traffic once serving starts.'}
+          </div>
         </div>
 
-        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 140 }}>
+        <div className="cell dashboard-metric-card">
           <div className="label-text">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
@@ -845,9 +933,15 @@ export function Dashboard() {
             ACTIVE NODES
           </div>
           <div className="value-text">{healthyWorkers.length} / {workers?.length || 0}</div>
-          <div style={{ marginTop: 'auto', paddingTop: '1rem' }}>
-            <span className="status-dot" />{' '}
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
+          <div className="progress-track" aria-hidden="true">
+            <div
+              className="progress-fill"
+              style={{ width: `${(workers?.length || 0) > 0 ? (healthyWorkers.length / (workers?.length || 1)) * 100 : 0}%` }}
+            />
+          </div>
+          <div className="dashboard-metric-inline">
+            <span className={`status-dot ${healthyWorkers.length > 0 ? '' : 'inactive'}`} />
+            <span>
               {healthyWorkers.length > 0 ? 'All systems operational' : 'No workers online'}
             </span>
           </div>

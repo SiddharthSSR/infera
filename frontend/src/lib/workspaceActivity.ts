@@ -4,6 +4,7 @@ import type {
   WorkspaceMemberRecord,
   WorkspaceProviderConfigRecord,
 } from './api';
+import { getProviderDisplayName } from './providerInventory';
 import { normalizeInviteStatus } from './workspaceLifecycle';
 
 export interface WorkspaceActivityItem {
@@ -16,10 +17,7 @@ export interface WorkspaceActivityItem {
 }
 
 function providerLabel(provider: string): string {
-  if (provider === 'e2e') return 'E2E TIR';
-  if (provider === 'runpod') return 'RunPod';
-  if (provider === 'vastai') return 'Vast.ai';
-  return provider;
+  return getProviderDisplayName(provider);
 }
 
 export function buildWorkspaceActivityItems(input: {

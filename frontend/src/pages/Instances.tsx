@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, useDeferredValue, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { Instance, GPUOffering, KnownGPUType, GPUType, ProviderStatus, ProviderType, VaultModel, Worker, ProvisionRequest } from '../types';
@@ -17,6 +17,7 @@ import { useDeploymentAttempts, useInstances, useMarkDeploymentAutoVerificationR
 import { useIsMobile } from '../hooks/useIsMobile';
 import { InstanceMobileCard } from '../components/InstanceMobileCard';
 import { useAuthSession } from '../lib/auth-context';
+import { getProviderDisplayName, isInventoryProviderType, isWorkspaceProviderType, WORKSPACE_PROVIDER_TYPES } from '../lib/providerInventory';
 
 const GPU_VRAM_GB: Record<KnownGPUType, number> = {
   RTX_4090: 24,
@@ -32,7 +33,11 @@ function formatGPUDisplayName(gpuType: GPUType, displayName?: string) {
   return gpuType.replace(/_/g, ' ');
 }
 
-const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai', 'e2e'] as const;
+function formatOfferingRegion(region?: string, provider?: ProviderType) {
+  if (provider === 'mock' && (!region || region === 'mock')) return 'local lab';
+  return region || 'global';
+}
+
 const AUTO_VERIFY_DELAY_MS = 1500;
 const RECOMMENDED_MODEL_IDS = [
   'Qwen/Qwen3-4B-Thinking-2507',
@@ -84,19 +89,29 @@ type OfferingGroup = {
   provider: ProviderType;
   gpuType: GPUType;
   displayName?: string;
-  region: string;
+  regions: string[];
   counts: GPUOffering[];
   cheapestCostPerHour: number;
+  totalAvailable: number;
 };
 
-function describeProvisioningState(configuredProviders: string[], providerStatuses: ProviderStatus[], offeringsCount: number) {
-  const visibleStatuses = providerStatuses.filter((status) => CONFIGURABLE_PROVIDERS.includes(status.provider as typeof CONFIGURABLE_PROVIDERS[number]));
-  const connectedProviders = visibleStatuses.filter((status) => status.connected);
+type ProvisionStep = 'compute' | 'models' | 'review';
 
-  if (configuredProviders.length === 0) {
+const PROVISION_FLOW: Array<{ id: ProvisionStep; label: string; caption: string }> = [
+  { id: 'compute', label: 'Compute', caption: 'Choose GPU and size' },
+  { id: 'models', label: 'Models', caption: 'Pick compatible models' },
+  { id: 'review', label: 'Review', caption: 'Confirm and provision' },
+];
+
+function describeProvisioningState(configuredProviders: string[], providerStatuses: ProviderStatus[], offeringsCount: number) {
+  const visibleStatuses = providerStatuses.filter((status) => isInventoryProviderType(status.provider));
+  const connectedProviders = visibleStatuses.filter((status) => status.connected);
+  const hasWorkspaceProviderConfig = configuredProviders.some((provider) => isWorkspaceProviderType(provider));
+
+  if (connectedProviders.length === 0 && !hasWorkspaceProviderConfig) {
     return {
-      title: 'No workspace provider is configured',
-      detail: 'Add RunPod, Vast.ai, or E2E TIR credentials in Workspace settings before provisioning nodes from this workspace.',
+      title: 'No live inventory is connected yet',
+      detail: 'Connect RunPod or Vast.ai in Workspace settings, or enable the local inventory source in development before provisioning nodes.',
       action: 'OPEN WORKSPACE',
     };
   }
@@ -121,6 +136,11 @@ function describeProvisioningState(configuredProviders: string[], providerStatus
 }
 
 function providerStateBadge(status?: ProviderStatus, configured?: boolean) {
+  if (status?.provider === 'mock') {
+    return status.connected
+      ? { label: 'LOCAL READY', tone: '' }
+      : { label: 'LOCAL OFFLINE', tone: 'warning' };
+  }
   if (!configured) return { label: 'NOT CONFIGURED', tone: 'inactive' };
   if (!status) return { label: 'UNAVAILABLE', tone: 'warning' };
   if (status.connected) return { label: 'CONNECTED', tone: '' };
@@ -448,7 +468,7 @@ function InstanceRow({
   );
 }
 
-function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, offerings, preselectedModel, initialDraft, providerStatuses, configuredProviders }: {
+export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, onOpenWorkspace, offerings, preselectedModel, initialDraft, providerStatuses, configuredProviders }: {
   isOpen: boolean;
   onClose: () => void;
   onProvisioned: (
@@ -460,22 +480,26 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
     request: ProvisionRequest & { name?: string },
     failureReason: string,
   ) => void;
+  onOpenWorkspace: () => void;
   offerings: GPUOffering[] | undefined;
   preselectedModel?: string | null;
   initialDraft?: ProvisionDraft | null;
   providerStatuses: ProviderStatus[];
   configuredProviders: string[];
 }) {
+  const [step, setStep] = useState<ProvisionStep>('compute');
   const [selectedGPU, setSelectedGPU] = useState<string>('');
   const [name, setName] = useState('');
   const [spotInstance, setSpotInstance] = useState(false);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [modelSearch, setModelSearch] = useState('');
   const provisionMutation = useProvisionInstance();
   const { data: vaultModels } = useVaultModels({ status: 'available' });
   const initializedDraftRef = useRef<string | null>(null);
+  const deferredModelSearch = useDeferredValue(modelSearch);
 
   const getOfferingKey = (o: GPUOffering) =>
-    `${o.provider}-${o.provider_gpu_type_id || o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}`;
+    `${o.provider}-${o.provider_gpu_type_id || o.gpu_type}-${o.gpu_count}-${o.memory_gb}-${o.vcpu}-${o.region || 'global'}`;
 
   const getOfferingGroupKey = (o: GPUOffering) =>
     `${o.provider}-${o.provider_gpu_type_id || o.gpu_type}-${o.display_name || o.gpu_type}`;
@@ -509,15 +533,20 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
             provider: offering.provider,
             gpuType: offering.gpu_type,
             displayName: offering.display_name,
-            region: offering.region || 'global',
+            regions: offering.region ? [offering.region] : ['global'],
             counts: [offering],
             cheapestCostPerHour: offering.cost_per_hour,
+            totalAvailable: offering.available,
           } satisfies OfferingGroup);
           return map;
         }
 
         existing.counts.push(offering);
         existing.cheapestCostPerHour = Math.min(existing.cheapestCostPerHour, offering.cost_per_hour);
+        existing.totalAvailable += offering.available;
+        if (offering.region && !existing.regions.includes(offering.region)) {
+          existing.regions.push(offering.region);
+        }
         return map;
       }, new Map<string, OfferingGroup>()).values(),
     );
@@ -531,7 +560,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
   }, [dedupedOfferings]);
 
   const allVaultModels = vaultModels?.models;
-  const selectedModelRecord = useMemo(
+  const pinnedModelRecord = useMemo(
     () => allVaultModels?.find((model) => model.source_uri === preselectedModel),
     [allVaultModels, preselectedModel],
   );
@@ -545,19 +574,15 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
       return m.vram_required <= selectedGPUVram * 1024;
     });
   }, [allVaultModels, selectedGPUVram]);
-  const recommendedVaultModels = useMemo(
-    () => (allVaultModels || []).filter((model) => RECOMMENDED_MODEL_IDS.includes(model.source_uri as typeof RECOMMENDED_MODEL_IDS[number])),
-    [allVaultModels],
-  );
   const pinnedModelCompatibleOfferings = useMemo(() => {
     if (!dedupedOfferings) return [];
-    if (!selectedModelRecord?.vram_required) return dedupedOfferings;
+    if (!pinnedModelRecord?.vram_required) return dedupedOfferings;
 
     return dedupedOfferings.filter((offering) => {
       const vramGB = offering.memory_gb || GPU_VRAM_GB[offering.gpu_type as KnownGPUType] || 0;
-      return vramGB * 1024 >= selectedModelRecord.vram_required;
+      return vramGB * 1024 >= pinnedModelRecord.vram_required;
     });
-  }, [dedupedOfferings, selectedModelRecord]);
+  }, [dedupedOfferings, pinnedModelRecord]);
   const recommendedOffering = useMemo(
     () => pinnedModelCompatibleOfferings.reduce<GPUOffering | null>((best, offering) => {
       if (!best || offering.cost_per_hour < best.cost_per_hour) return offering;
@@ -569,10 +594,75 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
     () => findPresetOffering(dedupedOfferings, selectedPreset),
     [dedupedOfferings, selectedPreset],
   );
+  const primarySelectedModelRecord = useMemo(
+    () => allVaultModels?.find((model) => model.source_uri === selectedModels[0]),
+    [allVaultModels, selectedModels],
+  );
+  const selectedModelEntries = useMemo(
+    () => selectedModels
+      .map((sourceUri) => allVaultModels?.find((model) => model.source_uri === sourceUri))
+      .filter((model): model is VaultModel => Boolean(model)),
+    [allVaultModels, selectedModels],
+  );
+  const filteredCompatibleModels = useMemo(() => {
+    const query = deferredModelSearch.trim().toLowerCase();
+    if (!query) return compatibleModels || [];
+
+    return (compatibleModels || []).filter((model) => {
+      const haystack = [
+        model.name,
+        model.source_uri,
+        model.parameters,
+        model.family,
+        model.quantization,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [compatibleModels, deferredModelSearch]);
+  const filteredRecommendedModels = useMemo(
+    () => filteredCompatibleModels.filter((model) => RECOMMENDED_MODEL_IDS.includes(model.source_uri as typeof RECOMMENDED_MODEL_IDS[number])),
+    [filteredCompatibleModels],
+  );
+  const filteredCatalogModels = useMemo(
+    () => filteredCompatibleModels.filter((model) => !RECOMMENDED_MODEL_IDS.includes(model.source_uri as typeof RECOMMENDED_MODEL_IDS[number])),
+    [filteredCompatibleModels],
+  );
+  const inventorySnapshot = useMemo(() => {
+    if (!dedupedOfferings?.length) return null;
+
+    const providers = new Set(dedupedOfferings.map((offering) => getProviderDisplayName(offering.provider)));
+    const regions = new Set(dedupedOfferings.map((offering) => offering.region || 'global'));
+    const lowestCost = dedupedOfferings.reduce<number | null>((best, offering) => {
+      if (best == null || offering.cost_per_hour < best) return offering.cost_per_hour;
+      return best;
+    }, null);
+
+    return {
+      providerCount: providers.size,
+      gpuFamilyCount: groupedOfferings.length,
+      regionCount: regions.size,
+      availableNow: dedupedOfferings.reduce((sum, offering) => sum + offering.available, 0),
+      lowestCost,
+    };
+  }, [dedupedOfferings, groupedOfferings]);
+  const stepIndex = PROVISION_FLOW.findIndex((entry) => entry.id === step);
+  const canContinueFromCompute = Boolean(selectedOffering) && Boolean(dedupedOfferings?.length) && !provisioningState;
+  const primaryActionLabel = step === 'compute'
+    ? 'Continue to models'
+    : step === 'models'
+      ? selectedModels.length > 0
+        ? 'Continue to review'
+        : 'Continue without model'
+      : (provisionMutation.isPending ? 'Provisioning...' : 'Provision node');
 
   useEffect(() => {
     if (!isOpen) {
       initializedDraftRef.current = null;
+      setStep('compute');
+      setModelSearch('');
       return;
     }
 
@@ -600,6 +690,12 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
     setSelectedGPU(matchingOffering ? getOfferingKey(matchingOffering) : '');
     initializedDraftRef.current = initKey;
   }, [dedupedOfferings, initialDraft, isOpen, preselectedModel]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setStep('compute');
+    setModelSearch('');
+  }, [initialDraft, isOpen, preselectedModel]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -631,8 +727,50 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
     setSelectedGPU(getOfferingKey(targetOffering));
   }, [isOpen, preselectedModel, presetOffering, recommendedOffering, selectedGPU]);
 
+  useEffect(() => {
+    if (!isOpen || step === 'compute' || selectedGPU) return;
+    setStep('compute');
+  }, [isOpen, selectedGPU, step]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   const toggleModel = (sourceUri: string) => {
     setSelectedModels(prev => prev.includes(sourceUri) ? prev.filter(id => id !== sourceUri) : [...prev, sourceUri]);
+  };
+
+  const jumpToStep = (targetStep: ProvisionStep) => {
+    if (targetStep === 'compute') {
+      setStep('compute');
+      return;
+    }
+    if (targetStep === 'models' && canContinueFromCompute) {
+      setStep('models');
+      return;
+    }
+    if (targetStep === 'review' && canContinueFromCompute) {
+      setStep('review');
+    }
+  };
+
+  const handlePrimaryAction = () => {
+    if (step === 'compute') {
+      if (canContinueFromCompute) setStep('models');
+      return;
+    }
+    if (step === 'models') {
+      setStep('review');
+      return;
+    }
+    void handleProvision();
   };
 
   const handleProvision = async () => {
@@ -645,7 +783,7 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
       gpu_count: selectedOffering.gpu_count,
       spot_instance: spotInstance,
       models: selectedModels.length > 0 ? selectedModels : undefined,
-      selected_model_name: selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : undefined,
+      selected_model_name: selectedModels.length === 1 ? (primarySelectedModelRecord?.name || selectedModels[0].split('/').pop()) : undefined,
     } as const;
 
     try {
@@ -653,11 +791,11 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
       onProvisioned(
         provisionedInstance,
         request,
-        selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : undefined,
+        selectedModels.length === 1 ? (primarySelectedModelRecord?.name || selectedModels[0].split('/').pop()) : undefined,
       );
       toast.success(
         selectedModels.length > 0
-          ? `Provisioning ${selectedModels.length === 1 ? (selectedModelRecord?.name || selectedModels[0].split('/').pop()) : `${selectedModels.length} models`} on ${formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}`
+          ? `Provisioning ${selectedModels.length === 1 ? (primarySelectedModelRecord?.name || selectedModels[0].split('/').pop()) : `${selectedModels.length} models`} on ${formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}`
           : `Provisioning node on ${formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}`,
       );
       onClose();
@@ -676,226 +814,455 @@ function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFailed, off
 
   return (
     <>
+      <div className="provision-modal-overlay" onClick={onClose} />
       <div
-        style={{ position: 'fixed', inset: 0, background: 'rgba(253,251,248,0.8)', backdropFilter: 'blur(4px)', zIndex: 50 }}
-        onClick={onClose}
-      />
-      <div style={{
-        position: 'fixed', top: '1.5rem', bottom: '1.5rem', left: '50%', transform: 'translateX(-50%)',
-        width: 'min(1180px, calc(100vw - 3rem))', maxWidth: 'none',
-        background: 'var(--bg-paper)', border: 'var(--grid-line)', zIndex: 50,
-        display: 'flex', flexDirection: 'column', overflow: 'hidden'
-      }}>
-        {/* Header */}
-        <div style={{ padding: '2rem', borderBottom: 'var(--grid-line)' }}>
-          <div className="label-text" style={{ marginBottom: '0.5rem' }}>PROVISION NEW NODE</div>
-          <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Select GPU configuration and models to deploy</div>
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="provision-modal-title"
+        className="provision-modal-shell"
+      >
+        <div className="provision-modal-header">
+          <div className="provision-modal-heading">
+            <div className="label-text">PROVISION NEW NODE</div>
+            <h2 id="provision-modal-title" className="provision-modal-title">Provision a node</h2>
+            <p className="provision-modal-description">
+              Choose compute first, then review the models that fit that hardware before confirming the deployment.
+            </p>
+          </div>
+          <div className="provision-stepper" role="tablist" aria-label="Provision node steps">
+            {PROVISION_FLOW.map((flowStep, index) => {
+              const isActive = flowStep.id === step;
+              const isAvailable = flowStep.id === 'compute' || canContinueFromCompute;
+              const isComplete = index < stepIndex;
+
+              return (
+                <button
+                  key={flowStep.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  className={`provision-step ${isActive ? 'active' : ''} ${isComplete ? 'complete' : ''}`}
+                  onClick={() => jumpToStep(flowStep.id)}
+                  disabled={!isAvailable}
+                >
+                  <span className="provision-step-index">0{index + 1}</span>
+                  <span className="provision-step-copy">
+                    <span>{flowStep.label}</span>
+                    <span>{flowStep.caption}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        {/* Content */}
-        <div className="provision-modal-body" style={{ flex: 1, overflowY: 'auto', padding: '2rem' }}>
-          {selectedModelRecord && (
-            <div className="workspace-provider-card" style={{ marginBottom: '2rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                <div>
-                  <div className="label-text" style={{ marginBottom: '0.45rem' }}>SELECTED MODEL</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{selectedModelRecord.name}</div>
-                  <div className="mono" style={{ marginTop: '0.3rem', color: 'var(--text-secondary)' }}>
-                    {selectedModelRecord.source_uri}
+        <div className="provision-modal-body">
+          {step === 'compute' && (
+            <div className="provision-stage">
+              <div className="provision-stage-main">
+                {pinnedModelRecord && (
+                  <div className="provision-context-card">
+                    <div className="provision-context-header">
+                      <div>
+                        <div className="label-text">PINNED MODEL CONTEXT</div>
+                        <div className="provision-context-title">{pinnedModelRecord.name}</div>
+                        <div className="mono provision-context-source">{pinnedModelRecord.source_uri}</div>
+                      </div>
+                      <div className="provision-context-badges">
+                        {selectedPreset && <span className="badge">{selectedPreset.label}</span>}
+                        {pinnedModelRecord.parameters && <span className="badge">{pinnedModelRecord.parameters}</span>}
+                        {pinnedModelRecord.quantization && <span className="badge">{pinnedModelRecord.quantization}</span>}
+                        {pinnedModelRecord.vram_required ? <span className="badge mono">{Math.ceil(pinnedModelRecord.vram_required / 1024)}GB VRAM</span> : null}
+                      </div>
+                    </div>
+                    <div className="provision-context-copy">
+                      {selectedPreset ? `${selectedPreset.detail} ` : ''}
+                      {pinnedModelCompatibleOfferings.length > 0
+                        ? `${presetOffering ? `The preferred preset maps to ${presetOffering.gpu_count}x ${formatGPUDisplayName(presetOffering.gpu_type, presetOffering.display_name)} on ${getProviderDisplayName(presetOffering.provider)}. ` : ''}This model fits ${pinnedModelCompatibleOfferings.length} available GPU option${pinnedModelCompatibleOfferings.length === 1 ? '' : 's'}${recommendedOffering ? `, starting at $${recommendedOffering.cost_per_hour.toFixed(2)}/hr.` : '.'}`
+                        : 'No live GPU option currently satisfies the recorded VRAM requirement for this model.'}
+                    </div>
+                    {selectedPreset && pinnedModelCompatibleOfferings.length === 0 && (
+                      <div className="provision-inline-warning">
+                        <div className="label-text">CAPACITY GAP</div>
+                        <div>{presetCapacityWarning(selectedPreset)} Choose a larger configuration once inventory appears, or switch to a smaller reasoning model.</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="provision-section">
+                  <div className="label-text">STEP 1</div>
+                  <div className="provision-section-title">Choose the GPU family and node size</div>
+                  <div className="provision-section-copy">
+                    Start with the hardware. The next step will narrow the catalog to models that fit the VRAM budget you choose here.
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                  {selectedPreset && <span className="badge">{selectedPreset.label}</span>}
-                  {selectedModelRecord.parameters && <span className="badge">{selectedModelRecord.parameters}</span>}
-                  {selectedModelRecord.quantization && <span className="badge">{selectedModelRecord.quantization}</span>}
-                  {selectedModelRecord.vram_required ? <span className="badge mono">{Math.ceil(selectedModelRecord.vram_required / 1024)}GB VRAM</span> : null}
-                </div>
-              </div>
-              <div style={{ marginTop: '0.85rem', fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                {selectedPreset ? `${selectedPreset.detail} ` : ''}
-                {pinnedModelCompatibleOfferings.length > 0
-                  ? `${presetOffering ? `Preferred preset currently maps to ${presetOffering.gpu_count}x ${formatGPUDisplayName(presetOffering.gpu_type, presetOffering.display_name)} on ${presetOffering.provider}. ` : ''}This model fits ${pinnedModelCompatibleOfferings.length} live GPU option${pinnedModelCompatibleOfferings.length === 1 ? '' : 's'}${recommendedOffering ? `, starting from $${recommendedOffering.cost_per_hour.toFixed(2)}/hr on ${recommendedOffering.provider}.` : '.'}`
-                  : 'No live GPU option currently satisfies the recorded VRAM requirement for this model.'}
-              </div>
-              {selectedPreset && pinnedModelCompatibleOfferings.length === 0 && (
-                <div
-                  style={{
-                    marginTop: '1rem',
-                    padding: '0.85rem 1rem',
-                    border: '1px solid rgba(184, 93, 32, 0.25)',
-                    background: 'rgba(184, 93, 32, 0.08)',
-                  }}
-                >
-                  <div className="label-text" style={{ marginBottom: '0.4rem' }}>PRESET CAPACITY GAP</div>
-                  <div style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                    {presetCapacityWarning(selectedPreset)} Open Nodes after more capacity appears, or choose a smaller reasoning model if you need an immediate single-node deployment.
+
+                {provisioningState ? (
+                  <div className="provision-empty-state">
+                    <div className="provision-empty-title">{provisioningState.title}</div>
+                    <div className="provision-empty-copy">{provisioningState.detail}</div>
+                    <div className="help-actions">
+                      <button className="action-btn" onClick={onOpenWorkspace}>OPEN WORKSPACE</button>
+                      <button className="action-btn" onClick={onClose}>CANCEL</button>
+                    </div>
                   </div>
-                </div>
-              )}
+                ) : (
+                  <>
+                    {inventorySnapshot && (
+                      <div className="provision-metric-strip" aria-label="Live inventory snapshot">
+                        <div className="provision-metric-card">
+                          <div className="label-text">LIVE SOURCES</div>
+                          <div className="provision-metric-value">{inventorySnapshot.providerCount}</div>
+                          <div className="provision-metric-copy">Connected inventory providers</div>
+                        </div>
+                        <div className="provision-metric-card">
+                          <div className="label-text">GPU FAMILIES</div>
+                          <div className="provision-metric-value">{inventorySnapshot.gpuFamilyCount}</div>
+                          <div className="provision-metric-copy">Distinct compute families</div>
+                        </div>
+                        <div className="provision-metric-card">
+                          <div className="label-text">REGIONS</div>
+                          <div className="provision-metric-value">{inventorySnapshot.regionCount}</div>
+                          <div className="provision-metric-copy">Capacity footprints visible now</div>
+                        </div>
+                        <div className="provision-metric-card">
+                          <div className="label-text">STARTING RATE</div>
+                          <div className="provision-metric-value mono">
+                            {inventorySnapshot.lowestCost != null ? `$${inventorySnapshot.lowestCost.toFixed(2)}/hr` : '—'}
+                          </div>
+                          <div className="provision-metric-copy">{inventorySnapshot.availableNow} slots reported live</div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="gpu-choice-grid">
+                      {groupedOfferings.map((group) => {
+                        const selectedGroupOffering = group.counts.find((offering) => getOfferingKey(offering) === selectedGPU) || null;
+                        const activeOffering = selectedGroupOffering || group.counts[0];
+                        const perGpuMemoryGB = Math.max(1, Math.round((activeOffering.memory_gb || 0) / Math.max(activeOffering.gpu_count || 1, 1)));
+
+                        return (
+                          <div key={group.key} className={`gpu-choice-card ${selectedGroupOffering ? 'selected' : ''}`}>
+                            <div className="gpu-choice-card-header">
+                              <div>
+                                <div className="gpu-choice-title">{formatGPUDisplayName(group.gpuType, group.displayName)}</div>
+                              <div className="gpu-choice-meta">
+                                <span>{perGpuMemoryGB}GB each</span>
+                                  <span>{group.regions.length === 1 ? formatOfferingRegion(group.regions[0], group.provider) : `${group.regions.length} regions`}</span>
+                                  <span>{group.totalAvailable} available</span>
+                              </div>
+                              </div>
+                              <span className="badge">{getProviderDisplayName(group.provider)}</span>
+                            </div>
+                            <div className="gpu-choice-price">
+                              <span className="mono">${activeOffering.cost_per_hour.toFixed(2)}</span>
+                              <span>/hr starting</span>
+                            </div>
+                            <div className="gpu-choice-detail">
+                              {pinnedModelRecord?.vram_required
+                                ? `${Math.ceil(pinnedModelRecord.vram_required / 1024)}GB model requirement ${((activeOffering.memory_gb || 0) * 1024) >= pinnedModelRecord.vram_required ? 'fits this size.' : 'needs a larger size.'}`
+                                : `${group.counts.length} size option${group.counts.length === 1 ? '' : 's'} available for this GPU family.`}
+                            </div>
+                            <div className="gpu-choice-counts">
+                              {group.counts.map((offering) => {
+                                const offeringKey = getOfferingKey(offering);
+                                const isOfferingSelected = selectedGPU === offeringKey;
+
+                                return (
+                                  <button
+                                    key={offeringKey}
+                                  type="button"
+                                  className={`gpu-count-chip ${isOfferingSelected ? 'active' : ''}`}
+                                  onClick={() => setSelectedGPU(offeringKey)}
+                                >
+                                    {offering.gpu_count}x GPU · {formatOfferingRegion(offering.region, offering.provider)}
+                                    <span className="mono">${offering.cost_per_hour.toFixed(2)}/hr</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <aside className="provision-sidebar">
+                <div className="label-text">CURRENT SELECTION</div>
+                {selectedOffering ? (
+                  <>
+                    <div className="provision-sidebar-title">{formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}</div>
+                    <div className="provision-sidebar-copy">
+                      {selectedOffering.gpu_count}x GPU on {getProviderDisplayName(selectedOffering.provider)} · {selectedOffering.memory_gb}GB total VRAM · {formatOfferingRegion(selectedOffering.region, selectedOffering.provider)}
+                    </div>
+                    <div className="provision-sidebar-stat mono">${selectedOffering.cost_per_hour.toFixed(2)}/hr</div>
+                  </>
+                ) : (
+                  <div className="provision-sidebar-copy">
+                    Choose a GPU size to unlock compatible model recommendations and the final deployment review.
+                  </div>
+                )}
+                {pinnedModelRecord && (
+                  <div className="provision-sidebar-block">
+                    <div className="label-text">MODEL REQUIREMENT</div>
+                    <div className="provision-sidebar-copy">
+                      {pinnedModelRecord.name} targets roughly {Math.ceil((pinnedModelRecord.vram_required || 0) / 1024)}GB VRAM.
+                    </div>
+                  </div>
+                )}
+              </aside>
             </div>
           )}
 
-          <div style={{ marginBottom: '2rem' }}>
-            <div className="label-text">INSTANCE NAME</div>
-            <input type="text" className="control-input" value={name} onChange={e => setName(e.target.value)} placeholder="infera-worker" style={{ marginTop: '0.5rem' }} />
-          </div>
+          {step === 'models' && (
+            <div className="provision-stage">
+              <div className="provision-stage-main">
+                <div className="provision-section">
+                  <div className="label-text">STEP 2</div>
+                  <div className="provision-section-title">Pick models that fit the selected GPU</div>
+                  <div className="provision-section-copy">
+                    Compatible models are filtered by the VRAM available on the selected node. Leave this step empty if you only want raw capacity first.
+                  </div>
+                </div>
 
-          <div className="provision-modal-grid">
-            <div>
-              <div className="label-text" style={{ marginBottom: '1rem' }}>GPU CONFIGURATION</div>
-              {dedupedOfferings && dedupedOfferings.length > 0 ? (
-                <div className="provision-options-grid" style={{ marginBottom: '2rem' }}>
-                  {groupedOfferings.map((group) => {
-                    const selectedGroupOffering = group.counts.find((offering) => getOfferingKey(offering) === selectedGPU) || null;
-                    const activeOffering = selectedGroupOffering || group.counts[0];
-                    const isSelected = Boolean(selectedGroupOffering);
-                    const perGpuMemoryGB = Math.max(1, Math.round((activeOffering.memory_gb || 0) / Math.max(activeOffering.gpu_count || 1, 1)));
-                    const activeKey = getOfferingKey(activeOffering);
-                    return (
-                      <div
-                        key={group.key}
-                        role="group"
-                        aria-label={formatGPUDisplayName(group.gpuType, group.displayName)}
-                        style={{
-                          padding: '1.25rem',
-                          border: isSelected ? '2px solid var(--text-primary)' : 'var(--grid-line)',
-                          background: isSelected ? 'var(--bg-accent)' : 'transparent',
-                          fontFamily: 'var(--font-main)',
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
-                          <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.5rem' }}>
-                            {formatGPUDisplayName(group.gpuType, group.displayName)}
-                          </div>
-                          <span className="badge">{group.provider.toUpperCase()}</span>
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                          <span>{perGpuMemoryGB}GB each</span>
-                          <span>{group.region || 'global'}</span>
-                        </div>
-                        <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                            <span>COUNT</span>
-                            <select
-                              className="control-select"
-                              value={activeKey}
-                              onChange={(e) => setSelectedGPU(e.target.value)}
-                              style={{ minWidth: '8rem' }}
-                            >
-                              {group.counts.map((offering) => (
-                                <option key={getOfferingKey(offering)} value={getOfferingKey(offering)}>
-                                  {offering.gpu_count}x
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <button
-                            className="action-btn"
-                            onClick={() => setSelectedGPU((prev) => prev === activeKey ? '' : activeKey)}
-                            style={{ fontSize: '0.7rem' }}
-                          >
-                            {isSelected ? 'SELECTED' : 'SELECT'}
-                          </button>
-                        </div>
-                        <div className="mono" style={{ marginTop: '0.75rem', fontSize: '1rem' }}>
-                          ${activeOffering.cost_per_hour.toFixed(2)}<span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/hr</span>
-                        </div>
-                        <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                          {activeOffering.gpu_count}x selected · {activeOffering.memory_gb}GB total VRAM
+                <label className="provision-search">
+                  <span className="label-text">SEARCH MODELS</span>
+                  <input
+                    type="text"
+                    className="control-input"
+                    placeholder="Search by model name, family, or size..."
+                    value={modelSearch}
+                    onChange={(event) => setModelSearch(event.target.value)}
+                  />
+                </label>
+
+                <div className="provision-metric-strip compact" aria-label="Model fit summary">
+                  <div className="provision-metric-card">
+                    <div className="label-text">VRAM</div>
+                    <div className="provision-metric-value mono">{selectedOffering?.memory_gb ?? 0}GB</div>
+                    <div className="provision-metric-copy">Total memory on this node</div>
+                  </div>
+                  <div className="provision-metric-card">
+                    <div className="label-text">COMPATIBLE</div>
+                    <div className="provision-metric-value">{filteredCompatibleModels.length}</div>
+                    <div className="provision-metric-copy">Models fit the current node</div>
+                  </div>
+                  <div className="provision-metric-card">
+                    <div className="label-text">SELECTED</div>
+                    <div className="provision-metric-value">{selectedModels.length}</div>
+                    <div className="provision-metric-copy">Models will preload on provision</div>
+                  </div>
+                </div>
+
+                {filteredCompatibleModels.length === 0 ? (
+                  <div className="provision-empty-state">
+                    <div className="provision-empty-title">No compatible models for this GPU size</div>
+                    <div className="provision-empty-copy">
+                      Try a larger GPU configuration, or continue without preloading a model if you only need the node online first.
+                    </div>
+                    <div className="help-actions">
+                      <button className="action-btn" onClick={() => setStep('compute')}>BACK TO GPU CHOICE</button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {filteredRecommendedModels.length > 0 && (
+                      <div className="provision-model-group">
+                        <div className="label-text">RECOMMENDED QUICK PICKS</div>
+                        <div className="provision-model-list">
+                          {filteredRecommendedModels.map((model) => {
+                            const isSelected = selectedModels.includes(model.source_uri);
+                            return (
+                              <button
+                                key={`recommended-${model.id}`}
+                                type="button"
+                                className={`provision-model-card ${isSelected ? 'selected' : ''}`}
+                                onClick={() => toggleModel(model.source_uri)}
+                              >
+                                <div className="provision-model-copy">
+                                  <div className="provision-model-title">{model.name}</div>
+                                  <div className="mono provision-model-source">{model.source_uri}</div>
+                                </div>
+                                <div className="provision-model-meta">
+                                  {model.parameters && <span className="badge">{model.parameters}</span>}
+                                  {model.quantization && <span className="badge">{model.quantization}</span>}
+                                  {model.vram_required ? <span className="badge mono">{Math.ceil(model.vram_required / 1024)}GB VRAM</span> : null}
+                                  {model.source_uri === preselectedModel ? <span className="badge">PINNED</span> : null}
+                                  {isSelected ? <span className="badge">SELECTED</span> : null}
+                                </div>
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="workspace-provider-card" style={{ marginBottom: '2rem' }}>
-                  <div className="label-text" style={{ marginBottom: '0.6rem' }}>{provisioningState?.title || 'NO OFFERINGS AVAILABLE'}</div>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.6 }}>
-                    {provisioningState?.detail || 'No GPU inventory is currently available for this workspace.'}
-                  </div>
-                </div>
-              )}
-            </div>
+                    )}
 
-            <div>
-              {/* Models */}
-              {allVaultModels && allVaultModels.length > 0 && (
-                <div style={{ marginBottom: '2rem' }}>
-                  <div className="label-text" style={{ marginBottom: '0.5rem' }}>MODELS TO DEPLOY</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                    {selectedGPUVram ? `Showing models that fit within ${selectedGPUVram}GB VRAM` : 'Select a GPU to filter compatible models'}
-                  </div>
-                  {recommendedVaultModels.length > 0 && (
-                    <div style={{ marginBottom: '1rem' }}>
-                      <div className="label-text" style={{ marginBottom: '0.5rem' }}>RECOMMENDED QUICK PICKS</div>
-                      <div className="provision-model-grid" style={{ marginBottom: '0.75rem' }}>
-                        {recommendedVaultModels.map((model) => {
+                    <div className="provision-model-group">
+                      <div className="label-text">COMPATIBLE MODEL LIBRARY</div>
+                      <div className="provision-model-list">
+                        {filteredCatalogModels.map((model) => {
                           const isSelected = selectedModels.includes(model.source_uri);
-                          const isCompatible = !selectedGPUVram || model.vram_required <= selectedGPUVram * 1024;
                           return (
                             <button
-                              key={`recommended-${model.id}`}
+                              key={model.id}
+                              type="button"
+                              className={`provision-model-card ${isSelected ? 'selected' : ''}`}
                               onClick={() => toggleModel(model.source_uri)}
-                              disabled={!isCompatible}
-                              style={{
-                                padding: '0.6rem 1rem',
-                                cursor: isCompatible ? 'pointer' : 'not-allowed',
-                                border: isSelected ? '1px solid var(--text-primary)' : 'var(--grid-line)',
-                                background: isSelected ? 'var(--bg-accent)' : 'transparent',
-                                opacity: isCompatible ? 1 : 0.45,
-                                fontFamily: 'var(--font-main)',
-                                fontSize: '0.82rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.5rem',
-                              }}
                             >
-                              {model.name}
-                              {model.parameters && <span className="badge">{model.parameters}</span>}
+                              <div className="provision-model-copy">
+                                <div className="provision-model-title">{model.name}</div>
+                                <div className="mono provision-model-source">{model.source_uri}</div>
+                              </div>
+                              <div className="provision-model-meta">
+                                {model.parameters && <span className="badge">{model.parameters}</span>}
+                                {model.quantization && <span className="badge">{model.quantization}</span>}
+                                {model.vram_required ? <span className="badge mono">{Math.ceil(model.vram_required / 1024)}GB VRAM</span> : null}
+                                {isSelected ? <span className="badge">SELECTED</span> : null}
+                              </div>
                             </button>
                           );
                         })}
                       </div>
                     </div>
-                  )}
-                  <div className="provision-model-grid">
-                    {(compatibleModels || []).map(model => {
-                      const isSelected = selectedModels.includes(model.source_uri);
-                      return (
-                        <button
-                          key={model.id}
-                          onClick={() => toggleModel(model.source_uri)}
-                          style={{
-                            padding: '0.5rem 1rem', cursor: 'pointer',
-                            border: isSelected ? '1px solid var(--text-primary)' : 'var(--grid-line)',
-                            background: isSelected ? 'var(--bg-accent)' : 'transparent',
-                            fontFamily: 'var(--font-main)', fontSize: '0.85rem',
-                            display: 'flex', alignItems: 'center', gap: '0.5rem',
-                          }}
-                        >
-                          {model.name}
+                  </>
+                )}
+              </div>
+
+              <aside className="provision-sidebar">
+                <div className="label-text">COMPUTE SUMMARY</div>
+                {selectedOffering && (
+                  <>
+                    <div className="provision-sidebar-title">{formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}</div>
+                    <div className="provision-sidebar-copy">
+                      {selectedOffering.gpu_count}x GPU · {selectedOffering.memory_gb}GB total VRAM · {getProviderDisplayName(selectedOffering.provider)}
+                    </div>
+                    <div className="provision-sidebar-stat mono">${selectedOffering.cost_per_hour.toFixed(2)}/hr</div>
+                  </>
+                )}
+                <div className="provision-sidebar-block">
+                  <div className="label-text">SELECTED MODELS</div>
+                  {selectedModelEntries.length > 0 ? (
+                    <div className="provision-selected-list">
+                      {selectedModelEntries.map((model) => (
+                        <div key={`selected-${model.id}`} className="provision-selected-item">
+                          <span>{model.name}</span>
                           {model.parameters && <span className="badge">{model.parameters}</span>}
-                        </button>
-                      );
-                    })}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="provision-sidebar-copy">
+                      No models selected yet. You can continue without preloading and attach models after the node is online.
+                    </div>
+                  )}
+                </div>
+              </aside>
+            </div>
+          )}
+
+          {step === 'review' && (
+            <div className="provision-stage">
+              <div className="provision-stage-main">
+                <div className="provision-section">
+                  <div className="label-text">STEP 3</div>
+                  <div className="provision-section-title">Review deployment details</div>
+                  <div className="provision-section-copy">
+                    Confirm the node name and cost posture, then provision the node with the selected compute and model bundle.
                   </div>
                 </div>
-              )}
 
-              {/* Spot toggle */}
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <input type="checkbox" checked={spotInstance} onChange={e => setSpotInstance(e.target.checked)} />
-                <span style={{ fontSize: '0.9rem' }}>Spot Instance (up to 70% cheaper, may be interrupted)</span>
-              </label>
+                <div className="provision-review-grid">
+                  <label className="provision-form-field">
+                    <span className="label-text">INSTANCE NAME</span>
+                    <input
+                      type="text"
+                      className="control-input"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      placeholder="infera-worker"
+                    />
+                    <span className="provision-helper-text">This label appears in the node inventory and deployment history.</span>
+                  </label>
+
+                  <label className="provision-toggle">
+                    <input type="checkbox" checked={spotInstance} onChange={(event) => setSpotInstance(event.target.checked)} />
+                    <span>
+                      <strong>Use spot capacity</strong>
+                      <span>Lower hourly cost, but the node can be interrupted by the provider.</span>
+                    </span>
+                  </label>
+                </div>
+
+                <div className="provision-review-block">
+                  <div className="label-text">WHAT HAPPENS NEXT</div>
+                  <div className="provision-review-copy">
+                    The provider request is submitted first, then the node appears in deployment history while the worker connects and models load. If you selected models, the platform will track inference verification after the node becomes ready.
+                  </div>
+                </div>
+              </div>
+
+              <aside className="provision-sidebar">
+                <div className="label-text">DEPLOYMENT SUMMARY</div>
+                {selectedOffering && (
+                  <>
+                    <div className="provision-sidebar-title">{formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}</div>
+                    <div className="provision-sidebar-copy">
+                      {selectedOffering.gpu_count}x GPU · {selectedOffering.memory_gb}GB total VRAM · {getProviderDisplayName(selectedOffering.provider)} · {formatOfferingRegion(selectedOffering.region, selectedOffering.provider)}
+                    </div>
+                    <div className="provision-sidebar-stat mono">${selectedOffering.cost_per_hour.toFixed(2)}/hr</div>
+                  </>
+                )}
+                <div className="provision-sidebar-block">
+                  <div className="label-text">MODELS</div>
+                  {selectedModelEntries.length > 0 ? (
+                    <div className="provision-selected-list">
+                      {selectedModelEntries.map((model) => (
+                        <div key={`review-${model.id}`} className="provision-selected-item">
+                          <span>{model.name}</span>
+                          {model.parameters && <span className="badge">{model.parameters}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="provision-sidebar-copy">No model selected. The node will provision as infrastructure only.</div>
+                  )}
+                </div>
+                <div className="provision-sidebar-block">
+                  <div className="label-text">DEPLOYMENT MODE</div>
+                  <div className="provision-sidebar-copy">{spotInstance ? 'Spot capacity enabled' : 'On-demand capacity'}</div>
+                </div>
+              </aside>
             </div>
-          </div>
+          )}
         </div>
 
-        {/* Footer */}
-        <div className="provision-modal-footer" style={{ padding: '1.5rem 2rem', borderTop: 'var(--grid-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button className="action-btn" onClick={onClose}>CANCEL</button>
-          <button className="btn-primary" onClick={handleProvision} disabled={!selectedGPU || provisionMutation.isPending || !dedupedOfferings?.length}>
-            {provisionMutation.isPending ? 'PROVISIONING...' : 'PROVISION NODE'}
+        <div className="provision-modal-footer">
+          <div className="provision-footer-actions">
+            <button className="action-btn" onClick={onClose}>CANCEL</button>
+            {step !== 'compute' && (
+              <button
+                className="action-btn"
+                onClick={() => setStep(step === 'review' ? 'models' : 'compute')}
+              >
+                BACK
+              </button>
+            )}
+          </div>
+          <button
+            className="btn-primary"
+            onClick={handlePrimaryAction}
+            disabled={
+              step === 'compute'
+                ? !canContinueFromCompute
+                : step === 'review'
+                  ? !selectedGPU || provisionMutation.isPending || !dedupedOfferings?.length
+                  : !selectedGPU
+            }
+          >
+            {primaryActionLabel}
           </button>
         </div>
       </div>
@@ -938,7 +1305,7 @@ export function Instances() {
   const totalMemUsed = healthyWorkers.reduce((sum, w) => sum + w.memory_used, 0);
   const totalMemTotal = healthyWorkers.reduce((sum, w) => sum + w.memory_total, 0);
   const visibleProviderStatuses = useMemo(
-    () => (providers || []).filter((status) => CONFIGURABLE_PROVIDERS.includes(status.provider as typeof CONFIGURABLE_PROVIDERS[number])),
+    () => (providers || []).filter((status) => isInventoryProviderType(status.provider)),
     [providers],
   );
   const filteredInstances = useMemo(() => {
@@ -955,13 +1322,21 @@ export function Instances() {
   }, [allInstances, drilldownFocus, drilldownModel, statusFilter, workers]);
   const connectedProviders = visibleProviderStatuses.filter((status) => status.connected);
   const visibleOfferings = useMemo(
-    () => (offerings || []).filter((offering) => CONFIGURABLE_PROVIDERS.includes(offering.provider as typeof CONFIGURABLE_PROVIDERS[number])),
+    () => (offerings || []).filter((offering) => isInventoryProviderType(offering.provider)),
     [offerings],
   );
   const provisioningState = describeProvisioningState(configuredProviders, visibleProviderStatuses, visibleOfferings.length);
   const providerSummary = filteredInstances.length > 0
     ? [...new Set(filteredInstances.map((instance) => instance.provider))]
-    : visibleProviderStatuses.filter((status) => configuredProviders.includes(status.provider)).map((status) => status.provider);
+    : visibleProviderStatuses
+      .filter((status) => status.provider === 'mock' || configuredProviders.includes(status.provider))
+      .map((status) => status.provider);
+  const providerRail = useMemo(() => {
+    const extras = visibleProviderStatuses
+      .map((status) => status.provider)
+      .filter((provider) => !WORKSPACE_PROVIDER_TYPES.includes(provider as typeof WORKSPACE_PROVIDER_TYPES[number]));
+    return [...WORKSPACE_PROVIDER_TYPES, ...extras];
+  }, [visibleProviderStatuses]);
   const deploymentHistory = useMemo(
     () => deploymentAttempts.map((attempt) => summarizeDeploymentAttempt(attempt, instances, workers)),
     [deploymentAttempts, instances, workers],
@@ -1175,16 +1550,6 @@ export function Instances() {
     };
   }, [latestDeployment, markAutoVerificationRequested, runInferenceVerification, verifyingAttemptID]);
 
-  // Auto-open provision modal if redirected from dashboard or registry.
-  useEffect(() => {
-    if (searchParams.get('provision') === 'true') {
-      const model = searchParams.get('model');
-      if (model) setPreselectedModel(model);
-      setShowProvisionModal(true);
-      setSearchParams({}, { replace: true });
-    }
-  }, [searchParams, setSearchParams]);
-
   return (
     <div className="instances-page animate-fade-in">
       {latestDeployment && (
@@ -1260,7 +1625,7 @@ export function Instances() {
           <div className="help-callout">
             <div className="label-text">NODE STATUS GUIDE</div>
             <div className="help-callout-copy">
-              <strong>Connected provider</strong> means the workspace credentials are valid and the provider can return live status. <strong>Serving verified</strong> means the worker heartbeat is fresh and runtime looks ready. <strong>Inference verified</strong> means a real chat-completions request passed. Treat the latest deployment banner as the fastest path from provisioned node to confirmed serving.
+              <strong>Connected inventory</strong> means the workspace or local provider path can return live status. <strong>Serving verified</strong> means the worker heartbeat is fresh and runtime looks ready. <strong>Inference verified</strong> means a real chat-completions request passed. Treat the latest deployment banner as the fastest path from provisioned node to confirmed serving.
             </div>
             <div className="help-actions">
               <button className="action-btn" onClick={() => navigate('/workspace')}>OPEN WORKSPACE</button>
@@ -1508,13 +1873,13 @@ export function Instances() {
           <div style={{ marginBottom: '2.5rem' }}>
             <div className="label-text">PROVIDERS</div>
             <div style={{ marginTop: '0.9rem', display: 'grid', gap: '0.65rem' }}>
-              {CONFIGURABLE_PROVIDERS.map((providerName) => {
+              {providerRail.map((providerName) => {
                 const status = visibleProviderStatuses.find((provider) => provider.provider === providerName);
                 const configured = configuredProviders.includes(providerName);
                 const badge = providerStateBadge(status, configured);
                 return (
                   <div key={providerName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
-                    <span style={{ fontSize: '0.85rem' }}>{providerName}</span>
+                    <span style={{ fontSize: '0.85rem' }}>{getProviderDisplayName(providerName)}</span>
                     <span className={`badge ${badge.tone ? `status-${badge.tone}` : ''}`}>{badge.label}</span>
                   </div>
                 );
@@ -1618,7 +1983,7 @@ export function Instances() {
                         </div>
                         <div style={{ marginTop: '0.65rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
                           <span className="badge">{formatAttemptTime(attempt.updated_at)}</span>
-                          {attempt.request.provider && <span className="badge">{attempt.request.provider.toUpperCase()}</span>}
+                          {attempt.request.provider && <span className="badge">{getProviderDisplayName(attempt.request.provider)}</span>}
                           <span className="badge">{attempt.request.gpu_count || 1}x {formatGPUDisplayName(attempt.request.gpu_type)}</span>
                           {attempt.request.spot_instance ? <span className="badge">SPOT</span> : null}
                           {attempt.request.models?.length ? <span className="badge">{attempt.request.models.length} MODEL{attempt.request.models.length === 1 ? '' : 'S'}</span> : null}
@@ -1677,7 +2042,7 @@ export function Instances() {
         <div className="cell">
           <div className="label-text">PROVIDER</div>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-            {providerSummary.length > 0 ? providerSummary.join(', ') : '—'}
+            {providerSummary.length > 0 ? providerSummary.map((provider) => getProviderDisplayName(provider)).join(', ') : '—'}
           </div>
         </div>
         <div className="cell">
@@ -1713,6 +2078,10 @@ export function Instances() {
         }}
         onProvisionFailed={(request) => {
           setProvisionDraft(request);
+        }}
+        onOpenWorkspace={() => {
+          setShowProvisionModal(false);
+          navigate('/workspace');
         }}
         offerings={visibleOfferings}
         preselectedModel={preselectedModel}

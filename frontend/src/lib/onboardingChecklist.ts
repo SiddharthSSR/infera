@@ -22,10 +22,10 @@ export function buildFirstWorkspaceChecklist(input: {
       id: 'provider',
       label: 'Add provider access',
       detail: input.providerConnected
-        ? 'A workspace provider is configured and returning live status.'
+        ? 'A live inventory source is connected and returning current capacity.'
         : input.providerReady
-          ? 'Provider config exists, but the workspace still needs a healthy live connection.'
-          : 'Save RunPod, Vast.ai, or E2E TIR credentials in Workspace before trying to deploy.',
+          ? 'A provider path exists, but the workspace still needs a healthy live connection.'
+          : 'Connect RunPod, Vast.ai, or a local inventory source before trying to deploy.',
       done: input.providerConnected,
       actionLabel: 'OPEN WORKSPACE',
       action: 'open_workspace',
