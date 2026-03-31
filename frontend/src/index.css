@@ -3896,6 +3896,8 @@ body {
   left: 50%;
   z-index: 60;
   width: min(1240px, calc(100vw - 3rem));
+  height: calc(100dvh - 3rem);
+  max-height: calc(100dvh - 3rem);
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
@@ -3982,13 +3984,17 @@ body {
 
 .provision-modal-body {
   flex: 1;
+  display: flex;
+  min-height: 0;
   overflow: hidden;
 }
 
 .provision-stage {
+  flex: 1;
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.85fr);
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
 }
 
 .provision-stage-main {
@@ -3996,6 +4002,7 @@ body {
   gap: 1.5rem;
   align-content: start;
   padding: 1.5rem 2rem 2rem;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -4006,6 +4013,7 @@ body {
   padding: 1.5rem;
   border-left: var(--grid-line);
   background: var(--bg-accent);
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -4410,6 +4418,8 @@ body {
     bottom: 0;
     left: 0;
     width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
     transform: none;
     border-left: none;
     border-right: none;
