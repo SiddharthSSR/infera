@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -145,6 +146,12 @@ var authMigrations = []migrate.Migration{
 		);
 		CREATE INDEX IF NOT EXISTS idx_workspace_provider_configs_workspace ON workspace_provider_configs(workspace_id);`,
 	},
+	{
+		Version:     8,
+		Description: "add provider config options json",
+		SQL: `
+		ALTER TABLE workspace_provider_configs ADD COLUMN options_json TEXT NOT NULL DEFAULT '{}';`,
+	},
 }
 
 // KeyRecord represents a stored API key.
@@ -215,12 +222,13 @@ type WorkspaceInvitationPreview struct {
 }
 
 type WorkspaceProviderConfigRecord struct {
-	WorkspaceID string    `json:"workspace_id"`
-	Provider    string    `json:"provider"`
-	Configured  bool      `json:"configured"`
-	Endpoint    string    `json:"endpoint,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	WorkspaceID string            `json:"workspace_id"`
+	Provider    string            `json:"provider"`
+	Configured  bool              `json:"configured"`
+	Endpoint    string            `json:"endpoint,omitempty"`
+	Options     map[string]string `json:"options,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
 // Store is a SQLite-backed API key store.
@@ -924,7 +932,7 @@ func (s *Store) ListWorkspaceProviderConfigs(workspaceID string) ([]*WorkspacePr
 	}
 
 	rows, err := s.db.Query(`
-		SELECT workspace_id, provider, api_key, endpoint, created_at, updated_at
+		SELECT workspace_id, provider, api_key, endpoint, options_json, created_at, updated_at
 		FROM workspace_provider_configs
 		WHERE workspace_id = ?
 		ORDER BY provider ASC`, workspaceID)
@@ -958,7 +966,7 @@ func (s *Store) GetWorkspaceProviderConfig(workspaceID, provider string) (*Works
 	}
 
 	row := s.db.QueryRow(`
-		SELECT workspace_id, provider, api_key, endpoint, created_at, updated_at
+		SELECT workspace_id, provider, api_key, endpoint, options_json, created_at, updated_at
 		FROM workspace_provider_configs
 		WHERE workspace_id = ? AND provider = ?`,
 		workspaceID, provider,
@@ -966,34 +974,39 @@ func (s *Store) GetWorkspaceProviderConfig(workspaceID, provider string) (*Works
 	return scanWorkspaceProviderConfig(row)
 }
 
-func (s *Store) ResolveWorkspaceProviderConfig(workspaceID, provider string) (apiKey, apiSecret, endpoint string, err error) {
+func (s *Store) ResolveWorkspaceProviderConfig(workspaceID, provider string) (apiKey, apiSecret, endpoint string, options map[string]string, err error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	provider = strings.TrimSpace(provider)
 	if workspaceID == "" || provider == "" {
-		return "", "", "", fmt.Errorf("workspace id and provider are required")
+		return "", "", "", nil, fmt.Errorf("workspace id and provider are required")
 	}
 	if _, err := s.getWorkspace(workspaceID); err != nil {
-		return "", "", "", err
+		return "", "", "", nil, err
 	}
 	row := s.db.QueryRow(`
-		SELECT api_key, api_secret, endpoint
+		SELECT api_key, api_secret, endpoint, options_json
 		FROM workspace_provider_configs
 		WHERE workspace_id = ? AND provider = ?`,
 		workspaceID, provider,
 	)
-	if err := row.Scan(&apiKey, &apiSecret, &endpoint); err != nil {
+	var optionsJSON string
+	if err := row.Scan(&apiKey, &apiSecret, &endpoint, &optionsJSON); err != nil {
 		if err == sql.ErrNoRows {
-			return "", "", "", fmt.Errorf("provider %s is not configured for workspace %s", provider, workspaceID)
+			return "", "", "", nil, fmt.Errorf("provider %s is not configured for workspace %s", provider, workspaceID)
 		}
-		return "", "", "", err
+		return "", "", "", nil, err
 	}
 	if strings.TrimSpace(apiKey) == "" && strings.TrimSpace(apiSecret) == "" {
-		return "", "", "", fmt.Errorf("provider %s is not configured for workspace %s", provider, workspaceID)
+		return "", "", "", nil, fmt.Errorf("provider %s is not configured for workspace %s", provider, workspaceID)
 	}
-	return apiKey, apiSecret, endpoint, nil
+	options, err = parseWorkspaceProviderOptions(optionsJSON)
+	if err != nil {
+		return "", "", "", nil, fmt.Errorf("invalid provider %s options for workspace %s: %w", provider, workspaceID, err)
+	}
+	return apiKey, apiSecret, endpoint, options, nil
 }
 
-func (s *Store) UpsertWorkspaceProviderConfig(workspaceID, provider, apiKey, apiSecret, endpoint string) (*WorkspaceProviderConfigRecord, error) {
+func (s *Store) UpsertWorkspaceProviderConfig(workspaceID, provider, apiKey, apiSecret, endpoint string, options map[string]string) (*WorkspaceProviderConfigRecord, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	provider = strings.TrimSpace(provider)
 	if workspaceID == "" || provider == "" {
@@ -1002,20 +1015,26 @@ func (s *Store) UpsertWorkspaceProviderConfig(workspaceID, provider, apiKey, api
 	if _, err := s.getWorkspace(workspaceID); err != nil {
 		return nil, err
 	}
+	optionsJSON, err := marshalWorkspaceProviderOptions(options)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode workspace provider options: %w", err)
+	}
 	now := time.Now()
-	_, err := s.db.Exec(`
-		INSERT INTO workspace_provider_configs (workspace_id, provider, api_key, api_secret, endpoint, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+	_, err = s.db.Exec(`
+		INSERT INTO workspace_provider_configs (workspace_id, provider, api_key, api_secret, endpoint, options_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(workspace_id, provider) DO UPDATE SET
 			api_key = excluded.api_key,
 			api_secret = excluded.api_secret,
 			endpoint = excluded.endpoint,
+			options_json = excluded.options_json,
 			updated_at = excluded.updated_at`,
 		workspaceID,
 		provider,
 		strings.TrimSpace(apiKey),
 		strings.TrimSpace(apiSecret),
 		strings.TrimSpace(endpoint),
+		optionsJSON,
 		now,
 		now,
 	)
@@ -1561,14 +1580,62 @@ func scanWorkspaceProviderConfig(row interface {
 }) (*WorkspaceProviderConfigRecord, error) {
 	var rec WorkspaceProviderConfigRecord
 	var apiKey string
-	if err := row.Scan(&rec.WorkspaceID, &rec.Provider, &apiKey, &rec.Endpoint, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+	var optionsJSON string
+	if err := row.Scan(&rec.WorkspaceID, &rec.Provider, &apiKey, &rec.Endpoint, &optionsJSON, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("workspace provider config not found")
 		}
 		return nil, err
 	}
+	options, err := parseWorkspaceProviderOptions(optionsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("invalid workspace provider config options: %w", err)
+	}
 	rec.Configured = strings.TrimSpace(apiKey) != ""
+	rec.Options = options
 	return &rec, nil
+}
+
+func marshalWorkspaceProviderOptions(options map[string]string) (string, error) {
+	normalized := normalizeWorkspaceProviderOptions(options)
+	if len(normalized) == 0 {
+		return "{}", nil
+	}
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func parseWorkspaceProviderOptions(raw string) (map[string]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return map[string]string{}, nil
+	}
+	var options map[string]string
+	if err := json.Unmarshal([]byte(raw), &options); err != nil {
+		return nil, err
+	}
+	return normalizeWorkspaceProviderOptions(options), nil
+}
+
+func normalizeWorkspaceProviderOptions(options map[string]string) map[string]string {
+	if len(options) == 0 {
+		return map[string]string{}
+	}
+	normalized := make(map[string]string, len(options))
+	for key, value := range options {
+		trimmedKey := strings.TrimSpace(key)
+		trimmedValue := strings.TrimSpace(value)
+		if trimmedKey == "" || trimmedValue == "" {
+			continue
+		}
+		normalized[trimmedKey] = trimmedValue
+	}
+	if normalized == nil {
+		return map[string]string{}
+	}
+	return normalized
 }
 
 func nullableInt64Ptr(v sql.NullInt64) *int64 {

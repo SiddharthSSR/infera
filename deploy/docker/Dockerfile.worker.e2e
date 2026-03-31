@@ -1,0 +1,69 @@
+# Infera Worker - E2E TIR variant
+#
+# This keeps the current vLLM worker runtime but adds a lightweight JupyterLab
+# sidecar process and startup logic for deriving a routable worker address in
+# E2E-hosted environments.
+
+FROM --platform=linux/amd64 runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip uninstall -y torch torchvision torchaudio 2>/dev/null; true
+
+RUN pip install --upgrade pip
+
+RUN pip install --no-cache-dir \
+    "vllm>=0.16.0" \
+    "transformers>=4.43.0" \
+    "accelerate>=0.30.0" \
+    "tokenizers>=0.19.0" \
+    "aiohttp>=3.9.0" \
+    "jupyterlab>=4.2.0"
+
+COPY python/pyproject.toml .
+COPY python/README.md .
+COPY python/src/ ./src/
+COPY deploy/docker/e2e-entrypoint.sh /usr/local/bin/e2e-entrypoint.sh
+
+RUN pip install --no-cache-dir -e . && chmod +x /usr/local/bin/e2e-entrypoint.sh && \
+    echo "=== Verifying installation ===" && \
+    python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.version.cuda}')" && \
+    python -c "import transformers; print(f'Transformers {transformers.__version__}')" && \
+    python -c "import vllm; print(f'vLLM {vllm.__version__}')" && \
+    python -c "from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams; print('vLLM imports OK')" && \
+    python -c "from infera_worker.engines.vllm_engine import VLLMEngine; print('VLLMEngine OK')" && \
+    python -c "import jupyterlab; print(f'JupyterLab {jupyterlab.__version__}')" 
+
+ENV INFERA_ENGINE=vllm
+ENV INFERA_HTTP_PORT=8081
+ENV INFERA_GRPC_PORT=50051
+ENV INFERA_LOG_LEVEL=INFO
+ENV INFERA_LOG_FORMAT=json
+ENV INFERA_E2E_ENABLE_JUPYTER=1
+ENV JUPYTER_PORT=8888
+
+ENV XDG_CACHE_HOME=/workspace/.cache
+ENV HF_HOME=/workspace/.cache/huggingface
+ENV HUGGINGFACE_HUB_CACHE=/workspace/.cache/huggingface/hub
+ENV TRANSFORMERS_CACHE=/workspace/.cache/huggingface/hub
+ENV TORCH_HOME=/workspace/.cache/torch
+
+ENV VLLM_WORKER_MULTIPROC_METHOD=spawn
+ENV VLLM_USE_MODELSCOPE=false
+
+ENV INFERA_ROUTER_ADDRESS=""
+ENV INFERA_PRELOAD_MODELS=""
+
+EXPOSE 8081 50051 8888
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
+    CMD curl -f http://localhost:8081/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/e2e-entrypoint.sh"]

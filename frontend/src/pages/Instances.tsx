@@ -32,7 +32,7 @@ function formatGPUDisplayName(gpuType: GPUType, displayName?: string) {
   return gpuType.replace(/_/g, ' ');
 }
 
-const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai'] as const;
+const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai', 'e2e'] as const;
 const AUTO_VERIFY_DELAY_MS = 1500;
 const RECOMMENDED_MODEL_IDS = [
   'Qwen/Qwen3-4B-Thinking-2507',
@@ -96,7 +96,7 @@ function describeProvisioningState(configuredProviders: string[], providerStatus
   if (configuredProviders.length === 0) {
     return {
       title: 'No workspace provider is configured',
-      detail: 'Add RunPod or Vast.ai credentials in Workspace settings before provisioning nodes from this workspace.',
+      detail: 'Add RunPod, Vast.ai, or E2E TIR credentials in Workspace settings before provisioning nodes from this workspace.',
       action: 'OPEN WORKSPACE',
     };
   }

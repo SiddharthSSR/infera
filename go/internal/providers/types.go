@@ -7,6 +7,7 @@ import "time"
 type ProviderType string
 
 const (
+	ProviderE2E    ProviderType = "e2e"
 	ProviderRunPod ProviderType = "runpod"
 	ProviderVastAI ProviderType = "vastai"
 	ProviderLambda ProviderType = "lambda"

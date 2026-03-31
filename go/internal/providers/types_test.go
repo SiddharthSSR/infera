@@ -11,6 +11,7 @@ func TestProviderTypes(t *testing.T) {
 		provider ProviderType
 		expected string
 	}{
+		{"E2E", ProviderE2E, "e2e"},
 		{"RunPod", ProviderRunPod, "runpod"},
 		{"VastAI", ProviderVastAI, "vastai"},
 		{"Lambda", ProviderLambda, "lambda"},

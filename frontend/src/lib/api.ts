@@ -78,6 +78,7 @@ export interface WorkspaceProviderConfigRecord {
   provider: string;
   configured: boolean;
   endpoint?: string;
+  options?: Record<string, string>;
   created_at: string;
   updated_at: string;
 }
@@ -611,7 +612,7 @@ export async function fetchWorkspaceProviderConfigs(workspaceId: string): Promis
 export async function upsertWorkspaceProviderConfig(
   workspaceId: string,
   provider: string,
-  payload: { api_key: string; api_secret?: string; endpoint?: string },
+  payload: { api_key: string; api_secret?: string; endpoint?: string; options?: Record<string, string> },
 ): Promise<WorkspaceProviderConfigRecord> {
   const response = await authFetch(`${API_BASE}/api/auth/workspaces/${workspaceId}/providers/${provider}`, {
     method: 'PUT',

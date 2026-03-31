@@ -25,7 +25,7 @@ export function buildFirstWorkspaceChecklist(input: {
         ? 'A workspace provider is configured and returning live status.'
         : input.providerReady
           ? 'Provider config exists, but the workspace still needs a healthy live connection.'
-          : 'Save RunPod or Vast.ai credentials in Workspace before trying to deploy.',
+          : 'Save RunPod, Vast.ai, or E2E TIR credentials in Workspace before trying to deploy.',
       done: input.providerConnected,
       actionLabel: 'OPEN WORKSPACE',
       action: 'open_workspace',

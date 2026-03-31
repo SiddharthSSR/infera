@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/infera/infera/go/internal/providers/e2e"
 	_ "github.com/infera/infera/go/internal/providers/mock"
 	_ "github.com/infera/infera/go/internal/providers/runpod"
 )
@@ -210,7 +211,7 @@ func TestHandleWorkspaceProviderConfig(t *testing.T) {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
 
-	putBody := `{"api_key":"rp_key","endpoint":"https://api.runpod.io/graphql"}`
+	putBody := `{"api_key":"rp_key","endpoint":"https://api.runpod.io/graphql","options":{"location":"us-east-1"}}`
 	putReq := httptest.NewRequest("PUT", "/api/auth/workspaces/"+workspace.ID+"/providers/runpod", strings.NewReader(putBody))
 	putReq.Header.Set("Content-Type", "application/json")
 	putReq.Header.Set("Authorization", "Bearer "+adminKey)

@@ -386,7 +386,9 @@ func TestWorkspaceProviderConfigLifecycle(t *testing.T) {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
 
-	config, err := s.UpsertWorkspaceProviderConfig(workspace.ID, "runpod", "rp_key", "", "https://api.runpod.io/graphql")
+	config, err := s.UpsertWorkspaceProviderConfig(workspace.ID, "runpod", "rp_key", "", "https://api.runpod.io/graphql", map[string]string{
+		"location": "us-east-1",
+	})
 	if err != nil {
 		t.Fatalf("UpsertWorkspaceProviderConfig: %v", err)
 	}
@@ -395,6 +397,9 @@ func TestWorkspaceProviderConfigLifecycle(t *testing.T) {
 	}
 	if config.Endpoint != "https://api.runpod.io/graphql" {
 		t.Fatalf("expected endpoint to round-trip, got %q", config.Endpoint)
+	}
+	if got := config.Options["location"]; got != "us-east-1" {
+		t.Fatalf("expected location option to round-trip, got %q", got)
 	}
 
 	listed, err := s.ListWorkspaceProviderConfigs(workspace.ID)
@@ -405,18 +410,21 @@ func TestWorkspaceProviderConfigLifecycle(t *testing.T) {
 		t.Fatalf("expected one runpod config, got %+v", listed)
 	}
 
-	apiKey, apiSecret, endpoint, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod")
+	apiKey, apiSecret, endpoint, options, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod")
 	if err != nil {
 		t.Fatalf("ResolveWorkspaceProviderConfig: %v", err)
 	}
 	if apiKey != "rp_key" || apiSecret != "" || endpoint != "https://api.runpod.io/graphql" {
 		t.Fatalf("unexpected resolved provider config: %q %q %q", apiKey, apiSecret, endpoint)
 	}
+	if got := options["location"]; got != "us-east-1" {
+		t.Fatalf("expected resolved location option, got %q", got)
+	}
 
 	if err := s.DeleteWorkspaceProviderConfig(workspace.ID, "runpod"); err != nil {
 		t.Fatalf("DeleteWorkspaceProviderConfig: %v", err)
 	}
-	if _, _, _, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod"); err == nil {
+	if _, _, _, _, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod"); err == nil {
 		t.Fatal("expected resolve to fail after delete")
 	}
 }

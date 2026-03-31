@@ -19,6 +19,7 @@ const GPU_LABELS: Record<KnownGPUType, string> = {
 };
 
 const PROVIDER_LABELS: Record<ProviderType, string> = {
+  e2e: 'E2E TIR',
   runpod: 'RunPod',
   vastai: 'Vast.ai',
   lambda: 'Lambda',

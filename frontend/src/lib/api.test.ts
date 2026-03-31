@@ -415,12 +415,12 @@ describe('API Functions', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          providers: [{ workspace_id: 'ws_1', provider: 'runpod', configured: true, endpoint: 'https://api.runpod.io/graphql' }],
+          providers: [{ workspace_id: 'ws_1', provider: 'runpod', configured: true, endpoint: 'https://api.runpod.io/graphql', options: { location: 'us-east-1' } }],
         }),
       })
 
       await expect(fetchWorkspaceProviderConfigs('ws_1')).resolves.toEqual([
-        expect.objectContaining({ workspace_id: 'ws_1', provider: 'runpod', configured: true }),
+        expect.objectContaining({ workspace_id: 'ws_1', provider: 'runpod', configured: true, options: { location: 'us-east-1' } }),
       ])
     })
 
@@ -463,6 +463,7 @@ describe('API Functions', () => {
         api_key: 'rp_key',
         api_secret: 'rp_secret',
         endpoint: 'https://api.runpod.io/graphql',
+        options: { location: 'us-east-1' },
       })
       await deleteWorkspaceProviderConfig('ws_1', 'runpod')
 
