@@ -59,6 +59,8 @@ const (
 	MetadataExplicitAffinity = "explicit"
 	MetadataSessionAffinity  = "session_prefix"
 	MetadataAPIKeyAffinity   = "api_key_prefix"
+	MetadataAgentID          = "agent_id"
+	MetadataAgentRunID       = "agent_run_id"
 )
 
 // InferenceRequest represents a request for model inference.
