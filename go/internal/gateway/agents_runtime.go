@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/infera/infera/go/internal/agents"
 	"github.com/infera/infera/go/internal/auth"
@@ -130,6 +131,28 @@ func (g *Gateway) NewAgentsRuntime(store *agents.Store) (*agents.Runtime, error)
 				return nil, fmt.Errorf("instance handlers are not configured")
 			}
 			return g.instanceHandlers.listProviderEntries(ctx, call.Run.WorkspaceID), nil
+		},
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := runtime.RegisterTool(agents.ToolDefinition{
+		Name:        "get_usage_summary",
+		Description: "Read current-month workspace totals plus a 7-day daily trend for requests, tokens, successes, and errors.",
+		Permission:  auth.PermissionViewUsage,
+		Handler: func(ctx context.Context, call agents.ToolCallContext, arguments json.RawMessage) (any, error) {
+			return g.usageSummaryPayload(call.Run.WorkspaceID, time.Now().UTC())
+		},
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := runtime.RegisterTool(agents.ToolDefinition{
+		Name:        "get_quota_status",
+		Description: "Read workspace quota settings and the current request or token pressure against this month's usage.",
+		Permission:  auth.PermissionViewUsage,
+		Handler: func(ctx context.Context, call agents.ToolCallContext, arguments json.RawMessage) (any, error) {
+			return g.quotaStatusPayload(call.Run.WorkspaceID, time.Now().UTC())
 		},
 	}); err != nil {
 		return nil, err

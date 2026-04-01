@@ -12,7 +12,7 @@ import {
   fetchAgentRunDetail,
   streamChatCompletion,
 } from '../lib/api';
-import type { AgentRunDetail, AgentRunStatus, AgentRunStep } from '../types';
+import type { AgentRunDetail, AgentRunStatus, AgentRunStep, PlaygroundMode } from '../types';
 
 interface TokenUsage {
   promptTokens: number;
@@ -21,7 +21,24 @@ interface TokenUsage {
   tokensPerSec: number;
 }
 
+interface AgentThinkingState {
+  headline: string;
+  detail: string;
+  recentChecks: string[];
+}
+
 const terminalAgentStatuses = new Set<AgentRunStatus>(['succeeded', 'failed', 'canceled']);
+
+const toolLabelMap: Record<string, string> = {
+  list_models: 'model availability',
+  list_workers: 'worker health',
+  get_gateway_stats: 'gateway pressure',
+  list_instances: 'workspace instances',
+  list_deployments: 'recent deployments',
+  get_provider_status: 'provider connectivity',
+  get_usage_summary: 'workspace usage',
+  get_quota_status: 'quota pressure',
+};
 
 function formatAgentStatus(status?: AgentRunStatus) {
   return status ? status.replace(/_/g, ' ').toUpperCase() : 'IDLE';
@@ -45,6 +62,10 @@ function formatStepPayload(payload: unknown) {
   }
 }
 
+function promptPreview(prompt: string) {
+  return prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '');
+}
+
 function summarizeAgentResult(detail: AgentRunDetail) {
   if (detail.run.final_output?.trim()) {
     return detail.run.final_output;
@@ -58,8 +79,150 @@ function summarizeAgentResult(detail: AgentRunDetail) {
   return 'Agent run completed without a final output.';
 }
 
-function promptPreview(prompt: string) {
-  return prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '');
+function friendlyToolLabel(toolName?: string) {
+  if (!toolName) {
+    return 'workspace state';
+  }
+  return toolLabelMap[toolName] || toolName.replace(/_/g, ' ');
+}
+
+function latestStep(detail: AgentRunDetail | null) {
+  if (!detail || detail.steps.length === 0) {
+    return null;
+  }
+  return detail.steps[detail.steps.length - 1];
+}
+
+function deriveAgentThinking(detail: AgentRunDetail | null, isRunning: boolean): AgentThinkingState | null {
+  if (!isRunning) {
+    return null;
+  }
+
+  const step = latestStep(detail);
+  const runStatus = detail?.run.status;
+  let headline = 'Planning workspace review';
+  let detailText = 'Hermes is preparing a read-only workspace health pass from the signals available to your current key.';
+
+  switch (runStatus) {
+    case 'queued':
+      headline = 'Planning workspace review';
+      detailText = 'Hermes is deciding which safe checks to run first.';
+      break;
+    case 'running':
+      if (!step) {
+        headline = 'Inspecting workspace state';
+        detailText = 'Hermes is gathering current infrastructure, deployment, and usage signals.';
+        break;
+      }
+      switch (step.type) {
+        case 'tool_call':
+          headline = `Checking ${friendlyToolLabel(step.tool_name)}`;
+          detailText = 'Hermes is waiting for the latest read-only check to return.';
+          break;
+        case 'tool_result':
+          headline = 'Cross-checking findings';
+          detailText = 'Hermes is reconciling the latest result before it answers.';
+          break;
+        case 'error':
+          headline = 'Recovering from a failed check';
+          detailText = 'Hermes is continuing with the remaining safe checks after an error.';
+          break;
+        default:
+          headline = 'Inspecting workspace state';
+          detailText = 'Hermes is gathering current infrastructure, deployment, and usage signals.';
+      }
+      break;
+    default:
+      if (isRunning) {
+        headline = 'Planning workspace review';
+      }
+  }
+
+  const recentChecks = (detail?.steps || [])
+    .filter((entry) => entry.tool_name)
+    .slice(-3)
+    .map((entry) => friendlyToolLabel(entry.tool_name));
+
+  return {
+    headline,
+    detail: detailText,
+    recentChecks,
+  };
+}
+
+function traceSummary(detail: AgentRunDetail | null) {
+  if (!detail) {
+    return 'No run trace available yet.';
+  }
+  if (detail.steps.length === 0) {
+    return detail.run.status === 'queued'
+      ? 'Queued with no steps yet.'
+      : 'Waiting for the first structured step.';
+  }
+
+  const last = detail.steps[detail.steps.length - 1];
+  const stepCount = `${detail.steps.length} step${detail.steps.length === 1 ? '' : 's'}`;
+  if (last.tool_name) {
+    return `${stepCount} · latest: ${friendlyToolLabel(last.tool_name)}`;
+  }
+  return `${stepCount} · latest: ${formatStepType(last.type).toLowerCase()}`;
+}
+
+function MarkdownOutput({ content }: { content: string }) {
+  return (
+    <div className="markdown-output">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={{
+          pre({ children, ...props }) {
+            return (
+              <pre
+                {...props}
+                style={{
+                  background: '#F4F2EE',
+                  border: '1px solid var(--border-color)',
+                  padding: '1.25rem',
+                  overflow: 'auto',
+                  fontSize: '0.85rem',
+                  lineHeight: 1.6,
+                  marginBottom: '1rem',
+                }}
+              >
+                {children}
+              </pre>
+            );
+          },
+          code({ className, children, ...props }) {
+            const isInline = !className;
+            if (isInline) {
+              return (
+                <code
+                  {...props}
+                  style={{
+                    background: '#F4F2EE',
+                    padding: '0.15rem 0.4rem',
+                    fontSize: '0.88em',
+                    fontFamily: 'var(--font-mono)',
+                    border: '1px solid var(--border-color)',
+                  }}
+                >
+                  {children}
+                </code>
+              );
+            }
+            return (
+              <code className={className} {...props} style={{ fontFamily: 'var(--font-mono)' }}>
+                {children}
+              </code>
+            );
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 export function Playground() {
@@ -108,11 +271,16 @@ export function Playground() {
     agents.find((agent) => agent.id === agentsData?.default_agent_id) ||
     agents[0] ||
     null;
+  const thinkingState = deriveAgentThinking(
+    agentDetail,
+    isAgentMode && (isLoading || agentDetail?.run.status === 'queued' || agentDetail?.run.status === 'running'),
+  );
 
-  // Keyboard shortcut: Escape to exit focus mode
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && focusMode) setFocusMode(false);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && focusMode) {
+        setFocusMode(false);
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -178,7 +346,10 @@ export function Playground() {
   }, []);
 
   const handleChatRun = useCallback(async () => {
-    if (!prompt.trim() || !selectedModel) return;
+    if (!prompt.trim() || !selectedModel) {
+      return;
+    }
+
     setIsLoading(true);
     setResponse('');
     setTokenUsage(null);
@@ -218,7 +389,7 @@ export function Playground() {
       const latency = Date.now() - startTime;
       const completionTokens = streamingCompletionTokens ?? Math.round(fullResponse.split(/\s+/).length * 1.3);
       const promptTokens = streamingPromptTokens ?? Math.round(prompt.split(/\s+/).length * 1.3);
-      const tokensPerSec = latency > 0 ? (completionTokens / (latency / 1000)) : 0;
+      const tokensPerSec = latency > 0 ? completionTokens / (latency / 1000) : 0;
 
       setTokenUsage({
         promptTokens,
@@ -237,9 +408,9 @@ export function Playground() {
         completionTokens,
       }, ...prev].slice(0, 20));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Request failed';
-      setResponse(`Error: ${msg}`);
-      toast.error(msg);
+      const message = err instanceof Error ? err.message : 'Request failed';
+      setResponse(`Error: ${message}`);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -256,7 +427,9 @@ export function Playground() {
   ]);
 
   const handleAgentRun = useCallback(async () => {
-    if (!prompt.trim() || !selectedModel || !selectedAgentID) return;
+    if (!prompt.trim() || !selectedModel || !selectedAgentID) {
+      return;
+    }
 
     const pollToken = agentPollTokenRef.current + 1;
     agentPollTokenRef.current = pollToken;
@@ -275,13 +448,18 @@ export function Playground() {
         input: prompt,
         max_steps: agentMaxSteps,
       });
-      if (agentPollTokenRef.current !== pollToken) return;
+      if (agentPollTokenRef.current !== pollToken) {
+        return;
+      }
 
       setAgentRunID(run.id);
+      setAgentDetail({ run, steps: [] });
 
       while (true) {
         const nextDetail = await fetchAgentRunDetail(run.id);
-        if (agentPollTokenRef.current !== pollToken) return;
+        if (agentPollTokenRef.current !== pollToken) {
+          return;
+        }
 
         setAgentDetail(nextDetail);
         if (nextDetail.run.final_output?.trim()) {
@@ -310,12 +488,14 @@ export function Playground() {
         }
 
         await new Promise((resolve) => window.setTimeout(resolve, 1200));
-        if (agentPollTokenRef.current !== pollToken) return;
+        if (agentPollTokenRef.current !== pollToken) {
+          return;
+        }
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Agent run failed';
-      setResponse(`Error: ${msg}`);
-      toast.error(msg);
+      const message = err instanceof Error ? err.message : 'Agent run failed';
+      setResponse(`Error: ${message}`);
+      toast.error(message);
     } finally {
       if (agentPollTokenRef.current === pollToken) {
         setIsLoading(false);
@@ -332,7 +512,9 @@ export function Playground() {
   }, [handleAgentRun, handleChatRun, isAgentMode]);
 
   const handleCancel = useCallback(async () => {
-    if (!agentRunID) return;
+    if (!agentRunID) {
+      return;
+    }
 
     const pollToken = agentPollTokenRef.current + 1;
     agentPollTokenRef.current = pollToken;
@@ -347,16 +529,19 @@ export function Playground() {
       try {
         detail = await fetchAgentRunDetail(agentRunID);
       } catch {
-        // Best effort; fall back to cancel response.
+        // Best effort detail refresh.
       }
 
-      if (agentPollTokenRef.current !== pollToken) return;
+      if (agentPollTokenRef.current !== pollToken) {
+        return;
+      }
+
       setAgentDetail(detail);
       setResponse(summarizeAgentResult(detail));
       toast.success('Agent run canceled');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to cancel agent run';
-      toast.error(msg);
+      const message = err instanceof Error ? err.message : 'Failed to cancel agent run';
+      toast.error(message);
     } finally {
       if (agentPollTokenRef.current === pollToken) {
         setIsLoading(false);
@@ -372,7 +557,7 @@ export function Playground() {
     setIsLoading(false);
   }, [resetAgentRunState]);
 
-  const handleModeChange = useCallback((mode: 'chat' | 'agent') => {
+  const handleModeChange = useCallback((mode: PlaygroundMode) => {
     if (mode === playgroundMode) {
       return;
     }
@@ -384,9 +569,9 @@ export function Playground() {
   }, [playgroundMode, resetAgentRunState, setPlaygroundMode]);
 
   const canRun = Boolean(
-    prompt.trim()
-    && selectedModel
-    && (!isAgentMode || (selectedAgentID && agentModeAvailable)),
+    prompt.trim() &&
+    selectedModel &&
+    (!isAgentMode || (selectedAgentID && agentModeAvailable)),
   );
 
   const settingsControls = (
@@ -416,18 +601,27 @@ export function Playground() {
       <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>ACTIVE MODEL</label>
       <select
         value={selectedModel}
-        onChange={(e) => setSelectedModel(e.target.value)}
+        onChange={(event) => setSelectedModel(event.target.value)}
         style={{
-          width: '100%', padding: '0.75rem 0', background: 'transparent',
-          border: 'none', borderBottom: '1px solid var(--text-primary)',
-          fontFamily: 'var(--font-main)', fontSize: '1rem', outline: 'none',
-          marginBottom: '2rem', cursor: 'pointer', color: 'var(--text-primary)',
+          width: '100%',
+          padding: '0.75rem 0',
+          background: 'transparent',
+          border: 'none',
+          borderBottom: '1px solid var(--text-primary)',
+          fontFamily: 'var(--font-main)',
+          fontSize: '1rem',
+          outline: 'none',
+          marginBottom: '2rem',
+          cursor: 'pointer',
+          color: 'var(--text-primary)',
         }}
       >
         {allModels.length === 0 && <option value="">No models available</option>}
         {allModels.map((model) => (
           <option key={model.id} value={model.id}>
-            {model.id.split('/').pop()}{model.loaded === false ? ' (not loaded)' : ''}{model.parameters ? ` — ${model.parameters}` : ''}
+            {model.id.split('/').pop()}
+            {model.loaded === false ? ' (not loaded)' : ''}
+            {model.parameters ? ` — ${model.parameters}` : ''}
           </option>
         ))}
       </select>
@@ -437,18 +631,25 @@ export function Playground() {
           <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>ACTIVE AGENT</label>
           <select
             value={selectedAgentID}
-            onChange={(e) => {
-              const nextAgent = agents.find((agent) => agent.id === e.target.value);
-              setSelectedAgentID(e.target.value);
+            onChange={(event) => {
+              const nextAgent = agents.find((agent) => agent.id === event.target.value);
+              setSelectedAgentID(event.target.value);
               if (nextAgent) {
                 setAgentMaxSteps(nextAgent.default_max_steps);
               }
             }}
             style={{
-              width: '100%', padding: '0.75rem 0', background: 'transparent',
-              border: 'none', borderBottom: '1px solid var(--text-primary)',
-              fontFamily: 'var(--font-main)', fontSize: '1rem', outline: 'none',
-              marginBottom: '1rem', cursor: 'pointer', color: 'var(--text-primary)',
+              width: '100%',
+              padding: '0.75rem 0',
+              background: 'transparent',
+              border: 'none',
+              borderBottom: '1px solid var(--text-primary)',
+              fontFamily: 'var(--font-main)',
+              fontSize: '1rem',
+              outline: 'none',
+              marginBottom: '1rem',
+              cursor: 'pointer',
+              color: 'var(--text-primary)',
             }}
           >
             {agents.length === 0 && <option value="">No agents available</option>}
@@ -474,7 +675,7 @@ export function Playground() {
               max="16"
               step="1"
               value={agentMaxSteps}
-              onChange={(e) => setAgentMaxSteps(parseInt(e.target.value))}
+              onChange={(event) => setAgentMaxSteps(parseInt(event.target.value, 10))}
             />
           </div>
 
@@ -482,10 +683,13 @@ export function Playground() {
             <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>AVAILABLE TOOLS</label>
             <div style={{ display: 'grid', gap: '0.75rem' }}>
               {(activeAgent?.tools || []).map((tool) => (
-                <div key={tool.name} style={{
-                  paddingBottom: '0.75rem',
-                  borderBottom: '1px solid var(--border-color)',
-                }}>
+                <div
+                  key={tool.name}
+                  style={{
+                    paddingBottom: '0.75rem',
+                    borderBottom: '1px solid var(--border-color)',
+                  }}
+                >
                   <div className="mono" style={{ fontSize: '0.72rem', marginBottom: '0.35rem' }}>{tool.name}</div>
                   <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{tool.description}</div>
                 </div>
@@ -507,8 +711,7 @@ export function Playground() {
               <span style={{ fontSize: '0.85rem' }}>Temperature</span>
               <span className="mono" style={{ fontSize: '0.85rem' }}>{temperature.toFixed(2)}</span>
             </div>
-            <input type="range" min="0" max="2" step="0.01" value={temperature}
-              onChange={(e) => setTemperature(parseFloat(e.target.value))} />
+            <input type="range" min="0" max="2" step="0.01" value={temperature} onChange={(event) => setTemperature(parseFloat(event.target.value))} />
           </div>
 
           <div style={{ marginBottom: '2rem' }}>
@@ -516,8 +719,7 @@ export function Playground() {
               <span style={{ fontSize: '0.85rem' }}>Max Tokens</span>
               <span className="mono" style={{ fontSize: '0.85rem' }}>{maxTokens}</span>
             </div>
-            <input type="range" min="1" max="8192" step="1" value={maxTokens}
-              onChange={(e) => setMaxTokens(parseInt(e.target.value))} />
+            <input type="range" min="1" max="8192" step="1" value={maxTokens} onChange={(event) => setMaxTokens(parseInt(event.target.value, 10))} />
           </div>
 
           <div style={{ marginBottom: '2rem' }}>
@@ -525,8 +727,7 @@ export function Playground() {
               <span style={{ fontSize: '0.85rem' }}>Top P</span>
               <span className="mono" style={{ fontSize: '0.85rem' }}>{topP.toFixed(2)}</span>
             </div>
-            <input type="range" min="0" max="1" step="0.01" value={topP}
-              onChange={(e) => setTopP(parseFloat(e.target.value))} />
+            <input type="range" min="0" max="1" step="0.01" value={topP} onChange={(event) => setTopP(parseFloat(event.target.value))} />
           </div>
 
           <div style={{ marginBottom: '2rem' }}>
@@ -534,20 +735,26 @@ export function Playground() {
               <span style={{ fontSize: '0.85rem' }}>Frequency Penalty</span>
               <span className="mono" style={{ fontSize: '0.85rem' }}>{freqPenalty.toFixed(2)}</span>
             </div>
-            <input type="range" min="0" max="2" step="0.01" value={freqPenalty}
-              onChange={(e) => setFreqPenalty(parseFloat(e.target.value))} />
+            <input type="range" min="0" max="2" step="0.01" value={freqPenalty} onChange={(event) => setFreqPenalty(parseFloat(event.target.value))} />
           </div>
 
           <div style={{ marginTop: '2rem' }}>
             <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>SYSTEM PROMPT</label>
             <textarea
               value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
+              onChange={(event) => setSystemPrompt(event.target.value)}
               placeholder="You are a helpful assistant..."
               style={{
-                width: '100%', height: 120, border: 'none', background: 'transparent',
-                resize: 'none', outline: 'none', fontFamily: 'var(--font-main)',
-                fontSize: '0.85rem', lineHeight: 1.6, color: 'var(--text-primary)',
+                width: '100%',
+                height: 120,
+                border: 'none',
+                background: 'transparent',
+                resize: 'none',
+                outline: 'none',
+                fontFamily: 'var(--font-main)',
+                fontSize: '0.85rem',
+                lineHeight: 1.6,
+                color: 'var(--text-primary)',
                 borderBottom: '1px solid var(--border-color)',
               }}
             />
@@ -564,14 +771,14 @@ export function Playground() {
           No requests yet. Run an inference or agent task to see history.
         </div>
       ) : (
-        history.map((entry, i) => (
+        history.map((entry, index) => (
           <button
             type="button"
             key={entry.id}
             style={{
               padding: '1rem 0',
               cursor: 'pointer',
-              opacity: i === 0 ? 1 : 0.7,
+              opacity: index === 0 ? 1 : 0.7,
               background: 'none',
               border: 'none',
               borderBottom: '1px solid #E5E2DE',
@@ -595,10 +802,15 @@ export function Playground() {
                 </span>
               )}
             </div>
-            <div style={{
-              fontSize: '0.85rem', whiteSpace: 'nowrap', overflow: 'hidden',
-              textOverflow: 'ellipsis', color: 'var(--text-primary)',
-            }}>
+            <div
+              style={{
+                fontSize: '0.85rem',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                color: 'var(--text-primary)',
+              }}
+            >
               {entry.preview}
             </div>
             {entry.promptTokens != null && (
@@ -633,43 +845,65 @@ export function Playground() {
       : '252px minmax(0, 1fr)';
 
   const runStatusText = isAgentMode
-    ? (agentDetail?.run.status ? `agent ${formatAgentStatus(agentDetail.run.status).toLowerCase()}` : (isLoading ? 'starting agent run...' : (activeAgent ? `${activeAgent.name.toLowerCase()} ready` : 'agent mode unavailable')))
+    ? (agentDetail?.run.status
+      ? `agent ${formatAgentStatus(agentDetail.run.status).toLowerCase()}`
+      : (isLoading ? 'starting agent run...' : (activeAgent ? `${activeAgent.name.toLowerCase()} ready` : 'agent mode unavailable')))
     : (isLoading ? 'generating...' : 'ready to inference');
 
+  const terminalRun = agentDetail && terminalAgentStatuses.has(agentDetail.run.status);
+  const traceExpandedByDefault = agentDetail?.run.status === 'failed' || agentDetail?.run.status === 'canceled';
+
   return (
-    <div style={focusMode ? {
-      position: 'fixed', inset: 0, zIndex: 100,
-      background: 'var(--bg-paper)',
-      display: 'flex', flexDirection: 'column',
-    } : {}}>
+    <div
+      style={focusMode ? {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100,
+        background: 'var(--bg-paper)',
+        display: 'flex',
+        flexDirection: 'column',
+      } : {}}
+    >
       {!focusMode && (
         <header className="display-text" style={{ fontSize: isMobile ? '3rem' : '4.2rem', padding: isMobile ? '1.25rem 0' : '1.5rem 0 1.2rem' }}>
           PLAYGROUND
         </header>
       )}
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: playgroundGridTemplateColumns,
-        flexGrow: 1,
-        overflow: 'hidden',
-        height: focusMode ? '100vh' : isMobile ? 'calc(100vh - 170px)' : 'calc(100vh - 190px)',
-      }}>
-        {showDesktopSettingsRail && <aside style={{
-          padding: '1.5rem',
-          borderRight: 'var(--grid-line)',
-          overflowY: 'auto',
-        }}>
-          {settingsControls}
-        </aside>}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: playgroundGridTemplateColumns,
+          flexGrow: 1,
+          overflow: 'hidden',
+          height: focusMode ? '100vh' : isMobile ? 'calc(100vh - 170px)' : 'calc(100vh - 190px)',
+        }}
+      >
+        {showDesktopSettingsRail && (
+          <aside
+            style={{
+              padding: '1.5rem',
+              borderRight: 'var(--grid-line)',
+              overflowY: 'auto',
+            }}
+          >
+            {settingsControls}
+          </aside>
+        )}
 
         <main style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{
-            padding: isMobile ? '1rem' : '1rem 1.5rem', borderBottom: 'var(--grid-line)',
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            flexWrap: 'wrap', gap: '0.75rem',
-            flexShrink: 0,
-          }}>
+          <div
+            style={{
+              padding: isMobile ? '1rem' : '1rem 1.5rem',
+              borderBottom: 'var(--grid-line)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '0.75rem',
+              flexShrink: 0,
+            }}
+          >
             <div style={{ display: 'grid', gap: '0.35rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>
                 <div style={{ width: 6, height: 6, background: isLoading ? 'var(--color-warning)' : 'var(--color-success)', borderRadius: '50%' }} />
@@ -678,25 +912,19 @@ export function Playground() {
               {!showDesktopHistoryRail && !isMobile && !isCompactDesktop && (
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                   {isAgentMode
-                    ? 'Agent runs are asynchronous and polled from the backend runtime.'
+                    ? 'Hermes runs asynchronously and the playground derives progress from structured run steps.'
                     : 'Request history will appear here after the first successful run.'}
                 </div>
               )}
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
               {(isMobile || isCompactDesktop) && !focusMode && (
-                <button
-                  className="btn-secondary"
-                  onClick={() => setShowMobileSettings((prev) => !prev)}
-                >
+                <button className="btn-secondary" onClick={() => setShowMobileSettings((value) => !value)}>
                   {showMobileSettings ? 'HIDE SETTINGS' : 'SETTINGS'}
                 </button>
               )}
               {(isMobile || isCompactDesktop) && !focusMode && (
-                <button
-                  className="btn-secondary"
-                  onClick={() => setShowCompactHistory((prev) => !prev)}
-                >
+                <button className="btn-secondary" onClick={() => setShowCompactHistory((value) => !value)}>
                   {showCompactHistory ? 'HIDE HISTORY' : 'HISTORY'}
                 </button>
               )}
@@ -707,7 +935,7 @@ export function Playground() {
               )}
               <button
                 className="btn-secondary"
-                onClick={() => setFocusMode((prev) => !prev)}
+                onClick={() => setFocusMode((value) => !value)}
                 title={focusMode ? 'Exit focus mode (Esc)' : 'Enter focus mode'}
               >
                 {focusMode ? 'EXIT' : 'FOCUS'}
@@ -720,11 +948,13 @@ export function Playground() {
           </div>
 
           {(isMobile || isCompactDesktop) && !focusMode && showMobileSettings && (
-            <section style={{
-              padding: '1rem',
-              borderBottom: 'var(--grid-line)',
-              backgroundColor: 'var(--bg-accent)',
-            }}>
+            <section
+              style={{
+                padding: '1rem',
+                borderBottom: 'var(--grid-line)',
+                backgroundColor: 'var(--bg-accent)',
+              }}
+            >
               <CollapsibleSection
                 title="SETTINGS"
                 description={isAgentMode ? 'Mode selection, agent controls, and workspace-safe tools.' : 'Model selection, decoding controls, and system prompt.'}
@@ -736,11 +966,13 @@ export function Playground() {
           )}
 
           {(isMobile || isCompactDesktop) && !focusMode && showCompactHistory && (
-            <section style={{
-              padding: '1rem',
-              borderBottom: 'var(--grid-line)',
-              backgroundColor: 'rgba(244, 242, 238, 0.72)',
-            }}>
+            <section
+              style={{
+                padding: '1rem',
+                borderBottom: 'var(--grid-line)',
+                backgroundColor: 'rgba(244, 242, 238, 0.72)',
+              }}
+            >
               <CollapsibleSection
                 title="REQUEST HISTORY"
                 description="Recent prompts, latency, and execution results."
@@ -751,184 +983,194 @@ export function Playground() {
             </section>
           )}
 
-          <section style={{
-            padding: isMobile ? '1rem' : '1.25rem 1.5rem', borderBottom: 'var(--grid-line)',
-            display: 'flex', flexDirection: 'column',
-            height: 132, flexShrink: 0,
-          }}>
+          <section
+            style={{
+              padding: isMobile ? '1rem' : '1.25rem 1.5rem',
+              borderBottom: 'var(--grid-line)',
+              display: 'flex',
+              flexDirection: 'column',
+              height: 132,
+              flexShrink: 0,
+            }}
+          >
             <label className="label-text" style={{ marginBottom: '0.75rem', display: 'block' }}>
               {isAgentMode ? 'TASK' : 'USER PROMPT'}
             </label>
             <textarea
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder={isAgentMode ? 'Ask Hermes to inspect models, workers, deployments, instances, or provider health...' : 'Type your instruction here...'}
-              onKeyDown={(e) => { if (e.key === 'Enter' && e.metaKey) handleRun(); }}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder={isAgentMode
+                ? 'Ask Hermes to inspect workspace health, quota pressure, deployments, or provider issues...'
+                : 'Type your instruction here...'}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && event.metaKey) {
+                  void handleRun();
+                }
+              }}
               style={{
-                width: '100%', flex: 1, border: 'none',
-                background: 'transparent', resize: 'none', outline: 'none',
-                fontFamily: 'var(--font-main)', fontSize: isMobile ? '0.95rem' : '1.05rem', lineHeight: 1.6,
+                width: '100%',
+                flex: 1,
+                border: 'none',
+                background: 'transparent',
+                resize: 'none',
+                outline: 'none',
+                fontFamily: 'var(--font-main)',
+                fontSize: isMobile ? '0.95rem' : '1.05rem',
+                lineHeight: 1.6,
                 color: 'var(--text-primary)',
               }}
             />
           </section>
 
-          <section style={{
-            flex: 1, display: 'flex', flexDirection: 'column',
-            overflow: 'hidden', minHeight: 0,
-          }}>
-            <div style={{
-              padding: isMobile ? '0.75rem 1rem 0.5rem' : '0.85rem 1.5rem 0.4rem', flexShrink: 0,
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              flexWrap: 'wrap', gap: '0.5rem',
-            }}>
-              <label className="label-text">{isAgentMode ? 'AGENT OUTPUT' : 'OUTPUT'}</label>
+          <section
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              minHeight: 0,
+            }}
+          >
+            <div
+              style={{
+                padding: isMobile ? '0.75rem 1rem 0.5rem' : '0.85rem 1.5rem 0.4rem',
+                flexShrink: 0,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '0.5rem',
+              }}
+            >
+              <label className="label-text">OUTPUT</label>
               {tokenUsage && !isAgentMode && (
-                <div className="mono" style={{
-                  fontSize: '0.65rem', color: 'var(--text-secondary)',
-                  display: 'flex', gap: '1rem', flexWrap: 'wrap',
-                }}>
+                <div className="mono" style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                   <span>{tokenUsage.promptTokens} prompt</span>
                   <span>{tokenUsage.completionTokens} completion</span>
                   <span>{tokenUsage.totalTokens} total</span>
                   <span>{tokenUsage.tokensPerSec.toFixed(1)} tok/s</span>
                 </div>
               )}
-              {isAgentMode && agentDetail && (
-                <div className="mono" style={{
-                  fontSize: '0.65rem', color: 'var(--text-secondary)',
-                  display: 'flex', gap: '1rem', flexWrap: 'wrap',
-                }}>
-                  <span>{formatAgentStatus(agentDetail.run.status)}</span>
-                  <span>{agentDetail.run.current_step}/{agentDetail.run.max_steps} steps</span>
-                  <span>{agentDetail.steps.length} events</span>
-                </div>
-              )}
             </div>
-            <div ref={responseRef} style={{
-              flex: 1, overflowY: 'auto', padding: isMobile ? '0.5rem 1rem 1rem' : '0.45rem 1.5rem 1.5rem',
-              minHeight: 0,
-            }}>
-              {isAgentMode && agentDetail && (
-                <div style={{
-                  marginBottom: '1rem',
-                  padding: '1rem',
-                  background: 'rgba(244, 242, 238, 0.72)',
-                  border: '1px solid var(--border-color)',
-                }}>
-                  <div className="label-text" style={{ marginBottom: '0.6rem' }}>RUN STATUS</div>
-                  <div className="mono" style={{ fontSize: '0.72rem', display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: agentDetail.run.failure_reason ? '0.75rem' : 0 }}>
-                    <span>{formatAgentStatus(agentDetail.run.status)}</span>
-                    <span>{agentDetail.run.agent_id}</span>
-                    <span>{agentDetail.run.model.split('/').pop()}</span>
-                    {agentRunID && <span>{agentRunID}</span>}
-                  </div>
-                  {agentDetail.run.failure_reason && (
-                    <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                      {agentDetail.run.failure_reason}
+
+            <div
+              ref={responseRef}
+              style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: isMobile ? '0.5rem 1rem 1rem' : '0.45rem 1.5rem 1.5rem',
+                minHeight: 0,
+              }}
+            >
+              {isAgentMode ? (
+                <>
+                  {thinkingState ? (
+                    <section className="agent-thinking-card" aria-live="polite">
+                      <div className="agent-thinking-kicker">LIVE REVIEW</div>
+                      <div className="agent-thinking-row">
+                        <div className="agent-thinking-dots" aria-hidden="true">
+                          <span className="agent-thinking-dot" />
+                          <span className="agent-thinking-dot" />
+                          <span className="agent-thinking-dot" />
+                        </div>
+                        <div className="agent-thinking-title">{thinkingState.headline}</div>
+                      </div>
+                      <p className="agent-thinking-body">{thinkingState.detail}</p>
+                      <div className="agent-thinking-meta">
+                        <span>{activeAgent?.name || 'Hermes'}</span>
+                        {agentDetail?.run.current_step != null && <span>step {agentDetail.run.current_step + 1}</span>}
+                        {agentRunID && <span>{agentRunID}</span>}
+                      </div>
+                      {thinkingState.recentChecks.length > 0 && (
+                        <div className="agent-thinking-chip-list">
+                          {thinkingState.recentChecks.map((label, index) => (
+                            <span key={`${label}:${index}`} className="agent-thinking-chip">{label}</span>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  ) : terminalRun && agentDetail ? (
+                    <section className={`agent-final-card animate-fade-in ${agentDetail.run.status === 'succeeded' ? '' : 'agent-final-card-failed'}`}>
+                      <div className="agent-output-meta">
+                        <span>{formatAgentStatus(agentDetail.run.status)}</span>
+                        <span>{agentDetail.steps.length} structured step{agentDetail.steps.length === 1 ? '' : 's'}</span>
+                      </div>
+                      <MarkdownOutput content={summarizeAgentResult(agentDetail)} />
+                    </section>
+                  ) : response ? (
+                    <section className="agent-final-card animate-fade-in">
+                      <MarkdownOutput content={response} />
+                    </section>
+                  ) : (
+                    <span className="agent-empty-state">
+                      Hermes will surface a narrative health brief here once the run starts.
+                    </span>
+                  )}
+
+                  {agentDetail && (
+                    <div style={{ marginTop: '1rem' }}>
+                      <CollapsibleSection
+                        key={`${agentDetail.run.id}:${agentDetail.run.status}`}
+                        title="RUN TRACE"
+                        description="Structured tool calls, results, and terminal events from the backend runtime."
+                        summary={traceSummary(agentDetail)}
+                        defaultExpanded={traceExpandedByDefault}
+                      >
+                        {agentDetail.steps.length === 0 ? (
+                          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                            No structured steps yet.
+                          </div>
+                        ) : (
+                          <div style={{ display: 'grid', gap: '1rem' }}>
+                            {agentDetail.steps.map((step) => (
+                              <div key={step.id} className="agent-trace-step">
+                                <div className="agent-trace-step-header">
+                                  <div>
+                                    <div className="mono" style={{ fontSize: '0.68rem', marginBottom: '0.2rem' }}>
+                                      STEP {step.index + 1}
+                                    </div>
+                                    <div style={{ fontSize: '0.92rem' }}>
+                                      {formatStepType(step.type)}
+                                      {step.tool_name ? ` · ${step.tool_name}` : ''}
+                                    </div>
+                                  </div>
+                                  <div className="agent-trace-step-meta">
+                                    {new Date(step.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                  </div>
+                                </div>
+                                <pre className="agent-trace-payload">{formatStepPayload(step.payload)}</pre>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </CollapsibleSection>
                     </div>
                   )}
-                </div>
-              )}
-
-              {response ? (
-                <div className="markdown-output">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    rehypePlugins={[rehypeHighlight]}
-                    components={{
-                      pre({ children, ...props }) {
-                        return (
-                          <pre {...props} style={{
-                            background: '#F4F2EE',
-                            border: '1px solid var(--border-color)',
-                            padding: '1.25rem',
-                            overflow: 'auto',
-                            fontSize: '0.85rem',
-                            lineHeight: 1.6,
-                            marginBottom: '1rem',
-                          }}>
-                            {children}
-                          </pre>
-                        );
-                      },
-                      code({ className, children, ...props }) {
-                        const isInline = !className;
-                        if (isInline) {
-                          return (
-                            <code {...props} style={{
-                              background: '#F4F2EE',
-                              padding: '0.15rem 0.4rem',
-                              fontSize: '0.88em',
-                              fontFamily: 'var(--font-mono)',
-                              border: '1px solid var(--border-color)',
-                            }}>
-                              {children}
-                            </code>
-                          );
-                        }
-                        return <code className={className} {...props} style={{ fontFamily: 'var(--font-mono)' }}>{children}</code>;
-                      },
-                    }}
-                  >
-                    {response}
-                  </ReactMarkdown>
-                </div>
+                </>
+              ) : response ? (
+                <MarkdownOutput content={response} />
               ) : (
                 <span style={{ color: 'var(--text-secondary)', opacity: 0.4, fontSize: '1.05rem' }}>
-                  {isAgentMode ? 'Hermes output and run trace will appear here...' : 'Response will appear here...'}
+                  Response will appear here...
                 </span>
               )}
-
-              {isAgentMode && agentDetail?.steps.length ? (
-                <div style={{ marginTop: '1.5rem' }}>
-                  <label className="label-text" style={{ marginBottom: '0.75rem', display: 'block' }}>RUN TRACE</label>
-                  <div style={{ display: 'grid', gap: '0.9rem' }}>
-                    {agentDetail.steps.map((step) => (
-                      <div key={step.id} style={{
-                        border: '1px solid var(--border-color)',
-                        background: 'rgba(244, 242, 238, 0.4)',
-                        padding: '0.9rem 1rem',
-                      }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-                          <div className="mono" style={{ fontSize: '0.72rem' }}>
-                            {String(step.index + 1).padStart(2, '0')} · {formatStepType(step.type)}{step.tool_name ? ` · ${step.tool_name}` : ''}
-                          </div>
-                          <div className="mono" style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
-                            {new Date(step.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                          </div>
-                        </div>
-                        <pre style={{
-                          background: '#F4F2EE',
-                          border: '1px solid var(--border-color)',
-                          padding: '0.9rem',
-                          overflow: 'auto',
-                          fontSize: '0.78rem',
-                          lineHeight: 1.55,
-                          margin: 0,
-                          whiteSpace: 'pre-wrap',
-                          wordBreak: 'break-word',
-                        }}>
-                          {formatStepPayload(step.payload)}
-                        </pre>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
             </div>
           </section>
         </main>
 
-        {showDesktopHistoryRail && <aside style={{
-          borderLeft: 'var(--grid-line)',
-          backgroundColor: 'var(--bg-accent)',
-          padding: '1.5rem',
-          overflowY: 'auto',
-        }}>
-          <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>REQUEST HISTORY</label>
-          {historyPanel}
-        </aside>}
+        {showDesktopHistoryRail && (
+          <aside
+            style={{
+              borderLeft: 'var(--grid-line)',
+              backgroundColor: 'var(--bg-accent)',
+              padding: '1.5rem',
+              overflowY: 'auto',
+            }}
+          >
+            <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>REQUEST HISTORY</label>
+            {historyPanel}
+          </aside>
+        )}
       </div>
     </div>
   );

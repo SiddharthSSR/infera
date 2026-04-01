@@ -78,7 +78,7 @@ func newTestRuntime(t *testing.T, runner ModelRunner) *Runtime {
 			params.MaxTokens = 256
 			return params
 		}(),
-		Tools: []string{"echo", "secure"},
+		Tools: []string{"echo", "secure", "usage"},
 		BuildSystemPrompt: func(tools []ToolDescriptor) string {
 			return "Return JSON only."
 		},
@@ -104,6 +104,16 @@ func newTestRuntime(t *testing.T, runner ModelRunner) *Runtime {
 		},
 	}); err != nil {
 		t.Fatalf("RegisterTool secure: %v", err)
+	}
+	if err := runtime.RegisterTool(ToolDefinition{
+		Name:        "usage",
+		Description: "usage tool",
+		Permission:  auth.PermissionViewUsage,
+		Handler: func(ctx context.Context, call ToolCallContext, arguments json.RawMessage) (any, error) {
+			return map[string]any{"usage": true}, nil
+		},
+	}); err != nil {
+		t.Fatalf("RegisterTool usage: %v", err)
 	}
 	return runtime
 }
@@ -277,5 +287,58 @@ func TestRuntimeCancelRun(t *testing.T) {
 	detail := waitForStatus(t, runtime, "ws_alpha", run.ID, StatusCanceled)
 	if detail.Run.Status != StatusCanceled {
 		t.Fatalf("expected canceled status, got %s", detail.Run.Status)
+	}
+}
+
+func TestRuntimeListDefinitionsFiltersToolsByPermission(t *testing.T) {
+	runtime := newTestRuntime(t, &fakeRunner{})
+
+	cases := []struct {
+		name string
+		key  *auth.KeyRecord
+		want []string
+	}{
+		{
+			name: "owner sees infra and usage tools",
+			key:  &auth.KeyRecord{Role: auth.RoleOwner, PrincipalType: auth.PrincipalHuman, Status: "active"},
+			want: []string{"echo", "secure", "usage"},
+		},
+		{
+			name: "operator sees infra but not usage",
+			key:  &auth.KeyRecord{Role: auth.RoleOperator, PrincipalType: auth.PrincipalHuman, Status: "active"},
+			want: []string{"echo", "secure"},
+		},
+		{
+			name: "billing sees usage but not infra",
+			key:  &auth.KeyRecord{Role: auth.RoleBilling, PrincipalType: auth.PrincipalHuman, Status: "active"},
+			want: []string{"echo", "usage"},
+		},
+		{
+			name: "read only sees both read bundles",
+			key:  &auth.KeyRecord{Role: auth.RoleReadOnly, PrincipalType: auth.PrincipalHuman, Status: "active"},
+			want: []string{"echo", "secure", "usage"},
+		},
+		{
+			name: "user sees only unrestricted tool",
+			key:  &auth.KeyRecord{Role: auth.RoleUser, PrincipalType: auth.PrincipalHuman, Status: "active"},
+			want: []string{"echo"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			definitions := runtime.ListDefinitions(tc.key)
+			if len(definitions) != 1 {
+				t.Fatalf("expected one definition, got %d", len(definitions))
+			}
+
+			got := make([]string, 0, len(definitions[0].Tools))
+			for _, tool := range definitions[0].Tools {
+				got = append(got, tool.Name)
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("expected tools %v, got %v", tc.want, got)
+			}
+		})
 	}
 }
