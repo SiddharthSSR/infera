@@ -20,7 +20,7 @@ func TestStoreCreateAppendAndDetail(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Now().UTC().Round(time.Second)
 
-	run, err := store.CreateRun("ws_alpha", "key_1", "hermes", "model-a", "inspect workers", 4, now)
+	run, err := store.CreateRun("ws_alpha", "key_1", "hermes", RunModeOperations, AnalysisDepthStandard, "model-a", "inspect workers", 4, now)
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
@@ -48,6 +48,12 @@ func TestStoreCreateAppendAndDetail(t *testing.T) {
 	if detail.Run.Status != StatusSucceeded {
 		t.Fatalf("expected succeeded status, got %s", detail.Run.Status)
 	}
+	if detail.Run.Mode != RunModeOperations {
+		t.Fatalf("expected operations mode, got %s", detail.Run.Mode)
+	}
+	if detail.Run.AnalysisDepth != AnalysisDepthStandard {
+		t.Fatalf("expected standard analysis depth, got %s", detail.Run.AnalysisDepth)
+	}
 	if detail.Run.CurrentStep != 2 {
 		t.Fatalf("expected current_step=2, got %d", detail.Run.CurrentStep)
 	}
@@ -66,11 +72,11 @@ func TestStoreMarkInterruptedRuns(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Now().UTC().Round(time.Second)
 
-	queuedRun, err := store.CreateRun("ws_alpha", "key_1", "hermes", "model-a", "queued", 4, now)
+	queuedRun, err := store.CreateRun("ws_alpha", "key_1", "hermes", RunModeOperations, AnalysisDepthStandard, "model-a", "queued", 4, now)
 	if err != nil {
 		t.Fatalf("CreateRun queued: %v", err)
 	}
-	runningRun, err := store.CreateRun("ws_alpha", "key_1", "hermes", "model-a", "running", 4, now)
+	runningRun, err := store.CreateRun("ws_alpha", "key_1", "hermes", RunModeResearch, AnalysisDepthDeep, "model-a", "running", 4, now)
 	if err != nil {
 		t.Fatalf("CreateRun running: %v", err)
 	}

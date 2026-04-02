@@ -78,8 +78,8 @@ func newTestRuntime(t *testing.T, runner ModelRunner) *Runtime {
 			params.MaxTokens = 256
 			return params
 		}(),
-		Tools: []string{"echo", "secure", "usage"},
-		BuildSystemPrompt: func(tools []ToolDescriptor) string {
+		Tools: []string{"echo", "secure"},
+		BuildSystemPrompt: func(ctx RunPromptContext) string {
 			return "Return JSON only."
 		},
 	}
@@ -104,16 +104,6 @@ func newTestRuntime(t *testing.T, runner ModelRunner) *Runtime {
 		},
 	}); err != nil {
 		t.Fatalf("RegisterTool secure: %v", err)
-	}
-	if err := runtime.RegisterTool(ToolDefinition{
-		Name:        "usage",
-		Description: "usage tool",
-		Permission:  auth.PermissionViewUsage,
-		Handler: func(ctx context.Context, call ToolCallContext, arguments json.RawMessage) (any, error) {
-			return map[string]any{"usage": true}, nil
-		},
-	}); err != nil {
-		t.Fatalf("RegisterTool usage: %v", err)
 	}
 	return runtime
 }
@@ -290,55 +280,112 @@ func TestRuntimeCancelRun(t *testing.T) {
 	}
 }
 
-func TestRuntimeListDefinitionsFiltersToolsByPermission(t *testing.T) {
-	runtime := newTestRuntime(t, &fakeRunner{})
+func TestRuntimeDeepAnalysisUsesLargerDefaultBudget(t *testing.T) {
+	runtime := newTestRuntime(t, &fakeRunner{
+		responses: []string{`{"type":"final","message":"done"}`},
+	})
+	actor := &auth.KeyRecord{ID: "key-1", WorkspaceID: "ws_alpha", Role: auth.RoleOwner, PrincipalType: auth.PrincipalHuman, Status: "active"}
 
-	cases := []struct {
-		name string
-		key  *auth.KeyRecord
-		want []string
-	}{
-		{
-			name: "owner sees infra and usage tools",
-			key:  &auth.KeyRecord{Role: auth.RoleOwner, PrincipalType: auth.PrincipalHuman, Status: "active"},
-			want: []string{"echo", "secure", "usage"},
+	run, err := runtime.CreateRun(context.Background(), actor, nil, CreateRunRequest{
+		Model:         "model-a",
+		Input:         "inspect deeply",
+		AnalysisDepth: AnalysisDepthDeep,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if run.AnalysisDepth != AnalysisDepthDeep {
+		t.Fatalf("expected deep analysis depth, got %s", run.AnalysisDepth)
+	}
+	if run.MaxSteps != 12 {
+		t.Fatalf("expected deep analysis default max steps 12, got %d", run.MaxSteps)
+	}
+}
+
+func TestListDefinitionsIncludesModeSpecificTools(t *testing.T) {
+	runtime := newTestRuntime(t, &fakeRunner{responses: []string{`{"type":"final","message":"done"}`}})
+	if err := runtime.RegisterTool(ToolDefinition{
+		Name:        "research_only",
+		Description: "research tool",
+		Modes:       []RunMode{RunModeResearch},
+		Handler: func(ctx context.Context, call ToolCallContext, arguments json.RawMessage) (any, error) {
+			return nil, nil
 		},
-		{
-			name: "operator sees infra but not usage",
-			key:  &auth.KeyRecord{Role: auth.RoleOperator, PrincipalType: auth.PrincipalHuman, Status: "active"},
-			want: []string{"echo", "secure"},
+	}); err != nil {
+		t.Fatalf("RegisterTool research_only: %v", err)
+	}
+	if err := runtime.RegisterTool(ToolDefinition{
+		Name:        "vision_only",
+		Description: "vision tool",
+		Modes:       []RunMode{RunModeMultimodal},
+		Handler: func(ctx context.Context, call ToolCallContext, arguments json.RawMessage) (any, error) {
+			return nil, nil
 		},
-		{
-			name: "billing sees usage but not infra",
-			key:  &auth.KeyRecord{Role: auth.RoleBilling, PrincipalType: auth.PrincipalHuman, Status: "active"},
-			want: []string{"echo", "usage"},
-		},
-		{
-			name: "read only sees both read bundles",
-			key:  &auth.KeyRecord{Role: auth.RoleReadOnly, PrincipalType: auth.PrincipalHuman, Status: "active"},
-			want: []string{"echo", "secure", "usage"},
-		},
-		{
-			name: "user sees only unrestricted tool",
-			key:  &auth.KeyRecord{Role: auth.RoleUser, PrincipalType: auth.PrincipalHuman, Status: "active"},
-			want: []string{"echo"},
-		},
+	}); err != nil {
+		t.Fatalf("RegisterTool vision_only: %v", err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			definitions := runtime.ListDefinitions(tc.key)
-			if len(definitions) != 1 {
-				t.Fatalf("expected one definition, got %d", len(definitions))
-			}
+	def := runtime.definitions["hermes"]
+	def.Tools = append(def.Tools, "research_only", "vision_only")
+	runtime.definitions["hermes"] = def
 
-			got := make([]string, 0, len(definitions[0].Tools))
-			for _, tool := range definitions[0].Tools {
-				got = append(got, tool.Name)
-			}
-			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
-				t.Fatalf("expected tools %v, got %v", tc.want, got)
-			}
-		})
+	descriptors := runtime.ListDefinitions(&auth.KeyRecord{Role: auth.RoleOwner, PrincipalType: auth.PrincipalHuman, Status: "active"})
+	if len(descriptors) != 1 {
+		t.Fatalf("expected one descriptor, got %+v", descriptors)
+	}
+	toolNames := make([]string, 0, len(descriptors[0].Tools))
+	toolModes := make(map[string][]RunMode, len(descriptors[0].Tools))
+	for _, tool := range descriptors[0].Tools {
+		toolNames = append(toolNames, tool.Name)
+		toolModes[tool.Name] = tool.Modes
+	}
+	if !strings.Contains(strings.Join(toolNames, ","), "research_only") || !strings.Contains(strings.Join(toolNames, ","), "vision_only") {
+		t.Fatalf("expected mode-specific tools in descriptor, got %+v", toolNames)
+	}
+	if got := toolModes["research_only"]; len(got) != 1 || got[0] != RunModeResearch {
+		t.Fatalf("expected research_only modes [research], got %+v", got)
+	}
+	if got := toolModes["vision_only"]; len(got) != 1 || got[0] != RunModeMultimodal {
+		t.Fatalf("expected vision_only modes [multimodal], got %+v", got)
+	}
+	if got := toolModes["echo"]; len(got) != 3 {
+		t.Fatalf("expected echo to be available in all modes, got %+v", got)
+	}
+}
+
+func TestRuntimeGetRunDetailCollectsResearchSources(t *testing.T) {
+	runtime := newTestRuntime(t, &fakeRunner{
+		responses: []string{
+			`{"type":"tool_call","tool_name":"echo","arguments":{}}`,
+			`{"type":"final","message":"done"}`,
+		},
+	})
+
+	now := time.Now().UTC()
+	run, err := runtime.store.CreateRun("ws_alpha", "key-1", "hermes", RunModeResearch, AnalysisDepthStandard, "model-a", "inspect", 4, now)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if _, err := runtime.store.AppendStep(run.WorkspaceID, run.ID, StepTypeToolResult, "web_search", map[string]any{
+		"ok": true,
+		"result": map[string]any{
+			"results": []map[string]any{
+				{
+					"title":  "RunPod Status",
+					"url":    "https://status.runpod.io/",
+					"domain": "status.runpod.io",
+				},
+			},
+		},
+	}, now.Add(time.Second)); err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+
+	detail, err := runtime.GetRunDetail("ws_alpha", run.ID)
+	if err != nil {
+		t.Fatalf("GetRunDetail: %v", err)
+	}
+	if len(detail.Sources) != 1 || detail.Sources[0].Domain != "status.runpod.io" {
+		t.Fatalf("expected derived research source, got %+v", detail.Sources)
 	}
 }

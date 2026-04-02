@@ -53,7 +53,9 @@ type Gateway struct {
 	deploymentStore *deployments.Store
 
 	// Agents runtime
-	agentRuntime *agents.Runtime
+	agentRuntime   *agents.Runtime
+	webSearcher    WebSearcher
+	visionAnalyzer VisionAnalyzer
 
 	// Rate limiting
 	rateLimiter *RateLimiter
@@ -127,6 +129,8 @@ func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gatew
 		log:                NewLogger(),
 		workerClients:      make(map[string]*WorkerClient),
 		startedAt:          time.Now(),
+		webSearcher:        newDuckDuckGoWebSearcher(),
+		visionAnalyzer:     newScreenshotAnalyzer(),
 	}
 
 	if r != nil {
@@ -192,6 +196,14 @@ func (g *Gateway) SetAgentRuntime(runtime *agents.Runtime) {
 	g.agentRuntime = runtime
 }
 
+func (g *Gateway) SetWebSearcher(searcher WebSearcher) {
+	g.webSearcher = searcher
+}
+
+func (g *Gateway) SetVisionAnalyzer(analyzer VisionAnalyzer) {
+	g.visionAnalyzer = analyzer
+}
+
 // Start starts the HTTP server.
 func (g *Gateway) Start() error {
 	mux := http.NewServeMux()
@@ -247,6 +259,7 @@ func (g *Gateway) Start() error {
 	}
 	if g.agentRuntime != nil {
 		mux.HandleFunc("/api/agents", withAuth(g.handleAgents))
+		mux.HandleFunc("/api/agent-attachments", withAuth(g.handleAgentAttachments))
 		mux.HandleFunc("/api/agents/runs", withAuth(g.handleAgentRuns))
 		mux.HandleFunc("/api/agents/runs/", withAuth(g.handleAgentRunByID))
 	}

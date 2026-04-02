@@ -10,6 +10,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ChatContext, type ChatContextType, type Message, type PlaygroundHistoryEntry } from './lib/chat-context';
 import { lazyWithRetry } from './lib/lazyWithRetry';
 import { useIsMobile } from './hooks/useIsMobile';
+import type { AgentAnalysisDepth, AgentExecutionMode, PlaygroundMode } from './types';
 
 import { Dashboard } from './pages/Dashboard';
 import { Playground } from './pages/Playground';
@@ -297,9 +298,11 @@ function AppContent() {
   // Chat state - persisted across page switches
   const [messages, setMessages] = useState<Message[]>([]);
   const [history, setHistory] = useState<PlaygroundHistoryEntry[]>([]);
-  const [playgroundMode, setPlaygroundMode] = useState<'chat' | 'agent'>('chat');
-  const [selectedAgentID, setSelectedAgentID] = useState('hermes');
+  const [playgroundMode, setPlaygroundMode] = useState<PlaygroundMode>('chat');
+  const [selectedAgentID, setSelectedAgentID] = useState('');
   const [agentMaxSteps, setAgentMaxSteps] = useState(8);
+  const [agentExecutionMode, setAgentExecutionMode] = useState<AgentExecutionMode>('operations');
+  const [agentAnalysisDepth, setAgentAnalysisDepth] = useState<AgentAnalysisDepth>('standard');
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
@@ -337,8 +340,10 @@ function AppContent() {
     setMessages([]);
     setHistory([]);
     setPlaygroundMode('chat');
-    setSelectedAgentID('hermes');
+    setSelectedAgentID('');
     setAgentMaxSteps(8);
+    setAgentExecutionMode('operations');
+    setAgentAnalysisDepth('standard');
     setSelectedModel('');
     setTemperature(0.7);
     setMaxTokens(2048);
@@ -368,8 +373,10 @@ function AppContent() {
       setMessages([]);
       setHistory([]);
       setPlaygroundMode('chat');
-      setSelectedAgentID('hermes');
+      setSelectedAgentID('');
       setAgentMaxSteps(8);
+      setAgentExecutionMode('operations');
+      setAgentAnalysisDepth('standard');
       setSelectedModel('');
       setTemperature(0.7);
       setMaxTokens(2048);
@@ -497,6 +504,10 @@ function AppContent() {
     setSelectedAgentID,
     agentMaxSteps,
     setAgentMaxSteps,
+    agentExecutionMode,
+    setAgentExecutionMode,
+    agentAnalysisDepth,
+    setAgentAnalysisDepth,
     selectedModel,
     setSelectedModel,
     temperature,

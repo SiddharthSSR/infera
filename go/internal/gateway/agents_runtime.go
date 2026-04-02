@@ -37,6 +37,16 @@ func (r *gatewayModelRunner) Run(ctx context.Context, req agents.ModelRunRequest
 	return result.Response, nil
 }
 
+func attachmentByID(attachments []*agents.Attachment, attachmentID string) *agents.Attachment {
+	attachmentID = strings.TrimSpace(attachmentID)
+	for _, attachment := range attachments {
+		if attachment.ID == attachmentID {
+			return attachment
+		}
+	}
+	return nil
+}
+
 func (g *Gateway) NewAgentsRuntime(store *agents.Store) (*agents.Runtime, error) {
 	runtime := agents.NewRuntime(store, &gatewayModelRunner{gateway: g})
 	if err := runtime.RegisterDefinition(agents.NewHermesDefinition()); err != nil {
@@ -153,6 +163,72 @@ func (g *Gateway) NewAgentsRuntime(store *agents.Store) (*agents.Runtime, error)
 		Permission:  auth.PermissionViewUsage,
 		Handler: func(ctx context.Context, call agents.ToolCallContext, arguments json.RawMessage) (any, error) {
 			return g.quotaStatusPayload(call.Run.WorkspaceID, time.Now().UTC())
+		},
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := runtime.RegisterTool(agents.ToolDefinition{
+		Name:        "web_search",
+		Description: "Search allowlisted official sources for external docs, status pages, or release notes. Arguments: {\"query\": string, \"topic\"?: string, \"max_results\"?: number}.",
+		Modes:       []agents.RunMode{agents.RunModeResearch},
+		Handler: func(ctx context.Context, call agents.ToolCallContext, arguments json.RawMessage) (any, error) {
+			if g.webSearcher == nil {
+				return nil, fmt.Errorf("web search is not configured")
+			}
+			var req struct {
+				Query      string `json:"query"`
+				Topic      string `json:"topic"`
+				MaxResults int    `json:"max_results"`
+			}
+			if len(arguments) > 0 && strings.TrimSpace(string(arguments)) != "" {
+				if err := json.Unmarshal(arguments, &req); err != nil {
+					return nil, fmt.Errorf("invalid web_search arguments: %w", err)
+				}
+			}
+			results, err := g.webSearcher.Search(ctx, WebSearchRequest{
+				Query:      req.Query,
+				Topic:      req.Topic,
+				MaxResults: req.MaxResults,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{
+				"query":   strings.TrimSpace(req.Query),
+				"topic":   strings.TrimSpace(req.Topic),
+				"results": results,
+			}, nil
+		},
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := runtime.RegisterTool(agents.ToolDefinition{
+		Name:        "vision_analyze",
+		Description: "Inspect an uploaded screenshot attachment. Arguments: {\"attachment_id\": string, \"question\"?: string, \"focus\"?: string}.",
+		Modes:       []agents.RunMode{agents.RunModeMultimodal},
+		Handler: func(ctx context.Context, call agents.ToolCallContext, arguments json.RawMessage) (any, error) {
+			if g.visionAnalyzer == nil {
+				return nil, fmt.Errorf("vision analysis is not configured")
+			}
+			var req struct {
+				AttachmentID string `json:"attachment_id"`
+				Question     string `json:"question"`
+				Focus        string `json:"focus"`
+			}
+			if err := json.Unmarshal(arguments, &req); err != nil {
+				return nil, fmt.Errorf("invalid vision_analyze arguments: %w", err)
+			}
+			attachment := attachmentByID(call.Attachments, req.AttachmentID)
+			if attachment == nil {
+				return nil, fmt.Errorf("attachment %q is unavailable for this run", req.AttachmentID)
+			}
+			return g.visionAnalyzer.Analyze(ctx, VisionAnalyzeRequest{
+				Attachment: attachment,
+				Question:   req.Question,
+				Focus:      req.Focus,
+			})
 		},
 	}); err != nil {
 		return nil, err

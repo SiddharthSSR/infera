@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,44 +21,70 @@ var agentMigrations = []migrate.Migration{
 		Description: "create agent runs and steps tables",
 		SQL: `
 		CREATE TABLE IF NOT EXISTS agent_runs (
-			id              TEXT PRIMARY KEY,
-			workspace_id    TEXT NOT NULL,
+			id                TEXT PRIMARY KEY,
+			workspace_id      TEXT NOT NULL,
 			created_by_key_id TEXT NOT NULL DEFAULT '',
-			agent_id        TEXT NOT NULL,
-			model           TEXT NOT NULL,
-			input_text      TEXT NOT NULL,
-			status          TEXT NOT NULL,
-			max_steps       INTEGER NOT NULL,
-			current_step    INTEGER NOT NULL DEFAULT 0,
-			final_output    TEXT NOT NULL DEFAULT '',
-			failure_reason  TEXT NOT NULL DEFAULT '',
-			created_at      TEXT NOT NULL,
-			updated_at      TEXT NOT NULL,
-			started_at      TEXT NOT NULL DEFAULT '',
-			finished_at     TEXT NOT NULL DEFAULT ''
+			agent_id          TEXT NOT NULL,
+			model             TEXT NOT NULL,
+			input_text        TEXT NOT NULL,
+			status            TEXT NOT NULL,
+			max_steps         INTEGER NOT NULL,
+			current_step      INTEGER NOT NULL DEFAULT 0,
+			final_output      TEXT NOT NULL DEFAULT '',
+			failure_reason    TEXT NOT NULL DEFAULT '',
+			created_at        TEXT NOT NULL,
+			updated_at        TEXT NOT NULL,
+			started_at        TEXT NOT NULL DEFAULT '',
+			finished_at       TEXT NOT NULL DEFAULT ''
 		);
 		CREATE INDEX IF NOT EXISTS idx_agent_runs_workspace_updated
 			ON agent_runs(workspace_id, updated_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_agent_runs_workspace_status
 			ON agent_runs(workspace_id, status);
 		CREATE TABLE IF NOT EXISTS agent_run_steps (
-			id            INTEGER PRIMARY KEY AUTOINCREMENT,
-			run_id         TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
-			workspace_id   TEXT NOT NULL,
-			step_index     INTEGER NOT NULL,
-			step_type      TEXT NOT NULL,
-			tool_name      TEXT NOT NULL DEFAULT '',
-			payload_json   TEXT NOT NULL,
-			created_at     TEXT NOT NULL,
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id        TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+			workspace_id  TEXT NOT NULL,
+			step_index    INTEGER NOT NULL,
+			step_type     TEXT NOT NULL,
+			tool_name     TEXT NOT NULL DEFAULT '',
+			payload_json  TEXT NOT NULL,
+			created_at    TEXT NOT NULL,
 			UNIQUE(run_id, step_index)
 		);
 		CREATE INDEX IF NOT EXISTS idx_agent_run_steps_run
 			ON agent_run_steps(run_id, step_index ASC);`,
 	},
+	{
+		Version:     2,
+		Description: "add run metadata and attachments",
+		SQL: `
+		ALTER TABLE agent_runs ADD COLUMN run_mode TEXT NOT NULL DEFAULT 'operations';
+		ALTER TABLE agent_runs ADD COLUMN analysis_depth TEXT NOT NULL DEFAULT 'standard';
+		CREATE TABLE IF NOT EXISTS agent_attachments (
+			id                TEXT PRIMARY KEY,
+			workspace_id      TEXT NOT NULL,
+			created_by_key_id TEXT NOT NULL DEFAULT '',
+			run_id            TEXT NOT NULL DEFAULT '',
+			file_name         TEXT NOT NULL,
+			mime_type         TEXT NOT NULL,
+			size_bytes        INTEGER NOT NULL,
+			width             INTEGER NOT NULL DEFAULT 0,
+			height            INTEGER NOT NULL DEFAULT 0,
+			sha256            TEXT NOT NULL,
+			storage_path      TEXT NOT NULL,
+			created_at        TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_attachments_workspace_created
+			ON agent_attachments(workspace_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_agent_attachments_run
+			ON agent_attachments(run_id, created_at ASC);`,
+	},
 }
 
 type Store struct {
-	db *sql.DB
+	db             *sql.DB
+	attachmentRoot string
 }
 
 func NewStore(dbPath string) (*Store, error) {
@@ -74,11 +102,25 @@ func NewStore(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+
+	attachmentRoot := filepath.Join(filepath.Dir(dbPath), "agent_attachments")
+	if err := os.MkdirAll(attachmentRoot, 0o755); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	return &Store{
+		db:             db,
+		attachmentRoot: attachmentRoot,
+	}, nil
 }
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func (s *Store) AttachmentRoot() string {
+	return s.attachmentRoot
 }
 
 func normalizeWorkspaceID(workspaceID string) string {
@@ -97,6 +139,26 @@ func normalizeListLimit(limit int) int {
 		return 100
 	}
 	return limit
+}
+
+func normalizeRunMode(mode RunMode) RunMode {
+	switch RunMode(strings.TrimSpace(string(mode))) {
+	case RunModeResearch:
+		return RunModeResearch
+	case RunModeMultimodal:
+		return RunModeMultimodal
+	default:
+		return RunModeOperations
+	}
+}
+
+func normalizeAnalysisDepth(depth AnalysisDepth) AnalysisDepth {
+	switch AnalysisDepth(strings.TrimSpace(string(depth))) {
+	case AnalysisDepthDeep:
+		return AnalysisDepthDeep
+	default:
+		return AnalysisDepthStandard
+	}
 }
 
 func parseOptionalTimestamp(raw string) (*time.Time, error) {
@@ -124,6 +186,8 @@ func runFromRow(
 	workspaceID string,
 	createdByKeyID string,
 	agentID string,
+	mode string,
+	analysisDepth string,
 	model string,
 	input string,
 	status string,
@@ -158,6 +222,8 @@ func runFromRow(
 		WorkspaceID:    workspaceID,
 		CreatedByKeyID: createdByKeyID,
 		AgentID:        agentID,
+		Mode:           normalizeRunMode(RunMode(mode)),
+		AnalysisDepth:  normalizeAnalysisDepth(AnalysisDepth(analysisDepth)),
 		Model:          model,
 		Input:          input,
 		Status:         Status(status),
@@ -172,12 +238,59 @@ func runFromRow(
 	}, nil
 }
 
-func (s *Store) CreateRun(workspaceID, createdByKeyID, agentID, model, input string, maxSteps int, now time.Time) (*Run, error) {
+func attachmentFromRow(
+	id string,
+	workspaceID string,
+	createdByKeyID string,
+	runID string,
+	fileName string,
+	mimeType string,
+	sizeBytes int64,
+	width int,
+	height int,
+	sha256 string,
+	storagePath string,
+	createdAtRaw string,
+) (*Attachment, error) {
+	createdAt, err := parseRequiredTimestamp(createdAtRaw)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Attachment{
+		ID:             id,
+		WorkspaceID:    workspaceID,
+		CreatedByKeyID: createdByKeyID,
+		RunID:          runID,
+		FileName:       fileName,
+		MIMEType:       mimeType,
+		SizeBytes:      sizeBytes,
+		Width:          width,
+		Height:         height,
+		SHA256:         sha256,
+		CreatedAt:      createdAt,
+		StoragePath:    storagePath,
+	}, nil
+}
+
+func (s *Store) CreateRun(
+	workspaceID,
+	createdByKeyID,
+	agentID string,
+	mode RunMode,
+	analysisDepth AnalysisDepth,
+	model,
+	input string,
+	maxSteps int,
+	now time.Time,
+) (*Run, error) {
 	workspaceID = normalizeWorkspaceID(workspaceID)
 	createdByKeyID = strings.TrimSpace(createdByKeyID)
 	agentID = strings.TrimSpace(agentID)
 	model = strings.TrimSpace(model)
 	input = strings.TrimSpace(input)
+	mode = normalizeRunMode(mode)
+	analysisDepth = normalizeAnalysisDepth(analysisDepth)
 	if agentID == "" {
 		return nil, fmt.Errorf("agent_id is required")
 	}
@@ -196,6 +309,8 @@ func (s *Store) CreateRun(workspaceID, createdByKeyID, agentID, model, input str
 		WorkspaceID:    workspaceID,
 		CreatedByKeyID: createdByKeyID,
 		AgentID:        agentID,
+		Mode:           mode,
+		AnalysisDepth:  analysisDepth,
 		Model:          model,
 		Input:          input,
 		Status:         StatusQueued,
@@ -207,12 +322,14 @@ func (s *Store) CreateRun(workspaceID, createdByKeyID, agentID, model, input str
 
 	_, err := s.db.Exec(
 		`INSERT INTO agent_runs (
-			id, workspace_id, created_by_key_id, agent_id, model, input_text, status, max_steps, current_step, final_output, failure_reason, created_at, updated_at, started_at, finished_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '')`,
+			id, workspace_id, created_by_key_id, agent_id, run_mode, analysis_depth, model, input_text, status, max_steps, current_step, final_output, failure_reason, created_at, updated_at, started_at, finished_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '')`,
 		run.ID,
 		run.WorkspaceID,
 		run.CreatedByKeyID,
 		run.AgentID,
+		run.Mode,
+		run.AnalysisDepth,
 		run.Model,
 		run.Input,
 		run.Status,
@@ -231,7 +348,7 @@ func (s *Store) CreateRun(workspaceID, createdByKeyID, agentID, model, input str
 
 func (s *Store) ListRuns(workspaceID string, limit int) ([]*Run, error) {
 	rows, err := s.db.Query(
-		`SELECT id, workspace_id, created_by_key_id, agent_id, model, input_text, status, max_steps, current_step, final_output, failure_reason, created_at, updated_at, started_at, finished_at
+		`SELECT id, workspace_id, created_by_key_id, agent_id, run_mode, analysis_depth, model, input_text, status, max_steps, current_step, final_output, failure_reason, created_at, updated_at, started_at, finished_at
 		FROM agent_runs
 		WHERE workspace_id = ?
 		ORDER BY updated_at DESC
@@ -251,6 +368,8 @@ func (s *Store) ListRuns(workspaceID string, limit int) ([]*Run, error) {
 			wsID           string
 			createdByKeyID string
 			agentID        string
+			mode           string
+			analysisDepth  string
 			model          string
 			input          string
 			status         string
@@ -268,6 +387,8 @@ func (s *Store) ListRuns(workspaceID string, limit int) ([]*Run, error) {
 			&wsID,
 			&createdByKeyID,
 			&agentID,
+			&mode,
+			&analysisDepth,
 			&model,
 			&input,
 			&status,
@@ -282,7 +403,7 @@ func (s *Store) ListRuns(workspaceID string, limit int) ([]*Run, error) {
 		); err != nil {
 			return nil, err
 		}
-		run, err := runFromRow(id, wsID, createdByKeyID, agentID, model, input, status, maxSteps, currentStep, finalOutput, failureReason, createdAtRaw, updatedAtRaw, startedAtRaw, finishedAtRaw)
+		run, err := runFromRow(id, wsID, createdByKeyID, agentID, mode, analysisDepth, model, input, status, maxSteps, currentStep, finalOutput, failureReason, createdAtRaw, updatedAtRaw, startedAtRaw, finishedAtRaw)
 		if err != nil {
 			return nil, err
 		}
@@ -293,7 +414,7 @@ func (s *Store) ListRuns(workspaceID string, limit int) ([]*Run, error) {
 
 func (s *Store) GetRun(workspaceID, runID string) (*Run, error) {
 	row := s.db.QueryRow(
-		`SELECT id, workspace_id, created_by_key_id, agent_id, model, input_text, status, max_steps, current_step, final_output, failure_reason, created_at, updated_at, started_at, finished_at
+		`SELECT id, workspace_id, created_by_key_id, agent_id, run_mode, analysis_depth, model, input_text, status, max_steps, current_step, final_output, failure_reason, created_at, updated_at, started_at, finished_at
 		FROM agent_runs
 		WHERE workspace_id = ? AND id = ?`,
 		normalizeWorkspaceID(workspaceID),
@@ -305,6 +426,8 @@ func (s *Store) GetRun(workspaceID, runID string) (*Run, error) {
 		wsID           string
 		createdByKeyID string
 		agentID        string
+		mode           string
+		analysisDepth  string
 		model          string
 		input          string
 		status         string
@@ -322,6 +445,8 @@ func (s *Store) GetRun(workspaceID, runID string) (*Run, error) {
 		&wsID,
 		&createdByKeyID,
 		&agentID,
+		&mode,
+		&analysisDepth,
 		&model,
 		&input,
 		&status,
@@ -337,7 +462,7 @@ func (s *Store) GetRun(workspaceID, runID string) (*Run, error) {
 		return nil, err
 	}
 
-	return runFromRow(id, wsID, createdByKeyID, agentID, model, input, status, maxSteps, currentStep, finalOutput, failureReason, createdAtRaw, updatedAtRaw, startedAtRaw, finishedAtRaw)
+	return runFromRow(id, wsID, createdByKeyID, agentID, mode, analysisDepth, model, input, status, maxSteps, currentStep, finalOutput, failureReason, createdAtRaw, updatedAtRaw, startedAtRaw, finishedAtRaw)
 }
 
 func (s *Store) ListRunSteps(workspaceID, runID string) ([]*RunStep, error) {
@@ -394,7 +519,11 @@ func (s *Store) GetRunDetail(workspaceID, runID string) (*RunDetail, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &RunDetail{Run: run, Steps: steps}, nil
+	attachments, err := s.ListAttachmentsForRun(workspaceID, runID)
+	if err != nil {
+		return nil, err
+	}
+	return &RunDetail{Run: run, Steps: steps, Attachments: attachments}, nil
 }
 
 func (s *Store) MarkRunRunning(workspaceID, runID string, now time.Time) error {
@@ -547,4 +676,235 @@ func (s *Store) MarkInterruptedRuns(now time.Time, reason string) (int64, error)
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+func (s *Store) CreateAttachment(
+	workspaceID,
+	createdByKeyID,
+	fileName,
+	mimeType string,
+	sizeBytes int64,
+	width,
+	height int,
+	sha256,
+	storagePath string,
+	now time.Time,
+) (*Attachment, error) {
+	workspaceID = normalizeWorkspaceID(workspaceID)
+	createdByKeyID = strings.TrimSpace(createdByKeyID)
+	fileName = strings.TrimSpace(fileName)
+	mimeType = strings.TrimSpace(mimeType)
+	sha256 = strings.TrimSpace(sha256)
+	storagePath = strings.TrimSpace(storagePath)
+	if fileName == "" {
+		return nil, fmt.Errorf("file_name is required")
+	}
+	if mimeType == "" {
+		return nil, fmt.Errorf("mime_type is required")
+	}
+	if sizeBytes <= 0 {
+		return nil, fmt.Errorf("size_bytes must be positive")
+	}
+	if sha256 == "" {
+		return nil, fmt.Errorf("sha256 is required")
+	}
+	if storagePath == "" {
+		return nil, fmt.Errorf("storage_path is required")
+	}
+
+	attachment := &Attachment{
+		ID:             uuid.New().String(),
+		WorkspaceID:    workspaceID,
+		CreatedByKeyID: createdByKeyID,
+		FileName:       fileName,
+		MIMEType:       mimeType,
+		SizeBytes:      sizeBytes,
+		Width:          width,
+		Height:         height,
+		SHA256:         sha256,
+		CreatedAt:      now.UTC(),
+		StoragePath:    storagePath,
+	}
+
+	_, err := s.db.Exec(
+		`INSERT INTO agent_attachments (
+			id, workspace_id, created_by_key_id, run_id, file_name, mime_type, size_bytes, width, height, sha256, storage_path, created_at
+		) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+		attachment.ID,
+		attachment.WorkspaceID,
+		attachment.CreatedByKeyID,
+		attachment.FileName,
+		attachment.MIMEType,
+		attachment.SizeBytes,
+		attachment.Width,
+		attachment.Height,
+		attachment.SHA256,
+		attachment.StoragePath,
+		attachment.CreatedAt.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return attachment, nil
+}
+
+func (s *Store) GetAttachment(workspaceID, attachmentID string) (*Attachment, error) {
+	row := s.db.QueryRow(
+		`SELECT id, workspace_id, created_by_key_id, run_id, file_name, mime_type, size_bytes, width, height, sha256, storage_path, created_at
+		FROM agent_attachments
+		WHERE workspace_id = ? AND id = ?`,
+		normalizeWorkspaceID(workspaceID),
+		strings.TrimSpace(attachmentID),
+	)
+
+	var (
+		id             string
+		wsID           string
+		createdByKeyID string
+		runID          string
+		fileName       string
+		mimeType       string
+		sizeBytes      int64
+		width          int
+		height         int
+		sha256         string
+		storagePath    string
+		createdAtRaw   string
+	)
+	if err := row.Scan(
+		&id,
+		&wsID,
+		&createdByKeyID,
+		&runID,
+		&fileName,
+		&mimeType,
+		&sizeBytes,
+		&width,
+		&height,
+		&sha256,
+		&storagePath,
+		&createdAtRaw,
+	); err != nil {
+		return nil, err
+	}
+
+	return attachmentFromRow(id, wsID, createdByKeyID, runID, fileName, mimeType, sizeBytes, width, height, sha256, storagePath, createdAtRaw)
+}
+
+func (s *Store) ListAttachmentsForRun(workspaceID, runID string) ([]*Attachment, error) {
+	rows, err := s.db.Query(
+		`SELECT id, workspace_id, created_by_key_id, run_id, file_name, mime_type, size_bytes, width, height, sha256, storage_path, created_at
+		FROM agent_attachments
+		WHERE workspace_id = ? AND run_id = ?
+		ORDER BY created_at ASC`,
+		normalizeWorkspaceID(workspaceID),
+		strings.TrimSpace(runID),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	attachments := make([]*Attachment, 0)
+	for rows.Next() {
+		var (
+			id             string
+			wsID           string
+			createdByKeyID string
+			currentRunID   string
+			fileName       string
+			mimeType       string
+			sizeBytes      int64
+			width          int
+			height         int
+			sha256         string
+			storagePath    string
+			createdAtRaw   string
+		)
+		if err := rows.Scan(
+			&id,
+			&wsID,
+			&createdByKeyID,
+			&currentRunID,
+			&fileName,
+			&mimeType,
+			&sizeBytes,
+			&width,
+			&height,
+			&sha256,
+			&storagePath,
+			&createdAtRaw,
+		); err != nil {
+			return nil, err
+		}
+		attachment, err := attachmentFromRow(id, wsID, createdByKeyID, currentRunID, fileName, mimeType, sizeBytes, width, height, sha256, storagePath, createdAtRaw)
+		if err != nil {
+			return nil, err
+		}
+		attachments = append(attachments, attachment)
+	}
+	return attachments, rows.Err()
+}
+
+func (s *Store) ListAttachmentsByID(workspaceID string, attachmentIDs []string) ([]*Attachment, error) {
+	if len(attachmentIDs) == 0 {
+		return nil, nil
+	}
+	attachments := make([]*Attachment, 0, len(attachmentIDs))
+	for _, attachmentID := range attachmentIDs {
+		attachment, err := s.GetAttachment(workspaceID, attachmentID)
+		if err != nil {
+			return nil, err
+		}
+		attachments = append(attachments, attachment)
+	}
+	return attachments, nil
+}
+
+func (s *Store) AttachAttachmentsToRun(workspaceID, runID string, attachmentIDs []string) error {
+	if len(attachmentIDs) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	normalizedWorkspaceID := normalizeWorkspaceID(workspaceID)
+	normalizedRunID := strings.TrimSpace(runID)
+	for _, attachmentID := range attachmentIDs {
+		result, execErr := tx.Exec(
+			`UPDATE agent_attachments
+			SET run_id = ?
+			WHERE workspace_id = ? AND id = ? AND (run_id = '' OR run_id = ?)`,
+			normalizedRunID,
+			normalizedWorkspaceID,
+			strings.TrimSpace(attachmentID),
+			normalizedRunID,
+		)
+		if execErr != nil {
+			err = execErr
+			return err
+		}
+		affected, execErr := result.RowsAffected()
+		if execErr != nil {
+			err = execErr
+			return err
+		}
+		if affected == 0 {
+			err = fmt.Errorf("attachment %q is unavailable for this run", attachmentID)
+			return err
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }

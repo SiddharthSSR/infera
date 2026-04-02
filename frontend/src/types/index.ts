@@ -89,10 +89,13 @@ export interface ChatCompletionResponse {
 }
 
 export type PlaygroundMode = 'chat' | 'agent';
+export type AgentExecutionMode = 'operations' | 'research' | 'multimodal';
+export type AgentAnalysisDepth = 'standard' | 'deep';
 
 export interface AgentToolDescriptor {
   name: string;
   description: string;
+  modes?: AgentExecutionMode[];
 }
 
 export interface AgentDescriptor {
@@ -106,11 +109,34 @@ export interface AgentDescriptor {
 export type AgentRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
 export type AgentRunStepType = 'tool_call' | 'tool_result' | 'final' | 'error';
 
+export interface AgentSource {
+  title: string;
+  url: string;
+  domain: string;
+  snippet?: string;
+}
+
+export interface AgentAttachment {
+  id: string;
+  workspace_id: string;
+  created_by_key_id?: string;
+  run_id?: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  width?: number;
+  height?: number;
+  sha256: string;
+  created_at: string;
+}
+
 export interface AgentRun {
   id: string;
   workspace_id: string;
   created_by_key_id?: string;
   agent_id: string;
+  mode: AgentExecutionMode;
+  analysis_depth: AgentAnalysisDepth;
   model: string;
   input: string;
   status: AgentRunStatus;
@@ -137,6 +163,8 @@ export interface AgentRunStep {
 export interface AgentRunDetail {
   run: AgentRun;
   steps: AgentRunStep[];
+  attachments?: AgentAttachment[];
+  sources?: AgentSource[];
 }
 
 // GPU Provider Types

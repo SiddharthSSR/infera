@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -11,8 +11,16 @@ import {
   createAgentRun,
   fetchAgentRunDetail,
   streamChatCompletion,
+  uploadAgentAttachment,
 } from '../lib/api';
-import type { AgentRunDetail, AgentRunStatus, AgentRunStep, PlaygroundMode } from '../types';
+import type {
+  AgentAttachment,
+  AgentExecutionMode,
+  AgentRunDetail,
+  AgentRunStatus,
+  AgentRunStep,
+  PlaygroundMode,
+} from '../types';
 
 interface TokenUsage {
   promptTokens: number;
@@ -38,6 +46,8 @@ const toolLabelMap: Record<string, string> = {
   get_provider_status: 'provider connectivity',
   get_usage_summary: 'workspace usage',
   get_quota_status: 'quota pressure',
+  web_search: 'official research',
+  vision_analyze: 'screenshot review',
 };
 
 function formatAgentStatus(status?: AgentRunStatus) {
@@ -86,6 +96,13 @@ function friendlyToolLabel(toolName?: string) {
   return toolLabelMap[toolName] || toolName.replace(/_/g, ' ');
 }
 
+function toolAvailableInMode(modes: AgentExecutionMode[] | undefined, mode: AgentExecutionMode) {
+  if (!modes || modes.length === 0) {
+    return true;
+  }
+  return modes.includes(mode);
+}
+
 function latestStep(detail: AgentRunDetail | null) {
   if (!detail || detail.steps.length === 0) {
     return null;
@@ -101,7 +118,7 @@ function deriveAgentThinking(detail: AgentRunDetail | null, isRunning: boolean):
   const step = latestStep(detail);
   const runStatus = detail?.run.status;
   let headline = 'Planning workspace review';
-  let detailText = 'Hermes is preparing a read-only workspace health pass from the signals available to your current key.';
+  let detailText = 'Hermes is preparing a safe review from the signals visible to your current key.';
 
   switch (runStatus) {
     case 'queued':
@@ -111,7 +128,7 @@ function deriveAgentThinking(detail: AgentRunDetail | null, isRunning: boolean):
     case 'running':
       if (!step) {
         headline = 'Inspecting workspace state';
-        detailText = 'Hermes is gathering current infrastructure, deployment, and usage signals.';
+        detailText = 'Hermes is gathering the first signals for this run.';
         break;
       }
       switch (step.type) {
@@ -125,17 +142,15 @@ function deriveAgentThinking(detail: AgentRunDetail | null, isRunning: boolean):
           break;
         case 'error':
           headline = 'Recovering from a failed check';
-          detailText = 'Hermes is continuing with the remaining safe checks after an error.';
+          detailText = 'Hermes is continuing after a failed tool step without exposing raw reasoning.';
           break;
         default:
           headline = 'Inspecting workspace state';
-          detailText = 'Hermes is gathering current infrastructure, deployment, and usage signals.';
+          detailText = 'Hermes is gathering the first signals for this run.';
       }
       break;
     default:
-      if (isRunning) {
-        headline = 'Planning workspace review';
-      }
+      headline = 'Planning workspace review';
   }
 
   const recentChecks = (detail?.steps || [])
@@ -235,6 +250,10 @@ export function Playground() {
     setSelectedAgentID,
     agentMaxSteps,
     setAgentMaxSteps,
+    agentExecutionMode,
+    setAgentExecutionMode,
+    agentAnalysisDepth,
+    setAgentAnalysisDepth,
     selectedModel,
     setSelectedModel,
     temperature,
@@ -261,7 +280,11 @@ export function Playground() {
   const [showCompactHistory, setShowCompactHistory] = useState(false);
   const [agentDetail, setAgentDetail] = useState<AgentRunDetail | null>(null);
   const [agentRunID, setAgentRunID] = useState('');
+  const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
+  const [screenshotPreviewURL, setScreenshotPreviewURL] = useState('');
+  const [uploadedAttachment, setUploadedAttachment] = useState<AgentAttachment | null>(null);
   const responseRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const agentPollTokenRef = useRef(0);
 
   const isAgentMode = playgroundMode === 'agent';
@@ -339,10 +362,33 @@ export function Playground() {
     agentPollTokenRef.current += 1;
   }, []);
 
+  useEffect(() => {
+    if (!screenshotFile) {
+      if (screenshotPreviewURL) {
+        URL.revokeObjectURL(screenshotPreviewURL);
+        setScreenshotPreviewURL('');
+      }
+      return;
+    }
+    const preview = URL.createObjectURL(screenshotFile);
+    setScreenshotPreviewURL(preview);
+    return () => {
+      URL.revokeObjectURL(preview);
+    };
+  }, [screenshotFile]);
+
   const resetAgentRunState = useCallback(() => {
     agentPollTokenRef.current += 1;
     setAgentDetail(null);
     setAgentRunID('');
+  }, []);
+
+  const resetScreenshotState = useCallback(() => {
+    setScreenshotFile(null);
+    setUploadedAttachment(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   }, []);
 
   const handleChatRun = useCallback(async () => {
@@ -414,17 +460,22 @@ export function Playground() {
     } finally {
       setIsLoading(false);
     }
-  }, [
-    freqPenalty,
-    maxTokens,
-    prompt,
-    resetAgentRunState,
-    selectedModel,
-    setHistory,
-    systemPrompt,
-    temperature,
-    topP,
-  ]);
+  }, [freqPenalty, maxTokens, prompt, resetAgentRunState, selectedModel, setHistory, systemPrompt, temperature, topP]);
+
+  const ensureUploadedAttachments = useCallback(async () => {
+    if (agentExecutionMode !== 'multimodal') {
+      return [] as string[];
+    }
+    if (!screenshotFile) {
+      throw new Error('Select a screenshot before running multimodal analysis');
+    }
+    if (uploadedAttachment) {
+      return [uploadedAttachment.id];
+    }
+    const attachment = await uploadAgentAttachment(screenshotFile);
+    setUploadedAttachment(attachment);
+    return [attachment.id];
+  }, [agentExecutionMode, screenshotFile, uploadedAttachment]);
 
   const handleAgentRun = useCallback(async () => {
     if (!prompt.trim() || !selectedModel || !selectedAgentID) {
@@ -442,18 +493,22 @@ export function Playground() {
     const startTime = Date.now();
 
     try {
+      const attachments = await ensureUploadedAttachments();
       const run = await createAgentRun({
         agent_id: selectedAgentID,
+        mode: agentExecutionMode,
+        analysis_depth: agentAnalysisDepth,
         model: selectedModel,
         input: prompt,
         max_steps: agentMaxSteps,
+        attachments,
       });
       if (agentPollTokenRef.current !== pollToken) {
         return;
       }
 
       setAgentRunID(run.id);
-      setAgentDetail({ run, steps: [] });
+      setAgentDetail({ run, steps: [], attachments: [], sources: [] });
 
       while (true) {
         const nextDetail = await fetchAgentRunDetail(run.id);
@@ -501,7 +556,16 @@ export function Playground() {
         setIsLoading(false);
       }
     }
-  }, [agentMaxSteps, prompt, selectedAgentID, selectedModel, setHistory]);
+  }, [
+    agentAnalysisDepth,
+    agentExecutionMode,
+    agentMaxSteps,
+    ensureUploadedAttachments,
+    prompt,
+    selectedAgentID,
+    selectedModel,
+    setHistory,
+  ]);
 
   const handleRun = useCallback(async () => {
     if (isAgentMode) {
@@ -524,12 +588,14 @@ export function Playground() {
       let detail: AgentRunDetail = {
         run,
         steps: agentDetail?.steps || [],
+        attachments: agentDetail?.attachments || [],
+        sources: agentDetail?.sources || [],
       };
 
       try {
         detail = await fetchAgentRunDetail(agentRunID);
       } catch {
-        // Best effort detail refresh.
+        // Best effort refresh.
       }
 
       if (agentPollTokenRef.current !== pollToken) {
@@ -547,7 +613,7 @@ export function Playground() {
         setIsLoading(false);
       }
     }
-  }, [agentDetail?.steps, agentRunID]);
+  }, [agentDetail?.attachments, agentDetail?.sources, agentDetail?.steps, agentRunID]);
 
   const handleClear = useCallback(() => {
     resetAgentRunState();
@@ -555,24 +621,47 @@ export function Playground() {
     setResponse('');
     setTokenUsage(null);
     setIsLoading(false);
-  }, [resetAgentRunState]);
+    if (agentExecutionMode === 'multimodal') {
+      resetScreenshotState();
+    }
+  }, [agentExecutionMode, resetAgentRunState, resetScreenshotState]);
 
   const handleModeChange = useCallback((mode: PlaygroundMode) => {
     if (mode === playgroundMode) {
       return;
     }
     resetAgentRunState();
+    if (mode !== 'agent') {
+      resetScreenshotState();
+    }
     setPlaygroundMode(mode);
     setResponse('');
     setTokenUsage(null);
     setIsLoading(false);
-  }, [playgroundMode, resetAgentRunState, setPlaygroundMode]);
+  }, [playgroundMode, resetAgentRunState, resetScreenshotState, setPlaygroundMode]);
 
-  const canRun = Boolean(
-    prompt.trim() &&
-    selectedModel &&
-    (!isAgentMode || (selectedAgentID && agentModeAvailable)),
+  const handleFileSelection = useCallback((file: File | null) => {
+    setUploadedAttachment(null);
+    setScreenshotFile(file);
+  }, []);
+
+  const toolList = useMemo(() => activeAgent?.tools || [], [activeAgent?.tools]);
+  const visibleToolList = useMemo(
+    () => toolList.filter((tool) => toolAvailableInMode(tool.modes, agentExecutionMode)),
+    [agentExecutionMode, toolList],
   );
+  const canRun = Boolean(
+    prompt.trim()
+      && selectedModel
+      && (!isAgentMode || (selectedAgentID && agentModeAvailable))
+      && (agentExecutionMode !== 'multimodal' || screenshotFile),
+  );
+
+  useEffect(() => {
+    if (agentExecutionMode !== 'multimodal') {
+      resetScreenshotState();
+    }
+  }, [agentExecutionMode, resetScreenshotState]);
 
   const settingsControls = (
     <>
@@ -660,8 +749,47 @@ export function Playground() {
             ))}
           </select>
 
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '2rem' }}>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '1.5rem' }}>
             {activeAgent?.description || (agentsError instanceof Error ? agentsError.message : 'Agents are unavailable on this gateway.')}
+          </div>
+
+          <label className="label-text" style={{ marginBottom: '0.75rem', display: 'block' }}>AGENT MODE</label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem', marginBottom: '1.5rem' }}>
+            {(['operations', 'research', 'multimodal'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={agentExecutionMode === mode ? 'btn-primary' : 'btn-secondary'}
+                aria-pressed={agentExecutionMode === mode}
+                onClick={() => setAgentExecutionMode(mode)}
+              >
+                {mode.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '1.5rem' }}>
+            Tool availability follows the selected mode so the playground matches Hermes&apos; real backend contract.
+          </div>
+
+          <label className="label-text" style={{ marginBottom: '0.75rem', display: 'block' }}>ANALYSIS DEPTH</label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.5rem' }}>
+            <button
+              type="button"
+              className={agentAnalysisDepth === 'standard' ? 'btn-primary' : 'btn-secondary'}
+              aria-pressed={agentAnalysisDepth === 'standard'}
+              onClick={() => setAgentAnalysisDepth('standard')}
+            >
+              STANDARD
+            </button>
+            <button
+              type="button"
+              className={agentAnalysisDepth === 'deep' ? 'btn-primary' : 'btn-secondary'}
+              aria-pressed={agentAnalysisDepth === 'deep'}
+              onClick={() => setAgentAnalysisDepth('deep')}
+            >
+              DEEP
+            </button>
           </div>
 
           <div style={{ marginBottom: '2rem' }}>
@@ -679,10 +807,51 @@ export function Playground() {
             />
           </div>
 
+          {agentExecutionMode === 'multimodal' && (
+            <div style={{ marginBottom: '2rem' }}>
+              <label className="label-text" style={{ marginBottom: '0.85rem', display: 'block' }}>SCREENSHOT</label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                aria-label="Screenshot upload"
+                accept="image/png,image/jpeg,image/webp"
+                style={{ display: 'none' }}
+                onChange={(event) => handleFileSelection(event.target.files?.[0] || null)}
+              />
+              <button
+                type="button"
+                className="btn-secondary"
+                style={{ width: '100%', marginBottom: '0.75rem' }}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {screenshotFile ? 'REPLACE SCREENSHOT' : 'UPLOAD SCREENSHOT'}
+              </button>
+              {screenshotFile && (
+                <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  <div className="mono" style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                    {screenshotFile.name} · {(screenshotFile.size / 1024).toFixed(1)} KB
+                  </div>
+                  {screenshotPreviewURL && (
+                    <img
+                      src={screenshotPreviewURL}
+                      alt="Selected screenshot preview"
+                      style={{
+                        width: '100%',
+                        border: '1px solid var(--border-color)',
+                        background: '#F4F2EE',
+                        objectFit: 'cover',
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={{ marginTop: '2rem' }}>
             <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>AVAILABLE TOOLS</label>
             <div style={{ display: 'grid', gap: '0.75rem' }}>
-              {(activeAgent?.tools || []).map((tool) => (
+              {visibleToolList.map((tool) => (
                 <div
                   key={tool.name}
                   style={{
@@ -694,7 +863,12 @@ export function Playground() {
                   <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{tool.description}</div>
                 </div>
               ))}
-              {activeAgent && activeAgent.tools.length === 0 && (
+              {activeAgent && toolList.length > 0 && visibleToolList.length === 0 && (
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                  No tools are available for the selected mode with your current key permissions.
+                </div>
+              )}
+              {activeAgent && toolList.length === 0 && (
                 <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
                   This agent does not expose any tools for your current key permissions.
                 </div>
@@ -784,9 +958,6 @@ export function Playground() {
               borderBottom: '1px solid #E5E2DE',
               width: '100%',
               textAlign: 'left',
-            }}
-            onClick={() => {
-              // Reserved for future prompt restore.
             }}
           >
             <span className="mono" style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.25rem' }}>
@@ -933,16 +1104,12 @@ export function Playground() {
                   CANCEL RUN
                 </button>
               )}
-              <button
-                className="btn-secondary"
-                onClick={() => setFocusMode((value) => !value)}
-                title={focusMode ? 'Exit focus mode (Esc)' : 'Enter focus mode'}
-              >
+              <button className="btn-secondary" onClick={() => setFocusMode((value) => !value)}>
                 {focusMode ? 'EXIT' : 'FOCUS'}
               </button>
               <button className="btn-secondary" onClick={handleClear}>CLEAR</button>
               <button className="btn-primary" onClick={handleRun} disabled={isLoading || !canRun}>
-                {isLoading ? (isAgentMode ? 'RUNNING AGENT...' : 'GENERATING...') : isMobile ? 'RUN' : (isAgentMode ? 'RUN AGENT' : 'RUN INFERENCE')}
+                {isLoading ? (isAgentMode ? 'RUNNING AGENT...' : 'GENERATING...') : isAgentMode ? 'RUN AGENT' : 'RUN INFERENCE'}
               </button>
             </div>
           </div>
@@ -957,7 +1124,7 @@ export function Playground() {
             >
               <CollapsibleSection
                 title="SETTINGS"
-                description={isAgentMode ? 'Mode selection, agent controls, and workspace-safe tools.' : 'Model selection, decoding controls, and system prompt.'}
+                description={isAgentMode ? 'Mode selection, agent controls, screenshots, and workspace-safe tools.' : 'Model selection, decoding controls, and system prompt.'}
                 defaultExpanded
               >
                 {settingsControls}
@@ -1000,7 +1167,11 @@ export function Playground() {
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               placeholder={isAgentMode
-                ? 'Ask Hermes to inspect workspace health, quota pressure, deployments, or provider issues...'
+                ? agentExecutionMode === 'research'
+                  ? 'Ask Hermes to investigate and cite official sources...'
+                  : agentExecutionMode === 'multimodal'
+                    ? 'Ask Hermes what this screenshot shows and what it implies for the workspace...'
+                    : 'Ask Hermes to inspect workspace health, quota pressure, deployments, or provider issues...'
                 : 'Type your instruction here...'}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && event.metaKey) {
@@ -1065,45 +1236,75 @@ export function Playground() {
               {isAgentMode ? (
                 <>
                   {thinkingState ? (
-                    <section className="agent-thinking-card" aria-live="polite">
-                      <div className="agent-thinking-kicker">LIVE REVIEW</div>
-                      <div className="agent-thinking-row">
-                        <div className="agent-thinking-dots" aria-hidden="true">
-                          <span className="agent-thinking-dot" />
-                          <span className="agent-thinking-dot" />
-                          <span className="agent-thinking-dot" />
+                    <section className="animate-fade-in" style={{ border: '1px solid var(--border-color)', padding: '1.25rem', background: 'rgba(244, 242, 238, 0.7)', marginBottom: '1rem' }}>
+                      <div className="mono" style={{ fontSize: '0.68rem', marginBottom: '0.6rem', color: 'var(--text-secondary)' }}>LIVE REVIEW</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.65rem' }}>
+                        <div style={{ display: 'flex', gap: '0.35rem' }} aria-hidden="true">
+                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-primary)', opacity: 0.35 }} />
+                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-primary)', opacity: 0.55 }} />
+                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-primary)', opacity: 0.75 }} />
                         </div>
-                        <div className="agent-thinking-title">{thinkingState.headline}</div>
+                        <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{thinkingState.headline}</div>
                       </div>
-                      <p className="agent-thinking-body">{thinkingState.detail}</p>
-                      <div className="agent-thinking-meta">
-                        <span>{activeAgent?.name || 'Hermes'}</span>
-                        {agentDetail?.run.current_step != null && <span>step {agentDetail.run.current_step + 1}</span>}
-                        {agentRunID && <span>{agentRunID}</span>}
+                      <p style={{ color: 'var(--text-secondary)', lineHeight: 1.7, marginBottom: '0.85rem' }}>{thinkingState.detail}</p>
+                      <div className="mono" style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.85rem', flexWrap: 'wrap', marginBottom: thinkingState.recentChecks.length > 0 ? '0.75rem' : 0 }}>
+                        <span>{agentExecutionMode.toUpperCase()}</span>
+                        <span>{agentAnalysisDepth.toUpperCase()}</span>
+                        {agentDetail?.run.current_step != null && <span>STEP {agentDetail.run.current_step + 1}</span>}
                       </div>
                       {thinkingState.recentChecks.length > 0 && (
-                        <div className="agent-thinking-chip-list">
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                           {thinkingState.recentChecks.map((label, index) => (
-                            <span key={`${label}:${index}`} className="agent-thinking-chip">{label}</span>
+                            <span key={`${label}:${index}`} className="mono" style={{ fontSize: '0.64rem', padding: '0.25rem 0.5rem', border: '1px solid var(--border-color)', background: 'white' }}>
+                              {label}
+                            </span>
                           ))}
                         </div>
                       )}
                     </section>
                   ) : terminalRun && agentDetail ? (
-                    <section className={`agent-final-card animate-fade-in ${agentDetail.run.status === 'succeeded' ? '' : 'agent-final-card-failed'}`}>
-                      <div className="agent-output-meta">
+                    <section className="animate-fade-in" style={{ border: '1px solid var(--border-color)', padding: '1.25rem', background: agentDetail.run.status === 'succeeded' ? 'white' : 'rgba(255, 246, 242, 0.9)', marginBottom: '1rem' }}>
+                      <div className="mono" style={{ fontSize: '0.68rem', marginBottom: '0.75rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.85rem', flexWrap: 'wrap' }}>
                         <span>{formatAgentStatus(agentDetail.run.status)}</span>
-                        <span>{agentDetail.steps.length} structured step{agentDetail.steps.length === 1 ? '' : 's'}</span>
+                        <span>{agentExecutionMode.toUpperCase()}</span>
+                        <span>{agentAnalysisDepth.toUpperCase()}</span>
+                        <span>{agentDetail.steps.length} STEP{agentDetail.steps.length === 1 ? '' : 'S'}</span>
                       </div>
                       <MarkdownOutput content={summarizeAgentResult(agentDetail)} />
+                      {agentDetail.sources && agentDetail.sources.length > 0 && (
+                        <div style={{ marginTop: '1rem', display: 'grid', gap: '0.75rem' }}>
+                          <div className="label-text">SOURCES</div>
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            {agentDetail.sources.map((source) => (
+                              <a
+                                key={source.url}
+                                href={source.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="mono"
+                                style={{
+                                  fontSize: '0.66rem',
+                                  padding: '0.32rem 0.55rem',
+                                  border: '1px solid var(--border-color)',
+                                  background: '#F4F2EE',
+                                  color: 'var(--text-primary)',
+                                  textDecoration: 'none',
+                                }}
+                              >
+                                {source.domain}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </section>
                   ) : response ? (
-                    <section className="agent-final-card animate-fade-in">
+                    <section className="animate-fade-in" style={{ border: '1px solid var(--border-color)', padding: '1.25rem', background: 'white', marginBottom: '1rem' }}>
                       <MarkdownOutput content={response} />
                     </section>
                   ) : (
-                    <span className="agent-empty-state">
-                      Hermes will surface a narrative health brief here once the run starts.
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      Hermes will surface a narrative answer here once the run starts.
                     </span>
                   )}
 
@@ -1123,22 +1324,26 @@ export function Playground() {
                         ) : (
                           <div style={{ display: 'grid', gap: '1rem' }}>
                             {agentDetail.steps.map((step) => (
-                              <div key={step.id} className="agent-trace-step">
-                                <div className="agent-trace-step-header">
-                                  <div>
-                                    <div className="mono" style={{ fontSize: '0.68rem', marginBottom: '0.2rem' }}>
-                                      STEP {step.index + 1}
-                                    </div>
-                                    <div style={{ fontSize: '0.92rem' }}>
-                                      {formatStepType(step.type)}
-                                      {step.tool_name ? ` · ${step.tool_name}` : ''}
-                                    </div>
-                                  </div>
-                                  <div className="agent-trace-step-meta">
-                                    {new Date(step.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                                  </div>
+                              <div key={step.id} style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.9rem' }}>
+                                <div className="mono" style={{ fontSize: '0.68rem', marginBottom: '0.35rem', color: 'var(--text-secondary)' }}>
+                                  STEP {step.index + 1} · {formatStepType(step.type)}{step.tool_name ? ` · ${step.tool_name}` : ''}
                                 </div>
-                                <pre className="agent-trace-payload">{formatStepPayload(step.payload)}</pre>
+                                <pre
+                                  style={{
+                                    margin: 0,
+                                    background: '#F4F2EE',
+                                    border: '1px solid var(--border-color)',
+                                    padding: '0.85rem',
+                                    overflowX: 'auto',
+                                    whiteSpace: 'pre-wrap',
+                                    wordBreak: 'break-word',
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: '0.78rem',
+                                    lineHeight: 1.6,
+                                  }}
+                                >
+                                  {formatStepPayload(step.payload)}
+                                </pre>
                               </div>
                             ))}
                           </div>
@@ -1148,10 +1353,12 @@ export function Playground() {
                   )}
                 </>
               ) : response ? (
-                <MarkdownOutput content={response} />
+                <div className="animate-fade-in">
+                  <MarkdownOutput content={response} />
+                </div>
               ) : (
-                <span style={{ color: 'var(--text-secondary)', opacity: 0.4, fontSize: '1.05rem' }}>
-                  Response will appear here...
+                <span style={{ color: 'var(--text-secondary)' }}>
+                  Model output will appear here.
                 </span>
               )}
             </div>
@@ -1161,9 +1368,8 @@ export function Playground() {
         {showDesktopHistoryRail && (
           <aside
             style={{
-              borderLeft: 'var(--grid-line)',
-              backgroundColor: 'var(--bg-accent)',
               padding: '1.5rem',
+              borderLeft: 'var(--grid-line)',
               overflowY: 'auto',
             }}
           >

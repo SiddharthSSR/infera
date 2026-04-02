@@ -28,22 +28,39 @@ const (
 	StepTypeError      StepType = "error"
 )
 
+type RunMode string
+
+const (
+	RunModeOperations RunMode = "operations"
+	RunModeResearch   RunMode = "research"
+	RunModeMultimodal RunMode = "multimodal"
+)
+
+type AnalysisDepth string
+
+const (
+	AnalysisDepthStandard AnalysisDepth = "standard"
+	AnalysisDepthDeep     AnalysisDepth = "deep"
+)
+
 type Run struct {
-	ID             string     `json:"id"`
-	WorkspaceID    string     `json:"workspace_id"`
-	CreatedByKeyID string     `json:"created_by_key_id,omitempty"`
-	AgentID        string     `json:"agent_id"`
-	Model          string     `json:"model"`
-	Input          string     `json:"input"`
-	Status         Status     `json:"status"`
-	MaxSteps       int        `json:"max_steps"`
-	CurrentStep    int        `json:"current_step"`
-	FinalOutput    string     `json:"final_output,omitempty"`
-	FailureReason  string     `json:"failure_reason,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	ID             string        `json:"id"`
+	WorkspaceID    string        `json:"workspace_id"`
+	CreatedByKeyID string        `json:"created_by_key_id,omitempty"`
+	AgentID        string        `json:"agent_id"`
+	Mode           RunMode       `json:"mode"`
+	AnalysisDepth  AnalysisDepth `json:"analysis_depth"`
+	Model          string        `json:"model"`
+	Input          string        `json:"input"`
+	Status         Status        `json:"status"`
+	MaxSteps       int           `json:"max_steps"`
+	CurrentStep    int           `json:"current_step"`
+	FinalOutput    string        `json:"final_output,omitempty"`
+	FailureReason  string        `json:"failure_reason,omitempty"`
+	CreatedAt      time.Time     `json:"created_at"`
+	UpdatedAt      time.Time     `json:"updated_at"`
+	StartedAt      *time.Time    `json:"started_at,omitempty"`
+	FinishedAt     *time.Time    `json:"finished_at,omitempty"`
 }
 
 type RunStep struct {
@@ -57,8 +74,48 @@ type RunStep struct {
 }
 
 type RunDetail struct {
-	Run   *Run       `json:"run"`
-	Steps []*RunStep `json:"steps"`
+	Run         *Run             `json:"run"`
+	Steps       []*RunStep       `json:"steps"`
+	Attachments []*Attachment    `json:"attachments,omitempty"`
+	Sources     []ResearchSource `json:"sources,omitempty"`
+}
+
+type Attachment struct {
+	ID             string    `json:"id"`
+	WorkspaceID    string    `json:"workspace_id"`
+	CreatedByKeyID string    `json:"created_by_key_id,omitempty"`
+	RunID          string    `json:"run_id,omitempty"`
+	FileName       string    `json:"file_name"`
+	MIMEType       string    `json:"mime_type"`
+	SizeBytes      int64     `json:"size_bytes"`
+	Width          int       `json:"width,omitempty"`
+	Height         int       `json:"height,omitempty"`
+	SHA256         string    `json:"sha256"`
+	CreatedAt      time.Time `json:"created_at"`
+	StoragePath    string    `json:"-"`
+}
+
+type AttachmentDescriptor struct {
+	ID        string `json:"id"`
+	FileName  string `json:"file_name"`
+	MIMEType  string `json:"mime_type"`
+	SizeBytes int64  `json:"size_bytes"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
+}
+
+type ResearchSource struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Domain  string `json:"domain"`
+	Snippet string `json:"snippet,omitempty"`
+}
+
+type RunPromptContext struct {
+	Tools         []ToolDescriptor
+	Mode          RunMode
+	AnalysisDepth AnalysisDepth
+	Attachments   []AttachmentDescriptor
 }
 
 type Definition struct {
@@ -69,19 +126,21 @@ type Definition struct {
 	Timeout           time.Duration
 	ModelParameters   types.InferenceParameters
 	Tools             []string
-	BuildSystemPrompt func([]ToolDescriptor) string
+	BuildSystemPrompt func(RunPromptContext) string
 }
 
 type ToolDefinition struct {
 	Name        string
 	Description string
+	Modes       []RunMode
 	Permission  string
 	Handler     ToolHandler
 }
 
 type ToolDescriptor struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Modes       []RunMode `json:"modes,omitempty"`
 }
 
 type AgentDescriptor struct {
@@ -93,8 +152,9 @@ type AgentDescriptor struct {
 }
 
 type ToolCallContext struct {
-	Run   *Run
-	Actor *auth.KeyRecord
+	Run         *Run
+	Actor       *auth.KeyRecord
+	Attachments []*Attachment
 }
 
 type ToolHandler func(ctx context.Context, call ToolCallContext, arguments json.RawMessage) (any, error)
@@ -107,10 +167,13 @@ type ToolCallEnvelope struct {
 }
 
 type CreateRunRequest struct {
-	AgentID  string
-	Model    string
-	Input    string
-	MaxSteps int
+	AgentID       string
+	Mode          RunMode
+	AnalysisDepth AnalysisDepth
+	Model         string
+	Input         string
+	MaxSteps      int
+	AttachmentIDs []string
 }
 
 type ModelRunRequest struct {

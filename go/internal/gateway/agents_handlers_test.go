@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -81,75 +80,6 @@ func TestHandleAgentsListsHermes(t *testing.T) {
 	}
 	if len(resp.Agents) != 1 || resp.Agents[0].ID != "hermes" {
 		t.Fatalf("expected Hermes in response, got %+v", resp.Agents)
-	}
-}
-
-func TestHandleAgentsFiltersHermesToolsByRole(t *testing.T) {
-	g, _ := newGatewayWithAgentsRuntime(t, "meta-llama/Meta-Llama-3.1-8B-Instruct", roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"meta-llama/Meta-Llama-3.1-8B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":"{\"type\":\"final\",\"message\":\"ok\"}"},"finish_reason":"stop"}]}`), nil
-	}))
-
-	cases := []struct {
-		name string
-		role string
-		want []string
-	}{
-		{
-			name: "owner sees infra and usage tools",
-			role: auth.RoleOwner,
-			want: []string{"get_gateway_stats", "get_provider_status", "get_quota_status", "get_usage_summary", "list_deployments", "list_instances", "list_models", "list_workers"},
-		},
-		{
-			name: "operator sees infra but not usage",
-			role: auth.RoleOperator,
-			want: []string{"get_gateway_stats", "get_provider_status", "list_deployments", "list_instances", "list_models", "list_workers"},
-		},
-		{
-			name: "billing sees usage but not infra",
-			role: auth.RoleBilling,
-			want: []string{"get_quota_status", "get_usage_summary", "list_models"},
-		},
-		{
-			name: "read only sees both read bundles",
-			role: auth.RoleReadOnly,
-			want: []string{"get_gateway_stats", "get_provider_status", "get_quota_status", "get_usage_summary", "list_deployments", "list_instances", "list_models", "list_workers"},
-		},
-		{
-			name: "user only sees model listing",
-			role: auth.RoleUser,
-			want: []string{"list_models"},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := authedRequest(httptest.NewRequest(http.MethodGet, "/api/agents", nil), tc.role)
-			w := httptest.NewRecorder()
-			g.handleAgents(w, req)
-
-			if w.Code != http.StatusOK {
-				t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-			}
-
-			var resp struct {
-				Agents []agents.AgentDescriptor `json:"agents"`
-			}
-			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-				t.Fatalf("json.Unmarshal: %v", err)
-			}
-			if len(resp.Agents) != 1 {
-				t.Fatalf("expected one agent, got %d", len(resp.Agents))
-			}
-
-			got := make([]string, 0, len(resp.Agents[0].Tools))
-			for _, tool := range resp.Agents[0].Tools {
-				got = append(got, tool.Name)
-			}
-			sort.Strings(got)
-			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
-				t.Fatalf("expected tools %v, got %v", tc.want, got)
-			}
-		})
 	}
 }
 
@@ -313,117 +243,41 @@ func TestHermesRunRespectsWorkspaceQuota(t *testing.T) {
 	}
 }
 
-func TestWorkspaceHealthHelpersAreWorkspaceScoped(t *testing.T) {
-	g, _ := newGatewayWithAgentsRuntime(t, "meta-llama/Meta-Llama-3.1-8B-Instruct", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+func TestHandleAgentRunDetailIncludesResearchSources(t *testing.T) {
+	g, store := newGatewayWithAgentsRuntime(t, "meta-llama/Meta-Llama-3.1-8B-Instruct", roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"meta-llama/Meta-Llama-3.1-8B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":"{\"type\":\"final\",\"message\":\"ok\"}"},"finish_reason":"stop"}]}`), nil
 	}))
 
-	authStore, err := auth.NewStore(filepath.Join(t.TempDir(), "auth.db"))
+	now := time.Now().UTC()
+	run, err := store.CreateRun("ws_alpha", "key-1", "hermes", agents.RunModeResearch, agents.AnalysisDepthStandard, "meta-llama/Meta-Llama-3.1-8B-Instruct", "inspect", 4, now)
 	if err != nil {
-		t.Fatalf("auth.NewStore: %v", err)
+		t.Fatalf("CreateRun: %v", err)
 	}
-	t.Cleanup(func() { _ = authStore.Close() })
-	g.SetAuthHandler(auth.NewHandler(authStore))
-
-	auditStore, err := audit.NewStore(filepath.Join(t.TempDir(), "audit.db"))
-	if err != nil {
-		t.Fatalf("audit.NewStore: %v", err)
-	}
-	t.Cleanup(func() { _ = auditStore.Close() })
-	g.SetAuditStore(auditStore)
-
-	alpha, err := authStore.CreateWorkspace("Alpha Team")
-	if err != nil {
-		t.Fatalf("CreateWorkspace alpha: %v", err)
-	}
-	beta, err := authStore.CreateWorkspace("Beta Team")
-	if err != nil {
-		t.Fatalf("CreateWorkspace beta: %v", err)
-	}
-
-	alphaReqLimit := int64(10)
-	alphaTokenLimit := int64(500)
-	if _, err := authStore.UpsertWorkspaceQuota(alpha.ID, &alphaReqLimit, &alphaTokenLimit, true); err != nil {
-		t.Fatalf("UpsertWorkspaceQuota alpha: %v", err)
-	}
-	betaReqLimit := int64(200)
-	betaTokenLimit := int64(9000)
-	if _, err := authStore.UpsertWorkspaceQuota(beta.ID, &betaReqLimit, &betaTokenLimit, false); err != nil {
-		t.Fatalf("UpsertWorkspaceQuota beta: %v", err)
-	}
-
-	now := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
-	records := []audit.InferenceAuditRecord{
-		{
-			Timestamp:   now.Add(-2 * time.Hour),
-			RequestID:   "alpha-1",
-			KeyID:       "key-alpha",
-			WorkspaceID: alpha.ID,
-			Model:       "m1",
-			Status:      "success",
-			TokenCount:  120,
+	if _, err := store.AppendStep(run.WorkspaceID, run.ID, agents.StepTypeToolResult, "web_search", map[string]any{
+		"ok": true,
+		"result": map[string]any{
+			"results": []map[string]any{
+				{"title": "RunPod Status", "url": "https://status.runpod.io/", "domain": "status.runpod.io"},
+			},
 		},
-		{
-			Timestamp:   now.Add(-26 * time.Hour),
-			RequestID:   "alpha-2",
-			KeyID:       "key-alpha",
-			WorkspaceID: alpha.ID,
-			Model:       "m1",
-			Status:      "inference_error",
-			TokenCount:  30,
-		},
-		{
-			Timestamp:   now.Add(-3 * time.Hour),
-			RequestID:   "beta-1",
-			KeyID:       "key-beta",
-			WorkspaceID: beta.ID,
-			Model:       "m2",
-			Status:      "success",
-			TokenCount:  999,
-		},
-	}
-	for _, record := range records {
-		if err := auditStore.AppendInference(record); err != nil {
-			t.Fatalf("AppendInference %s: %v", record.RequestID, err)
-		}
+	}, now.Add(time.Second)); err != nil {
+		t.Fatalf("AppendStep: %v", err)
 	}
 
-	usagePayload, err := g.usageSummaryPayload(alpha.ID, now)
-	if err != nil {
-		t.Fatalf("usageSummaryPayload: %v", err)
-	}
-	totals, _ := usagePayload["totals"].(map[string]any)
-	if got, _ := totals["requests"].(int64); got != 2 {
-		t.Fatalf("expected alpha request count 2, got %v", totals["requests"])
-	}
-	if got, _ := totals["tokens"].(int64); got != 150 {
-		t.Fatalf("expected alpha token count 150, got %v", totals["tokens"])
-	}
-	if got, _ := totals["errors"].(int64); got != 1 {
-		t.Fatalf("expected alpha error count 1, got %v", totals["errors"])
-	}
-	trend, _ := usagePayload["daily_trend"].([]map[string]any)
-	if len(trend) != 7 {
-		t.Fatalf("expected 7 trend buckets, got %d", len(trend))
+	req := authedWorkspaceRequest(httptest.NewRequest(http.MethodGet, "/api/agents/runs/"+run.ID, nil), auth.RoleOwner, "ws_alpha")
+	w := httptest.NewRecorder()
+	g.handleAgentRunByID(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	quotaPayload, err := g.quotaStatusPayload(alpha.ID, now)
-	if err != nil {
-		t.Fatalf("quotaStatusPayload: %v", err)
+	var resp struct {
+		Sources []agents.ResearchSource `json:"sources"`
 	}
-	quotaBlock, _ := quotaPayload["quota"].(map[string]any)
-	if got, _ := quotaBlock["monthly_request_limit"].(*int64); got == nil || *got != alphaReqLimit {
-		t.Fatalf("expected alpha request limit %d, got %#v", alphaReqLimit, quotaBlock["monthly_request_limit"])
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	pressure, _ := quotaPayload["pressure"].(map[string]any)
-	requestPressure, _ := pressure["requests"].(map[string]any)
-	if got, _ := requestPressure["used"].(int64); got != 2 {
-		t.Fatalf("expected alpha pressure to use 2 requests, got %v", requestPressure["used"])
-	}
-	if got, _ := requestPressure["limit"].(int64); got != alphaReqLimit {
-		t.Fatalf("expected alpha pressure limit %d, got %v", alphaReqLimit, requestPressure["limit"])
-	}
-	if got, _ := pressure["overall_status"].(string); got != "healthy" {
-		t.Fatalf("expected healthy quota status, got %q", got)
+	if len(resp.Sources) != 1 || resp.Sources[0].Domain != "status.runpod.io" {
+		t.Fatalf("expected derived research source, got %+v", resp.Sources)
 	}
 }

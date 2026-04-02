@@ -93,12 +93,30 @@ func (r *Runtime) ListDefinitions(actor *auth.KeyRecord) []AgentDescriptor {
 
 	out := make([]AgentDescriptor, 0, len(r.definitions))
 	for _, def := range r.definitions {
+		toolsByName := make(map[string]ToolDescriptor)
+		for _, mode := range []RunMode{RunModeOperations, RunModeResearch, RunModeMultimodal} {
+			for _, tool := range r.toolDescriptorsForDefinition(actor, def, mode) {
+				if existing, ok := toolsByName[tool.Name]; ok {
+					existing.Modes = mergeDescriptorModes(existing.Modes, tool.Modes)
+					toolsByName[tool.Name] = existing
+					continue
+				}
+				toolsByName[tool.Name] = tool
+			}
+		}
+		tools := make([]ToolDescriptor, 0, len(toolsByName))
+		for _, tool := range toolsByName {
+			tools = append(tools, tool)
+		}
+		sort.Slice(tools, func(i, j int) bool {
+			return tools[i].Name < tools[j].Name
+		})
 		out = append(out, AgentDescriptor{
 			ID:              def.ID,
 			Name:            def.Name,
 			Description:     def.Description,
 			DefaultMaxSteps: def.DefaultMaxSteps,
-			Tools:           r.toolDescriptorsForDefinition(actor, def),
+			Tools:           tools,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -114,11 +132,65 @@ func (r *Runtime) getDefinition(agentID string) (Definition, bool) {
 	return def, ok
 }
 
-func (r *Runtime) toolDescriptorsForDefinition(actor *auth.KeyRecord, def Definition) []ToolDescriptor {
+func toolSupportsMode(tool ToolDefinition, mode RunMode) bool {
+	if len(tool.Modes) == 0 {
+		return true
+	}
+	mode = normalizeRunMode(mode)
+	for _, candidate := range tool.Modes {
+		if normalizeRunMode(candidate) == mode {
+			return true
+		}
+	}
+	return false
+}
+
+func descriptorModesForTool(tool ToolDefinition) []RunMode {
+	if len(tool.Modes) == 0 {
+		return []RunMode{RunModeOperations, RunModeResearch, RunModeMultimodal}
+	}
+
+	seen := make(map[RunMode]struct{}, len(tool.Modes))
+	out := make([]RunMode, 0, len(tool.Modes))
+	for _, mode := range tool.Modes {
+		normalized := normalizeRunMode(mode)
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i] < out[j]
+	})
+	return out
+}
+
+func mergeDescriptorModes(existing []RunMode, incoming []RunMode) []RunMode {
+	seen := make(map[RunMode]struct{}, len(existing)+len(incoming))
+	out := make([]RunMode, 0, len(existing)+len(incoming))
+	for _, mode := range append(append([]RunMode{}, existing...), incoming...) {
+		normalized := normalizeRunMode(mode)
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i] < out[j]
+	})
+	return out
+}
+
+func (r *Runtime) toolDescriptorsForDefinition(actor *auth.KeyRecord, def Definition, mode RunMode) []ToolDescriptor {
 	descriptors := make([]ToolDescriptor, 0, len(def.Tools))
 	for _, name := range def.Tools {
 		tool, ok := r.tools[name]
 		if !ok {
+			continue
+		}
+		if !toolSupportsMode(tool, mode) {
 			continue
 		}
 		if tool.Permission != "" && !auth.HasPermission(actor, tool.Permission) {
@@ -127,6 +199,7 @@ func (r *Runtime) toolDescriptorsForDefinition(actor *auth.KeyRecord, def Defini
 		descriptors = append(descriptors, ToolDescriptor{
 			Name:        tool.Name,
 			Description: tool.Description,
+			Modes:       descriptorModesForTool(tool),
 		})
 	}
 	sort.Slice(descriptors, func(i, j int) bool {
@@ -135,7 +208,7 @@ func (r *Runtime) toolDescriptorsForDefinition(actor *auth.KeyRecord, def Defini
 	return descriptors
 }
 
-func (r *Runtime) availableTools(actor *auth.KeyRecord, def Definition) map[string]ToolDefinition {
+func (r *Runtime) availableTools(actor *auth.KeyRecord, def Definition, mode RunMode) map[string]ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -143,6 +216,9 @@ func (r *Runtime) availableTools(actor *auth.KeyRecord, def Definition) map[stri
 	for _, name := range def.Tools {
 		tool, ok := r.tools[name]
 		if !ok {
+			continue
+		}
+		if !toolSupportsMode(tool, mode) {
 			continue
 		}
 		if tool.Permission != "" && !auth.HasPermission(actor, tool.Permission) {
@@ -157,8 +233,38 @@ func (r *Runtime) ListRuns(workspaceID string, limit int) ([]*Run, error) {
 	return r.store.ListRuns(workspaceID, limit)
 }
 
+func (r *Runtime) AttachmentRoot() string {
+	return r.store.AttachmentRoot()
+}
+
+func (r *Runtime) CreateAttachment(
+	actor *auth.KeyRecord,
+	fileName,
+	mimeType string,
+	sizeBytes int64,
+	width,
+	height int,
+	sha256,
+	storagePath string,
+) (*Attachment, error) {
+	workspaceID := auth.DefaultWorkspaceID
+	createdByKeyID := ""
+	if actor != nil {
+		if strings.TrimSpace(actor.WorkspaceID) != "" {
+			workspaceID = actor.WorkspaceID
+		}
+		createdByKeyID = actor.ID
+	}
+	return r.store.CreateAttachment(workspaceID, createdByKeyID, fileName, mimeType, sizeBytes, width, height, sha256, storagePath, time.Now().UTC())
+}
+
 func (r *Runtime) GetRunDetail(workspaceID, runID string) (*RunDetail, error) {
-	return r.store.GetRunDetail(workspaceID, runID)
+	detail, err := r.store.GetRunDetail(workspaceID, runID)
+	if err != nil {
+		return nil, err
+	}
+	detail.Sources = collectResearchSources(detail.Steps)
+	return detail, nil
 }
 
 func (r *Runtime) CreateRun(ctx context.Context, actor *auth.KeyRecord, session *auth.SessionRecord, req CreateRunRequest) (*Run, error) {
@@ -171,9 +277,18 @@ func (r *Runtime) CreateRun(ctx context.Context, actor *auth.KeyRecord, session 
 		return nil, fmt.Errorf("unknown agent_id %q", agentID)
 	}
 
+	mode := normalizeRunMode(req.Mode)
+	analysisDepth := normalizeAnalysisDepth(req.AnalysisDepth)
+	if mode != RunModeMultimodal && len(req.AttachmentIDs) > 0 {
+		return nil, fmt.Errorf("attachments are only valid for multimodal runs")
+	}
+
 	maxSteps := req.MaxSteps
 	if maxSteps <= 0 {
 		maxSteps = def.DefaultMaxSteps
+		if analysisDepth == AnalysisDepthDeep && maxSteps < 12 {
+			maxSteps = 12
+		}
 	}
 
 	workspaceID := auth.DefaultWorkspaceID
@@ -185,13 +300,48 @@ func (r *Runtime) CreateRun(ctx context.Context, actor *auth.KeyRecord, session 
 		createdByKeyID = actor.ID
 	}
 
-	run, err := r.store.CreateRun(workspaceID, createdByKeyID, agentID, req.Model, req.Input, maxSteps, time.Now().UTC())
+	attachments, err := r.store.ListAttachmentsByID(workspaceID, req.AttachmentIDs)
 	if err != nil {
 		return nil, err
 	}
+	for _, attachment := range attachments {
+		if attachment.RunID != "" {
+			return nil, fmt.Errorf("attachment %q is already attached to another run", attachment.ID)
+		}
+	}
 
-	go r.executeRun(actor, session, run, def)
+	run, err := r.store.CreateRun(workspaceID, createdByKeyID, agentID, mode, analysisDepth, req.Model, req.Input, maxSteps, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if err := r.store.AttachAttachmentsToRun(workspaceID, run.ID, req.AttachmentIDs); err != nil {
+		_ = r.store.CompleteRun(workspaceID, run.ID, StatusFailed, "", err.Error(), time.Now().UTC())
+		return nil, err
+	}
+
+	go r.executeRun(actor, session, run, adjustDefinitionForRun(def, run))
 	return run, nil
+}
+
+func adjustDefinitionForRun(def Definition, run *Run) Definition {
+	adjusted := def
+	if adjusted.Timeout <= 0 {
+		adjusted.Timeout = defaultTimeout
+	}
+	if adjusted.ModelParameters.MaxTokens <= 0 {
+		adjusted.ModelParameters = types.DefaultInferenceParameters()
+	}
+	if run != nil && run.AnalysisDepth == AnalysisDepthDeep {
+		if adjusted.Timeout < 90*time.Second {
+			adjusted.Timeout = 90 * time.Second
+		} else {
+			adjusted.Timeout *= 2
+		}
+		if adjusted.ModelParameters.MaxTokens < 1024 {
+			adjusted.ModelParameters.MaxTokens = 1024
+		}
+	}
+	return adjusted
 }
 
 func (r *Runtime) CancelRun(workspaceID, runID string) (*Run, error) {
@@ -219,6 +369,24 @@ func (r *Runtime) CancelRun(workspaceID, runID string) (*Run, error) {
 	return r.store.GetRun(workspaceID, runID)
 }
 
+func attachmentDescriptors(attachments []*Attachment) []AttachmentDescriptor {
+	descriptors := make([]AttachmentDescriptor, 0, len(attachments))
+	for _, attachment := range attachments {
+		descriptors = append(descriptors, AttachmentDescriptor{
+			ID:        attachment.ID,
+			FileName:  attachment.FileName,
+			MIMEType:  attachment.MIMEType,
+			SizeBytes: attachment.SizeBytes,
+			Width:     attachment.Width,
+			Height:    attachment.Height,
+		})
+	}
+	sort.Slice(descriptors, func(i, j int) bool {
+		return descriptors[i].ID < descriptors[j].ID
+	})
+	return descriptors
+}
+
 func (r *Runtime) executeRun(actor *auth.KeyRecord, session *auth.SessionRecord, run *Run, def Definition) {
 	now := time.Now().UTC()
 	if err := r.store.MarkRunRunning(run.WorkspaceID, run.ID, now); err != nil {
@@ -243,9 +411,20 @@ func (r *Runtime) executeRun(actor *auth.KeyRecord, session *auth.SessionRecord,
 		r.cancelMu.Unlock()
 	}()
 
-	availableTools := r.availableTools(actor, def)
-	toolDescriptors := r.toolDescriptorsForDefinition(actor, def)
-	systemPrompt := def.BuildSystemPrompt(toolDescriptors)
+	attachments, err := r.store.ListAttachmentsForRun(run.WorkspaceID, run.ID)
+	if err != nil {
+		r.failRun(run, fmt.Sprintf("failed to load attachments: %v", err))
+		return
+	}
+
+	availableTools := r.availableTools(actor, def, run.Mode)
+	toolDescriptors := r.toolDescriptorsForDefinition(actor, def, run.Mode)
+	systemPrompt := def.BuildSystemPrompt(RunPromptContext{
+		Tools:         toolDescriptors,
+		Mode:          run.Mode,
+		AnalysisDepth: run.AnalysisDepth,
+		Attachments:   attachmentDescriptors(attachments),
+	})
 
 	conversation := []types.Message{
 		{Role: types.RoleSystem, Content: systemPrompt},
@@ -283,7 +462,7 @@ func (r *Runtime) executeRun(actor *auth.KeyRecord, session *auth.SessionRecord,
 
 		switch envelope.Type {
 		case "tool_call":
-			r.handleToolCall(ctx, actor, run, availableTools, assistantMessage, envelope, &conversation)
+			r.handleToolCall(ctx, actor, run, attachments, availableTools, assistantMessage, envelope, &conversation)
 		case "final":
 			if strings.TrimSpace(envelope.Message) == "" {
 				_, _ = r.store.AppendStep(run.WorkspaceID, run.ID, StepTypeError, "", map[string]any{
@@ -315,7 +494,16 @@ func (r *Runtime) executeRun(actor *auth.KeyRecord, session *auth.SessionRecord,
 	r.failRun(run, "agent exhausted max steps without a final answer")
 }
 
-func (r *Runtime) handleToolCall(ctx context.Context, actor *auth.KeyRecord, run *Run, availableTools map[string]ToolDefinition, assistantMessage string, envelope ToolCallEnvelope, conversation *[]types.Message) {
+func (r *Runtime) handleToolCall(
+	ctx context.Context,
+	actor *auth.KeyRecord,
+	run *Run,
+	attachments []*Attachment,
+	availableTools map[string]ToolDefinition,
+	assistantMessage string,
+	envelope ToolCallEnvelope,
+	conversation *[]types.Message,
+) {
 	now := time.Now().UTC()
 	argsPayload := any(map[string]any{})
 	if len(envelope.Arguments) > 0 {
@@ -346,7 +534,7 @@ func (r *Runtime) handleToolCall(ctx context.Context, actor *auth.KeyRecord, run
 		return
 	}
 
-	result, err := tool.Handler(ctx, ToolCallContext{Run: run, Actor: actor}, envelope.Arguments)
+	result, err := tool.Handler(ctx, ToolCallContext{Run: run, Actor: actor, Attachments: attachments}, envelope.Arguments)
 	if err != nil {
 		resultPayload["error"] = err.Error()
 	} else {
@@ -392,6 +580,33 @@ func (r *Runtime) handleRunError(run *Run, ctx context.Context, message string, 
 
 func (r *Runtime) failRun(run *Run, reason string) {
 	_ = r.store.CompleteRun(run.WorkspaceID, run.ID, StatusFailed, "", reason, time.Now().UTC())
+}
+
+func collectResearchSources(steps []*RunStep) []ResearchSource {
+	seen := make(map[string]bool)
+	sources := make([]ResearchSource, 0)
+	for _, step := range steps {
+		if step.ToolName != "web_search" || step.Type != StepTypeToolResult {
+			continue
+		}
+		var payload struct {
+			OK     bool `json:"ok"`
+			Result struct {
+				Results []ResearchSource `json:"results"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(step.Payload, &payload); err != nil {
+			continue
+		}
+		for _, source := range payload.Result.Results {
+			if strings.TrimSpace(source.URL) == "" || seen[source.URL] {
+				continue
+			}
+			seen[source.URL] = true
+			sources = append(sources, source)
+		}
+	}
+	return sources
 }
 
 func ParseActionEnvelope(raw string) (ToolCallEnvelope, error) {

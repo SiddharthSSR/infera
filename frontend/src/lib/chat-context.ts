@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { ChatMessage, PlaygroundMode } from '../types';
+import type { AgentAnalysisDepth, AgentExecutionMode, ChatMessage, PlaygroundMode } from '../types';
 
 export interface Message extends ChatMessage {
   id: string;
@@ -29,6 +29,10 @@ export interface ChatContextType {
   setSelectedAgentID: (agentID: string) => void;
   agentMaxSteps: number;
   setAgentMaxSteps: (steps: number) => void;
+  agentExecutionMode: AgentExecutionMode;
+  setAgentExecutionMode: (mode: AgentExecutionMode) => void;
+  agentAnalysisDepth: AgentAnalysisDepth;
+  setAgentAnalysisDepth: (depth: AgentAnalysisDepth) => void;
   selectedModel: string;
   setSelectedModel: (model: string) => void;
   temperature: number;
