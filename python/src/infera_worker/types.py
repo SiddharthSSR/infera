@@ -1,5 +1,7 @@
 """Core types for Infera Worker."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -9,6 +11,7 @@ class Role(str, Enum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 class FinishReason(str, Enum):
@@ -16,6 +19,7 @@ class FinishReason(str, Enum):
     LENGTH = "length"
     CONTENT_FILTER = "content_filter"
     ERROR = "error"
+    TOOL_CALLS = "tool_calls"
 
 
 class Priority(int, Enum):
@@ -34,10 +38,39 @@ class WorkerState(str, Enum):
 
 
 @dataclass
+class FunctionCall:
+    name: str
+    arguments: str
+
+
+@dataclass
+class ToolCall:
+    id: str
+    type: str
+    function: FunctionCall
+
+
+@dataclass
+class ToolDefinition:
+    type: str
+    function: dict  # JSON schema, pass through as-is
+
+
+@dataclass
+class ToolCallChunkDelta:
+    index: int
+    id: str | None = None
+    type: str | None = None
+    function: dict | None = None  # {"name": "...", "arguments": "..."}
+
+
+@dataclass
 class Message:
     role: Role
     content: str
     name: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
 
 
 @dataclass
@@ -74,6 +107,8 @@ class InferenceRequest:
     priority: Priority = Priority.NORMAL
     metadata: dict[str, str] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
+    tools: list[ToolDefinition] | None = None
+    tool_choice: object | None = None  # string or dict, pass through
 
     def token_estimate(self) -> int:
         return sum(len(msg.content) for msg in self.messages) // 4
@@ -118,6 +153,7 @@ class TokenChunk:
     delta: str
     finish_reason: FinishReason | None = None
     usage: UsageStats | None = None
+    tool_calls: list[ToolCallChunkDelta] | None = None
     created_at: datetime = field(default_factory=datetime.now)
 
     def is_final(self) -> bool:

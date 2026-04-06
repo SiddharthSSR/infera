@@ -166,6 +166,20 @@ type ToolCallEnvelope struct {
 	Message   string          `json:"message,omitempty"`
 }
 
+type CustomDefinition struct {
+	ID             string    `json:"id"`
+	WorkspaceID    string    `json:"workspace_id"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description"`
+	SystemPrompt   string    `json:"system_prompt"`
+	Tools          []string  `json:"tools"`
+	MaxSteps       int       `json:"max_steps"`
+	TimeoutSeconds int       `json:"timeout_seconds"`
+	Model          string    `json:"model,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 type CreateRunRequest struct {
 	AgentID       string
 	Mode          RunMode
@@ -174,6 +188,16 @@ type CreateRunRequest struct {
 	Input         string
 	MaxSteps      int
 	AttachmentIDs []string
+}
+
+type CreateCustomDefinitionRequest struct {
+	Name           string
+	Description    string
+	SystemPrompt   string
+	Tools          []string
+	MaxSteps       int
+	TimeoutSeconds int
+	Model          string
 }
 
 type ModelRunRequest struct {
@@ -186,4 +210,18 @@ type ModelRunRequest struct {
 
 type ModelRunner interface {
 	Run(ctx context.Context, req ModelRunRequest) (*types.InferenceResponse, error)
+}
+
+// WebhookConfig stores a registered webhook endpoint for a workspace.
+// The Secret field is intentionally excluded from JSON serialization so it
+// is never returned in API responses.
+type WebhookConfig struct {
+	ID          string    `json:"id"`
+	WorkspaceID string    `json:"workspace_id"`
+	URL         string    `json:"url"`
+	Secret      string    `json:"-"` // Never expose in API responses
+	Events      []string  `json:"events"`
+	Active      bool      `json:"active"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }

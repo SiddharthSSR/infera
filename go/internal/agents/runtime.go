@@ -1,10 +1,15 @@
 package agents
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -233,6 +238,54 @@ func (r *Runtime) ListRuns(workspaceID string, limit int) ([]*Run, error) {
 	return r.store.ListRuns(workspaceID, limit)
 }
 
+func (r *Runtime) CreateWebhookConfig(workspaceID, url, secret string, events []string) (*WebhookConfig, error) {
+	return r.store.CreateWebhookConfig(workspaceID, url, secret, events)
+}
+
+func (r *Runtime) ListWebhookConfigs(workspaceID string) ([]*WebhookConfig, error) {
+	return r.store.ListWebhookConfigs(workspaceID)
+}
+
+func (r *Runtime) DeleteWebhookConfig(workspaceID, webhookID string) error {
+	return r.store.DeleteWebhookConfig(workspaceID, webhookID)
+}
+
+func (r *Runtime) CreateCustomDefinition(workspaceID string, req CreateCustomDefinitionRequest) (*CustomDefinition, error) {
+	r.mu.RLock()
+	knownTools := r.tools
+	r.mu.RUnlock()
+
+	for _, toolName := range req.Tools {
+		if _, ok := knownTools[strings.TrimSpace(toolName)]; !ok {
+			return nil, fmt.Errorf("unknown tool %q", toolName)
+		}
+	}
+
+	return r.store.CreateCustomDefinition(
+		workspaceID,
+		req.Name,
+		req.Description,
+		req.SystemPrompt,
+		req.Tools,
+		req.MaxSteps,
+		req.TimeoutSeconds,
+		req.Model,
+		time.Now().UTC(),
+	)
+}
+
+func (r *Runtime) ListCustomDefinitions(workspaceID string) ([]*CustomDefinition, error) {
+	return r.store.ListCustomDefinitions(workspaceID)
+}
+
+func (r *Runtime) GetCustomDefinition(workspaceID, defID string) (*CustomDefinition, error) {
+	return r.store.GetCustomDefinition(workspaceID, defID)
+}
+
+func (r *Runtime) DeleteCustomDefinition(workspaceID, defID string) error {
+	return r.store.DeleteCustomDefinition(workspaceID, defID)
+}
+
 func (r *Runtime) AttachmentRoot() string {
 	return r.store.AttachmentRoot()
 }
@@ -256,6 +309,14 @@ func (r *Runtime) CreateAttachment(
 		createdByKeyID = actor.ID
 	}
 	return r.store.CreateAttachment(workspaceID, createdByKeyID, fileName, mimeType, sizeBytes, width, height, sha256, storagePath, time.Now().UTC())
+}
+
+func (r *Runtime) GetRun(workspaceID, runID string) (*Run, error) {
+	return r.store.GetRun(workspaceID, runID)
+}
+
+func (r *Runtime) ListStepsAfter(workspaceID, runID string, afterIndex int) ([]*RunStep, error) {
+	return r.store.ListStepsAfter(workspaceID, runID, afterIndex)
 }
 
 func (r *Runtime) GetRunDetail(workspaceID, runID string) (*RunDetail, error) {
@@ -409,6 +470,17 @@ func (r *Runtime) executeRun(actor *auth.KeyRecord, session *auth.SessionRecord,
 		r.cancelMu.Lock()
 		delete(r.cancels, run.ID)
 		r.cancelMu.Unlock()
+	}()
+
+	// Fire webhooks after the run reaches a terminal state. The deferred
+	// function reads the final run record from the store so that it sees the
+	// committed status regardless of which code path ended the run.
+	defer func() {
+		finalRun, err := r.store.GetRun(run.WorkspaceID, run.ID)
+		if err != nil {
+			return
+		}
+		r.fireWebhooks(finalRun)
 	}()
 
 	attachments, err := r.store.ListAttachmentsForRun(run.WorkspaceID, run.ID)
@@ -580,6 +652,61 @@ func (r *Runtime) handleRunError(run *Run, ctx context.Context, message string, 
 
 func (r *Runtime) failRun(run *Run, reason string) {
 	_ = r.store.CompleteRun(run.WorkspaceID, run.ID, StatusFailed, "", reason, time.Now().UTC())
+}
+
+// fireWebhooks looks up active webhook subscribers for the run's terminal
+// status and dispatches each delivery in a separate goroutine so that
+// webhook latency never delays run completion or SSE polling.
+func (r *Runtime) fireWebhooks(run *Run) {
+	webhooks, err := r.store.GetActiveWebhooksForEvent(run.WorkspaceID, string(run.Status))
+	if err != nil || len(webhooks) == 0 {
+		return
+	}
+
+	payload, err := json.Marshal(map[string]interface{}{
+		"event":  string(run.Status),
+		"run":    run,
+		"output": run.FinalOutput,
+	})
+	if err != nil {
+		return
+	}
+
+	for _, wh := range webhooks {
+		wh := wh // capture loop variable
+		go r.deliverWebhook(wh, payload)
+	}
+}
+
+// deliverWebhook performs a single HTTPS POST to the registered webhook URL.
+// It signs the payload with HMAC-SHA256 when a secret is configured and
+// silently discards errors so that a misbehaving receiver never affects the
+// gateway's request path.
+func (r *Runtime) deliverWebhook(wh *WebhookConfig, payload []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, wh.URL, bytes.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Infera-Event", "agent.run.completed")
+
+	// HMAC-SHA256 signature so receivers can verify the request origin.
+	if wh.Secret != "" {
+		mac := hmac.New(sha256.New, []byte(wh.Secret))
+		mac.Write(payload)
+		sig := hex.EncodeToString(mac.Sum(nil))
+		req.Header.Set("X-Infera-Signature", "sha256="+sig)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
 }
 
 func collectResearchSources(steps []*RunStep) []ResearchSource {

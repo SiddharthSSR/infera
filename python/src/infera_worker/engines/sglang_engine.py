@@ -8,6 +8,8 @@ import asyncio
 import inspect
 from typing import Any
 
+import structlog
+
 from ..config import ModelConfig, WorkerConfig
 from ..engine import EngineCapabilities, EngineDefinition, register_engine
 from ..types import Choice, InferenceRequest, InferenceResponse, LatencyStats, LoadedModel, TokenChunk, UsageStats
@@ -22,6 +24,8 @@ except ImportError:
     SGLANG_AVAILABLE = False
     sgl = None
     async_stream_and_merge = None
+
+logger = structlog.get_logger()
 
 
 class SGLangEngine(TokenizerPromptEngine):
@@ -41,7 +45,7 @@ class SGLangEngine(TokenizerPromptEngine):
 
         runtime = self.config.sglang_runtime
         engine_kwargs: dict[str, Any] = {"model_path": model_path}
-        optional_kwargs = {
+        optional_kwargs: dict[str, Any] = {
             "tp_size": runtime.tp_size,
             "mem_fraction_static": runtime.mem_fraction_static,
             "context_length": runtime.context_length,
@@ -53,6 +57,15 @@ class SGLangEngine(TokenizerPromptEngine):
             "disable_cuda_graph": runtime.disable_cuda_graph,
             "quantization": model_config.quantization,
         }
+
+        tool_call_parser = self.config.tool_call_parser.strip()
+        if tool_call_parser:
+            optional_kwargs["tool_call_parser"] = tool_call_parser
+            logger.info(
+                "SGLang tool calling enabled",
+                tool_call_parser=tool_call_parser,
+                model_id=model_config.model_id,
+            )
 
         signature = inspect.signature(sgl.Engine)
         supported_kwargs = set(signature.parameters)

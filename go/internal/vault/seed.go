@@ -165,6 +165,30 @@ func SeedDefaultModels(store *Store) error {
 			Tags:         []string{"chat", "instruct", "general"},
 			Status:       "available",
 		},
+		{
+			Name:         "Hermes 3 Llama 3.1 8B",
+			Source:       "huggingface",
+			SourceURI:    "NousResearch/Hermes-3-Llama-3.1-8B",
+			Parameters:   "8B",
+			Quantization: "none",
+			VRAMRequired: 18432,
+			MaxContext:   131072,
+			Family:       "hermes",
+			Tags:         []string{"chat", "instruct", "function-calling", "agentic"},
+			Status:       "available",
+		},
+		{
+			Name:         "Hermes 3 Llama 3.1 70B",
+			Source:       "huggingface",
+			SourceURI:    "NousResearch/Hermes-3-Llama-3.1-70B",
+			Parameters:   "70B",
+			Quantization: "none",
+			VRAMRequired: 143360,
+			MaxContext:   131072,
+			Family:       "hermes",
+			Tags:         []string{"chat", "instruct", "function-calling", "agentic"},
+			Status:       "available",
+		},
 	}
 
 	inserted := 0

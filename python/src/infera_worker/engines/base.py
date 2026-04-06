@@ -177,6 +177,7 @@ class BaseInferenceEngine(InferenceEngine):
             "abort": FinishReason.ERROR,
             "cancelled": FinishReason.ERROR,
             "error": FinishReason.ERROR,
+            "tool_calls": FinishReason.TOOL_CALLS,
         }
         return reason_map.get(normalized, FinishReason.STOP)
 

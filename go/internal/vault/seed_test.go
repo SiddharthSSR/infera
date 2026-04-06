@@ -19,14 +19,14 @@ func TestSeedDefaultModels(t *testing.T) {
 			}
 
 			count, _ := s.Count()
-			if count != 13 {
-				t.Errorf("expected 13 seeded models, got %d", count)
+			if count != 15 {
+				t.Errorf("expected 15 seeded models, got %d", count)
 			}
 
 			// Verify families
 			families, _ := s.ListFamilies()
-			if len(families) < 5 {
-				t.Errorf("expected at least 5 families, got %d: %v", len(families), families)
+			if len(families) < 6 {
+				t.Errorf("expected at least 6 families, got %d: %v", len(families), families)
 			}
 
 			quantized, err := s.List(&ModelFilter{Tag: "quantized"})
@@ -66,8 +66,8 @@ func TestSeedDefaultModels(t *testing.T) {
 			}
 
 			count, _ := s.Count()
-			if count != 14 {
-				t.Errorf("expected 14 models after additive seed, got %d", count)
+			if count != 16 {
+				t.Errorf("expected 16 models after additive seed, got %d", count)
 			}
 		})
 
@@ -83,8 +83,8 @@ func TestSeedDefaultModels(t *testing.T) {
 			SeedDefaultModels(s)
 
 			count, _ := s.Count()
-			if count != 13 {
-				t.Errorf("expected 13 models after double seed, got %d", count)
+			if count != 15 {
+				t.Errorf("expected 15 models after double seed, got %d", count)
 			}
 		})
 	}

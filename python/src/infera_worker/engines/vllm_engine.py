@@ -12,10 +12,14 @@ from ..config import ModelConfig, WorkerConfig
 from ..engine import EngineCapabilities, EngineDefinition, register_engine
 from ..types import (
     Choice,
+    FunctionCall,
     InferenceRequest,
     InferenceResponse,
     LatencyStats,
     LoadedModel,
+    Message,
+    Role,
+    ToolCall,
     TokenChunk,
     UsageStats,
 )
@@ -91,6 +95,16 @@ class VLLMEngine(TokenizerPromptEngine):
             if spec_model == "[ngram]" and runtime.ngram_prompt_lookup_num_tokens > 0:
                 optional_engine_kwargs["ngram_prompt_lookup_num_tokens"] = runtime.ngram_prompt_lookup_num_tokens
 
+        tool_call_parser = self.config.tool_call_parser.strip()
+        if tool_call_parser:
+            optional_engine_kwargs["enable_auto_tool_choice"] = True
+            optional_engine_kwargs["tool_call_parser"] = tool_call_parser
+            logger.info(
+                "vLLM tool calling enabled",
+                tool_call_parser=tool_call_parser,
+                model_id=model_config.model_id,
+            )
+
         supported_kwargs = set(inspect.signature(AsyncEngineArgs).parameters)
         for key, value in optional_engine_kwargs.items():
             if key in supported_kwargs:
@@ -143,7 +157,7 @@ class VLLMEngine(TokenizerPromptEngine):
         self.active_requests.add(request.request_id)
 
         try:
-            prompt = self._build_prompt(request)
+            prompt = self._build_prompt_with_tools(request)
             sampling_params = SamplingParams(**request.parameters.to_sampling_params())
 
             results: list[RequestOutput] = []
@@ -164,13 +178,15 @@ class VLLMEngine(TokenizerPromptEngine):
                 else latency_ms
             )
 
+            response_message = self._build_response_message_with_tool_calls(completion_output)
+
             return InferenceResponse(
                 request_id=request.request_id,
                 model_id=request.model_id,
                 choices=[
                     Choice(
                         index=0,
-                        message=self._build_response_message(completion_output.text),
+                        message=response_message,
                         finish_reason=self._map_finish_reason(completion_output.finish_reason),
                     )
                 ],
@@ -200,7 +216,7 @@ class VLLMEngine(TokenizerPromptEngine):
         self.active_requests.add(request.request_id)
 
         try:
-            prompt = self._build_prompt(request)
+            prompt = self._build_prompt_with_tools(request)
             sampling_params = SamplingParams(**request.parameters.to_sampling_params())
 
             prev_text = ""
@@ -247,6 +263,74 @@ class VLLMEngine(TokenizerPromptEngine):
         for engine in self.engines.values():
             await engine.abort(request_id)
         return True
+
+    def _build_prompt_with_tools(self, request: InferenceRequest) -> str:
+        """Build a prompt string, injecting tools into the chat template when present.
+
+        When tools are provided and a tokenizer with apply_chat_template is available,
+        the tools list is forwarded to the template so the model sees tool definitions
+        in its system context (Hermes, Mistral, llama3_json all rely on this).
+        Falls back to the base _build_prompt when no tools or no template support.
+        """
+        if not request.tools:
+            return self._build_prompt(request)
+
+        messages = [
+            {"role": msg.role.value, "content": msg.content or ""}
+            for msg in request.messages
+        ]
+        tools_schema = [
+            {"type": td.type, "function": td.function}
+            for td in request.tools
+        ]
+        tool_choice = request.tool_choice
+
+        tokenizer = self._get_tokenizer(request.model_id)
+        if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+            try:
+                template_kwargs: dict[str, Any] = {
+                    "tokenize": False,
+                    "add_generation_prompt": True,
+                    "tools": tools_schema,
+                }
+                if tool_choice is not None:
+                    template_kwargs["tool_choice"] = tool_choice
+                prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
+                return prompt
+            except Exception as exc:
+                logger.warning(
+                    "apply_chat_template with tools failed, falling back to base prompt",
+                    error=str(exc),
+                    model_id=request.model_id,
+                )
+
+        return self._build_prompt(request)
+
+    def _build_response_message_with_tool_calls(self, completion_output: Any) -> Message:
+        """Build a Message from a vLLM CompletionOutput, extracting tool_calls if present."""
+        raw_tool_calls = getattr(completion_output, "tool_calls", None)
+        if not raw_tool_calls:
+            return self._build_response_message(completion_output.text)
+
+        tool_calls: list[ToolCall] = []
+        for raw_tc in raw_tool_calls:
+            # vLLM ToolCall has .id, .type, .function (ToolCallFunction with .name/.arguments)
+            tc_id = getattr(raw_tc, "id", "") or ""
+            tc_type = getattr(raw_tc, "type", "function") or "function"
+            fn_obj = getattr(raw_tc, "function", None)
+            fn_name = getattr(fn_obj, "name", "") or "" if fn_obj is not None else ""
+            fn_args = getattr(fn_obj, "arguments", "") or "" if fn_obj is not None else ""
+            tool_calls.append(ToolCall(
+                id=tc_id,
+                type=tc_type,
+                function=FunctionCall(name=fn_name, arguments=fn_args),
+            ))
+
+        return Message(
+            role=Role.ASSISTANT,
+            content=completion_output.text or "",
+            tool_calls=tool_calls if tool_calls else None,
+        )
 
     def _estimate_memory(self) -> int:
         """Estimate model memory usage."""

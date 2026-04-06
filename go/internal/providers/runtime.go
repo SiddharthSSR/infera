@@ -43,6 +43,8 @@ const (
 	OptionTensorRTLLMEnableChunkedContext         = "INFERA_TENSORRT_LLM_ENABLE_CHUNKED_CONTEXT"
 	OptionTensorRTLLMBackend                      = "INFERA_TENSORRT_LLM_BACKEND"
 
+	OptionToolCallParser = "INFERA_TOOL_CALL_PARSER"
+
 	// largeGPUVRAMThresholdGB is the minimum VRAM (GB) required to enable a
 	// real draft model. GPUs below this threshold get no speculative decoding.
 	largeGPUVRAMThresholdGB = 40
@@ -339,6 +341,16 @@ func validateRuntimeOptionValue(key string, value string) error {
 			return fmt.Errorf("runtime option %q must be \"tensorrt\"", key)
 		}
 		return nil
+	case OptionToolCallParser:
+		allowed := map[string]bool{
+			"hermes": true, "mistral": true, "llama3_json": true,
+			"jamba": true, "pythonic": true, "internlm": true,
+			"qwen25": true,
+		}
+		if !allowed[value] {
+			return fmt.Errorf("unsupported tool call parser %q for option %s", value, key)
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -412,6 +424,7 @@ func workerRuntimeOptionKeys(engine InferenceEngine) []string {
 			OptionSGLangAttentionBackend,
 			OptionSGLangSamplingBackend,
 			OptionSGLangDisableCudaGraph,
+			OptionToolCallParser,
 		}
 	case EngineTensorRTLLM:
 		return []string{
@@ -422,6 +435,7 @@ func workerRuntimeOptionKeys(engine InferenceEngine) []string {
 			OptionTensorRTLLMKVCacheFreeGPUMemoryFraction,
 			OptionTensorRTLLMEnableChunkedContext,
 			OptionTensorRTLLMBackend,
+			OptionToolCallParser,
 		}
 	default:
 		return []string{
@@ -438,6 +452,7 @@ func workerRuntimeOptionKeys(engine InferenceEngine) []string {
 			OptionVLLMSpeculativeModel,
 			OptionVLLMNumSpecTokens,
 			OptionVLLMNgramLookup,
+			OptionToolCallParser,
 		}
 	}
 }
