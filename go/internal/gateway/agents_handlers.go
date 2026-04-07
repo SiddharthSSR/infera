@@ -172,7 +172,12 @@ func (g *Gateway) handleCreateAgentRun(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON")
 		return
 	}
-	if strings.TrimSpace(req.Model) == "" {
+	model, err := g.resolveRequestedAgentRunModel(currentWorkspaceID(r), req.AgentID, req.Model)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "agents_unavailable", err.Error())
+		return
+	}
+	if model == "" {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "model is required")
 		return
 	}
@@ -180,7 +185,7 @@ func (g *Gateway) handleCreateAgentRun(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "input is required")
 		return
 	}
-	if !g.modelExists(req.Model) {
+	if !g.modelExists(model) {
 		g.writeError(w, http.StatusNotFound, "model_not_found", "Model is not registered in Infera")
 		return
 	}
@@ -193,7 +198,7 @@ func (g *Gateway) handleCreateAgentRun(w http.ResponseWriter, r *http.Request) {
 			AgentID:       req.AgentID,
 			Mode:          agents.RunMode(strings.TrimSpace(req.Mode)),
 			AnalysisDepth: agents.AnalysisDepth(strings.TrimSpace(req.AnalysisDepth)),
-			Model:         req.Model,
+			Model:         model,
 			Input:         req.Input,
 			MaxSteps:      req.MaxSteps,
 			AttachmentIDs: req.Attachments,
@@ -276,6 +281,11 @@ func (g *Gateway) handleListAgentWebhooks(w http.ResponseWriter, r *http.Request
 }
 
 func (g *Gateway) handleCreateAgentWebhook(w http.ResponseWriter, r *http.Request) {
+	if !auth.HasPermission(auth.KeyFromContext(r.Context()), auth.PermissionManageAgents) {
+		g.writeError(w, http.StatusForbidden, "forbidden", "Managing agent webhooks requires owner or admin role")
+		return
+	}
+
 	var req struct {
 		URL    string   `json:"url"`
 		Secret string   `json:"secret"`
@@ -307,6 +317,10 @@ func (g *Gateway) handleCreateAgentWebhook(w http.ResponseWriter, r *http.Reques
 func (g *Gateway) handleAgentWebhookByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only DELETE is allowed")
+		return
+	}
+	if !auth.HasPermission(auth.KeyFromContext(r.Context()), auth.PermissionManageAgents) {
+		g.writeError(w, http.StatusForbidden, "forbidden", "Managing agent webhooks requires owner or admin role")
 		return
 	}
 
@@ -465,7 +479,7 @@ func (g *Gateway) handleListAgentDefinitions(w http.ResponseWriter, r *http.Requ
 
 func (g *Gateway) handleCreateAgentDefinition(w http.ResponseWriter, r *http.Request) {
 	actor := auth.KeyFromContext(r.Context())
-	if !auth.HasPermission(actor, auth.PermissionManageVault) {
+	if !auth.HasPermission(actor, auth.PermissionManageAgents) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "Managing agent definitions requires owner or admin role")
 		return
 	}
@@ -520,7 +534,7 @@ func (g *Gateway) handleAgentDefinitionByID(w http.ResponseWriter, r *http.Reque
 	}
 
 	actor := auth.KeyFromContext(r.Context())
-	if !auth.HasPermission(actor, auth.PermissionManageVault) {
+	if !auth.HasPermission(actor, auth.PermissionManageAgents) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "Managing agent definitions requires owner or admin role")
 		return
 	}
@@ -575,7 +589,12 @@ func (g *Gateway) handleExternalAgentRun(w http.ResponseWriter, r *http.Request)
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON")
 		return
 	}
-	if strings.TrimSpace(req.Model) == "" {
+	model, err := g.resolveRequestedAgentRunModel(currentWorkspaceID(r), req.AgentID, req.Model)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "agents_unavailable", err.Error())
+		return
+	}
+	if model == "" {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "model is required")
 		return
 	}
@@ -583,7 +602,7 @@ func (g *Gateway) handleExternalAgentRun(w http.ResponseWriter, r *http.Request)
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "input is required")
 		return
 	}
-	if !g.modelExists(req.Model) {
+	if !g.modelExists(model) {
 		g.writeError(w, http.StatusNotFound, "model_not_found", "Model is not registered in Infera")
 		return
 	}
@@ -596,7 +615,7 @@ func (g *Gateway) handleExternalAgentRun(w http.ResponseWriter, r *http.Request)
 			AgentID:       req.AgentID,
 			Mode:          agents.RunMode(strings.TrimSpace(req.Mode)),
 			AnalysisDepth: agents.AnalysisDepth(strings.TrimSpace(req.AnalysisDepth)),
-			Model:         req.Model,
+			Model:         model,
 			Input:         req.Input,
 			MaxSteps:      req.MaxSteps,
 			AttachmentIDs: req.Attachments,
@@ -669,4 +688,23 @@ func (g *Gateway) handleExternalAgentRun(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+}
+
+func (g *Gateway) resolveRequestedAgentRunModel(workspaceID, agentID, requestedModel string) (string, error) {
+	model := strings.TrimSpace(requestedModel)
+	if model != "" {
+		return model, nil
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" || g.agentRuntime == nil {
+		return "", nil
+	}
+	def, err := g.agentRuntime.GetCustomDefinition(workspaceID, agentID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(def.Model), nil
 }

@@ -281,3 +281,80 @@ func TestHandleAgentRunDetailIncludesResearchSources(t *testing.T) {
 		t.Fatalf("expected derived research source, got %+v", resp.Sources)
 	}
 }
+
+func TestHandleCreateAgentRunUsesCustomDefinitionDefaultModel(t *testing.T) {
+	const modelID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+	g, _ := newGatewayWithAgentsRuntime(t, modelID, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"`+modelID+`","choices":[{"index":0,"message":{"role":"assistant","content":"{\"type\":\"final\",\"message\":\"done\"}"},"finish_reason":"stop"}]}`), nil
+	}))
+
+	custom, err := g.agentRuntime.CreateCustomDefinition("ws_alpha", agents.CreateCustomDefinitionRequest{
+		Name:         "Custom Investigator",
+		SystemPrompt: "Use the available tools to investigate.",
+		Model:        modelID,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomDefinition: %v", err)
+	}
+
+	req := authedWorkspaceRequest(
+		httptest.NewRequest(http.MethodPost, "/api/agents/runs", strings.NewReader(`{"agent_id":"`+custom.ID+`","input":"inspect"}`)),
+		auth.RoleOwner,
+		"ws_alpha",
+	)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	g.handleCreateAgentRun(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Run *agents.Run `json:"run"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if resp.Run == nil || resp.Run.Model != modelID {
+		t.Fatalf("expected run model %q, got %+v", modelID, resp.Run)
+	}
+}
+
+func TestHandleCreateAgentWebhookRequiresManageAgents(t *testing.T) {
+	g, _ := newGatewayWithAgentsRuntime(t, "meta-llama/Meta-Llama-3.1-8B-Instruct", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"meta-llama/Meta-Llama-3.1-8B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":"{\"type\":\"final\",\"message\":\"ok\"}"},"finish_reason":"stop"}]}`), nil
+	}))
+
+	req := authedWorkspaceRequest(
+		httptest.NewRequest(http.MethodPost, "/api/agents/webhooks", strings.NewReader(`{"url":"https://example.com/hook"}`)),
+		auth.RoleReadOnly,
+		"ws_alpha",
+	)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	g.handleCreateAgentWebhook(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleCreateAgentWebhookRejectsUnsafeURL(t *testing.T) {
+	g, _ := newGatewayWithAgentsRuntime(t, "meta-llama/Meta-Llama-3.1-8B-Instruct", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"meta-llama/Meta-Llama-3.1-8B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":"{\"type\":\"final\",\"message\":\"ok\"}"},"finish_reason":"stop"}]}`), nil
+	}))
+
+	req := authedWorkspaceRequest(
+		httptest.NewRequest(http.MethodPost, "/api/agents/webhooks", strings.NewReader(`{"url":"http://localhost:9000/hook"}`)),
+		auth.RoleOwner,
+		"ws_alpha",
+	)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	g.handleCreateAgentWebhook(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "public host") && !strings.Contains(w.Body.String(), "https") {
+		t.Fatalf("expected unsafe webhook validation error, got %s", w.Body.String())
+	}
+}

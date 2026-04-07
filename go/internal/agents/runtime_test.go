@@ -389,3 +389,35 @@ func TestRuntimeGetRunDetailCollectsResearchSources(t *testing.T) {
 		t.Fatalf("expected derived research source, got %+v", detail.Sources)
 	}
 }
+
+func TestCreateRunSupportsCustomDefinitions(t *testing.T) {
+	runtime := newTestRuntime(t, &fakeRunner{
+		responses: []string{`{"type":"final","message":"done"}`},
+	})
+	actor := &auth.KeyRecord{ID: "key-1", WorkspaceID: "ws_alpha", Role: auth.RoleOwner, PrincipalType: auth.PrincipalHuman, Status: "active"}
+
+	custom, err := runtime.CreateCustomDefinition("ws_alpha", CreateCustomDefinitionRequest{
+		Name:         "Workspace Investigator",
+		SystemPrompt: "Investigate the workspace carefully.",
+		Model:        "model-a",
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomDefinition: %v", err)
+	}
+
+	run, err := runtime.CreateRun(context.Background(), actor, nil, CreateRunRequest{
+		AgentID: custom.ID,
+		Input:   "inspect",
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if run.Model != "model-a" {
+		t.Fatalf("expected custom definition model fallback, got %q", run.Model)
+	}
+
+	detail := waitForStatus(t, runtime, "ws_alpha", run.ID, StatusSucceeded)
+	if detail.Run.AgentID != custom.ID {
+		t.Fatalf("expected custom agent id %q, got %q", custom.ID, detail.Run.AgentID)
+	}
+}

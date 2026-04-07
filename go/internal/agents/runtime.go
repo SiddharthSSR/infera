@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -137,6 +139,69 @@ func (r *Runtime) getDefinition(agentID string) (Definition, bool) {
 	return def, ok
 }
 
+func buildCustomDefinition(def *CustomDefinition) Definition {
+	params := types.DefaultInferenceParameters()
+	params.MaxTokens = 512
+	params.Temperature = 0.1
+
+	timeout := time.Duration(def.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+
+	return Definition{
+		ID:              def.ID,
+		Name:            def.Name,
+		Description:     def.Description,
+		DefaultMaxSteps: def.MaxSteps,
+		Timeout:         timeout,
+		ModelParameters: params,
+		Tools:           append([]string(nil), def.Tools...),
+		BuildSystemPrompt: func(ctx RunPromptContext) string {
+			lines := []string{
+				strings.TrimSpace(def.SystemPrompt),
+				"",
+				"Runtime contract:",
+				"Use only the tools explicitly listed below.",
+				"Respond with exactly one JSON object and no prose before or after it.",
+				`Valid actions: {"type":"tool_call","tool_name":"<tool>","arguments":{...}} or {"type":"final","message":"<answer>"}.`,
+				`The outer response format must stay JSON-only, but final.message itself must be concise operator-facing prose or markdown, not serialized JSON.`,
+				"Never reveal hidden reasoning or chain-of-thought. Surface findings, evidence, uncertainty, and next actions only.",
+			}
+			if len(ctx.Attachments) > 0 {
+				lines = append(lines, "Available attachments:")
+				for _, attachment := range ctx.Attachments {
+					lines = append(lines, fmt.Sprintf("- %s: %s [%s, %d bytes]", attachment.ID, attachment.FileName, attachment.MIMEType, attachment.SizeBytes))
+				}
+			}
+			if len(ctx.Tools) == 0 {
+				lines = append(lines, "No tools are available for this run. Return a final answer without requesting tools.")
+				return strings.Join(lines, "\n")
+			}
+			lines = append(lines, "Available tools:")
+			for _, tool := range ctx.Tools {
+				lines = append(lines, fmt.Sprintf("- %s: %s", tool.Name, tool.Description))
+			}
+			return strings.Join(lines, "\n")
+		},
+	}
+}
+
+func (r *Runtime) resolveDefinition(workspaceID, agentID string) (Definition, string, bool, error) {
+	if def, ok := r.getDefinition(agentID); ok {
+		return def, "", true, nil
+	}
+
+	custom, err := r.store.GetCustomDefinition(workspaceID, agentID)
+	if err == nil {
+		return buildCustomDefinition(custom), strings.TrimSpace(custom.Model), true, nil
+	}
+	if err == sql.ErrNoRows {
+		return Definition{}, "", false, nil
+	}
+	return Definition{}, "", false, err
+}
+
 func toolSupportsMode(tool ToolDefinition, mode RunMode) bool {
 	if len(tool.Modes) == 0 {
 		return true
@@ -239,7 +304,15 @@ func (r *Runtime) ListRuns(workspaceID string, limit int) ([]*Run, error) {
 }
 
 func (r *Runtime) CreateWebhookConfig(workspaceID, url, secret string, events []string) (*WebhookConfig, error) {
-	return r.store.CreateWebhookConfig(workspaceID, url, secret, events)
+	normalizedURL, err := validateWebhookURL(url)
+	if err != nil {
+		return nil, err
+	}
+	normalizedEvents, err := normalizeWebhookEvents(events)
+	if err != nil {
+		return nil, err
+	}
+	return r.store.CreateWebhookConfig(workspaceID, normalizedURL, secret, normalizedEvents)
 }
 
 func (r *Runtime) ListWebhookConfigs(workspaceID string) ([]*WebhookConfig, error) {
@@ -329,11 +402,23 @@ func (r *Runtime) GetRunDetail(workspaceID, runID string) (*RunDetail, error) {
 }
 
 func (r *Runtime) CreateRun(ctx context.Context, actor *auth.KeyRecord, session *auth.SessionRecord, req CreateRunRequest) (*Run, error) {
+	workspaceID := auth.DefaultWorkspaceID
+	createdByKeyID := ""
+	if actor != nil {
+		if strings.TrimSpace(actor.WorkspaceID) != "" {
+			workspaceID = actor.WorkspaceID
+		}
+		createdByKeyID = actor.ID
+	}
+
 	agentID := strings.TrimSpace(req.AgentID)
 	if agentID == "" {
 		agentID = "hermes"
 	}
-	def, ok := r.getDefinition(agentID)
+	def, defaultModel, ok, err := r.resolveDefinition(workspaceID, agentID)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, fmt.Errorf("unknown agent_id %q", agentID)
 	}
@@ -352,13 +437,12 @@ func (r *Runtime) CreateRun(ctx context.Context, actor *auth.KeyRecord, session 
 		}
 	}
 
-	workspaceID := auth.DefaultWorkspaceID
-	createdByKeyID := ""
-	if actor != nil {
-		if strings.TrimSpace(actor.WorkspaceID) != "" {
-			workspaceID = actor.WorkspaceID
-		}
-		createdByKeyID = actor.ID
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = defaultModel
+	}
+	if model == "" {
+		return nil, fmt.Errorf("model is required")
 	}
 
 	attachments, err := r.store.ListAttachmentsByID(workspaceID, req.AttachmentIDs)
@@ -371,7 +455,7 @@ func (r *Runtime) CreateRun(ctx context.Context, actor *auth.KeyRecord, session 
 		}
 	}
 
-	run, err := r.store.CreateRun(workspaceID, createdByKeyID, agentID, mode, analysisDepth, req.Model, req.Input, maxSteps, time.Now().UTC())
+	run, err := r.store.CreateRun(workspaceID, createdByKeyID, agentID, mode, analysisDepth, model, req.Input, maxSteps, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -683,6 +767,10 @@ func (r *Runtime) fireWebhooks(run *Run) {
 // silently discards errors so that a misbehaving receiver never affects the
 // gateway's request path.
 func (r *Runtime) deliverWebhook(wh *WebhookConfig, payload []byte) {
+	if _, err := validateWebhookURL(wh.URL); err != nil {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -707,6 +795,70 @@ func (r *Runtime) deliverWebhook(wh *WebhookConfig, payload []byte) {
 		return
 	}
 	defer resp.Body.Close()
+}
+
+func normalizeWebhookEvents(events []string) ([]string, error) {
+	if len(events) == 0 {
+		return []string{"succeeded", "failed"}, nil
+	}
+
+	allowed := map[string]struct{}{
+		"succeeded": {},
+		"failed":    {},
+		"canceled":  {},
+	}
+	seen := make(map[string]struct{}, len(events))
+	out := make([]string, 0, len(events))
+	for _, event := range events {
+		normalized := strings.TrimSpace(event)
+		if _, ok := allowed[normalized]; !ok {
+			return nil, fmt.Errorf("unsupported webhook event %q", event)
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func validateWebhookURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("url is required")
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid webhook url: %w", err)
+	}
+	if strings.ToLower(parsed.Scheme) != "https" {
+		return "", fmt.Errorf("webhook url must use https")
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("webhook url host is required")
+	}
+	if parsed.User != nil {
+		return "", fmt.Errorf("webhook url must not include userinfo")
+	}
+
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" {
+		return "", fmt.Errorf("webhook url host is required")
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || !strings.Contains(host, ".") {
+		return "", fmt.Errorf("webhook url must target a public host")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
+			return "", fmt.Errorf("webhook url must target a public host")
+		}
+	}
+
+	parsed.Fragment = ""
+	return parsed.String(), nil
 }
 
 func collectResearchSources(steps []*RunStep) []ResearchSource {
