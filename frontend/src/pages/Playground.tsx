@@ -16,7 +16,6 @@ import {
   uploadAgentAttachment,
 } from '../lib/api';
 import type {
-  AgentAttachment,
   AgentExecutionMode,
   AgentRunDetail,
   AgentRunStatus,
@@ -287,7 +286,6 @@ export function Playground() {
   const [agentRunID, setAgentRunID] = useState('');
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
   const [screenshotPreviewURL, setScreenshotPreviewURL] = useState('');
-  const [uploadedAttachment, setUploadedAttachment] = useState<AgentAttachment | null>(null);
   const responseRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const agentPollTokenRef = useRef(0);
@@ -385,7 +383,6 @@ export function Playground() {
 
   const resetScreenshotState = useCallback(() => {
     setScreenshotFile(null);
-    setUploadedAttachment(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -470,7 +467,6 @@ export function Playground() {
       throw new Error('Select a screenshot before running multimodal analysis');
     }
     const attachment = await uploadAgentAttachment(screenshotFile);
-    setUploadedAttachment(attachment);
     return [attachment.id];
   }, [agentExecutionMode, screenshotFile]);
 
@@ -638,7 +634,6 @@ export function Playground() {
   }, [playgroundMode, resetAgentRunState, resetScreenshotState, setPlaygroundMode]);
 
   const handleFileSelection = useCallback((file: File | null) => {
-    setUploadedAttachment(null);
     setScreenshotFile(file);
   }, []);
 

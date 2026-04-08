@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import os
 from pathlib import Path
 import threading
@@ -280,13 +279,16 @@ class TokenizerPromptEngine(BaseInferenceEngine):
         return max(1, len(text) // 4) if text else 0
 
     def _template_message(self, msg: Message) -> dict[str, Any]:
+        name = getattr(msg, "name", None)
+        tool_calls = getattr(msg, "tool_calls", None)
+        tool_call_id = getattr(msg, "tool_call_id", None)
         payload: dict[str, Any] = {
             "role": msg.role.value,
             "content": msg.content or "",
         }
-        if msg.name:
-            payload["name"] = msg.name
-        if msg.tool_calls:
+        if name:
+            payload["name"] = name
+        if tool_calls:
             payload["tool_calls"] = [
                 {
                     "id": tool_call.id,
@@ -296,10 +298,10 @@ class TokenizerPromptEngine(BaseInferenceEngine):
                         "arguments": tool_call.function.arguments,
                     },
                 }
-                for tool_call in msg.tool_calls
+                for tool_call in tool_calls
             ]
-        if msg.tool_call_id:
-            payload["tool_call_id"] = msg.tool_call_id
+        if tool_call_id:
+            payload["tool_call_id"] = tool_call_id
         return payload
 
     def _template_messages(self, request: InferenceRequest) -> list[dict[str, Any]]:
@@ -313,34 +315,27 @@ class TokenizerPromptEngine(BaseInferenceEngine):
         tools: list[dict[str, Any]] | None = None,
         tool_choice: Any = None,
     ) -> str:
-        kwargs: dict[str, Any] = {
+        base_kwargs: dict[str, Any] = {
             "tokenize": False,
             "add_generation_prompt": True,
         }
-
-        try:
-            signature = inspect.signature(tokenizer.apply_chat_template)
-        except (TypeError, ValueError):
-            signature = None
-
-        supports_kwargs = False
-        supported_params: set[str] = set()
-        if signature is not None:
-            supported_params = set(signature.parameters)
-            supports_kwargs = any(
-                parameter.kind == inspect.Parameter.VAR_KEYWORD
-                for parameter in signature.parameters.values()
-            )
-
-        if tools is not None and (signature is None or supports_kwargs or "tools" in supported_params):
+        kwargs = dict(base_kwargs)
+        if tools is not None:
             kwargs["tools"] = tools
-        if (
-            tool_choice is not None
-            and (signature is None or supports_kwargs or "tool_choice" in supported_params)
-        ):
+        if tool_choice is not None:
             kwargs["tool_choice"] = tool_choice
 
-        return tokenizer.apply_chat_template(messages, **kwargs)
+        try:
+            return tokenizer.apply_chat_template(messages, **kwargs)
+        except TypeError as exc:
+            message = str(exc)
+            unsupported_tools = "tools" in kwargs and "tools" in message and "unexpected keyword" in message
+            unsupported_choice = (
+                "tool_choice" in kwargs and "tool_choice" in message and "unexpected keyword" in message
+            )
+            if not unsupported_tools and not unsupported_choice:
+                raise
+            return tokenizer.apply_chat_template(messages, **base_kwargs)
 
     def _build_prompt(self, request: InferenceRequest) -> str:
         messages = self._template_messages(request)
