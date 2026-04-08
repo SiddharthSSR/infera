@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback, useDeferredValue, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import { GridRow, Cell, LabelText, StatusDot, Badge, ActionButton, ControlInput, ProgressBar } from '../components/shared';
+import { InstancesSkeleton } from '../components/skeletons';
 import type { Instance, GPUOffering, KnownGPUType, GPUType, ProviderStatus, ProviderType, VaultModel, Worker, ProvisionRequest } from '../types';
 import { fetchWorkspaceProviderConfigs, sendChatCompletion } from '../lib/api';
 import {
@@ -10,7 +12,6 @@ import {
   type DeploymentAttemptRecord,
   type DeploymentAttemptSummary,
   type DeploymentRemediation,
-  type DeploymentTimelineStep,
 } from '../lib/deploymentHistory';
 import { getInstanceReadiness } from '../lib/instanceReadiness';
 import { useDeploymentAttempts, useInstances, useMarkDeploymentAutoVerificationRequested, useOfferings, useProviders, useTerminateInstance, useStartInstance, useStopInstance, useProvisionInstance, useUpdateDeploymentVerification, useVaultModels, useWorkers } from '../hooks/useApi';
@@ -18,6 +19,9 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { InstanceMobileCard } from '../components/InstanceMobileCard';
 import { useAuthSession } from '../lib/auth-context';
 import { getProviderDisplayName, isInventoryProviderType, isWorkspaceProviderType, WORKSPACE_PROVIDER_TYPES } from '../lib/providerInventory';
+import { formatShortTimestamp, formatLatency } from '../lib/formatting';
+import { formatGPUDisplayName, formatOfferingRegion, instanceStatusClass, instanceStatusLabel, providerStateBadge } from '../lib/labels';
+import { DeploymentTimeline } from '../components/DeploymentTimeline';
 
 const GPU_VRAM_GB: Record<KnownGPUType, number> = {
   RTX_4090: 24,
@@ -28,15 +32,6 @@ const GPU_VRAM_GB: Record<KnownGPUType, number> = {
   L40S: 48,
 };
 
-function formatGPUDisplayName(gpuType: GPUType, displayName?: string) {
-  if (displayName?.trim()) return displayName.trim();
-  return gpuType.replace(/_/g, ' ');
-}
-
-function formatOfferingRegion(region?: string, provider?: ProviderType) {
-  if (provider === 'mock' && (!region || region === 'mock')) return 'local lab';
-  return region || 'global';
-}
 
 const AUTO_VERIFY_DELAY_MS = 1500;
 const RECOMMENDED_MODEL_IDS = [
@@ -135,115 +130,11 @@ function describeProvisioningState(configuredProviders: string[], providerStatus
   return null;
 }
 
-function providerStateBadge(status?: ProviderStatus, configured?: boolean) {
-  if (status?.provider === 'mock') {
-    return status.connected
-      ? { label: 'LOCAL READY', tone: '' }
-      : { label: 'LOCAL OFFLINE', tone: 'warning' };
-  }
-  if (!configured) return { label: 'NOT CONFIGURED', tone: 'inactive' };
-  if (!status) return { label: 'UNAVAILABLE', tone: 'warning' };
-  if (status.connected) return { label: 'CONNECTED', tone: '' };
-  if (status.error_code === 'auth_failed') return { label: 'AUTH FAILED', tone: 'error' };
-  return { label: 'DEGRADED', tone: 'warning' };
-}
-
-function getStatusClass(status: string) {
-  switch (status) {
-    case 'running':
-      return '';
-    case 'error':
-      return 'error';
-    case 'stopping':
-    case 'pending':
-    case 'provisioning':
-      return 'warning';
-    case 'stopped':
-    case 'terminating':
-    case 'terminated':
-      return 'inactive';
-    default:
-      console.warn('Unknown instance status class fallback', status);
-      return '';
-  }
-}
-
-function getStatusLabel(status: string) {
-  switch (status) {
-    case 'pending':
-      return 'Pending';
-    case 'provisioning':
-      return 'Provisioning';
-    case 'running':
-      return 'Running';
-    case 'stopping':
-      return 'Stopping';
-    case 'stopped':
-      return 'Stopped';
-    case 'terminating':
-      return 'Terminating';
-    case 'terminated':
-      return 'Terminated';
-    case 'error':
-      return 'Error';
-    default:
-      console.warn('Unknown instance status label fallback', status);
-      return 'Unknown';
-  }
-}
-
-function formatAttemptTime(value: string) {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return value;
-  return new Date(timestamp).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-function formatVerificationLatency(latencyMs?: number) {
-  if (latencyMs == null) return null;
-  if (latencyMs < 1000) return `${latencyMs}ms`;
-  return `${(latencyMs / 1000).toFixed(2)}s`;
-}
-
-function timelineTone(state: DeploymentTimelineStep['state']) {
-  switch (state) {
-    case 'done':
-      return '';
-    case 'active':
-      return 'warning';
-    case 'failed':
-      return 'error';
-    case 'stopped':
-    case 'terminated':
-      return 'inactive';
-    default:
-      return 'inactive';
-  }
-}
-
-function timelineLabel(state: DeploymentTimelineStep['state']) {
-  if (state === 'stopped') return 'STOPPED';
-  if (state === 'terminated') return 'TERMINATED';
-  return state.toUpperCase();
-}
-
-function DeploymentTimeline({ steps }: { steps: DeploymentTimelineStep[] }) {
-  return (
-    <div style={{ display: 'grid', gap: '0.55rem', marginTop: '0.9rem' }}>
-      {steps.map((step) => (
-        <div key={step.label} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-          <span className={`status-dot ${timelineTone(step.state)}`} />
-          <span style={{ fontSize: '0.8rem', minWidth: '8.5rem' }}>{step.label}</span>
-          <span className={`badge ${timelineTone(step.state) ? `status-${timelineTone(step.state)}` : ''}`}>{timelineLabel(step.state)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
+// Aliases for backwards-compatible call sites in this file
+const getStatusClass = instanceStatusClass;
+const getStatusLabel = instanceStatusLabel;
+const formatAttemptTime = (value: string) => formatShortTimestamp(value) ?? value;
+const formatVerificationLatency = formatLatency;
 
 function findPresetOffering(
   offerings: GPUOffering[] | undefined,
@@ -384,20 +275,20 @@ function InstanceActions({
     <>
       {incidentActions}
       {instance.status === 'stopped' && (
-        <button className="action-btn" style={buttonStyle} disabled={isLoading} onClick={handleStart}>START</button>
+        <ActionButton style={buttonStyle} disabled={isLoading} onClick={handleStart}>START</ActionButton>
       )}
       {instance.status === 'running' && (
-        <button className="action-btn" style={buttonStyle} disabled={isLoading} onClick={handleStop}>STOP</button>
+        <ActionButton style={buttonStyle} disabled={isLoading} onClick={handleStop}>STOP</ActionButton>
       )}
       {instance.status !== 'terminating' && instance.status !== 'terminated' && (
-        <button
-          className="action-btn destructive"
+        <ActionButton
+          variant="destructive"
           style={{ fontSize: '0.65rem' }}
           disabled={isLoading}
           onClick={handleTerminate}
         >
           TERMINATE
-        </button>
+        </ActionButton>
       )}
     </>
   );
@@ -421,7 +312,7 @@ function InstanceRow({
   const readiness = getInstanceReadiness(instance, workers);
 
   return (
-    <tr id={`instance-row-${instance.id}`} style={{ borderBottom: '1px solid #EEEEEC', background: highlighted ? 'rgba(244, 242, 238, 0.7)' : 'transparent' }}>
+    <tr id={`instance-row-${instance.id}`} style={{ borderBottom: '1px solid #EEEEEC', background: incident?.tone === 'warning' ? 'rgba(249, 168, 37, 0.06)' : highlighted ? 'rgba(244, 242, 238, 0.7)' : 'transparent' }}>
       <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
         <div className="mono">{instance.name || instance.id.slice(0, 16)}</div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
@@ -433,18 +324,18 @@ function InstanceRow({
       </td>
       <td style={{ padding: '1.5rem 0', verticalAlign: 'middle' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
-          <span className={`status-dot ${statusClass}`} />
+          <StatusDot tone={statusClass as 'success' | 'warning' | 'error' | 'inactive' | undefined} />
           {statusLabel}
         </div>
         <div style={{ marginTop: '0.45rem', display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-          <span className={`badge ${readiness.tone ? `status-${readiness.tone}` : ''}`}>{readiness.label}</span>
+          <Badge tone={readiness.tone || undefined}>{readiness.label}</Badge>
         </div>
         <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5, maxWidth: '22rem' }}>
           {readiness.detail}
         </div>
         {incident && (
           <div style={{ marginTop: '0.65rem', maxWidth: '22rem' }}>
-            <span className={`badge ${incident.tone ? `status-${incident.tone}` : ''}`}>{incident.title}</span>
+            <Badge tone={incident.tone || undefined}>{incident.title}</Badge>
             <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
               {incident.detail}
             </div>
@@ -823,7 +714,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
       >
         <div className="provision-modal-header">
           <div className="provision-modal-heading">
-            <div className="label-text">PROVISION NEW NODE</div>
+            <LabelText as="div">PROVISION NEW NODE</LabelText>
             <h2 id="provision-modal-title" className="provision-modal-title">Provision a node</h2>
             <p className="provision-modal-description">
               Choose compute first, then review the models that fit that hardware before confirming the deployment.
@@ -864,15 +755,15 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                   <div className="provision-context-card">
                     <div className="provision-context-header">
                       <div>
-                        <div className="label-text">PINNED MODEL CONTEXT</div>
+                        <LabelText as="div">PINNED MODEL CONTEXT</LabelText>
                         <div className="provision-context-title">{pinnedModelRecord.name}</div>
                         <div className="mono provision-context-source">{pinnedModelRecord.source_uri}</div>
                       </div>
                       <div className="provision-context-badges">
-                        {selectedPreset && <span className="badge">{selectedPreset.label}</span>}
-                        {pinnedModelRecord.parameters && <span className="badge">{pinnedModelRecord.parameters}</span>}
-                        {pinnedModelRecord.quantization && <span className="badge">{pinnedModelRecord.quantization}</span>}
-                        {pinnedModelRecord.vram_required ? <span className="badge mono">{Math.ceil(pinnedModelRecord.vram_required / 1024)}GB VRAM</span> : null}
+                        {selectedPreset && <Badge>{selectedPreset.label}</Badge>}
+                        {pinnedModelRecord.parameters && <Badge>{pinnedModelRecord.parameters}</Badge>}
+                        {pinnedModelRecord.quantization && <Badge>{pinnedModelRecord.quantization}</Badge>}
+                        {pinnedModelRecord.vram_required ? <Badge mono>{Math.ceil(pinnedModelRecord.vram_required / 1024)}GB VRAM</Badge> : null}
                       </div>
                     </div>
                     <div className="provision-context-copy">
@@ -883,7 +774,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                     </div>
                     {selectedPreset && pinnedModelCompatibleOfferings.length === 0 && (
                       <div className="provision-inline-warning">
-                        <div className="label-text">CAPACITY GAP</div>
+                        <LabelText as="div">CAPACITY GAP</LabelText>
                         <div>{presetCapacityWarning(selectedPreset)} Choose a larger configuration once inventory appears, or switch to a smaller reasoning model.</div>
                       </div>
                     )}
@@ -891,7 +782,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                 )}
 
                 <div className="provision-section">
-                  <div className="label-text">STEP 1</div>
+                  <LabelText as="div">STEP 1</LabelText>
                   <div className="provision-section-title">Choose the GPU family and node size</div>
                   <div className="provision-section-copy">
                     Start with the hardware. The next step will narrow the catalog to models that fit the VRAM budget you choose here.
@@ -903,8 +794,8 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                     <div className="provision-empty-title">{provisioningState.title}</div>
                     <div className="provision-empty-copy">{provisioningState.detail}</div>
                     <div className="help-actions">
-                      <button className="action-btn" onClick={onOpenWorkspace}>OPEN WORKSPACE</button>
-                      <button className="action-btn" onClick={onClose}>CANCEL</button>
+                      <ActionButton onClick={onOpenWorkspace}>OPEN WORKSPACE</ActionButton>
+                      <ActionButton onClick={onClose}>CANCEL</ActionButton>
                     </div>
                   </div>
                 ) : (
@@ -912,22 +803,22 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                     {inventorySnapshot && (
                       <div className="provision-metric-strip" aria-label="Live inventory snapshot">
                         <div className="provision-metric-card">
-                          <div className="label-text">LIVE SOURCES</div>
+                          <LabelText as="div">LIVE SOURCES</LabelText>
                           <div className="provision-metric-value">{inventorySnapshot.providerCount}</div>
                           <div className="provision-metric-copy">Connected inventory providers</div>
                         </div>
                         <div className="provision-metric-card">
-                          <div className="label-text">GPU FAMILIES</div>
+                          <LabelText as="div">GPU FAMILIES</LabelText>
                           <div className="provision-metric-value">{inventorySnapshot.gpuFamilyCount}</div>
                           <div className="provision-metric-copy">Distinct compute families</div>
                         </div>
                         <div className="provision-metric-card">
-                          <div className="label-text">REGIONS</div>
+                          <LabelText as="div">REGIONS</LabelText>
                           <div className="provision-metric-value">{inventorySnapshot.regionCount}</div>
                           <div className="provision-metric-copy">Capacity footprints visible now</div>
                         </div>
                         <div className="provision-metric-card">
-                          <div className="label-text">STARTING RATE</div>
+                          <LabelText as="div">STARTING RATE</LabelText>
                           <div className="provision-metric-value mono">
                             {inventorySnapshot.lowestCost != null ? `$${inventorySnapshot.lowestCost.toFixed(2)}/hr` : '—'}
                           </div>
@@ -953,7 +844,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                                   <span>{group.totalAvailable} available</span>
                               </div>
                               </div>
-                              <span className="badge">{getProviderDisplayName(group.provider)}</span>
+                              <Badge>{getProviderDisplayName(group.provider)}</Badge>
                             </div>
                             <div className="gpu-choice-price">
                               <span className="mono">${activeOffering.cost_per_hour.toFixed(2)}</span>
@@ -991,7 +882,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
               </div>
 
               <aside className="provision-sidebar">
-                <div className="label-text">CURRENT SELECTION</div>
+                <LabelText as="div">CURRENT SELECTION</LabelText>
                 {selectedOffering ? (
                   <>
                     <div className="provision-sidebar-title">{formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}</div>
@@ -1007,7 +898,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                 )}
                 {pinnedModelRecord && (
                   <div className="provision-sidebar-block">
-                    <div className="label-text">MODEL REQUIREMENT</div>
+                    <LabelText as="div">MODEL REQUIREMENT</LabelText>
                     <div className="provision-sidebar-copy">
                       {pinnedModelRecord.name} targets roughly {Math.ceil((pinnedModelRecord.vram_required || 0) / 1024)}GB VRAM.
                     </div>
@@ -1021,7 +912,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
             <div className="provision-stage">
               <div className="provision-stage-main">
                 <div className="provision-section">
-                  <div className="label-text">STEP 2</div>
+                  <LabelText as="div">STEP 2</LabelText>
                   <div className="provision-section-title">Pick models that fit the selected GPU</div>
                   <div className="provision-section-copy">
                     Compatible models are filtered by the VRAM available on the selected node. Leave this step empty if you only want raw capacity first.
@@ -1029,10 +920,9 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                 </div>
 
                 <label className="provision-search">
-                  <span className="label-text">SEARCH MODELS</span>
-                  <input
+                  <LabelText>SEARCH MODELS</LabelText>
+                  <ControlInput
                     type="text"
-                    className="control-input"
                     placeholder="Search by model name, family, or size..."
                     value={modelSearch}
                     onChange={(event) => setModelSearch(event.target.value)}
@@ -1041,17 +931,17 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
 
                 <div className="provision-metric-strip compact" aria-label="Model fit summary">
                   <div className="provision-metric-card">
-                    <div className="label-text">VRAM</div>
+                    <LabelText as="div">VRAM</LabelText>
                     <div className="provision-metric-value mono">{selectedOffering?.memory_gb ?? 0}GB</div>
                     <div className="provision-metric-copy">Total memory on this node</div>
                   </div>
                   <div className="provision-metric-card">
-                    <div className="label-text">COMPATIBLE</div>
+                    <LabelText as="div">COMPATIBLE</LabelText>
                     <div className="provision-metric-value">{filteredCompatibleModels.length}</div>
                     <div className="provision-metric-copy">Models fit the current node</div>
                   </div>
                   <div className="provision-metric-card">
-                    <div className="label-text">SELECTED</div>
+                    <LabelText as="div">SELECTED</LabelText>
                     <div className="provision-metric-value">{selectedModels.length}</div>
                     <div className="provision-metric-copy">Models will preload on provision</div>
                   </div>
@@ -1064,14 +954,14 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                       Try a larger GPU configuration, or continue without preloading a model if you only need the node online first.
                     </div>
                     <div className="help-actions">
-                      <button className="action-btn" onClick={() => setStep('compute')}>BACK TO GPU CHOICE</button>
+                      <ActionButton onClick={() => setStep('compute')}>BACK TO GPU CHOICE</ActionButton>
                     </div>
                   </div>
                 ) : (
                   <>
                     {filteredRecommendedModels.length > 0 && (
                       <div className="provision-model-group">
-                        <div className="label-text">RECOMMENDED QUICK PICKS</div>
+                        <LabelText as="div">RECOMMENDED QUICK PICKS</LabelText>
                         <div className="provision-model-list">
                           {filteredRecommendedModels.map((model) => {
                             const isSelected = selectedModels.includes(model.source_uri);
@@ -1087,11 +977,11 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                                   <div className="mono provision-model-source">{model.source_uri}</div>
                                 </div>
                                 <div className="provision-model-meta">
-                                  {model.parameters && <span className="badge">{model.parameters}</span>}
-                                  {model.quantization && <span className="badge">{model.quantization}</span>}
-                                  {model.vram_required ? <span className="badge mono">{Math.ceil(model.vram_required / 1024)}GB VRAM</span> : null}
-                                  {model.source_uri === preselectedModel ? <span className="badge">PINNED</span> : null}
-                                  {isSelected ? <span className="badge">SELECTED</span> : null}
+                                  {model.parameters && <Badge>{model.parameters}</Badge>}
+                                  {model.quantization && <Badge>{model.quantization}</Badge>}
+                                  {model.vram_required ? <Badge mono>{Math.ceil(model.vram_required / 1024)}GB VRAM</Badge> : null}
+                                  {model.source_uri === preselectedModel ? <Badge>PINNED</Badge> : null}
+                                  {isSelected ? <Badge>SELECTED</Badge> : null}
                                 </div>
                               </button>
                             );
@@ -1101,7 +991,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                     )}
 
                     <div className="provision-model-group">
-                      <div className="label-text">COMPATIBLE MODEL LIBRARY</div>
+                      <LabelText as="div">COMPATIBLE MODEL LIBRARY</LabelText>
                       <div className="provision-model-list">
                         {filteredCatalogModels.map((model) => {
                           const isSelected = selectedModels.includes(model.source_uri);
@@ -1117,10 +1007,10 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                                 <div className="mono provision-model-source">{model.source_uri}</div>
                               </div>
                               <div className="provision-model-meta">
-                                {model.parameters && <span className="badge">{model.parameters}</span>}
-                                {model.quantization && <span className="badge">{model.quantization}</span>}
-                                {model.vram_required ? <span className="badge mono">{Math.ceil(model.vram_required / 1024)}GB VRAM</span> : null}
-                                {isSelected ? <span className="badge">SELECTED</span> : null}
+                                {model.parameters && <Badge>{model.parameters}</Badge>}
+                                {model.quantization && <Badge>{model.quantization}</Badge>}
+                                {model.vram_required ? <Badge mono>{Math.ceil(model.vram_required / 1024)}GB VRAM</Badge> : null}
+                                {isSelected ? <Badge>SELECTED</Badge> : null}
                               </div>
                             </button>
                           );
@@ -1132,7 +1022,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
               </div>
 
               <aside className="provision-sidebar">
-                <div className="label-text">COMPUTE SUMMARY</div>
+                <LabelText as="div">COMPUTE SUMMARY</LabelText>
                 {selectedOffering && (
                   <>
                     <div className="provision-sidebar-title">{formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}</div>
@@ -1143,13 +1033,13 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                   </>
                 )}
                 <div className="provision-sidebar-block">
-                  <div className="label-text">SELECTED MODELS</div>
+                  <LabelText as="div">SELECTED MODELS</LabelText>
                   {selectedModelEntries.length > 0 ? (
                     <div className="provision-selected-list">
                       {selectedModelEntries.map((model) => (
                         <div key={`selected-${model.id}`} className="provision-selected-item">
                           <span>{model.name}</span>
-                          {model.parameters && <span className="badge">{model.parameters}</span>}
+                          {model.parameters && <Badge>{model.parameters}</Badge>}
                         </div>
                       ))}
                     </div>
@@ -1167,7 +1057,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
             <div className="provision-stage">
               <div className="provision-stage-main">
                 <div className="provision-section">
-                  <div className="label-text">STEP 3</div>
+                  <LabelText as="div">STEP 3</LabelText>
                   <div className="provision-section-title">Review deployment details</div>
                   <div className="provision-section-copy">
                     Confirm the node name and cost posture, then provision the node with the selected compute and model bundle.
@@ -1176,10 +1066,9 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
 
                 <div className="provision-review-grid">
                   <label className="provision-form-field">
-                    <span className="label-text">INSTANCE NAME</span>
-                    <input
+                    <LabelText>INSTANCE NAME</LabelText>
+                    <ControlInput
                       type="text"
-                      className="control-input"
                       value={name}
                       onChange={(event) => setName(event.target.value)}
                       placeholder="infera-worker"
@@ -1197,7 +1086,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                 </div>
 
                 <div className="provision-review-block">
-                  <div className="label-text">WHAT HAPPENS NEXT</div>
+                  <LabelText as="div">WHAT HAPPENS NEXT</LabelText>
                   <div className="provision-review-copy">
                     The provider request is submitted first, then the node appears in deployment history while the worker connects and models load. If you selected models, the platform will track inference verification after the node becomes ready.
                   </div>
@@ -1205,7 +1094,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
               </div>
 
               <aside className="provision-sidebar">
-                <div className="label-text">DEPLOYMENT SUMMARY</div>
+                <LabelText as="div">DEPLOYMENT SUMMARY</LabelText>
                 {selectedOffering && (
                   <>
                     <div className="provision-sidebar-title">{formatGPUDisplayName(selectedOffering.gpu_type, selectedOffering.display_name)}</div>
@@ -1216,13 +1105,13 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                   </>
                 )}
                 <div className="provision-sidebar-block">
-                  <div className="label-text">MODELS</div>
+                  <LabelText as="div">MODELS</LabelText>
                   {selectedModelEntries.length > 0 ? (
                     <div className="provision-selected-list">
                       {selectedModelEntries.map((model) => (
                         <div key={`review-${model.id}`} className="provision-selected-item">
                           <span>{model.name}</span>
-                          {model.parameters && <span className="badge">{model.parameters}</span>}
+                          {model.parameters && <Badge>{model.parameters}</Badge>}
                         </div>
                       ))}
                     </div>
@@ -1231,7 +1120,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
                   )}
                 </div>
                 <div className="provision-sidebar-block">
-                  <div className="label-text">DEPLOYMENT MODE</div>
+                  <LabelText as="div">DEPLOYMENT MODE</LabelText>
                   <div className="provision-sidebar-copy">{spotInstance ? 'Spot capacity enabled' : 'On-demand capacity'}</div>
                 </div>
               </aside>
@@ -1241,18 +1130,17 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
 
         <div className="provision-modal-footer">
           <div className="provision-footer-actions">
-            <button className="action-btn" onClick={onClose}>CANCEL</button>
+            <ActionButton onClick={onClose}>CANCEL</ActionButton>
             {step !== 'compute' && (
-              <button
-                className="action-btn"
+              <ActionButton
                 onClick={() => setStep(step === 'review' ? 'models' : 'compute')}
               >
                 BACK
-              </button>
+              </ActionButton>
             )}
           </div>
-          <button
-            className="btn-primary"
+          <ActionButton
+            variant="primary"
             onClick={handlePrimaryAction}
             disabled={
               step === 'compute'
@@ -1263,7 +1151,7 @@ export function ProvisionModal({ isOpen, onClose, onProvisioned, onProvisionFail
             }
           >
             {primaryActionLabel}
-          </button>
+          </ActionButton>
         </div>
       </div>
     </>
@@ -1293,6 +1181,32 @@ export function Instances() {
   const markAutoVerificationRequested = useMarkDeploymentAutoVerificationRequested(workspaceID);
 
   const [preselectedModel, setPreselectedModel] = useState<string | null>(null);
+
+  // Scaling controls state
+  const scalingDefaults = { minNodes: 1, maxNodes: 5, autoscaleTrigger: 80 };
+  const [scalingMinNodes, setScalingMinNodes] = useState(scalingDefaults.minNodes);
+  const [scalingMaxNodes, setScalingMaxNodes] = useState(scalingDefaults.maxNodes);
+  const [scalingTrigger, setScalingTrigger] = useState(scalingDefaults.autoscaleTrigger);
+  const [scalingSaved, setScalingSaved] = useState(scalingDefaults);
+
+  const scalingDirty =
+    scalingMinNodes !== scalingSaved.minNodes ||
+    scalingMaxNodes !== scalingSaved.maxNodes ||
+    scalingTrigger !== scalingSaved.autoscaleTrigger;
+
+  const scalingErrors = {
+    minNodes: scalingMinNodes >= scalingMaxNodes ? 'Min must be less than max nodes' : '',
+    maxNodes: scalingMaxNodes <= scalingMinNodes ? 'Max must be greater than min nodes' : '',
+    trigger: scalingTrigger < 0 || scalingTrigger > 100 ? 'Must be between 0 and 100' : '',
+  };
+  const scalingHasErrors = Object.values(scalingErrors).some(Boolean);
+
+  const handleApplyScaling = () => {
+    if (scalingHasErrors || !scalingDirty) return;
+    setScalingSaved({ minNodes: scalingMinNodes, maxNodes: scalingMaxNodes, autoscaleTrigger: scalingTrigger });
+    toast.success('Scaling configuration updated');
+  };
+
   const drilldownModel = searchParams.get('model');
   const drilldownFocus = searchParams.get('focus');
   const drilldownModelLabel = drilldownModel?.split('/').pop() || drilldownModel;
@@ -1492,19 +1406,18 @@ export function Instances() {
     return (
       <>
         {instance.status === 'running' && hasModel && (
-          <button
-            className="action-btn"
+          <ActionButton
             style={buttonStyle}
             disabled={verifyingAttemptID === summary.attempt.id}
             onClick={() => void runInferenceVerification(summary)}
           >
             {verifyingAttemptID === summary.attempt.id ? 'VERIFYING...' : 'VERIFY NOW'}
-          </button>
+          </ActionButton>
         )}
         {summary.retryable && (
-          <button className="action-btn" style={buttonStyle} onClick={() => openRetryModal(summary.attempt)}>
+          <ActionButton style={buttonStyle} onClick={() => openRetryModal(summary.attempt)}>
             RETRY CONFIG
-          </button>
+          </ActionButton>
         )}
       </>
     );
@@ -1550,11 +1463,13 @@ export function Instances() {
     };
   }, [latestDeployment, markAutoVerificationRequested, runInferenceVerification, verifyingAttemptID]);
 
+  if (isLoading) return <InstancesSkeleton />;
+
   return (
     <div className="instances-page animate-fade-in">
       {latestDeployment && (
         <div style={{ padding: '1.25rem 2rem', borderBottom: 'var(--grid-line)', background: 'rgba(255, 255, 255, 0.82)' }}>
-          <div className="label-text" style={{ marginBottom: '0.5rem' }}>LATEST DEPLOYMENT</div>
+          <LabelText as="div" style={{ marginBottom: '0.5rem' }}>LATEST DEPLOYMENT</LabelText>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: '1rem', fontWeight: 600 }}>
@@ -1572,7 +1487,7 @@ export function Instances() {
               </div>
               {latestDeployment.attempt.inference_verification && (
                 <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '44rem' }}>
-                  <div className="label-text" style={{ marginBottom: '0.35rem' }}>FIRST INFERENCE</div>
+                  <LabelText as="div" style={{ marginBottom: '0.35rem' }}>FIRST INFERENCE</LabelText>
                   {latestDeployment.attempt.inference_verification.status === 'passed'
                     ? `Verified on ${formatAttemptTime(latestDeployment.attempt.inference_verification.verified_at)}${latestDeployment.attempt.inference_verification.latency_ms != null ? ` in ${formatVerificationLatency(latestDeployment.attempt.inference_verification.latency_ms)}` : ''}${latestDeployment.attempt.inference_verification.response_preview ? `. Response: ${latestDeployment.attempt.inference_verification.response_preview}` : '.'}`
                     : `Inference check failed on ${formatAttemptTime(latestDeployment.attempt.inference_verification.verified_at)}${latestDeployment.attempt.inference_verification.error ? `: ${latestDeployment.attempt.inference_verification.error}` : '.'}`}
@@ -1591,15 +1506,14 @@ export function Instances() {
                 <span className="badge">{getStatusLabel(latestDeployment.instance.status).toUpperCase()}</span>
               )}
               {latestRemediation && (
-                <button
-                  className="action-btn"
+                <ActionButton
                   disabled={latestRemediation.action === 'verify_inference' && verifyingAttemptID === latestDeployment.attempt.id}
                   onClick={() => handleRemediation(latestDeployment, latestRemediation)}
                 >
                   {latestRemediation.action === 'verify_inference' && verifyingAttemptID === latestDeployment.attempt.id
                     ? 'VERIFYING...'
                     : latestRemediation.label}
-                </button>
+                </ActionButton>
               )}
               {latestDeployment.inferenceVerified && <span className="badge">INFERENCE VERIFIED</span>}
               {latestDeployment.attempt.inference_verification?.status === 'failed' && (
@@ -1611,37 +1525,37 @@ export function Instances() {
                 </span>
               )}
               {latestDeployment.retryable && latestRemediation?.action !== 'retry_config' && (
-                <button className="action-btn" onClick={() => openRetryModal(latestDeployment.attempt)}>
+                <ActionButton onClick={() => openRetryModal(latestDeployment.attempt)}>
                   RETRY CONFIG
-                </button>
+                </ActionButton>
               )}
             </div>
           </div>
         </div>
       )}
 
-      <div className="grid-row">
-        <div className="cell" style={{ gridColumn: 'span 4' }}>
+      <GridRow>
+        <Cell span={4}>
           <div className="help-callout">
-            <div className="label-text">NODE STATUS GUIDE</div>
+            <LabelText as="div">NODE STATUS GUIDE</LabelText>
             <div className="help-callout-copy">
               <strong>Connected inventory</strong> means the workspace or local provider path can return live status. <strong>Serving verified</strong> means the worker heartbeat is fresh and runtime looks ready. <strong>Inference verified</strong> means a real chat-completions request passed. Treat the latest deployment banner as the fastest path from provisioned node to confirmed serving.
             </div>
             <div className="help-actions">
-              <button className="action-btn" onClick={() => navigate('/workspace')}>OPEN WORKSPACE</button>
-              <button className="action-btn" onClick={() => navigate('/docs')}>READ DEPLOYMENT DOCS</button>
+              <ActionButton onClick={() => navigate('/workspace')}>OPEN WORKSPACE</ActionButton>
+              <ActionButton onClick={() => navigate('/docs')}>READ DEPLOYMENT DOCS</ActionButton>
             </div>
           </div>
-        </div>
-      </div>
+        </Cell>
+      </GridRow>
 
       {drilldownModel && (
-        <div className="grid-row">
-          <div className="cell" style={{ gridColumn: 'span 4' }}>
+        <GridRow>
+          <Cell span={4}>
             <div className="help-callout">
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
                 <div>
-                  <div className="label-text">MODEL DRILLDOWN</div>
+                  <LabelText as="div">MODEL DRILLDOWN</LabelText>
                   <div className="help-callout-copy">
                     Showing {drilldownFocus === 'degraded' ? 'degraded runtime nodes' : 'nodes'} for <strong>{drilldownModelLabel}</strong>. Use this view to inspect the deployments behind the model health signal from the registry.
                   </div>
@@ -1676,7 +1590,7 @@ export function Instances() {
                         {incident?.detail}
                       </div>
                       <div className="help-actions">
-                        <button className="action-btn" onClick={() => focusInstance(instance.id)}>FOCUS NODE</button>
+                        <ActionButton onClick={() => focusInstance(instance.id)}>FOCUS NODE</ActionButton>
                         {summary && renderIncidentActions(instance, summary)}
                       </div>
                     </div>
@@ -1684,80 +1598,72 @@ export function Instances() {
                 </div>
               )}
               <div className="help-actions">
-                <button className="action-btn" onClick={() => setSearchParams({}, { replace: true })}>CLEAR DRILLDOWN</button>
-                <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
+                <ActionButton onClick={() => setSearchParams({}, { replace: true })}>CLEAR DRILLDOWN</ActionButton>
+                <ActionButton onClick={() => navigate('/models')}>OPEN MODELS</ActionButton>
               </div>
             </div>
-          </div>
-        </div>
+          </Cell>
+        </GridRow>
       )}
 
       {/* Metrics Row */}
-      <div className="grid-row instances-metrics-row">
-        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-          <div className="label-text">
+      <GridRow className="instances-metrics-row">
+        <Cell style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <LabelText as="div" icon={
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
               <line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
             </svg>
-            TOTAL INSTANCES
-          </div>
+          }>TOTAL INSTANCES</LabelText>
           <div className="value-text">{filteredInstances.length}</div>
           <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
             {instances?.length || 0} total
           </div>
-        </div>
-        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-          <div className="label-text">
+        </Cell>
+        <Cell style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <LabelText as="div" icon={
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M12 2v20M2 12h20" />
             </svg>
-            AVG GPU UTIL
-          </div>
+          }>AVG GPU UTIL</LabelText>
           <div className="value-text">{totalGpuUtil}%</div>
-          <div className="progress-track">
-            <div className="progress-fill" style={{ width: `${totalGpuUtil}%` }} />
-          </div>
-        </div>
-        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-          <div className="label-text">
+          <ProgressBar value={totalGpuUtil} />
+        </Cell>
+        <Cell style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <LabelText as="div" icon={
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
             </svg>
-            MEMORY USAGE
-          </div>
+          }>MEMORY USAGE</LabelText>
           <div className="value-text">
             {totalMemTotal > 0 ? `${(totalMemUsed / 1073741824).toFixed(1)} / ${(totalMemTotal / 1073741824).toFixed(1)} GB` : '-'}
           </div>
-          <div className="progress-track">
-            <div className="progress-fill" style={{ width: totalMemTotal > 0 ? `${(totalMemUsed / totalMemTotal * 100)}%` : '0%' }} />
-          </div>
-        </div>
-        <div className="cell" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-          <div className="label-text">
+          <ProgressBar value={totalMemTotal > 0 ? (totalMemUsed / totalMemTotal * 100) : 0} />
+        </Cell>
+        <Cell style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <LabelText as="div" icon={
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
             </svg>
-            STATUS
-          </div>
+          }>STATUS</LabelText>
           <div className="value-text" style={{ fontSize: '1.25rem' }}>
             {filteredInstances.filter(i => i.status === 'running').length} Running
           </div>
           <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span className={`status-dot ${filteredInstances.some(i => i.status === 'running') ? '' : 'inactive'}`} />
+            <StatusDot tone={filteredInstances.some(i => i.status === 'running') ? 'success' : 'inactive'} />
             <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
               {filteredInstances.some(i => i.status === 'running') ? 'Operational' : 'No active nodes'}
             </span>
           </div>
-        </div>
-      </div>
+        </Cell>
+      </GridRow>
 
       {/* Main Content Row */}
-      <div className="grid-row instances-main-row" style={{ flexGrow: 1 }}>
+      <GridRow className="instances-main-row" style={{ flexGrow: 1 }}>
         {/* Node Table */}
-        <div className="cell instances-list-cell" style={{ gridColumn: 'span 3' }}>
+        <Cell className="instances-list-cell" span={3}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-            <div className="label-text">NODE OVERVIEW</div>
+            <LabelText as="div">NODE OVERVIEW</LabelText>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
               <select
                 className="filter-select"
@@ -1770,16 +1676,14 @@ export function Instances() {
                 <option value="all">All</option>
               </select>
               {drilldownModel && (
-                <button className="action-btn" onClick={() => setSearchParams({}, { replace: true })}>
+                <ActionButton onClick={() => setSearchParams({}, { replace: true })}>
                   CLEAR MODEL FILTER
-                </button>
+                </ActionButton>
               )}
             </div>
           </div>
 
-          {isLoading ? (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading...</div>
-          ) : filteredInstances.length === 0 ? (
+          {filteredInstances.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '4rem 0', color: 'var(--text-secondary)' }}>
               <div style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>
                 {drilldownModel
@@ -1792,8 +1696,7 @@ export function Instances() {
                   : provisioningState?.detail || 'Provision your first node to start serving models from this workspace.'}
               </div>
               <div className="help-actions" style={{ justifyContent: 'center' }}>
-                <button
-                  className="action-btn"
+                <ActionButton
                   onClick={() => {
                     if (drilldownModel) {
                       setSearchParams({}, { replace: true });
@@ -1807,9 +1710,9 @@ export function Instances() {
                   }}
                 >
                   {drilldownModel ? 'CLEAR DRILLDOWN' : provisioningState?.action || 'PROVISION NEW NODE'}
-                </button>
-                <button className="action-btn" onClick={() => navigate('/models')}>OPEN MODELS</button>
-                <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+                </ActionButton>
+                <ActionButton onClick={() => navigate('/models')}>OPEN MODELS</ActionButton>
+                <ActionButton onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</ActionButton>
               </div>
             </div>
           ) : isMobile ? (
@@ -1835,11 +1738,11 @@ export function Instances() {
               <table className="data-table responsive-scroll-x-content">
                 <thead>
                   <tr>
-                    <th>NODE ID</th>
-                    <th>STATUS</th>
-                    <th>COST</th>
-                    <th>ENDPOINT</th>
-                    <th style={{ textAlign: 'right' }}>ACTIONS</th>
+                    <th scope="col">NODE ID</th>
+                    <th scope="col">STATUS</th>
+                    <th scope="col">COST</th>
+                    <th scope="col">ENDPOINT</th>
+                    <th scope="col" style={{ textAlign: 'right' }}>ACTIONS</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1861,17 +1764,17 @@ export function Instances() {
             </div>
           )}
 
-          <button className="action-btn" style={{ marginTop: '2rem' }} onClick={openFreshProvisionModal}>
+          <ActionButton style={{ marginTop: '2rem' }} onClick={openFreshProvisionModal}>
             PROVISION NEW NODE
-          </button>
-        </div>
+          </ActionButton>
+        </Cell>
 
         {/* Sidebar */}
-        <div className="cell instances-sidebar-cell" style={{ backgroundColor: 'var(--bg-accent)' }}>
-          <div className="label-text" style={{ marginBottom: '2rem' }}>WORKSPACE INFRASTRUCTURE</div>
+        <Cell className="instances-sidebar-cell" bg="var(--bg-accent)">
+          <LabelText as="div" style={{ marginBottom: '2rem' }}>WORKSPACE INFRASTRUCTURE</LabelText>
 
           <div style={{ marginBottom: '2.5rem' }}>
-            <div className="label-text">PROVIDERS</div>
+            <LabelText as="div">PROVIDERS</LabelText>
             <div style={{ marginTop: '0.9rem', display: 'grid', gap: '0.65rem' }}>
               {providerRail.map((providerName) => {
                 const status = visibleProviderStatuses.find((provider) => provider.provider === providerName);
@@ -1888,14 +1791,14 @@ export function Instances() {
           </div>
 
           <div style={{ marginBottom: '2.5rem' }}>
-            <div className="label-text">TOTAL WORKERS</div>
+            <LabelText as="div">TOTAL WORKERS</LabelText>
             <div className="mono" style={{ fontSize: '1.25rem', marginTop: '0.5rem' }}>
               {healthyWorkers.length}
             </div>
           </div>
 
           <div style={{ marginBottom: '2.5rem' }}>
-            <div className="label-text">ACTIVE MODELS</div>
+            <LabelText as="div">ACTIVE MODELS</LabelText>
             <div style={{ marginTop: '0.5rem' }}>
               {healthyWorkers.length > 0 ? (
                 [...new Set(healthyWorkers.flatMap(w => w.models || []))].map(model => (
@@ -1910,44 +1813,108 @@ export function Instances() {
           </div>
 
           <div style={{ marginTop: '4rem', borderTop: '1px solid var(--border-color)', paddingTop: '2rem' }}>
-            <div className="label-text">PLATFORM HEALTH</div>
+            <LabelText as="div">PLATFORM HEALTH</LabelText>
             <div style={{ marginTop: '1rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
                 <span>Gateway</span>
-                <span style={{ color: 'var(--color-success)' }}>OK</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--color-success)' }}><StatusDot tone="success" />OK</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
                 <span>Router</span>
-                <span style={{ color: 'var(--color-success)' }}>OK</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--color-success)' }}><StatusDot tone="success" />OK</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
                 <span>Workers</span>
-                <span style={{ color: healthyWorkers.length > 0 ? 'var(--color-success)' : 'var(--color-warning)' }}>
-                  {healthyWorkers.length > 0 ? 'OK' : 'NONE'}
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: healthyWorkers.length > 0 ? 'var(--color-success)' : 'var(--color-warning)' }}>
+                  <StatusDot tone={healthyWorkers.length > 0 ? 'success' : 'warning'} />{healthyWorkers.length > 0 ? 'OK' : 'NONE'}
                 </span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', marginTop: '0.5rem' }}>
                 <span>Providers</span>
-                <span style={{ color: connectedProviders.length > 0 ? 'var(--color-success)' : 'var(--color-warning)' }}>
-                  {connectedProviders.length > 0 ? `${connectedProviders.length} live` : 'CHECK'}
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: connectedProviders.length > 0 ? 'var(--color-success)' : 'var(--color-warning)' }}>
+                  <StatusDot tone={connectedProviders.length > 0 ? 'success' : 'warning'} />{connectedProviders.length > 0 ? `${connectedProviders.length} live` : 'CHECK'}
                 </span>
               </div>
             </div>
           </div>
-        </div>
-      </div>
+
+          <div style={{ marginTop: '2.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '2rem' }}>
+            <LabelText as="div" style={{ marginBottom: '1.25rem' }}>SCALING CONTROLS</LabelText>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
+                MIN NODES
+              </label>
+              <ControlInput
+                type="number"
+                value={scalingMinNodes}
+                onChange={e => setScalingMinNodes(Number(e.target.value))}
+                style={{ width: '100%' }}
+              />
+              {scalingErrors.minNodes && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-error)', marginTop: '0.3rem', lineHeight: 1.4 }}>
+                  {scalingErrors.minNodes}
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
+                MAX NODES
+              </label>
+              <ControlInput
+                type="number"
+                value={scalingMaxNodes}
+                onChange={e => setScalingMaxNodes(Number(e.target.value))}
+                style={{ width: '100%' }}
+              />
+              {scalingErrors.maxNodes && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-error)', marginTop: '0.3rem', lineHeight: 1.4 }}>
+                  {scalingErrors.maxNodes}
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginBottom: '1.25rem' }}>
+              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
+                AUTOSCALE TRIGGER (%)
+              </label>
+              <ControlInput
+                type="number"
+                value={scalingTrigger}
+                onChange={e => setScalingTrigger(Number(e.target.value))}
+                style={{ width: '100%' }}
+              />
+              {scalingErrors.trigger && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-error)', marginTop: '0.3rem', lineHeight: 1.4 }}>
+                  {scalingErrors.trigger}
+                </div>
+              )}
+            </div>
+
+            <ActionButton
+              variant="primary"
+              disabled={!scalingDirty || scalingHasErrors}
+              onClick={handleApplyScaling}
+              style={{ width: '100%' }}
+            >
+              APPLY CHANGES
+            </ActionButton>
+          </div>
+        </Cell>
+      </GridRow>
 
       {deploymentHistory.length > 0 && (
-        <div className="grid-row">
-          <div className="cell" style={{ gridColumn: 'span 4' }}>
+        <GridRow>
+          <Cell span={4}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
               <div>
-                <div className="label-text" style={{ marginBottom: '0.35rem' }}>DEPLOYMENT HISTORY</div>
+                <LabelText as="div" style={{ marginBottom: '0.35rem' }}>DEPLOYMENT HISTORY</LabelText>
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                   Recent provisioning attempts persist per workspace so you can recover the flow after refresh.
                 </div>
               </div>
-              <button className="action-btn" onClick={openFreshProvisionModal}>NEW ATTEMPT</button>
+              <ActionButton onClick={openFreshProvisionModal}>NEW ATTEMPT</ActionButton>
             </div>
 
             <div style={{ display: 'grid', gap: '0.85rem' }}>
@@ -1995,7 +1962,7 @@ export function Instances() {
                         </div>
                         {attempt.inference_verification && (
                           <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '54rem' }}>
-                            <div className="label-text" style={{ marginBottom: '0.35rem' }}>FIRST INFERENCE</div>
+                            <LabelText as="div" style={{ marginBottom: '0.35rem' }}>FIRST INFERENCE</LabelText>
                             {attempt.inference_verification.status === 'passed'
                               ? `Verified on ${formatAttemptTime(attempt.inference_verification.verified_at)}${attempt.inference_verification.latency_ms != null ? ` in ${formatVerificationLatency(attempt.inference_verification.latency_ms)}` : ''}${attempt.inference_verification.response_preview ? `. Response: ${attempt.inference_verification.response_preview}` : '.'}`
                               : `Inference check failed on ${formatAttemptTime(attempt.inference_verification.verified_at)}${attempt.inference_verification.error ? `: ${attempt.inference_verification.error}` : '.'}`}
@@ -2012,20 +1979,19 @@ export function Instances() {
                       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         {instance && <InstanceActions instance={instance} compact />}
                         {remediation && (
-                          <button
-                            className="action-btn"
+                          <ActionButton
                             disabled={remediation.action === 'verify_inference' && verifyingAttemptID === attempt.id}
                             onClick={() => handleRemediation(summary, remediation)}
                           >
                             {remediation.action === 'verify_inference' && verifyingAttemptID === attempt.id
                               ? 'VERIFYING...'
                               : remediation.label}
-                          </button>
+                          </ActionButton>
                         )}
                         {retryable && remediation?.action !== 'retry_config' && (
-                          <button className="action-btn" onClick={() => openRetryModal(attempt)}>
+                          <ActionButton onClick={() => openRetryModal(attempt)}>
                             RETRY CONFIG
-                          </button>
+                          </ActionButton>
                         )}
                       </div>
                     </div>
@@ -2033,33 +1999,33 @@ export function Instances() {
                 );
               })}
             </div>
-          </div>
-        </div>
+          </Cell>
+        </GridRow>
       )}
 
       {/* Footer */}
-      <div className="grid-row instances-footer-row">
-        <div className="cell">
-          <div className="label-text">PROVIDER</div>
+      <GridRow className="instances-footer-row">
+        <Cell>
+          <LabelText as="div">PROVIDER</LabelText>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
             {providerSummary.length > 0 ? providerSummary.map((provider) => getProviderDisplayName(provider)).join(', ') : '—'}
           </div>
-        </div>
-        <div className="cell">
-          <div className="label-text">TOTAL COST</div>
+        </Cell>
+        <Cell>
+          <LabelText as="div">TOTAL COST</LabelText>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
             ${filteredInstances.reduce((sum, i) => sum + i.cost_per_hour, 0).toFixed(2)}/hr
           </div>
-        </div>
-        <div className="cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text">TAGS</div>
+        </Cell>
+        <Cell span={2}>
+          <LabelText as="div">TAGS</LabelText>
           <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-            <span className="badge">INFERENCE</span>
-            <span className="badge">GPU</span>
-            <span className="badge">PRODUCTION</span>
+            <Badge>INFERENCE</Badge>
+            <Badge>GPU</Badge>
+            <Badge>PRODUCTION</Badge>
           </div>
-        </div>
-      </div>
+        </Cell>
+      </GridRow>
 
       <ProvisionModal
         isOpen={showProvisionModal}

@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
+import { LabelText, ActionButton } from '../components/shared';
+import { PlaygroundSkeleton } from '../components/skeletons';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { useAgents, useModels } from '../hooks/useApi';
@@ -18,9 +20,9 @@ import type {
   AgentExecutionMode,
   AgentRunDetail,
   AgentRunStatus,
-  AgentRunStep,
   PlaygroundMode,
 } from '../types';
+import { formatAgentStatus, formatStepType, formatStepPayload } from '../lib/labels';
 
 interface TokenUsage {
   promptTokens: number;
@@ -49,28 +51,6 @@ const toolLabelMap: Record<string, string> = {
   web_search: 'official research',
   vision_analyze: 'screenshot review',
 };
-
-function formatAgentStatus(status?: AgentRunStatus) {
-  return status ? status.replace(/_/g, ' ').toUpperCase() : 'IDLE';
-}
-
-function formatStepType(type: AgentRunStep['type']) {
-  return type.replace(/_/g, ' ').toUpperCase();
-}
-
-function formatStepPayload(payload: unknown) {
-  if (typeof payload === 'string') {
-    return payload;
-  }
-  if (payload == null) {
-    return '';
-  }
-  try {
-    return JSON.stringify(payload, null, 2);
-  } catch {
-    return String(payload);
-  }
-}
 
 function promptPreview(prompt: string) {
   return prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '');
@@ -261,7 +241,7 @@ export function Playground() {
     maxTokens,
     setMaxTokens,
   } = useChat();
-  const { data: models } = useModels();
+  const { data: models, isLoading: modelsLoading } = useModels();
   const { data: agentsData, error: agentsError } = useAgents();
   const allModels = models || [];
   const agents = agentsData?.agents || [];
@@ -274,10 +254,9 @@ export function Playground() {
   const [freqPenalty, setFreqPenalty] = useState(0.0);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const [focusMode, setFocusMode] = useState(false);
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 900);
-  const [isCompactDesktop, setIsCompactDesktop] = useState(() => window.innerWidth <= 1460);
-  const [showMobileSettings, setShowMobileSettings] = useState(false);
-  const [showCompactHistory, setShowCompactHistory] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
+  const [isTablet, setIsTablet] = useState(() => window.innerWidth > 768 && window.innerWidth <= 1024);
+  const [isCompactDesktop, setIsCompactDesktop] = useState(() => window.innerWidth <= 1024);
   const [agentDetail, setAgentDetail] = useState<AgentRunDetail | null>(null);
   const [agentRunID, setAgentRunID] = useState('');
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
@@ -310,28 +289,23 @@ export function Playground() {
   }, [focusMode]);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia('(max-width: 900px)');
-    const compactQuery = window.matchMedia('(max-width: 1460px)');
-    const handleChange = (event: MediaQueryListEvent) => setIsMobile(event.matches);
-    const handleCompactChange = (event: MediaQueryListEvent) => setIsCompactDesktop(event.matches);
-    setIsMobile(mediaQuery.matches);
-    setIsCompactDesktop(compactQuery.matches);
-    mediaQuery.addEventListener('change', handleChange);
-    compactQuery.addEventListener('change', handleCompactChange);
+    const mobileQuery = window.matchMedia('(max-width: 768px)');
+    const compactQuery = window.matchMedia('(max-width: 1024px)');
+    const updateBreakpoints = () => {
+      const w = window.innerWidth;
+      setIsMobile(w <= 768);
+      setIsTablet(w > 768 && w <= 1024);
+      setIsCompactDesktop(w <= 1024);
+    };
+    updateBreakpoints();
+    mobileQuery.addEventListener('change', updateBreakpoints);
+    compactQuery.addEventListener('change', updateBreakpoints);
     return () => {
-      mediaQuery.removeEventListener('change', handleChange);
-      compactQuery.removeEventListener('change', handleCompactChange);
+      mobileQuery.removeEventListener('change', updateBreakpoints);
+      compactQuery.removeEventListener('change', updateBreakpoints);
     };
   }, []);
 
-  useEffect(() => {
-    if (!isMobile) {
-      setShowMobileSettings(false);
-    }
-    if (!isCompactDesktop) {
-      setShowCompactHistory(false);
-    }
-  }, [isCompactDesktop, isMobile]);
 
   useEffect(() => {
     if (!selectedModel && allModels.length > 0) {
@@ -665,7 +639,7 @@ export function Playground() {
 
   const settingsControls = (
     <>
-      <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>PLAY MODE</label>
+      <LabelText as="label" style={{ marginBottom: '1rem', display: 'block' }}>PLAY MODE</LabelText>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '2rem' }}>
         <button
           className={playgroundMode === 'chat' ? 'btn-primary' : 'btn-secondary'}
@@ -687,7 +661,7 @@ export function Playground() {
         </button>
       </div>
 
-      <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>ACTIVE MODEL</label>
+      <LabelText as="label" style={{ marginBottom: '1rem', display: 'block' }}>ACTIVE MODEL</LabelText>
       <select
         value={selectedModel}
         onChange={(event) => setSelectedModel(event.target.value)}
@@ -717,7 +691,7 @@ export function Playground() {
 
       {isAgentMode ? (
         <>
-          <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>ACTIVE AGENT</label>
+          <LabelText as="label" style={{ marginBottom: '1rem', display: 'block' }}>ACTIVE AGENT</LabelText>
           <select
             value={selectedAgentID}
             onChange={(event) => {
@@ -753,7 +727,7 @@ export function Playground() {
             {activeAgent?.description || (agentsError instanceof Error ? agentsError.message : 'Agents are unavailable on this gateway.')}
           </div>
 
-          <label className="label-text" style={{ marginBottom: '0.75rem', display: 'block' }}>AGENT MODE</label>
+          <LabelText as="label" style={{ marginBottom: '0.75rem', display: 'block' }}>AGENT MODE</LabelText>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem', marginBottom: '1.5rem' }}>
             {(['operations', 'research', 'multimodal'] as const).map((mode) => (
               <button
@@ -772,7 +746,7 @@ export function Playground() {
             Tool availability follows the selected mode so the playground matches Hermes&apos; real backend contract.
           </div>
 
-          <label className="label-text" style={{ marginBottom: '0.75rem', display: 'block' }}>ANALYSIS DEPTH</label>
+          <LabelText as="label" style={{ marginBottom: '0.75rem', display: 'block' }}>ANALYSIS DEPTH</LabelText>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.5rem' }}>
             <button
               type="button"
@@ -809,7 +783,7 @@ export function Playground() {
 
           {agentExecutionMode === 'multimodal' && (
             <div style={{ marginBottom: '2rem' }}>
-              <label className="label-text" style={{ marginBottom: '0.85rem', display: 'block' }}>SCREENSHOT</label>
+              <LabelText as="label" style={{ marginBottom: '0.85rem', display: 'block' }}>SCREENSHOT</LabelText>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -849,7 +823,7 @@ export function Playground() {
           )}
 
           <div style={{ marginTop: '2rem' }}>
-            <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>AVAILABLE TOOLS</label>
+            <LabelText as="label" style={{ marginBottom: '1rem', display: 'block' }}>AVAILABLE TOOLS</LabelText>
             <div style={{ display: 'grid', gap: '0.75rem' }}>
               {visibleToolList.map((tool) => (
                 <div
@@ -878,7 +852,7 @@ export function Playground() {
         </>
       ) : (
         <>
-          <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>PARAMETERS</label>
+          <LabelText as="label" style={{ marginBottom: '1rem', display: 'block' }}>PARAMETERS</LabelText>
 
           <div style={{ marginBottom: '2rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
@@ -913,7 +887,7 @@ export function Playground() {
           </div>
 
           <div style={{ marginTop: '2rem' }}>
-            <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>SYSTEM PROMPT</label>
+            <LabelText as="label" style={{ marginBottom: '1rem', display: 'block' }}>SYSTEM PROMPT</LabelText>
             <textarea
               value={systemPrompt}
               onChange={(event) => setSystemPrompt(event.target.value)}
@@ -1007,6 +981,16 @@ export function Playground() {
     </>
   );
 
+  const [isExtraSmall, setIsExtraSmall] = useState(() => window.innerWidth <= 480);
+
+  useEffect(() => {
+    const xsQuery = window.matchMedia('(max-width: 480px)');
+    const handleXS = (event: MediaQueryListEvent) => setIsExtraSmall(event.matches);
+    setIsExtraSmall(xsQuery.matches);
+    xsQuery.addEventListener('change', handleXS);
+    return () => xsQuery.removeEventListener('change', handleXS);
+  }, []);
+
   const showDesktopSettingsRail = !focusMode && !isMobile && !isCompactDesktop;
   const showDesktopHistoryRail = showDesktopSettingsRail && history.length > 0;
   const playgroundGridTemplateColumns = focusMode || isMobile || isCompactDesktop
@@ -1024,6 +1008,76 @@ export function Playground() {
   const terminalRun = agentDetail && terminalAgentStatuses.has(agentDetail.run.status);
   const traceExpandedByDefault = agentDetail?.run.status === 'failed' || agentDetail?.run.status === 'canceled';
 
+  // Tablet (768–1024): settings/history always visible, stacked around editor
+  const tabletSettingsSection = isTablet && !focusMode && (
+    <section
+      style={{
+        padding: '1rem',
+        borderBottom: 'var(--grid-line)',
+        backgroundColor: 'var(--bg-accent)',
+        overflowY: 'auto',
+        maxHeight: '35vh',
+      }}
+    >
+      {settingsControls}
+    </section>
+  );
+
+  const tabletHistorySection = isTablet && !focusMode && history.length > 0 && (
+    <section
+      style={{
+        padding: '1rem',
+        borderTop: 'var(--grid-line)',
+        backgroundColor: 'rgba(244, 242, 238, 0.72)',
+        overflowY: 'auto',
+        maxHeight: '30vh',
+      }}
+    >
+      <LabelText as="div" style={{ marginBottom: '0.75rem' }}>REQUEST HISTORY</LabelText>
+      {historyPanel}
+    </section>
+  );
+
+  // Mobile (≤768): accordion sections below the editor
+  const mobileAccordionPanels = isMobile && !focusMode && (
+    <div style={{ borderTop: 'var(--grid-line)' }}>
+      <section
+        style={{
+          backgroundColor: 'var(--bg-accent)',
+          borderBottom: 'var(--grid-line)',
+        }}
+      >
+        <CollapsibleSection
+          title="MODEL & PARAMETERS"
+          description={isAgentMode ? 'Mode, agent, screenshots, and tools.' : 'Model, decoding, and system prompt.'}
+        >
+          <div style={{ padding: '0 0.75rem 0.75rem' }}>
+            {settingsControls}
+          </div>
+        </CollapsibleSection>
+      </section>
+      <section
+        style={{
+          backgroundColor: 'rgba(244, 242, 238, 0.72)',
+        }}
+      >
+        <CollapsibleSection
+          title="REQUEST HISTORY"
+          description="Recent prompts, latency, and execution results."
+        >
+          <div style={{ padding: '0 0.75rem 0.75rem' }}>
+            {historyPanel}
+          </div>
+        </CollapsibleSection>
+      </section>
+    </div>
+  );
+
+
+  const promptHeight = isExtraSmall ? 100 : isMobile ? 116 : 132;
+
+  if (modelsLoading) return <PlaygroundSkeleton />;
+
   return (
     <div
       style={focusMode ? {
@@ -1036,20 +1090,41 @@ export function Playground() {
       } : {}}
     >
       {!focusMode && (
-        <header className="display-text" style={{ fontSize: isMobile ? '3rem' : '4.2rem', padding: isMobile ? '1.25rem 0' : '1.5rem 0 1.2rem' }}>
+        <header
+          className="display-text"
+          style={{
+            fontSize: isExtraSmall ? '2.4rem' : isMobile ? '3rem' : '4.2rem',
+            padding: isMobile ? '1rem 0 0.75rem' : '1.5rem 0 1.2rem',
+          }}
+        >
           PLAYGROUND
         </header>
       )}
 
       <div
         style={{
-          display: 'grid',
-          gridTemplateColumns: playgroundGridTemplateColumns,
+          display: (isTablet || isMobile) ? 'flex' : 'grid',
+          flexDirection: (isTablet || isMobile) ? 'column' : undefined,
+          gridTemplateColumns: (isTablet || isMobile) ? undefined : playgroundGridTemplateColumns,
           flexGrow: 1,
-          overflow: 'hidden',
-          height: focusMode ? '100vh' : isMobile ? 'calc(100vh - 170px)' : 'calc(100vh - 190px)',
+          overflow: (isTablet || isMobile) ? 'auto' : 'hidden',
+          height: focusMode
+            ? '100dvh'
+            : isMobile
+              ? 'auto'
+              : isTablet
+                ? 'auto'
+                : 'calc(100dvh - 190px)',
+          minHeight: focusMode
+            ? undefined
+            : (isMobile || isTablet)
+              ? 'calc(100dvh - 150px)'
+              : undefined,
         }}
       >
+        {/* Tablet: settings stacked above editor */}
+        {tabletSettingsSection}
+
         {showDesktopSettingsRail && (
           <aside
             style={{
@@ -1062,16 +1137,17 @@ export function Playground() {
           </aside>
         )}
 
-        <main style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <main style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0, flex: (isTablet || isMobile) ? '1 1 auto' : undefined }}>
+          {/* Toolbar */}
           <div
             style={{
-              padding: isMobile ? '1rem' : '1rem 1.5rem',
+              padding: isExtraSmall ? '0.65rem 0.75rem' : isMobile ? '0.75rem 1rem' : '1rem 1.5rem',
               borderBottom: 'var(--grid-line)',
               display: 'flex',
+              flexDirection: isMobile ? 'column' : 'row',
               justifyContent: 'space-between',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: '0.75rem',
+              alignItems: isMobile ? 'stretch' : 'center',
+              gap: isMobile ? '0.5rem' : '0.75rem',
               flexShrink: 0,
             }}
           >
@@ -1088,81 +1164,63 @@ export function Playground() {
                 </div>
               )}
             </div>
-            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              {(isMobile || isCompactDesktop) && !focusMode && (
-                <button className="btn-secondary" onClick={() => setShowMobileSettings((value) => !value)}>
-                  {showMobileSettings ? 'HIDE SETTINGS' : 'SETTINGS'}
+
+            {isMobile ? (
+              <div style={{ display: 'grid', gap: '0.4rem' }}>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <ActionButton
+                    variant="primary"
+                    style={{ flex: 1, minHeight: 44 }}
+                    onClick={handleRun}
+                    disabled={isLoading || !canRun}
+                  >
+                    {isLoading ? (isAgentMode ? 'RUNNING...' : 'GENERATING...') : isAgentMode ? 'RUN AGENT' : 'RUN'}
+                  </ActionButton>
+                  {isAgentMode && isLoading && agentRunID && (
+                    <button className="btn-secondary" style={{ minHeight: 44 }} onClick={handleCancel}>
+                      CANCEL
+                    </button>
+                  )}
+                  <button className="btn-secondary" style={{ minHeight: 44 }} onClick={handleClear}>CLEAR</button>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button className="btn-secondary" style={{ flex: 1, minHeight: 40 }} onClick={() => setFocusMode((value) => !value)}>
+                    {focusMode ? 'EXIT' : 'FOCUS'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                {isAgentMode && isLoading && agentRunID && (
+                  <button className="btn-secondary" onClick={handleCancel}>
+                    CANCEL RUN
+                  </button>
+                )}
+                <button className="btn-secondary" onClick={() => setFocusMode((value) => !value)}>
+                  {focusMode ? 'EXIT' : 'FOCUS'}
                 </button>
-              )}
-              {(isMobile || isCompactDesktop) && !focusMode && (
-                <button className="btn-secondary" onClick={() => setShowCompactHistory((value) => !value)}>
-                  {showCompactHistory ? 'HIDE HISTORY' : 'HISTORY'}
-                </button>
-              )}
-              {isAgentMode && isLoading && agentRunID && (
-                <button className="btn-secondary" onClick={handleCancel}>
-                  CANCEL RUN
-                </button>
-              )}
-              <button className="btn-secondary" onClick={() => setFocusMode((value) => !value)}>
-                {focusMode ? 'EXIT' : 'FOCUS'}
-              </button>
-              <button className="btn-secondary" onClick={handleClear}>CLEAR</button>
-              <button className="btn-primary" onClick={handleRun} disabled={isLoading || !canRun}>
-                {isLoading ? (isAgentMode ? 'RUNNING AGENT...' : 'GENERATING...') : isAgentMode ? 'RUN AGENT' : 'RUN INFERENCE'}
-              </button>
-            </div>
+                <button className="btn-secondary" onClick={handleClear}>CLEAR</button>
+                <ActionButton variant="primary" onClick={handleRun} disabled={isLoading || !canRun}>
+                  {isLoading ? (isAgentMode ? 'RUNNING AGENT...' : 'GENERATING...') : isAgentMode ? 'RUN AGENT' : 'RUN INFERENCE'}
+                </ActionButton>
+              </div>
+            )}
           </div>
 
-          {(isMobile || isCompactDesktop) && !focusMode && showMobileSettings && (
-            <section
-              style={{
-                padding: '1rem',
-                borderBottom: 'var(--grid-line)',
-                backgroundColor: 'var(--bg-accent)',
-              }}
-            >
-              <CollapsibleSection
-                title="SETTINGS"
-                description={isAgentMode ? 'Mode selection, agent controls, screenshots, and workspace-safe tools.' : 'Model selection, decoding controls, and system prompt.'}
-                defaultExpanded
-              >
-                {settingsControls}
-              </CollapsibleSection>
-            </section>
-          )}
-
-          {(isMobile || isCompactDesktop) && !focusMode && showCompactHistory && (
-            <section
-              style={{
-                padding: '1rem',
-                borderBottom: 'var(--grid-line)',
-                backgroundColor: 'rgba(244, 242, 238, 0.72)',
-              }}
-            >
-              <CollapsibleSection
-                title="REQUEST HISTORY"
-                description="Recent prompts, latency, and execution results."
-                defaultExpanded
-              >
-                {historyPanel}
-              </CollapsibleSection>
-            </section>
-          )}
-
+          {/* Prompt input */}
           <section
             style={{
-              padding: isMobile ? '1rem' : '1.25rem 1.5rem',
+              padding: isExtraSmall ? '0.65rem 0.75rem' : isMobile ? '0.75rem 1rem' : '1.25rem 1.5rem',
               borderBottom: 'var(--grid-line)',
               display: 'flex',
               flexDirection: 'column',
-              height: 132,
+              height: promptHeight,
               flexShrink: 0,
             }}
           >
-            <label className="label-text" style={{ marginBottom: '0.75rem', display: 'block' }}>
+            <LabelText as="label" style={{ marginBottom: '0.5rem', display: 'block' }}>
               {isAgentMode ? 'TASK' : 'USER PROMPT'}
-            </label>
+            </LabelText>
             <textarea
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
@@ -1186,13 +1244,14 @@ export function Playground() {
                 resize: 'none',
                 outline: 'none',
                 fontFamily: 'var(--font-main)',
-                fontSize: isMobile ? '0.95rem' : '1.05rem',
+                fontSize: isExtraSmall ? '0.9rem' : isMobile ? '0.95rem' : '1.05rem',
                 lineHeight: 1.6,
                 color: 'var(--text-primary)',
               }}
             />
           </section>
 
+          {/* Output area */}
           <section
             style={{
               flex: 1,
@@ -1204,21 +1263,31 @@ export function Playground() {
           >
             <div
               style={{
-                padding: isMobile ? '0.75rem 1rem 0.5rem' : '0.85rem 1.5rem 0.4rem',
+                padding: isExtraSmall ? '0.5rem 0.75rem 0.35rem' : isMobile ? '0.75rem 1rem 0.5rem' : '0.85rem 1.5rem 0.4rem',
                 flexShrink: 0,
                 display: 'flex',
                 justifyContent: 'space-between',
-                alignItems: 'center',
+                alignItems: isExtraSmall ? 'flex-start' : 'center',
+                flexDirection: isExtraSmall ? 'column' : 'row',
                 flexWrap: 'wrap',
                 gap: '0.5rem',
               }}
             >
-              <label className="label-text">OUTPUT</label>
+              <LabelText as="label">OUTPUT</LabelText>
               {tokenUsage && !isAgentMode && (
-                <div className="mono" style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                <div
+                  className="mono"
+                  style={{
+                    fontSize: isExtraSmall ? '0.6rem' : '0.65rem',
+                    color: 'var(--text-secondary)',
+                    display: 'flex',
+                    gap: isExtraSmall ? '0.5rem' : '1rem',
+                    flexWrap: 'wrap',
+                  }}
+                >
                   <span>{tokenUsage.promptTokens} prompt</span>
                   <span>{tokenUsage.completionTokens} completion</span>
-                  <span>{tokenUsage.totalTokens} total</span>
+                  {!isExtraSmall && <span>{tokenUsage.totalTokens} total</span>}
                   <span>{tokenUsage.tokensPerSec.toFixed(1)} tok/s</span>
                 </div>
               )}
@@ -1229,14 +1298,22 @@ export function Playground() {
               style={{
                 flex: 1,
                 overflowY: 'auto',
-                padding: isMobile ? '0.5rem 1rem 1rem' : '0.45rem 1.5rem 1.5rem',
+                padding: isExtraSmall ? '0.35rem 0.75rem 0.75rem' : isMobile ? '0.5rem 1rem 1rem' : '0.45rem 1.5rem 1.5rem',
                 minHeight: 0,
               }}
             >
               {isAgentMode ? (
                 <>
                   {thinkingState ? (
-                    <section className="animate-fade-in" style={{ border: '1px solid var(--border-color)', padding: '1.25rem', background: 'rgba(244, 242, 238, 0.7)', marginBottom: '1rem' }}>
+                    <section
+                      className="animate-fade-in"
+                      style={{
+                        border: '1px solid var(--border-color)',
+                        padding: isExtraSmall ? '0.85rem' : '1.25rem',
+                        background: 'rgba(244, 242, 238, 0.7)',
+                        marginBottom: '1rem',
+                      }}
+                    >
                       <div className="mono" style={{ fontSize: '0.68rem', marginBottom: '0.6rem', color: 'var(--text-secondary)' }}>LIVE REVIEW</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.65rem' }}>
                         <div style={{ display: 'flex', gap: '0.35rem' }} aria-hidden="true">
@@ -1244,9 +1321,9 @@ export function Playground() {
                           <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-primary)', opacity: 0.55 }} />
                           <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-primary)', opacity: 0.75 }} />
                         </div>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{thinkingState.headline}</div>
+                        <div style={{ fontSize: isExtraSmall ? '0.95rem' : '1.1rem', fontWeight: 600 }}>{thinkingState.headline}</div>
                       </div>
-                      <p style={{ color: 'var(--text-secondary)', lineHeight: 1.7, marginBottom: '0.85rem' }}>{thinkingState.detail}</p>
+                      <p style={{ color: 'var(--text-secondary)', lineHeight: 1.7, marginBottom: '0.85rem', fontSize: isExtraSmall ? '0.85rem' : undefined }}>{thinkingState.detail}</p>
                       <div className="mono" style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.85rem', flexWrap: 'wrap', marginBottom: thinkingState.recentChecks.length > 0 ? '0.75rem' : 0 }}>
                         <span>{agentExecutionMode.toUpperCase()}</span>
                         <span>{agentAnalysisDepth.toUpperCase()}</span>
@@ -1263,8 +1340,16 @@ export function Playground() {
                       )}
                     </section>
                   ) : terminalRun && agentDetail ? (
-                    <section className="animate-fade-in" style={{ border: '1px solid var(--border-color)', padding: '1.25rem', background: agentDetail.run.status === 'succeeded' ? 'white' : 'rgba(255, 246, 242, 0.9)', marginBottom: '1rem' }}>
-                      <div className="mono" style={{ fontSize: '0.68rem', marginBottom: '0.75rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.85rem', flexWrap: 'wrap' }}>
+                    <section
+                      className="animate-fade-in"
+                      style={{
+                        border: '1px solid var(--border-color)',
+                        padding: isExtraSmall ? '0.85rem' : '1.25rem',
+                        background: agentDetail.run.status === 'succeeded' ? 'white' : 'rgba(255, 246, 242, 0.9)',
+                        marginBottom: '1rem',
+                      }}
+                    >
+                      <div className="mono" style={{ fontSize: '0.68rem', marginBottom: '0.75rem', color: 'var(--text-secondary)', display: 'flex', gap: isExtraSmall ? '0.5rem' : '0.85rem', flexWrap: 'wrap' }}>
                         <span>{formatAgentStatus(agentDetail.run.status)}</span>
                         <span>{agentExecutionMode.toUpperCase()}</span>
                         <span>{agentAnalysisDepth.toUpperCase()}</span>
@@ -1273,7 +1358,7 @@ export function Playground() {
                       <MarkdownOutput content={summarizeAgentResult(agentDetail)} />
                       {agentDetail.sources && agentDetail.sources.length > 0 && (
                         <div style={{ marginTop: '1rem', display: 'grid', gap: '0.75rem' }}>
-                          <div className="label-text">SOURCES</div>
+                          <LabelText as="div">SOURCES</LabelText>
                           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                             {agentDetail.sources.map((source) => (
                               <a
@@ -1299,11 +1384,11 @@ export function Playground() {
                       )}
                     </section>
                   ) : response ? (
-                    <section className="animate-fade-in" style={{ border: '1px solid var(--border-color)', padding: '1.25rem', background: 'white', marginBottom: '1rem' }}>
+                    <section className="animate-fade-in" style={{ border: '1px solid var(--border-color)', padding: isExtraSmall ? '0.85rem' : '1.25rem', background: 'white', marginBottom: '1rem' }}>
                       <MarkdownOutput content={response} />
                     </section>
                   ) : (
-                    <span style={{ color: 'var(--text-secondary)' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: isExtraSmall ? '0.85rem' : undefined }}>
                       Hermes will surface a narrative answer here once the run starts.
                     </span>
                   )}
@@ -1333,12 +1418,12 @@ export function Playground() {
                                     margin: 0,
                                     background: '#F4F2EE',
                                     border: '1px solid var(--border-color)',
-                                    padding: '0.85rem',
+                                    padding: isExtraSmall ? '0.5rem' : '0.85rem',
                                     overflowX: 'auto',
                                     whiteSpace: 'pre-wrap',
                                     wordBreak: 'break-word',
                                     fontFamily: 'var(--font-mono)',
-                                    fontSize: '0.78rem',
+                                    fontSize: isExtraSmall ? '0.68rem' : '0.78rem',
                                     lineHeight: 1.6,
                                   }}
                                 >
@@ -1357,13 +1442,20 @@ export function Playground() {
                   <MarkdownOutput content={response} />
                 </div>
               ) : (
-                <span style={{ color: 'var(--text-secondary)' }}>
+                <span style={{ color: 'var(--text-secondary)', fontSize: isExtraSmall ? '0.85rem' : undefined }}>
                   Model output will appear here.
                 </span>
               )}
             </div>
           </section>
+
         </main>
+
+        {/* Mobile: accordion panels below editor */}
+        {mobileAccordionPanels}
+
+        {/* Tablet: history stacked below editor */}
+        {tabletHistorySection}
 
         {showDesktopHistoryRail && (
           <aside
@@ -1373,7 +1465,7 @@ export function Playground() {
               overflowY: 'auto',
             }}
           >
-            <label className="label-text" style={{ marginBottom: '1rem', display: 'block' }}>REQUEST HISTORY</label>
+            <LabelText as="label" style={{ marginBottom: '1rem', display: 'block' }}>REQUEST HISTORY</LabelText>
             {historyPanel}
           </aside>
         )}

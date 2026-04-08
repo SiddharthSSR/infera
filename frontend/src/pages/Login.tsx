@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { createSession, type SessionInfo } from '../lib/api';
+import { LabelText, StatusDot, ControlInput, ActionButton } from '../components/shared';
 
 interface LoginProps {
   onAuthenticated: (session: SessionInfo) => void;
@@ -109,18 +110,18 @@ export function Login({ onAuthenticated }: LoginProps) {
           </div>
 
           <div className="login-brand-footer">
-            <span className="label-text mono">
+            <LabelText className="mono">
             {healthData?.version ? `v${healthData.version}` : 'v0.1.0'}
-            </span>
-            <span className="label-text">Open source inference gateway</span>
+            </LabelText>
+            <LabelText>Open source inference gateway</LabelText>
           </div>
         </section>
 
         <section className="login-form-panel">
           <div className="login-form-card">
             <div className="login-status-row">
-            <span
-              className={health === 'offline' ? 'status-dot inactive' : 'status-dot'}
+            <StatusDot
+              tone={health === 'offline' ? 'inactive' : 'success'}
               style={health === 'checking' ? {
                 animation: 'skeleton-pulse 1.5s ease-in-out infinite',
               } : undefined}
@@ -143,7 +144,7 @@ export function Login({ onAuthenticated }: LoginProps) {
             </div>
 
             <div className="login-form-copy">
-              <div className="label-text">Connect</div>
+              <LabelText as="div">Connect</LabelText>
               <h2 className="login-form-title">Sign in with an admin key</h2>
               <p className="login-form-description">
                 Enter a valid admin key to open the workspace console and manage models, nodes, access, and usage.
@@ -152,10 +153,9 @@ export function Login({ onAuthenticated }: LoginProps) {
 
             <form onSubmit={handleSubmit} className="login-form-fields">
               <div className="login-field">
-                <div className="label-text">API key</div>
-                <input
+                <LabelText as="div">API key</LabelText>
+                <ControlInput
                   type="password"
-                  className="control-input"
                   placeholder="inf_..."
                   value={key}
                   onChange={e => { setKey(e.target.value); setError(''); }}
@@ -168,18 +168,19 @@ export function Login({ onAuthenticated }: LoginProps) {
                 <div className="login-error">{error}</div>
             )}
 
-              <button
-                className="btn-primary login-submit"
+              <ActionButton
+                variant="primary"
+                className="login-submit"
                 type="submit"
                 disabled={loading || connected}
               >
                 {connected ? (
                   <span className="login-submit-state">
-                    <span className="status-dot" />
+                    <StatusDot tone="success" />
                     Connected
                   </span>
                 ) : loading ? 'Connecting...' : 'Connect'}
-              </button>
+              </ActionButton>
             </form>
 
             <div className="login-help">

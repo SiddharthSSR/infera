@@ -11,6 +11,9 @@ import { ChatContext, type ChatContextType, type Message, type PlaygroundHistory
 import { lazyWithRetry } from './lib/lazyWithRetry';
 import { useIsMobile } from './hooks/useIsMobile';
 import type { AgentAnalysisDepth, AgentExecutionMode, PlaygroundMode } from './types';
+import { AppShell, PageHeader } from './components/shared';
+import { CommandPalette } from './components/CommandPalette';
+import { PageTransition } from './components/PageTransition';
 
 import { Dashboard } from './pages/Dashboard';
 import { Playground } from './pages/Playground';
@@ -528,31 +531,34 @@ function AppContent() {
       }}
     >
     <ChatContext.Provider value={chatContextValue}>
-      <div className="app-shell app-shell-auth">
+      <AppShell variant="auth">
         {!hideAppChrome && <TopNav onLogout={handleLogout} />}
         {!hideDisplayHeader && (
-          <header className="page-header">
-            <div className="page-header-eyebrow">{currentPage.eyebrow}</div>
-            <div className="page-header-title">{currentPage.title}</div>
-            <p className="page-header-description">{currentPage.description}</p>
-          </header>
+          <PageHeader
+            eyebrow={currentPage.eyebrow}
+            title={currentPage.title}
+            description={currentPage.description}
+          />
         )}
         <Suspense fallback={<RouteLoader />}>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/playground" element={<Playground />} />
-            <Route path="/models" element={<Models />} />
-            <Route path="/instances" element={<Instances />} />
-            <Route path="/logs" element={<Logs />} />
-            <Route path="/api-keys" element={<ApiKeys />} />
-            <Route path="/workspace" element={<WorkspaceAdmin />} />
-            <Route path="/docs" element={<PublicApiDocs />} />
-            <Route path="/getting-started" element={<GettingStarted />} />
-            <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <PageTransition>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/playground" element={<Playground />} />
+              <Route path="/models" element={<Models />} />
+              <Route path="/instances" element={<Instances />} />
+              <Route path="/logs" element={<Logs />} />
+              <Route path="/api-keys" element={<ApiKeys />} />
+              <Route path="/workspace" element={<WorkspaceAdmin />} />
+              <Route path="/docs" element={<PublicApiDocs />} />
+              <Route path="/getting-started" element={<GettingStarted />} />
+              <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </PageTransition>
         </Suspense>
-      </div>
+        <CommandPalette />
+      </AppShell>
     </ChatContext.Provider>
     </AuthContext.Provider>
   );

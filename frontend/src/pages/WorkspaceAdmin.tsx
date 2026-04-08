@@ -25,11 +25,15 @@ import {
   type WorkspaceInvitationRecord,
   type WorkspaceProviderConfigRecord,
 } from '../lib/api';
-import type { ProviderCapabilities, ProviderStatus } from '../types';
+import type { ProviderStatus } from '../types';
 import { useAuthSession } from '../lib/auth-context';
+import { GridRow, Cell, LabelText, Badge, ActionButton, ControlInput, ControlSelect, ProgressBar, StatusDot } from '../components/shared';
+import { WorkspaceSkeleton } from '../components/skeletons';
 import { MetadataList } from '../components/MetadataList';
 import { inviteStatusMeta, memberStatusMeta, normalizeInviteStatus } from '../lib/workspaceLifecycle';
 import { buildWorkspaceActivityItems } from '../lib/workspaceActivity';
+import { formatDateTime, formatCount, formatPercent, clampPercent, usageRatio, parseNullableLimit, monthRange } from '../lib/formatting';
+import { capabilityLabels, providerLiveState } from '../lib/labels';
 
 const assignableInviteRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
 const serviceAccountRoles = ['operator', 'developer', 'read_only', 'billing'] as const;
@@ -102,120 +106,8 @@ function validateProviderConfigDraft(
   return null;
 }
 
-function formatDate(dateStr?: string | null) {
-  if (!dateStr) return 'Never';
-  try {
-    return new Date(dateStr).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  } catch {
-    return dateStr;
-  }
-}
-
-function parseNullableLimit(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed < 0) return NaN;
-  return parsed;
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat('en-US').format(value);
-}
-
-function formatPercent(value: number): string {
-  if (!Number.isFinite(value)) return '100%+';
-  return `${Math.round(value * 100)}%`;
-}
-
-function clampPercent(value: number): number {
-  if (!Number.isFinite(value)) return 100;
-  if (value < 0) return 0;
-  return Math.min(value * 100, 100);
-}
-
-function usageRatio(used: number, limit?: number | null): number {
-  if (limit == null) return 0;
-  if (limit <= 0) return used > 0 ? Number.POSITIVE_INFINITY : 1;
-  return used / limit;
-}
-
-function capabilityLabels(capabilities?: ProviderCapabilities): string[] {
-  if (!capabilities) return [];
-
-  const labels: string[] = [];
-  if (capabilities.supports_spot) labels.push('SPOT');
-  if (capabilities.supports_start_stop) labels.push('START/STOP');
-  if (capabilities.supports_custom_images) labels.push('CUSTOM IMAGES');
-  if (capabilities.supports_region_selection) labels.push('REGIONS');
-  if (capabilities.supports_public_ip) labels.push('PUBLIC IP');
-  if (capabilities.supports_ssh_keys) labels.push('SSH KEYS');
-  return labels;
-}
-
-function providerLiveState(status?: ProviderStatus, configured?: boolean): {
-  label: string;
-  tone: string;
-  detail: string;
-} {
-  if (!configured) {
-    return {
-      label: 'NOT CONFIGURED',
-      tone: 'inactive',
-      detail: 'No workspace-specific provider credential has been saved yet.',
-    };
-  }
-
-  if (!status) {
-    return {
-      label: 'UNAVAILABLE',
-      tone: 'warning',
-      detail: 'Configuration exists, but the provider is not returning live status for this workspace.',
-    };
-  }
-
-  if (status.connected) {
-    return {
-      label: 'CONNECTED',
-      tone: '',
-      detail: 'Provider is reachable and can return live account status.',
-    };
-  }
-
-  if (status.error_code === 'auth_failed') {
-    return {
-      label: 'AUTH FAILED',
-      tone: 'error',
-      detail: 'Saved credentials were rejected by the provider.',
-    };
-  }
-
-  if (status.error_code === 'rate_limited') {
-    return {
-      label: 'RATE LIMITED',
-      tone: 'warning',
-      detail: 'Provider is reachable but temporarily rate limiting status or offering requests.',
-    };
-  }
-
-  return {
-    label: 'DEGRADED',
-    tone: 'warning',
-    detail: status.error || 'Provider is configured but currently unreachable or unhealthy.',
-  };
-}
-
-function monthRange() {
-  const now = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
-  return { start: start.toISOString(), end: now.toISOString() };
-}
+// formatDate in WorkspaceAdmin uses datetime format — alias for backwards compat
+const formatDate = formatDateTime;
 
 export function WorkspaceAdmin() {
   const { session } = useAuthSession();
@@ -675,17 +567,7 @@ export function WorkspaceAdmin() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="animate-fade-in">
-        <div className="grid-row">
-          <div className="cell" style={{ gridColumn: 'span 4', color: 'var(--text-secondary)' }}>
-            Loading workspace settings...
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <WorkspaceSkeleton />;
 
   return (
     <div className="workspace-page animate-fade-in">
@@ -695,7 +577,7 @@ export function WorkspaceAdmin() {
           backgroundColor: '#E8F5E9',
           borderBottom: 'var(--grid-line)',
         }}>
-          <div className="label-text" style={{ marginBottom: '0.6rem' }}>INVITATION TOKEN — COPY NOW</div>
+          <LabelText as="div" style={{ marginBottom: '0.6rem' }}>INVITATION TOKEN — COPY NOW</LabelText>
           <div className="code-block" style={{ marginTop: 0 }}>{createdInviteToken}</div>
           <div style={{ marginTop: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.5 }}>
             This does not send an email yet. Share the token or the <code style={{ fontFamily: 'var(--font-mono)' }}>/accept-invite</code> link manually with the person you invited.
@@ -704,11 +586,11 @@ export function WorkspaceAdmin() {
             <div className="code-block" style={{ marginTop: '0.75rem' }}>{createdInviteLink}</div>
           )}
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <button className="btn-primary" onClick={() => navigator.clipboard.writeText(createdInviteToken).then(() => toast.success('Invitation token copied.'))}>COPY TOKEN</button>
+            <ActionButton variant="primary" onClick={() => navigator.clipboard.writeText(createdInviteToken).then(() => toast.success('Invitation token copied.'))}>COPY TOKEN</ActionButton>
             {createdInviteLink && (
-              <button className="btn-secondary" onClick={() => navigator.clipboard.writeText(createdInviteLink).then(() => toast.success('Invitation link copied.'))}>COPY LINK</button>
+              <ActionButton variant="secondary" onClick={() => navigator.clipboard.writeText(createdInviteLink).then(() => toast.success('Invitation link copied.'))}>COPY LINK</ActionButton>
             )}
-            <button className="btn-secondary" onClick={() => setCreatedInviteToken(null)}>DISMISS</button>
+            <ActionButton variant="secondary" onClick={() => setCreatedInviteToken(null)}>DISMISS</ActionButton>
           </div>
         </div>
       )}
@@ -719,23 +601,23 @@ export function WorkspaceAdmin() {
           backgroundColor: '#E8F5E9',
           borderBottom: 'var(--grid-line)',
         }}>
-          <div className="label-text" style={{ marginBottom: '0.6rem' }}>SERVICE ACCOUNT KEY — COPY NOW</div>
+          <LabelText as="div" style={{ marginBottom: '0.6rem' }}>SERVICE ACCOUNT KEY — COPY NOW</LabelText>
           <div className="code-block" style={{ marginTop: 0 }}>{createdSecret}</div>
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <button className="btn-primary" onClick={() => navigator.clipboard.writeText(createdSecret).then(() => toast.success('Service account key copied.'))}>COPY KEY</button>
-            <button className="btn-secondary" onClick={() => setCreatedSecret(null)}>DISMISS</button>
+            <ActionButton variant="primary" onClick={() => navigator.clipboard.writeText(createdSecret).then(() => toast.success('Service account key copied.'))}>COPY KEY</ActionButton>
+            <ActionButton variant="secondary" onClick={() => setCreatedSecret(null)}>DISMISS</ActionButton>
           </div>
         </div>
       )}
 
-      <div className="grid-row workspace-hero-row">
-        <div className="cell workspace-profile-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text" style={{ marginBottom: '1rem' }}>WORKSPACE PROFILE</div>
+      <GridRow className="workspace-hero-row">
+        <Cell span={2} className="workspace-profile-cell">
+          <LabelText as="div" style={{ marginBottom: '1rem' }}>WORKSPACE PROFILE</LabelText>
           <h2 style={{ fontSize: '2rem', lineHeight: 1.1 }}>{session?.workspace?.name || 'Workspace'}</h2>
           <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <span className="badge">{role.toUpperCase()}</span>
-            <span className="badge">{session?.key?.principal_type === 'service_account' ? 'SERVICE ACCOUNT' : 'HUMAN'}</span>
-            {session?.workspace?.slug && <span className="badge mono">{session.workspace.slug}</span>}
+            <Badge>{role.toUpperCase()}</Badge>
+            <Badge>{session?.key?.principal_type === 'service_account' ? 'SERVICE ACCOUNT' : 'HUMAN'}</Badge>
+            {session?.workspace?.slug && <Badge mono>{session.workspace.slug}</Badge>}
           </div>
           <div style={{ marginTop: '1.1rem' }}>
             <MetadataList
@@ -750,9 +632,9 @@ export function WorkspaceAdmin() {
             <br />
             Workspace administration is gated by the backend role model already enforced on auth, quota, infrastructure, and audit routes.
           </div>
-        </div>
-        <div className="cell workspace-access-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
-          <div className="label-text" style={{ marginBottom: '1rem' }}>ACCESS SURFACE</div>
+        </Cell>
+        <Cell span={2} className="workspace-access-cell" bg="var(--bg-accent)">
+          <LabelText as="div" style={{ marginBottom: '1rem' }}>ACCESS SURFACE</LabelText>
           <div style={{ display: 'grid', gap: '0.8rem', fontSize: '0.9rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage memberships</span><span className="mono">{canManageMemberships ? 'YES' : 'NO'}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Manage service accounts</span><span className="mono">{canManageKeys ? 'YES' : 'NO'}</span></div>
@@ -761,17 +643,17 @@ export function WorkspaceAdmin() {
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>View quota</span><span className="mono">{canViewQuota ? 'YES' : 'NO'}</span></div>
           </div>
           <div className="help-callout" style={{ marginTop: '1rem', padding: '0.95rem 1rem' }}>
-            <div className="label-text">WORKSPACE ADMIN GUIDE</div>
+            <LabelText as="div">WORKSPACE ADMIN GUIDE</LabelText>
             <div className="help-callout-copy">
               Invite creation still produces a manual share token or link, not an email. Service accounts are for automation in this workspace only. Provider states here mean: <strong>connected</strong> for healthy credentials and live status, <strong>degraded</strong> for reachable but unhealthy, and <strong>auth failed</strong> when the saved credentials are rejected.
             </div>
           </div>
-        </div>
-      </div>
+        </Cell>
+      </GridRow>
 
-      <div className="grid-row">
-        <div className="cell" style={{ gridColumn: 'span 4', paddingTop: '1.25rem', paddingBottom: '1.25rem' }}>
-          <div className="label-text">SETTINGS SECTIONS</div>
+      <GridRow>
+        <Cell span={4} style={{ paddingTop: '1.25rem', paddingBottom: '1.25rem' }}>
+          <LabelText as="div">SETTINGS SECTIONS</LabelText>
           <div className="chip-row" style={{ marginTop: '0.85rem' }}>
             {[
               ['usage', 'Usage & Quota'],
@@ -780,38 +662,37 @@ export function WorkspaceAdmin() {
               ['members', 'Members'],
               ['invites', 'Invites'],
             ].map(([key, label]) => (
-              <button
+              <ActionButton
                 key={key}
-                type="button"
-                className={settingsTab === key ? 'btn-primary' : 'btn-secondary'}
+                variant={settingsTab === key ? 'primary' : 'secondary'}
                 onClick={() => setSettingsTab(key as typeof settingsTab)}
               >
                 {label}
-              </button>
+              </ActionButton>
             ))}
           </div>
           <div style={{ marginTop: '0.85rem', color: 'var(--text-secondary)', fontSize: '0.86rem', lineHeight: 1.6 }}>
             Use the active section to focus the admin surface. This keeps usage, provider credentials, automation identity management, and access control from competing on one long page.
           </div>
-        </div>
-      </div>
+        </Cell>
+      </GridRow>
 
       {settingsTab === 'usage' && (
-      <div className="grid-row workspace-usage-row">
-        <div className="cell workspace-usage-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>CURRENT MONTH USAGE</div>
+      <GridRow className="workspace-usage-row">
+        <Cell span={2} className="workspace-usage-cell">
+          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>CURRENT MONTH USAGE</LabelText>
           {canViewUsage ? (
             <>
               <div className="workspace-usage-summary" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '1rem' }}>
                 <div style={{ padding: '1rem', backgroundColor: 'var(--bg-accent)' }}>
-                  <div className="label-text">REQUESTS</div>
+                  <LabelText as="div">REQUESTS</LabelText>
                   <div style={{ fontSize: '2rem', marginTop: '0.5rem' }}>{formatCount(usageSummary.requests)}</div>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
                     {formatCount(usageSummary.successes)} success / {formatCount(usageSummary.errors)} error
                   </div>
                 </div>
                 <div style={{ padding: '1rem', backgroundColor: 'var(--bg-accent)' }}>
-                  <div className="label-text">TOKENS</div>
+                  <LabelText as="div">TOKENS</LabelText>
                   <div style={{ fontSize: '2rem', marginTop: '0.5rem' }}>{formatCount(usageSummary.tokens)}</div>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
                     Aggregated from workspace audit records
@@ -820,9 +701,9 @@ export function WorkspaceAdmin() {
               </div>
 
               <div style={{ marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                <span className={`status-dot ${quotaStateClass}`}></span>
-                <span className="label-text">QUOTA STATE</span>
-                <span className="badge">{quotaState}</span>
+                <StatusDot tone={(quotaStateClass || 'success') as 'success' | 'warning' | 'error'} />
+                <LabelText>QUOTA STATE</LabelText>
+                <Badge>{quotaState}</Badge>
               </div>
 
               <div style={{ marginTop: '1rem' }}>
@@ -834,9 +715,7 @@ export function WorkspaceAdmin() {
                       : `${formatCount(usageSummary.requests)} / unlimited`}
                   </span>
                 </div>
-                <div className="progress-track">
-                  <div className="progress-fill" style={{ width: `${clampPercent(requestUsageRatio)}%` }} />
-                </div>
+                <ProgressBar value={clampPercent(requestUsageRatio)} warnAt={80} errorAt={100} />
               </div>
 
               <div style={{ marginTop: '1rem' }}>
@@ -848,9 +727,7 @@ export function WorkspaceAdmin() {
                       : `${formatCount(usageSummary.tokens)} / unlimited`}
                   </span>
                 </div>
-                <div className="progress-track">
-                  <div className="progress-fill" style={{ width: `${clampPercent(tokenUsageRatio)}%` }} />
-                </div>
+                <ProgressBar value={clampPercent(tokenUsageRatio)} warnAt={80} errorAt={100} />
               </div>
             </>
           ) : (
@@ -858,10 +735,10 @@ export function WorkspaceAdmin() {
               Usage visibility is restricted to workspace owners, admins, billing, and read-only roles.
             </div>
           )}
-        </div>
+        </Cell>
 
-        <div className="cell workspace-trend-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>RECENT DAILY TREND</div>
+        <Cell span={2} className="workspace-trend-cell" bg="var(--bg-accent)">
+          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>RECENT DAILY TREND</LabelText>
           {canViewUsage ? (
             usageSummary.dailyTrend.length > 0 ? (
               <div className="mobile-data-list">
@@ -872,7 +749,7 @@ export function WorkspaceAdmin() {
                         <div className="mobile-data-title">{entry.day}</div>
                         <div className="mobile-data-subtitle">{formatCount(entry.requests)} requests</div>
                       </div>
-                      <span className="badge mono">{formatCount(entry.tokens)} TOKENS</span>
+                      <Badge mono>{formatCount(entry.tokens)} TOKENS</Badge>
                     </div>
                   </div>
                 ))}
@@ -881,8 +758,8 @@ export function WorkspaceAdmin() {
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 No usage recorded for this workspace in the current month yet.
                 <div className="help-actions">
-                  <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY A MODEL</button>
-                  <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
+                  <ActionButton onClick={() => navigate('/models')}>DEPLOY A MODEL</ActionButton>
+                  <ActionButton onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</ActionButton>
                 </div>
               </div>
             )
@@ -891,45 +768,45 @@ export function WorkspaceAdmin() {
               Usage visibility is restricted for this role.
             </div>
           )}
-        </div>
-      </div>
+        </Cell>
+      </GridRow>
       )}
 
       {(settingsTab === 'providers' || settingsTab === 'service') && (
-      <div className="grid-row workspace-ops-row">
-        <div className="cell workspace-provider-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>PROVIDER CONFIGS</div>
+      <GridRow className="workspace-ops-row">
+        <Cell span={2} className="workspace-provider-cell">
+          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>PROVIDER CONFIGS</LabelText>
           {canManageProviderConfigs ? (
             <>
               <div className="responsive-scroll-x" style={{ marginBottom: '1.5rem' }}>
                 <table className="data-table responsive-scroll-x-content">
                   <thead>
                     <tr>
-                      <th>PROVIDER</th>
-                      <th>CONFIG</th>
-                      <th>LIVE STATE</th>
-                      <th>ENDPOINT</th>
-                      <th>ACTIVE</th>
-                      <th>UPDATED</th>
-                      <th style={{ textAlign: 'right' }}>ACTION</th>
+                      <th scope="col">PROVIDER</th>
+                      <th scope="col">CONFIG</th>
+                      <th scope="col">LIVE STATE</th>
+                      <th scope="col">ENDPOINT</th>
+                      <th scope="col">ACTIVE</th>
+                      <th scope="col">UPDATED</th>
+                      <th scope="col" style={{ textAlign: 'right' }}>ACTION</th>
                     </tr>
                   </thead>
                   <tbody>
                     {providerHealthRows.map((provider) => (
                       <tr key={provider.id}>
                         <td>{provider.name}</td>
-                        <td><span className="badge">{provider.config?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}</span></td>
+                        <td><Badge>{provider.config?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}</Badge></td>
                         <td>
-                          <span className={`badge ${provider.liveState.tone ? `status-${provider.liveState.tone}` : ''}`}>
+                          <Badge tone={provider.liveState.tone as 'warning' | 'error' | '' | undefined || undefined}>
                             {provider.liveState.label}
-                          </span>
+                          </Badge>
                         </td>
                         <td className="mono">{provider.config ? (provider.config.endpoint || 'default') : '—'}</td>
                         <td>{provider.status?.active_instances ?? 0}</td>
                         <td>{provider.config ? formatDate(provider.config.updated_at) : '—'}</td>
                         <td style={{ textAlign: 'right' }}>
                           {provider.config ? (
-                            <button className="action-btn destructive" onClick={() => handleDeleteProviderConfig(provider.id)}>DELETE</button>
+                            <ActionButton variant="destructive" onClick={() => handleDeleteProviderConfig(provider.id)}>DELETE</ActionButton>
                           ) : (
                             <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>—</span>
                           )}
@@ -945,10 +822,10 @@ export function WorkspaceAdmin() {
                   <div key={`${provider.id}-health`} className="workspace-provider-card">
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
                       <div>
-                        <div className="label-text" style={{ marginBottom: '0.5rem' }}>{provider.name.toUpperCase()}</div>
+                        <LabelText as="div" style={{ marginBottom: '0.5rem' }}>{provider.name.toUpperCase()}</LabelText>
                         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                          <span className="badge">{provider.config?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}</span>
-                          <span className={`badge ${provider.liveState.tone ? `status-${provider.liveState.tone}` : ''}`}>{provider.liveState.label}</span>
+                          <Badge>{provider.config?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}</Badge>
+                          <Badge tone={provider.liveState.tone as 'warning' | 'error' | '' | undefined || undefined}>{provider.liveState.label}</Badge>
                         </div>
                       </div>
                       <div className="mono" style={{ color: 'var(--text-secondary)' }}>
@@ -962,11 +839,11 @@ export function WorkspaceAdmin() {
 
                     <div className="workspace-provider-meta" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.9rem', marginTop: '1rem' }}>
                       <div>
-                        <div className="label-text">ACTIVE INSTANCES</div>
+                        <LabelText as="div">ACTIVE INSTANCES</LabelText>
                         <div className="mono" style={{ marginTop: '0.4rem' }}>{provider.status?.active_instances ?? 0}</div>
                       </div>
                       <div>
-                        <div className="label-text">REGIONS</div>
+                        <LabelText as="div">REGIONS</LabelText>
                         <div style={{ marginTop: '0.4rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
                           {provider.status?.capabilities?.known_regions?.length
                             ? provider.status.capabilities.known_regions.join(', ')
@@ -974,7 +851,7 @@ export function WorkspaceAdmin() {
                         </div>
                       </div>
                       <div>
-                        <div className="label-text">BILLING SIGNAL</div>
+                        <LabelText as="div">BILLING SIGNAL</LabelText>
                         <div className="mono" style={{ marginTop: '0.4rem' }}>
                           {provider.status?.balance != null ? `$${provider.status.balance.toFixed(2)}` : '—'}
                         </div>
@@ -984,7 +861,7 @@ export function WorkspaceAdmin() {
                     <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                       {provider.capabilities.length > 0 ? (
                         provider.capabilities.map((capability) => (
-                          <span key={`${provider.id}-${capability}`} className="badge">{capability}</span>
+                          <Badge key={`${provider.id}-${capability}`}>{capability}</Badge>
                         ))
                       ) : (
                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Capabilities will appear when live provider status is available.</span>
@@ -996,30 +873,29 @@ export function WorkspaceAdmin() {
 
               <div style={{ display: 'grid', gap: '1rem' }}>
                 <div>
-                  <div className="label-text">PROVIDER</div>
-                  <select className="control-input" value={selectedProvider} onChange={(e) => setSelectedProvider(e.target.value as ConfigurableProvider['id'])}>
+                  <LabelText as="div">PROVIDER</LabelText>
+                  <ControlSelect value={selectedProvider} onChange={(e) => setSelectedProvider(e.target.value as ConfigurableProvider['id'])}>
                     {configurableProviders.map((provider) => (
                       <option key={provider.id} value={provider.id}>{provider.name}</option>
                     ))}
-                  </select>
+                  </ControlSelect>
                 </div>
                 <div>
-                  <div className="label-text">API KEY</div>
-                  <input className="control-input" type="password" value={providerAPIKey} onChange={(e) => setProviderAPIKey(e.target.value)} placeholder="Write-only" />
+                  <LabelText as="div">API KEY</LabelText>
+                  <ControlInput type="password" value={providerAPIKey} onChange={(e) => setProviderAPIKey(e.target.value)} placeholder="Write-only" />
                 </div>
                 <div>
-                  <div className="label-text">{selectedProviderMeta.apiSecretLabel || 'API SECRET'}</div>
-                  <input className="control-input" type="password" value={providerAPISecret} onChange={(e) => setProviderAPISecret(e.target.value)} placeholder={selectedProviderMeta.apiSecretPlaceholder || 'Optional write-only secret'} />
+                  <LabelText as="div">{selectedProviderMeta.apiSecretLabel || 'API SECRET'}</LabelText>
+                  <ControlInput type="password" value={providerAPISecret} onChange={(e) => setProviderAPISecret(e.target.value)} placeholder={selectedProviderMeta.apiSecretPlaceholder || 'Optional write-only secret'} />
                 </div>
                 <div>
-                  <div className="label-text">ENDPOINT</div>
-                  <input className="control-input" value={providerEndpoint} onChange={(e) => setProviderEndpoint(e.target.value)} placeholder={selectedProviderMeta.endpointPlaceholder} />
+                  <LabelText as="div">ENDPOINT</LabelText>
+                  <ControlInput value={providerEndpoint} onChange={(e) => setProviderEndpoint(e.target.value)} placeholder={selectedProviderMeta.endpointPlaceholder} />
                 </div>
                 {(selectedProviderMeta.optionFields || []).map((field) => (
                   <div key={field.key}>
-                    <div className="label-text">{field.label}</div>
-                    <input
-                      className="control-input"
+                    <LabelText as="div">{field.label}</LabelText>
+                    <ControlInput
                       value={providerOptions[field.key] || ''}
                       onChange={(e) => setProviderOptions((current) => ({ ...current, [field.key]: e.target.value }))}
                       placeholder={field.placeholder}
@@ -1035,9 +911,9 @@ export function WorkspaceAdmin() {
                   Stored secrets are never shown again after save. Update a provider by submitting a new key or token for the selected provider. Non-secret options reload when you revisit the provider.
                 </div>
                 <div>
-                  <button className="btn-primary" disabled={savingProviderConfig} onClick={handleSaveProviderConfig}>
+                  <ActionButton variant="primary" disabled={savingProviderConfig} onClick={handleSaveProviderConfig}>
                     {savingProviderConfig ? 'SAVING...' : 'SAVE PROVIDER CONFIG'}
-                  </button>
+                  </ActionButton>
                 </div>
               </div>
             </>
@@ -1046,20 +922,20 @@ export function WorkspaceAdmin() {
               Provider configuration is restricted to workspace owners and admins.
             </div>
           )}
-        </div>
+        </Cell>
 
-        <div className="cell workspace-quota-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>WORKSPACE QUOTA</div>
+        <Cell span={2} className="workspace-quota-cell">
+          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>WORKSPACE QUOTA</LabelText>
           {canViewQuota && quota ? (
             <>
               <div className="workspace-quota-inputs" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                 <div>
-                  <div className="label-text">MONTHLY REQUEST LIMIT</div>
-                  <input className="control-input" value={requestLimit} disabled={!canManageQuota} onChange={(e) => setRequestLimit(e.target.value)} placeholder="Unlimited" />
+                  <LabelText as="div">MONTHLY REQUEST LIMIT</LabelText>
+                  <ControlInput value={requestLimit} disabled={!canManageQuota} onChange={(e) => setRequestLimit(e.target.value)} placeholder="Unlimited" />
                 </div>
                 <div>
-                  <div className="label-text">MONTHLY TOKEN LIMIT</div>
-                  <input className="control-input" value={tokenLimit} disabled={!canManageQuota} onChange={(e) => setTokenLimit(e.target.value)} placeholder="Unlimited" />
+                  <LabelText as="div">MONTHLY TOKEN LIMIT</LabelText>
+                  <ControlInput value={tokenLimit} disabled={!canManageQuota} onChange={(e) => setTokenLimit(e.target.value)} placeholder="Unlimited" />
                 </div>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '1.25rem', fontSize: '0.9rem' }}>
@@ -1070,9 +946,9 @@ export function WorkspaceAdmin() {
                 Last updated {formatDate(quota.updated_at)}
               </div>
               {canManageQuota && (
-                <button className="btn-primary" style={{ marginTop: '1.25rem' }} disabled={savingQuota} onClick={handleSaveQuota}>
+                <ActionButton variant="primary" style={{ marginTop: '1.25rem' }} disabled={savingQuota} onClick={handleSaveQuota}>
                   {savingQuota ? 'SAVING...' : 'SAVE QUOTA'}
-                </button>
+                </ActionButton>
               )}
             </>
           ) : (
@@ -1080,32 +956,32 @@ export function WorkspaceAdmin() {
               You do not have permission to view quota settings for this workspace.
             </div>
           )}
-        </div>
+        </Cell>
 
-        <div className="cell workspace-service-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>SERVICE ACCOUNTS</div>
+        <Cell span={2} className="workspace-service-cell">
+          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>SERVICE ACCOUNTS</LabelText>
           {canManageKeys ? (
             <>
               <div className="responsive-scroll-x" style={{ marginBottom: '1.5rem' }}>
                 <table className="data-table responsive-scroll-x-content">
                   <thead>
                     <tr>
-                      <th>NAME</th>
-                      <th>ROLE</th>
-                      <th>PREFIX</th>
-                      <th>LAST USED</th>
-                      <th style={{ textAlign: 'right' }}>ACTION</th>
+                      <th scope="col">NAME</th>
+                      <th scope="col">ROLE</th>
+                      <th scope="col">PREFIX</th>
+                      <th scope="col">LAST USED</th>
+                      <th scope="col" style={{ textAlign: 'right' }}>ACTION</th>
                     </tr>
                   </thead>
                   <tbody>
                     {serviceAccounts.map((key) => (
                       <tr key={key.id}>
                         <td>{key.name}</td>
-                        <td><span className="badge">{key.role.toUpperCase()}</span></td>
+                        <td><Badge>{key.role.toUpperCase()}</Badge></td>
                         <td className="mono">{key.key_prefix}</td>
                         <td>{formatDate(key.last_used)}</td>
                         <td style={{ textAlign: 'right' }}>
-                          <button className="action-btn destructive" onClick={() => handleRevokeServiceAccount(key.id)}>REVOKE</button>
+                          <ActionButton variant="destructive" onClick={() => handleRevokeServiceAccount(key.id)}>REVOKE</ActionButton>
                         </td>
                       </tr>
                     ))}
@@ -1114,8 +990,8 @@ export function WorkspaceAdmin() {
                         <td colSpan={5} style={{ color: 'var(--text-secondary)', padding: '1.5rem 0' }}>
                           No service accounts yet.
                           <div className="help-actions" style={{ justifyContent: 'center' }}>
-                            <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="ci-bot"]')?.focus()}>CREATE ONE</button>
-                            <button className="action-btn" onClick={() => navigate('/api-keys')}>OPEN API KEYS</button>
+                            <ActionButton onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="ci-bot"]')?.focus()}>CREATE ONE</ActionButton>
+                            <ActionButton onClick={() => navigate('/api-keys')}>OPEN API KEYS</ActionButton>
                           </div>
                         </td>
                       </tr>
@@ -1126,20 +1002,20 @@ export function WorkspaceAdmin() {
 
               <div className="workspace-service-create-row" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr auto', gap: '1rem', alignItems: 'end' }}>
                 <div>
-                  <div className="label-text">NAME</div>
-                  <input className="control-input" value={newServiceAccountName} onChange={(e) => setNewServiceAccountName(e.target.value)} placeholder="ci-bot" />
+                  <LabelText as="div">NAME</LabelText>
+                  <ControlInput value={newServiceAccountName} onChange={(e) => setNewServiceAccountName(e.target.value)} placeholder="ci-bot" />
                 </div>
                 <div>
-                  <div className="label-text">ROLE</div>
-                  <select className="control-input" value={newServiceAccountRole} onChange={(e) => setNewServiceAccountRole(e.target.value as typeof serviceAccountRoles[number])}>
+                  <LabelText as="div">ROLE</LabelText>
+                  <ControlSelect value={newServiceAccountRole} onChange={(e) => setNewServiceAccountRole(e.target.value as typeof serviceAccountRoles[number])}>
                     {serviceAccountRoles.map((candidate) => (
                       <option key={candidate} value={candidate}>{candidate}</option>
                     ))}
-                  </select>
+                  </ControlSelect>
                 </div>
-                <button className="btn-primary" disabled={creatingServiceAccount} onClick={handleCreateServiceAccount}>
+                <ActionButton variant="primary" disabled={creatingServiceAccount} onClick={handleCreateServiceAccount}>
                   {creatingServiceAccount ? 'CREATING...' : 'CREATE'}
-                </button>
+                </ActionButton>
               </div>
             </>
           ) : (
@@ -1147,18 +1023,18 @@ export function WorkspaceAdmin() {
               Service account management is restricted to workspace owners and admins.
             </div>
           )}
-        </div>
-      </div>
+        </Cell>
+      </GridRow>
       )}
 
       {(settingsTab === 'members' || settingsTab === 'invites') && (
       <div className="grid-row workspace-members-row" style={{ alignItems: 'start' }}>
         <div className="cell workspace-members-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>MEMBERS</div>
+          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>MEMBERS</LabelText>
           <div className="workspace-lifecycle-summary">
-            <span className="badge">TOTAL {memberCounts.total}</span>
-            <span className="badge">ADMINS {memberCounts.admins}</span>
-            <span className="badge">OPERATORS {memberCounts.operators}</span>
+            <Badge>TOTAL {memberCounts.total}</Badge>
+            <Badge>ADMINS {memberCounts.admins}</Badge>
+            <Badge>OPERATORS {memberCounts.operators}</Badge>
           </div>
           {canManageMemberships ? (
             members.length > 0 ? (
@@ -1173,19 +1049,18 @@ export function WorkspaceAdmin() {
                           <div className="mobile-data-subtitle">{memberRecord.email}</div>
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          <span className="badge">{(memberRoles[memberRecord.id] || memberRecord.role).toUpperCase()}</span>
+                          <Badge>{(memberRoles[memberRecord.id] || memberRecord.role).toUpperCase()}</Badge>
                           <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
                         </div>
                       </div>
                       <div className="mobile-data-meta">
-                        <div><span className="label-text">ACCESS</span> <span>{status.detail}</span></div>
-                        <div><span className="label-text">JOINED</span> <span>{formatDate(memberRecord.created_at)}</span></div>
+                        <div><LabelText>ACCESS</LabelText> <span>{status.detail}</span></div>
+                        <div><LabelText>JOINED</LabelText> <span>{formatDate(memberRecord.created_at)}</span></div>
                       </div>
                       <div style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
                         <div>
-                          <div className="label-text">ROLE</div>
-                          <select
-                            className="control-input"
+                          <LabelText as="div">ROLE</LabelText>
+                          <ControlSelect
                             value={memberRoles[memberRecord.id] || memberRecord.role}
                             disabled={member?.id === memberRecord.id}
                             onChange={(e) => setMemberRoles((current) => ({ ...current, [memberRecord.id]: e.target.value }))}
@@ -1193,23 +1068,22 @@ export function WorkspaceAdmin() {
                             {roleOptionsForMember(memberRecord.role).map((candidate) => (
                               <option key={candidate} value={candidate}>{candidate}</option>
                             ))}
-                          </select>
+                          </ControlSelect>
                         </div>
                         <div className="mobile-data-actions">
-                          <button
-                            className="action-btn"
+                          <ActionButton
                             disabled={updatingMemberId === memberRecord.id || member?.id === memberRecord.id || (memberRoles[memberRecord.id] || memberRecord.role) === memberRecord.role}
                             onClick={() => handleUpdateMemberRole(memberRecord.id, memberRecord.role)}
                           >
                             {updatingMemberId === memberRecord.id ? 'SAVING...' : 'SAVE ROLE'}
-                          </button>
-                          <button
-                            className="action-btn destructive"
+                          </ActionButton>
+                          <ActionButton
+                            variant="destructive"
                             disabled={removingMemberId === memberRecord.id || member?.id === memberRecord.id}
                             onClick={() => handleRemoveMember(memberRecord.id)}
                           >
                             {removingMemberId === memberRecord.id ? 'REMOVING...' : 'REMOVE'}
-                          </button>
+                          </ActionButton>
                         </div>
                         {member?.id === memberRecord.id && (
                           <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
@@ -1225,8 +1099,8 @@ export function WorkspaceAdmin() {
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 No members yet.
                 <div className="help-actions">
-                  <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE INVITE</button>
-                  <button className="action-btn" onClick={() => navigate('/docs')}>READ TEAM ACCESS DOCS</button>
+                  <ActionButton onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE INVITE</ActionButton>
+                  <ActionButton onClick={() => navigate('/docs')}>READ TEAM ACCESS DOCS</ActionButton>
                 </div>
               </div>
             )
@@ -1238,38 +1112,38 @@ export function WorkspaceAdmin() {
         </div>
 
         <div className="cell workspace-invites-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>INVITATIONS</div>
+          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>INVITATIONS</LabelText>
           <div className="workspace-lifecycle-summary">
-            <span className="badge">PENDING {inviteCounts.pending}</span>
-            <span className="badge">ACCEPTED {inviteCounts.accepted}</span>
-            <span className="badge">EXPIRED {inviteCounts.expired}</span>
-            <span className="badge">REVOKED {inviteCounts.revoked}</span>
+            <Badge>PENDING {inviteCounts.pending}</Badge>
+            <Badge>ACCEPTED {inviteCounts.accepted}</Badge>
+            <Badge>EXPIRED {inviteCounts.expired}</Badge>
+            <Badge>REVOKED {inviteCounts.revoked}</Badge>
           </div>
           {canManageMemberships ? (
             <>
               <div style={{ display: 'grid', gap: '1rem' }}>
                 <div>
-                  <div className="label-text">EMAIL</div>
-                  <input className="control-input" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="teammate@example.com" />
+                  <LabelText as="div">EMAIL</LabelText>
+                  <ControlInput value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="teammate@example.com" />
                 </div>
                 <div>
-                  <div className="label-text">DISPLAY NAME</div>
-                  <input className="control-input" value={inviteDisplayName} onChange={(e) => setInviteDisplayName(e.target.value)} placeholder="Optional" />
+                  <LabelText as="div">DISPLAY NAME</LabelText>
+                  <ControlInput value={inviteDisplayName} onChange={(e) => setInviteDisplayName(e.target.value)} placeholder="Optional" />
                 </div>
                 <div>
-                  <div className="label-text">ROLE</div>
-                  <select className="control-input" value={inviteRole} onChange={(e) => setInviteRole(e.target.value as typeof assignableInviteRoles[number])}>
+                  <LabelText as="div">ROLE</LabelText>
+                  <ControlSelect value={inviteRole} onChange={(e) => setInviteRole(e.target.value as typeof assignableInviteRoles[number])}>
                     {visibleInviteRoles.map((candidate) => (
                       <option key={candidate} value={candidate}>{candidate}</option>
                     ))}
-                  </select>
+                  </ControlSelect>
                 </div>
                 <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.5 }}>
                   Entering an email here does not send mail automatically. It creates an invite token for manual sharing.
                 </div>
-                <button className="btn-primary" disabled={creatingInvite} onClick={handleCreateInvite}>
+                <ActionButton variant="primary" disabled={creatingInvite} onClick={handleCreateInvite}>
                   {creatingInvite ? 'CREATING...' : 'CREATE INVITE'}
-                </button>
+                </ActionButton>
               </div>
 
               <div style={{ marginTop: '2rem' }}>
@@ -1285,16 +1159,16 @@ export function WorkspaceAdmin() {
                             <div className="mobile-data-subtitle">{invite.email}</div>
                           </div>
                           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                            <span className="badge">{invite.role.toUpperCase()}</span>
+                            <Badge>{invite.role.toUpperCase()}</Badge>
                             <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
                           </div>
                         </div>
                         <div className="mobile-data-meta">
-                          <div><span className="label-text">EXPIRES</span> <span>{formatDate(invite.expires_at)}</span></div>
-                          <div><span className="label-text">STATE</span> <span>{status.detail}</span></div>
+                          <div><LabelText>EXPIRES</LabelText> <span>{formatDate(invite.expires_at)}</span></div>
+                          <div><LabelText>STATE</LabelText> <span>{status.detail}</span></div>
                         </div>
                         <div className="mobile-data-actions">
-                          <button className="action-btn destructive" onClick={() => handleRevokeInvite(invite.id)}>REVOKE</button>
+                          <ActionButton variant="destructive" onClick={() => handleRevokeInvite(invite.id)}>REVOKE</ActionButton>
                         </div>
                       </div>
                       );
@@ -1304,15 +1178,15 @@ export function WorkspaceAdmin() {
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                     No pending invitations. Accepted, expired, and revoked invites appear in history below.
                     <div className="help-actions">
-                      <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE INVITE</button>
-                      <button className="action-btn" onClick={() => navigate('/docs')}>READ INVITE FLOW</button>
+                      <ActionButton onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE INVITE</ActionButton>
+                      <ActionButton onClick={() => navigate('/docs')}>READ INVITE FLOW</ActionButton>
                     </div>
                   </div>
                 )}
               </div>
 
               <div style={{ marginTop: '2rem' }}>
-                <div className="label-text" style={{ marginBottom: '1rem' }}>INVITE HISTORY</div>
+                <LabelText as="div" style={{ marginBottom: '1rem' }}>INVITE HISTORY</LabelText>
                 {inviteHistory.length > 0 ? (
                   <div className="mobile-data-list">
                     {inviteHistory.map((invite) => {
@@ -1325,13 +1199,13 @@ export function WorkspaceAdmin() {
                               <div className="mobile-data-subtitle">{invite.email}</div>
                             </div>
                             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                              <span className="badge">{invite.role.toUpperCase()}</span>
+                              <Badge>{invite.role.toUpperCase()}</Badge>
                               <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
                             </div>
                           </div>
                           <div className="mobile-data-meta">
-                            <div><span className="label-text">CREATED</span> <span>{formatDate(invite.created_at)}</span></div>
-                            <div><span className="label-text">FINAL STATE</span> <span>{status.detail}</span></div>
+                            <div><LabelText>CREATED</LabelText> <span>{formatDate(invite.created_at)}</span></div>
+                            <div><LabelText>FINAL STATE</LabelText> <span>{status.detail}</span></div>
                           </div>
                         </div>
                       );
@@ -1341,8 +1215,8 @@ export function WorkspaceAdmin() {
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 Invite history will appear once invites are accepted, revoked, or expire.
                 <div className="help-actions">
-                  <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE FIRST INVITE</button>
-                  <button className="action-btn" onClick={() => navigate('/docs')}>READ INVITE FLOW</button>
+                  <ActionButton onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE FIRST INVITE</ActionButton>
+                  <ActionButton onClick={() => navigate('/docs')}>READ INVITE FLOW</ActionButton>
                 </div>
               </div>
             )}
@@ -1358,16 +1232,16 @@ export function WorkspaceAdmin() {
       )}
 
       {(settingsTab === 'members' || settingsTab === 'invites' || settingsTab === 'providers' || settingsTab === 'service') && (
-      <div className="grid-row">
+      <GridRow>
         <div className="cell workspace-activity-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>RECENT TEAM ACTIVITY</div>
+          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>RECENT TEAM ACTIVITY</LabelText>
           {canManageMemberships ? (
             teamActivity.length > 0 ? (
               <div className="workspace-activity-list">
                 {teamActivity.map((item) => (
                   <div key={item.id} className="workspace-activity-item">
                     <div className="workspace-activity-header">
-                      <span className="label-text">{item.title}</span>
+                      <LabelText>{item.title}</LabelText>
                       <span className={`badge ${item.tone ? `status-${item.tone}` : ''}`.trim()}>{formatDate(item.timestamp)}</span>
                     </div>
                     <div className="workspace-activity-detail">{item.detail}</div>
@@ -1378,8 +1252,8 @@ export function WorkspaceAdmin() {
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 Team activity will appear here once members join or invites are created.
                 <div className="help-actions">
-                  <button className="action-btn" onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>INVITE FIRST MEMBER</button>
-                  <button className="action-btn" onClick={() => navigate('/docs')}>READ WORKSPACE HELP</button>
+                  <ActionButton onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>INVITE FIRST MEMBER</ActionButton>
+                  <ActionButton onClick={() => navigate('/docs')}>READ WORKSPACE HELP</ActionButton>
                 </div>
               </div>
             )
@@ -1391,14 +1265,14 @@ export function WorkspaceAdmin() {
         </div>
 
         <div className="cell workspace-activity-cell workspace-activity-accent-cell" style={{ gridColumn: 'span 2' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>ACCESS AND CONFIG ACTIVITY</div>
+          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>ACCESS AND CONFIG ACTIVITY</LabelText>
           {(canManageKeys || canManageProviderConfigs) ? (
             accessActivity.length > 0 ? (
               <div className="workspace-activity-list">
                 {accessActivity.map((item) => (
                   <div key={item.id} className="workspace-activity-item">
                     <div className="workspace-activity-header">
-                      <span className="label-text">{item.title}</span>
+                      <LabelText>{item.title}</LabelText>
                       <span className={`badge ${item.tone ? `status-${item.tone}` : ''}`.trim()}>{formatDate(item.timestamp)}</span>
                     </div>
                     <div className="workspace-activity-detail">{item.detail}</div>
@@ -1409,8 +1283,8 @@ export function WorkspaceAdmin() {
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 Provider updates and service-account usage will appear here once this workspace records access activity.
                 <div className="help-actions">
-                  <button className="action-btn" onClick={() => navigate('/api-keys')}>OPEN API KEYS</button>
-                  <button className="action-btn" onClick={() => navigate('/docs')}>READ AUTOMATION DOCS</button>
+                  <ActionButton onClick={() => navigate('/api-keys')}>OPEN API KEYS</ActionButton>
+                  <ActionButton onClick={() => navigate('/docs')}>READ AUTOMATION DOCS</ActionButton>
                 </div>
               </div>
             )
@@ -1420,13 +1294,13 @@ export function WorkspaceAdmin() {
             </div>
           )}
         </div>
-      </div>
+      </GridRow>
       )}
 
       {settingsTab === 'usage' && (
-      <div className="grid-row">
+      <GridRow>
         <div className="cell" style={{ gridColumn: 'span 4' }}>
-          <div className="label-text" style={{ marginBottom: '1.5rem' }}>TOP KEY ACTIVITY THIS MONTH</div>
+          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>TOP KEY ACTIVITY THIS MONTH</LabelText>
           {canViewUsage ? (
             usageSummary.topKeys.length > 0 ? (
               <>
@@ -1437,11 +1311,11 @@ export function WorkspaceAdmin() {
                 <table className="data-table responsive-scroll-x-content">
                   <thead>
                     <tr>
-                      <th>KEY</th>
-                      <th>REQUESTS</th>
-                      <th>TOKENS</th>
-                      <th>SUCCESS</th>
-                      <th>ERRORS</th>
+                      <th scope="col">KEY</th>
+                      <th scope="col">REQUESTS</th>
+                      <th scope="col">TOKENS</th>
+                      <th scope="col">SUCCESS</th>
+                      <th scope="col">ERRORS</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1462,8 +1336,8 @@ export function WorkspaceAdmin() {
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                 Key-level usage will appear here once this workspace records traffic.
                 <div className="help-actions">
-                  <button className="action-btn" onClick={() => navigate('/models')}>DEPLOY A MODEL</button>
-                  <button className="action-btn" onClick={() => navigate('/api-keys')}>OPEN API KEYS</button>
+                  <ActionButton onClick={() => navigate('/models')}>DEPLOY A MODEL</ActionButton>
+                  <ActionButton onClick={() => navigate('/api-keys')}>OPEN API KEYS</ActionButton>
                 </div>
               </div>
             )
@@ -1473,7 +1347,7 @@ export function WorkspaceAdmin() {
             </div>
           )}
         </div>
-      </div>
+      </GridRow>
       )}
     </div>
   );

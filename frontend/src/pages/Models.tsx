@@ -1,8 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { GPUOffering, Model, ProviderStatus, Instance, Worker } from '../types';
 import { sendChatCompletion } from '../lib/api';
+import { GridRow, Cell, LabelText, Badge, ActionButton } from '../components/shared';
+import { ModelsSkeleton } from '../components/skeletons';
 import { ActionGroup } from '../components/ActionGroup';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { MetadataList } from '../components/MetadataList';
@@ -16,8 +18,11 @@ import { getInstanceReadiness } from '../lib/instanceReadiness';
 import { deriveModelRuntimeDrilldown } from '../lib/modelRuntimeDrilldown';
 import { useDeploymentAttempts, useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel, useOfferings, useProviders, useInstances, useUpdateDeploymentVerification, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useAuthSession } from '../lib/auth-context';
 import { getProviderDisplayName, isInventoryProviderType } from '../lib/providerInventory';
+import { formatVerificationMeta } from '../lib/formatting';
+import { verificationToneClass } from '../lib/labels';
 
 const FAMILY_OPTIONS = ['mistral', 'llama', 'qwen', 'phi', 'gemma', 'deepseek', 'falcon', 'mixtral', 'yi', 'command-r'];
 const QUANT_OPTIONS = ['none', 'GPTQ', 'AWQ', 'GGUF', 'FP8', 'INT8', 'INT4'];
@@ -37,6 +42,224 @@ const GPU_VRAM_GB: Record<string, number> = {
   H100: 80,
   L40S: 48,
 };
+
+function HighlightMatch({ text, query }: { text: string; query: string }): ReactNode {
+  if (!query) return text;
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const idx = lowerText.indexOf(lowerQuery);
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark style={{ background: 'var(--bg-accent)', color: 'inherit', padding: '1px 2px', borderRadius: 2 }}>
+        {text.slice(idx, idx + query.length)}
+      </mark>
+      {text.slice(idx + query.length)}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Model slide-over panel                                             */
+/* ------------------------------------------------------------------ */
+
+type SlideOverModel = {
+  model: Model;
+  overview: ModelServingOverview;
+  runtime: ReturnType<typeof deriveModelRuntimeDrilldown>;
+  deployState: ReturnType<typeof describeDeployReadiness>;
+};
+
+function ModelSlideOver({
+  data,
+  workers,
+  onClose,
+  onDelete,
+  onVerify,
+  verifying,
+}: {
+  data: SlideOverModel;
+  workers: Worker[] | undefined;
+  onClose: () => void;
+  onDelete: (modelId: string) => void;
+  onVerify: (model: Model) => void;
+  verifying: boolean;
+}) {
+  const navigate = useNavigate();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const { model, overview, runtime, deployState } = data;
+
+  const shortName = model.id.split('/').pop() || model.id;
+  const provider = model.owned_by || model.family || '';
+  const isLoaded = model.loaded !== false;
+  const isDeploying = model.vault_status === 'testing';
+  const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying' : 'Available';
+
+  // Serving workers for this model
+  const modelWorkers = (workers || []).filter(
+    (w) => w.models?.some((m) => m === model.id || m.endsWith(`/${shortName}`)),
+  );
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const metaRows: { label: string; value: string; mono?: boolean }[] = [
+    { label: 'ID', value: model.id, mono: true },
+    { label: 'PROVIDER', value: provider || 'Unknown' },
+    { label: 'FAMILY', value: model.family || '-' },
+    { label: 'PARAMETERS', value: model.parameters || '-' },
+    { label: 'QUANTIZATION', value: model.quantization || 'FP16' },
+    { label: 'CONTEXT', value: model.max_context ? `${(model.max_context / 1000).toFixed(0)}k tokens` : 'N/A', mono: true },
+    { label: 'VRAM REQUIRED', value: model.vram_required ? `${Math.ceil(model.vram_required / 1024)} GB` : 'Not specified', mono: true },
+    { label: 'STATUS', value: statusLabel },
+  ];
+
+  const deployRows: { label: string; value: string; mono?: boolean }[] = [
+    { label: 'ACTIVE NODES', value: String(runtime.activeNodes), mono: true },
+    { label: 'DEGRADED NODES', value: String(runtime.degradedNodes), mono: true },
+    { label: 'SERVING STATE', value: overview.badgeLabel },
+    { label: 'DEPLOY READINESS', value: deployState.summary },
+    { label: 'LATEST ISSUE', value: runtime.latestIssue || 'None' },
+  ];
+
+  const verificationRows: { label: string; value: string }[] = [
+    { label: 'VERIFICATION', value: runtime.verificationLabel },
+    { label: 'LAST VERIFIED', value: overview.verifiedAt ? new Date(overview.verifiedAt).toLocaleString() : 'Never' },
+    { label: 'LATENCY', value: overview.latestVerificationLatencyMs != null ? `${overview.latestVerificationLatencyMs}ms` : '-' },
+    { label: 'LAST ERROR', value: overview.latestVerificationError || 'None' },
+  ];
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="slideover-backdrop"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      {/* Panel */}
+      <aside
+        className="slideover-panel"
+        role="dialog"
+        aria-label={`Manage ${shortName}`}
+      >
+        {/* Header */}
+        <div className="slideover-header">
+          <div>
+            <LabelText as="div">MODEL DETAILS</LabelText>
+            <div style={{ fontSize: '1.15rem', fontWeight: 600, marginTop: '0.4rem', lineHeight: 1.2 }}>
+              {shortName}
+            </div>
+            <div className="chip-row" style={{ marginTop: '0.5rem' }}>
+              <Badge tone={overview.badgeTone || undefined}>{overview.badgeLabel}</Badge>
+              {model.tags?.map((tag) => <Badge key={tag}>{tag}</Badge>)}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="slideover-close"
+            onClick={onClose}
+            aria-label="Close panel"
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="slideover-body">
+          {/* Model metadata */}
+          <section className="slideover-section">
+            <LabelText as="div" style={{ marginBottom: '0.75rem' }}>REGISTRY METADATA</LabelText>
+            {metaRows.map((row) => (
+              <div key={row.label} className="slideover-row">
+                <span className="slideover-row-label">{row.label}</span>
+                <span className={row.mono ? 'mono' : ''} style={{ fontSize: '0.85rem' }}>{row.value}</span>
+              </div>
+            ))}
+          </section>
+
+          {/* Deployment / resource usage */}
+          <section className="slideover-section">
+            <LabelText as="div" style={{ marginBottom: '0.75rem' }}>RESOURCE USAGE</LabelText>
+            {deployRows.map((row) => (
+              <div key={row.label} className="slideover-row">
+                <span className="slideover-row-label">{row.label}</span>
+                <span className={row.mono ? 'mono' : ''} style={{ fontSize: '0.85rem' }}>{row.value}</span>
+              </div>
+            ))}
+            {modelWorkers.length > 0 && (
+              <div style={{ marginTop: '0.75rem' }}>
+                <LabelText as="div" style={{ marginBottom: '0.5rem' }}>SERVING WORKERS</LabelText>
+                {modelWorkers.slice(0, 4).map((w) => (
+                  <div key={w.worker_id} className="slideover-row" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>
+                    <span>{w.worker_id.slice(0, 12)}</span>
+                    <span>GPU {w.gpu_utilization}% · {((w.memory_used / (w.memory_total || 1)) * 100).toFixed(0)}% mem</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Verification history */}
+          <section className="slideover-section">
+            <LabelText as="div" style={{ marginBottom: '0.75rem' }}>VERIFICATION HISTORY</LabelText>
+            {verificationRows.map((row) => (
+              <div key={row.label} className="slideover-row">
+                <span className="slideover-row-label">{row.label}</span>
+                <span style={{ fontSize: '0.85rem' }}>{row.value}</span>
+              </div>
+            ))}
+          </section>
+
+          {/* Actions */}
+          <section className="slideover-section slideover-actions">
+            <ActionButton onClick={() => navigate(`/instances?model=${encodeURIComponent(model.id)}`)}>
+              VIEW DEPLOYMENTS
+            </ActionButton>
+            {isLoaded && (
+              <ActionButton
+                disabled={verifying}
+                onClick={() => onVerify(model)}
+              >
+                {verifying ? 'VERIFYING...' : 'VERIFY SERVING'}
+              </ActionButton>
+            )}
+            <ActionButton onClick={() => navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}&from=models`)}>
+              DEPLOY MORE
+            </ActionButton>
+          </section>
+
+          {/* Delete */}
+          <section className="slideover-section slideover-danger-zone">
+            <LabelText as="div" style={{ marginBottom: '0.5rem' }}>DANGER ZONE</LabelText>
+            {!confirmDelete ? (
+              <ActionButton variant="destructive" onClick={() => setConfirmDelete(true)}>
+                DELETE MODEL
+              </ActionButton>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--color-error)', lineHeight: 1.5 }}>
+                  This will remove <strong>{shortName}</strong> from the registry. Active deployments will not be terminated but the model will no longer appear in the catalog.
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <ActionButton variant="destructive" onClick={() => { onDelete(model.id); onClose(); }}>
+                    CONFIRM DELETE
+                  </ActionButton>
+                  <ActionButton onClick={() => setConfirmDelete(false)}>CANCEL</ActionButton>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      </aside>
+    </>
+  );
+}
 
 type ModelServingOverview = {
   state: 'not_deployed' | 'runtime_pending' | 'serving_unverified' | 'serving_verified' | 'serving_failed' | 'degraded';
@@ -110,23 +333,6 @@ function describeDeployReadiness(model: Model, offerings: GPUOffering[], provide
   };
 }
 
-function formatVerificationMeta(verifiedAt?: string, latencyMs?: number) {
-  if (!verifiedAt) return null;
-  const label = new Date(verifiedAt).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-  if (latencyMs == null) return label;
-  return `${label} in ${latencyMs < 1000 ? `${latencyMs}ms` : `${(latencyMs / 1000).toFixed(2)}s`}`;
-}
-
-function verificationToneClass(freshness: 'fresh' | 'stale' | 'never' | 'recent') {
-  if (freshness === 'stale') return 'status-warning';
-  if (freshness === 'never') return 'status-inactive';
-  return '';
-}
 
 function deriveModelServingOverview(
   model: Model,
@@ -299,7 +505,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
       }}>
         {/* Header */}
         <div style={{ padding: '2rem 2rem 1.5rem', borderBottom: 'var(--grid-line)' }}>
-          <div className="label-text" style={{ marginBottom: '0.5rem' }}>REGISTER MODEL</div>
+          <LabelText as="div" style={{ marginBottom: '0.5rem' }}>REGISTER MODEL</LabelText>
           <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             Add a HuggingFace model to the registry
           </div>
@@ -309,7 +515,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
         <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }}>
           {/* Source URI - primary field */}
           <div style={{ marginBottom: '1.75rem' }}>
-            <div className="label-text" style={{ marginBottom: '0.5rem' }}>HUGGINGFACE MODEL ID *</div>
+            <LabelText as="div" style={{ marginBottom: '0.5rem' }}>HUGGINGFACE MODEL ID *</LabelText>
             <input
               type="text"
               value={form.source_uri}
@@ -324,7 +530,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 
           {/* Name */}
           <div style={{ marginBottom: '1.75rem' }}>
-            <div className="label-text" style={{ marginBottom: '0.5rem' }}>DISPLAY NAME *</div>
+            <LabelText as="div" style={{ marginBottom: '0.5rem' }}>DISPLAY NAME *</LabelText>
             <input
               type="text"
               value={form.name}
@@ -337,7 +543,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           {/* Two-column row */}
           <div className="modal-two-col-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.75rem' }}>
             <div>
-              <div className="label-text" style={{ marginBottom: '0.5rem' }}>FAMILY</div>
+              <LabelText as="div" style={{ marginBottom: '0.5rem' }}>FAMILY</LabelText>
               <select
                 value={form.family}
                 onChange={e => set('family', e.target.value)}
@@ -350,7 +556,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
               </select>
             </div>
             <div>
-              <div className="label-text" style={{ marginBottom: '0.5rem' }}>PARAMETERS</div>
+              <LabelText as="div" style={{ marginBottom: '0.5rem' }}>PARAMETERS</LabelText>
               <input
                 type="text"
                 value={form.parameters}
@@ -364,7 +570,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           {/* Two-column row */}
           <div className="modal-two-col-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.75rem' }}>
             <div>
-              <div className="label-text" style={{ marginBottom: '0.5rem' }}>QUANTIZATION</div>
+              <LabelText as="div" style={{ marginBottom: '0.5rem' }}>QUANTIZATION</LabelText>
               <select
                 value={form.quantization}
                 onChange={e => set('quantization', e.target.value)}
@@ -376,7 +582,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
               </select>
             </div>
             <div>
-              <div className="label-text" style={{ marginBottom: '0.5rem' }}>MAX CONTEXT</div>
+              <LabelText as="div" style={{ marginBottom: '0.5rem' }}>MAX CONTEXT</LabelText>
               <input
                 type="number"
                 value={form.max_context}
@@ -389,7 +595,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 
           {/* VRAM */}
           <div style={{ marginBottom: '1.75rem' }}>
-            <div className="label-text" style={{ marginBottom: '0.5rem' }}>VRAM REQUIRED (MB)</div>
+            <LabelText as="div" style={{ marginBottom: '0.5rem' }}>VRAM REQUIRED (MB)</LabelText>
             <input
               type="number"
               value={form.vram_required || ''}
@@ -404,7 +610,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 
           {/* Tags */}
           <div style={{ marginBottom: '1rem' }}>
-            <div className="label-text" style={{ marginBottom: '0.5rem' }}>TAGS</div>
+            <LabelText as="div" style={{ marginBottom: '0.5rem' }}>TAGS</LabelText>
             <input
               type="text"
               value={form.tags}
@@ -423,14 +629,14 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           padding: '1.5rem 2rem', borderTop: 'var(--grid-line)',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
-          <button className="action-btn" onClick={onClose}>CANCEL</button>
-          <button
-            className="btn-primary"
+          <ActionButton onClick={onClose}>CANCEL</ActionButton>
+          <ActionButton
+            variant="primary"
             onClick={handleSubmit}
             disabled={registerMutation.isPending || !form.source_uri.trim() || !form.name.trim()}
           >
             {registerMutation.isPending ? 'REGISTERING...' : 'REGISTER MODEL'}
-          </button>
+          </ActionButton>
         </div>
       </div>
     </>
@@ -442,7 +648,7 @@ export function Models() {
   const isMobile = useIsMobile(900);
   const { session } = useAuthSession();
   const workspaceID = session?.workspace?.id;
-  const { data: models } = useModels();
+  const { data: models, isLoading: modelsLoading } = useModels();
   const { data: vaultData } = useVaultModels({});
   const { data: offerings } = useOfferings();
   const { data: providers } = useProviders();
@@ -450,8 +656,20 @@ export function Models() {
   const { data: workers } = useWorkers(workspaceID);
   const deleteMutation = useDeleteVaultModel();
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredQuery = useDebouncedValue(searchQuery, 200);
+  const isSearchStale = searchQuery !== deferredQuery;
+  const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [verifyingModelID, setVerifyingModelID] = useState<string | null>(null);
+  const [slideOverModelId, setSlideOverModelId] = useState<string | null>(null);
+
+  const handleOpenSlideOver = useCallback((modelId: string) => {
+    setSlideOverModelId(modelId);
+  }, []);
+
+  const handleCloseSlideOver = useCallback(() => {
+    setSlideOverModelId(null);
+  }, []);
   const { data: deploymentAttempts = [] } = useDeploymentAttempts(workspaceID);
   const updateDeploymentVerification = useUpdateDeploymentVerification(workspaceID);
 
@@ -478,11 +696,24 @@ export function Models() {
     vault_status: vm.status,
   }));
 
-  const filtered = displayModels.filter(m => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return m.id.toLowerCase().includes(q) || m.family?.toLowerCase().includes(q) || m.owned_by?.toLowerCase().includes(q);
-  });
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    for (const model of displayModels) {
+      for (const tag of model.tags || []) tagSet.add(tag);
+    }
+    return [...tagSet].sort();
+  }, [displayModels]);
+
+  const filtered = useMemo(() => displayModels.filter(m => {
+    if (activeTagFilter && !(m.tags || []).includes(activeTagFilter)) return false;
+    if (!deferredQuery) return true;
+    const q = deferredQuery.toLowerCase();
+    return m.id.toLowerCase().includes(q)
+      || m.family?.toLowerCase().includes(q)
+      || m.owned_by?.toLowerCase().includes(q)
+      || (m.quantization || '').toLowerCase().includes(q)
+      || (m.tags || []).some(t => t.toLowerCase().includes(q));
+  }), [activeTagFilter, deferredQuery, displayModels]);
 
   const visibleProviders = useMemo(
     () => (providers || []).filter((provider) => isInventoryProviderType(provider.provider)),
@@ -583,6 +814,8 @@ export function Models() {
     }
   };
 
+  if (modelsLoading) return <ModelsSkeleton />;
+
   return (
     <div className="models-page animate-fade-in">
       <div className="models-toolbar">
@@ -596,25 +829,83 @@ export function Models() {
               className="models-search-input"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Filter by model name or provider..."
+              placeholder="Filter by name, provider, quant, tag..."
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '0.25rem',
+                  color: 'var(--text-secondary)',
+                  fontSize: '1rem',
+                  lineHeight: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+                aria-label="Clear search"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            )}
           </label>
-          <div className="chip-row models-summary-strip">
-            <span className="badge">{displayModels.length} REGISTRY MODELS</span>
-            <span className="badge">{activeCount} ACTIVE</span>
-            <span className="badge">{readyCount} READY TO DEPLOY</span>
-            <span className="badge">{servingVerifiedCount} SERVING VERIFIED</span>
+          <div className="chip-row models-summary-strip" style={{ flexWrap: 'wrap' }}>
+            <Badge>{displayModels.length} REGISTRY MODELS</Badge>
+            <Badge>{activeCount} ACTIVE</Badge>
+            <Badge>{readyCount} READY TO DEPLOY</Badge>
+            <Badge>{servingVerifiedCount} SERVING VERIFIED</Badge>
+            {(deferredQuery || activeTagFilter) && (
+              <Badge style={{ opacity: isSearchStale ? 0.5 : 1, transition: 'opacity 0.15s' }}>
+                SHOWING {filtered.length} OF {displayModels.length}
+              </Badge>
+            )}
           </div>
+          {allTags.length > 0 && (
+            <div className="chip-row" style={{ flexWrap: 'wrap', gap: '0.35rem' }}>
+              {allTags.map(tag => (
+                <button
+                  key={tag}
+                  type="button"
+                  className="tag"
+                  onClick={() => setActiveTagFilter(activeTagFilter === tag ? null : tag)}
+                  style={{
+                    cursor: 'pointer',
+                    background: activeTagFilter === tag ? 'var(--text-primary)' : undefined,
+                    color: activeTagFilter === tag ? 'var(--bg-paper)' : undefined,
+                    borderColor: activeTagFilter === tag ? 'var(--text-primary)' : undefined,
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {tag}
+                </button>
+              ))}
+              {activeTagFilter && (
+                <button
+                  type="button"
+                  className="tag"
+                  onClick={() => setActiveTagFilter(null)}
+                  style={{ cursor: 'pointer', borderStyle: 'dashed', opacity: 0.6 }}
+                >
+                  CLEAR
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <ActionGroup compact>
-          <button className="btn-primary" onClick={() => setShowRegisterModal(true)}>
+          <ActionButton variant="primary" onClick={() => setShowRegisterModal(true)}>
             REGISTER MODEL
-          </button>
+          </ActionButton>
         </ActionGroup>
       </div>
 
-      <div className="grid-row">
-        <div className="cell" style={{ gridColumn: 'span 4' }}>
+      <GridRow>
+        <Cell span={4}>
           <div className="help-callout" style={{ padding: '1rem 1.25rem' }}>
             <SectionHeader
               eyebrow="MODEL STATUS GUIDE"
@@ -626,18 +917,18 @@ export function Models() {
               )}
               actions={(
                 <ActionGroup compact>
-                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
-                  <button className="action-btn" onClick={() => navigate('/docs')}>READ API DOCS</button>
+                  <ActionButton onClick={() => navigate('/instances')}>OPEN NODES</ActionButton>
+                  <ActionButton onClick={() => navigate('/docs')}>READ API DOCS</ActionButton>
                 </ActionGroup>
               )}
             />
           </div>
-        </div>
-      </div>
+        </Cell>
+      </GridRow>
 
       {recommendedModels.length > 0 && (
-        <div className="grid-row">
-          <div className="cell" style={{ gridColumn: 'span 4' }}>
+        <GridRow>
+          <Cell span={4}>
             <div className="help-callout" style={{ padding: '1rem 1.25rem' }}>
               <SectionHeader
                 eyebrow="RECOMMENDED NOW"
@@ -658,45 +949,63 @@ export function Models() {
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          {RECOMMENDED_MODEL_LABELS[model.id] ? <span className="badge">{RECOMMENDED_MODEL_LABELS[model.id]}</span> : null}
-                          {overview ? <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span> : null}
+                          {RECOMMENDED_MODEL_LABELS[model.id] ? <Badge>{RECOMMENDED_MODEL_LABELS[model.id]}</Badge> : null}
+                          {overview ? <Badge tone={overview.badgeTone || undefined}>{overview.badgeLabel}</Badge> : null}
                         </div>
                       </div>
                       <div style={{ marginTop: '0.8rem', color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.6 }}>
                         {deployState.summary}
                       </div>
                       <div className="action-group compact" style={{ marginTop: '0.9rem' }}>
-                        <button className="action-btn" onClick={() => navigate(deployState.actionTarget)}>
+                        <ActionButton onClick={() => navigate(deployState.actionTarget)}>
                           {deployState.actionLabel}
-                        </button>
-                        <button className="action-btn" onClick={() => setSearchQuery(model.id.split('/').pop() || model.id)}>
+                        </ActionButton>
+                        <ActionButton onClick={() => setSearchQuery(model.id.split('/').pop() || model.id)}>
                           FILTER
-                        </button>
+                        </ActionButton>
                       </div>
                     </div>
                   );
                 })}
               </div>
             </div>
-          </div>
-        </div>
+          </Cell>
+        </GridRow>
       )}
 
       {isMobile ? (
         <div className="mobile-data-list models-list-section">
           {filtered.length === 0 ? (
-            <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
-              {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
-              {!searchQuery && (
-                <div className="help-actions" style={{ justifyContent: 'center' }}>
-                  <button className="action-btn" onClick={() => setShowRegisterModal(true)}>ADD MODEL</button>
-                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
-                  <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
-                </div>
+            <div style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              {searchQuery ? (
+                <>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.4, marginBottom: '0.75rem' }}>
+                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 500, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+                    No models match &ldquo;{searchQuery}&rdquo;
+                  </div>
+                  <div style={{ fontSize: '0.85rem', lineHeight: 1.6, maxWidth: 360, margin: '0 auto 1rem' }}>
+                    Try a different name, provider, quantization, or tag. Filters are combined with the active tag if one is selected.
+                  </div>
+                  <div className="help-actions" style={{ justifyContent: 'center' }}>
+                    <ActionButton onClick={() => setSearchQuery('')}>CLEAR SEARCH</ActionButton>
+                    {activeTagFilter && <ActionButton onClick={() => setActiveTagFilter(null)}>CLEAR TAG FILTER</ActionButton>}
+                  </div>
+                </>
+              ) : (
+                <>
+                  No models in registry. Add one to get started.
+                  <div className="help-actions" style={{ justifyContent: 'center' }}>
+                    <ActionButton onClick={() => setShowRegisterModal(true)}>ADD MODEL</ActionButton>
+                    <ActionButton onClick={() => navigate('/instances')}>OPEN NODES</ActionButton>
+                    <ActionButton onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</ActionButton>
+                  </div>
+                </>
               )}
             </div>
           ) : (
-            filtered.map(model => {
+            filtered.map((model, rowIndex) => {
               const isLoaded = model.loaded !== false;
               const isDeploying = model.vault_status === 'testing';
               const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
@@ -711,37 +1020,56 @@ export function Models() {
               const degradedTarget = `/instances?model=${encodeURIComponent(model.id)}&focus=degraded`;
 
               return (
-                <div key={model.id} className="mobile-data-card">
+                <div
+                  key={model.id}
+                  className="mobile-data-card"
+                  style={{
+                    animation: `fade-slide-in 0.3s ease both`,
+                    animationDelay: `${Math.min(rowIndex * 40, 400)}ms`,
+                  }}
+                >
                   <div className="mobile-data-card-header">
                     <div>
-                      <div className="mobile-data-title">{shortName}</div>
+                      <div className="mobile-data-title">
+                        <HighlightMatch text={shortName} query={deferredQuery} />
+                      </div>
                       <div className="mobile-data-subtitle mono">
-                        {model.parameters && `${model.parameters} — `}{provider}
+                        {model.parameters && `${model.parameters} — `}<HighlightMatch text={provider} query={deferredQuery} />
                       </div>
                       <div className="mobile-card-chip-row">
                         <span className="mobile-status-inline">
                           <span className={`status-dot ${statusDotClass}`} />
                           {statusLabel}
+                          {isDeploying && <span className="deploy-spinner" />}
                         </span>
-                        <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
+                        <Badge tone={overview.badgeTone || undefined}>{overview.badgeLabel}</Badge>
                       </div>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                      <span className="badge mono">{runtime.activeNodes} node{runtime.activeNodes === 1 ? '' : 's'}</span>
+                      <Badge mono>{runtime.activeNodes} node{runtime.activeNodes === 1 ? '' : 's'}</Badge>
                     </div>
                   </div>
 
                   <div className="mobile-data-meta">
-                    <div><span className="label-text">DEPLOYMENTS</span> <span className="mono">{runtime.activeNodes}</span></div>
-                    <div><span className="label-text">VERIFY</span> <span className={`badge ${verificationToneClass(runtime.verificationFreshness)}`}>{runtime.verificationLabel}</span></div>
+                    <div><LabelText>DEPLOYMENTS</LabelText> <span className="mono">{runtime.activeNodes}</span></div>
+                    <div><LabelText>VERIFY</LabelText> <Badge className={verificationToneClass(runtime.verificationFreshness)}>{runtime.verificationLabel}</Badge></div>
                     {runtime.degradedNodes > 0 && (
-                      <div><span className="label-text">DEGRADED</span> <span className="mono">{runtime.degradedNodes} node{runtime.degradedNodes === 1 ? '' : 's'}</span></div>
+                      <div><LabelText>DEGRADED</LabelText> <span className="mono">{runtime.degradedNodes} node{runtime.degradedNodes === 1 ? '' : 's'}</span></div>
                     )}
-                    <div><span className="label-text">DEPLOY</span> <span>{deployState.summary}</span></div>
-                    <div><span className="label-text">STATUS</span> <span>{overview.summary}</span></div>
+                    <div><LabelText>DEPLOY</LabelText> <span>{deployState.summary}</span></div>
+                    <div><LabelText>STATUS</LabelText> <span>{overview.summary}</span></div>
                   </div>
 
                   <div className="mobile-data-actions">
+                    {runtime.activeNodes > 0 && (
+                      <button
+                        type="button"
+                        className="mobile-data-action"
+                        onClick={() => handleOpenSlideOver(model.id)}
+                      >
+                        MANAGE
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="mobile-data-action"
@@ -808,18 +1136,36 @@ export function Models() {
         <div className="models-list-section">
           <div className="stack-list">
             {filtered.length === 0 ? (
-              <div className="stack-item" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
-                {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
-                {!searchQuery && (
-                  <div className="help-actions" style={{ justifyContent: 'center' }}>
-                    <button className="action-btn" onClick={() => setShowRegisterModal(true)}>ADD MODEL</button>
-                    <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
-                    <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
-                  </div>
+              <div className="stack-item" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 2rem' }}>
+                {searchQuery ? (
+                  <>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.4, marginBottom: '0.75rem' }}>
+                      <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 500, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+                      No models match &ldquo;{searchQuery}&rdquo;
+                    </div>
+                    <div style={{ fontSize: '0.85rem', lineHeight: 1.6, maxWidth: 420, margin: '0 auto 1rem' }}>
+                      Try a different name, provider, quantization, or tag. Filters are combined with the active tag if one is selected.
+                    </div>
+                    <div className="help-actions" style={{ justifyContent: 'center' }}>
+                      <ActionButton onClick={() => setSearchQuery('')}>CLEAR SEARCH</ActionButton>
+                      {activeTagFilter && <ActionButton onClick={() => setActiveTagFilter(null)}>CLEAR TAG FILTER</ActionButton>}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    No models in registry. Add one to get started.
+                    <div className="help-actions" style={{ justifyContent: 'center' }}>
+                      <ActionButton onClick={() => setShowRegisterModal(true)}>ADD MODEL</ActionButton>
+                      <ActionButton onClick={() => navigate('/instances')}>OPEN NODES</ActionButton>
+                      <ActionButton onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</ActionButton>
+                    </div>
+                  </>
                 )}
               </div>
             ) : (
-              filtered.map(model => {
+              filtered.map((model, rowIndex) => {
                 const isLoaded = model.loaded !== false;
                 const isDeploying = model.vault_status === 'testing';
                 const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
@@ -834,26 +1180,37 @@ export function Models() {
                 const degradedTarget = `/instances?model=${encodeURIComponent(model.id)}&focus=degraded`;
 
                 return (
-                  <div key={model.id} className="stack-item" data-testid="model-row-card">
+                  <div
+                    key={model.id}
+                    className="stack-item model-row-card"
+                    data-testid="model-row-card"
+                    style={{
+                      animation: `fade-slide-in 0.3s ease both`,
+                      animationDelay: `${Math.min(rowIndex * 40, 400)}ms`,
+                    }}
+                  >
                     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '1rem', alignItems: 'start' }}>
                       <div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
                           <div>
-                            <div style={{ fontSize: '1.15rem', fontWeight: 600 }}>{shortName}</div>
+                            <div style={{ fontSize: '1.15rem', fontWeight: 600 }}>
+                              <HighlightMatch text={shortName} query={deferredQuery} />
+                            </div>
                             <div className="mono" style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                              {model.parameters && `${model.parameters} — `}{provider}
+                              {model.parameters && `${model.parameters} — `}<HighlightMatch text={provider} query={deferredQuery} />
                             </div>
                           </div>
                           <div className="chip-row">
-                            <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
-                            {runtime.activeNodes > 0 && <span className="badge">{runtime.activeNodes} DEPLOYMENT{runtime.activeNodes === 1 ? '' : 'S'}</span>}
-                            <span className={`badge ${verificationToneClass(runtime.verificationFreshness)}`}>{runtime.verificationLabel}</span>
-                            {runtime.degradedNodes > 0 && <span className="badge status-error">{runtime.degradedNodes} DEGRADED NODE{runtime.degradedNodes === 1 ? '' : 'S'}</span>}
+                            <Badge tone={overview.badgeTone || undefined}>{overview.badgeLabel}</Badge>
+                            {runtime.activeNodes > 0 && <Badge>{runtime.activeNodes} DEPLOYMENT{runtime.activeNodes === 1 ? '' : 'S'}</Badge>}
+                            <Badge className={verificationToneClass(runtime.verificationFreshness)}>{runtime.verificationLabel}</Badge>
+                            {runtime.degradedNodes > 0 && <Badge tone="error">{runtime.degradedNodes} DEGRADED NODE{runtime.degradedNodes === 1 ? '' : 'S'}</Badge>}
                           </div>
                         </div>
                         <div style={{ marginTop: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
                           <span className={`status-dot ${statusDotClass}`} />
                           {statusLabel}
+                          {isDeploying && <span className="deploy-spinner" />}
                         </div>
                         <div style={{ marginTop: '0.6rem', fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                           {overview.summary}
@@ -871,6 +1228,15 @@ export function Models() {
                         </div>
                       </div>
                       <div style={{ display: 'grid', gap: '0.55rem', justifyItems: 'end' }}>
+                        {runtime.activeNodes > 0 && (
+                          <button
+                            type="button"
+                            className="action-link"
+                            onClick={() => handleOpenSlideOver(model.id)}
+                          >
+                            MANAGE
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="action-link"
@@ -950,43 +1316,62 @@ export function Models() {
         </div>
       )}
 
-      <div className="grid-row" style={{ backgroundColor: 'var(--bg-accent)' }}>
-        <div className="cell">
-          <div className="label-text">REGISTRY MODELS</div>
+      <GridRow style={{ background: 'var(--bg-accent)' }}>
+        <Cell>
+          <LabelText as="div">REGISTRY MODELS</LabelText>
           <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
             {displayModels.length}
           </div>
-        </div>
-        <div className="cell">
-          <div className="label-text">ACTIVE</div>
+        </Cell>
+        <Cell>
+          <LabelText as="div">ACTIVE</LabelText>
           <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
             {activeCount}
           </div>
-        </div>
-        <div className="cell">
-          <div className="label-text">READY TO DEPLOY</div>
+        </Cell>
+        <Cell>
+          <LabelText as="div">READY TO DEPLOY</LabelText>
           <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
             {readyCount}
           </div>
-        </div>
-        <div className="cell">
-          <div className="label-text">SERVING VERIFIED</div>
+        </Cell>
+        <Cell>
+          <LabelText as="div">SERVING VERIFIED</LabelText>
           <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
             {servingVerifiedCount}
           </div>
-        </div>
-        <div className="cell">
-          <div className="label-text">DEPLOYMENT SIGNAL</div>
+        </Cell>
+        <Cell>
+          <LabelText as="div">DEPLOYMENT SIGNAL</LabelText>
           <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span className={`status-dot ${visibleProviders.some((provider) => provider.connected) ? '' : 'inactive'}`} />
             {visibleProviders.some((provider) => provider.connected)
               ? `${visibleProviders.filter((provider) => provider.connected).length} provider${visibleProviders.filter((provider) => provider.connected).length === 1 ? '' : 's'} live.`
               : 'No live provider is currently connected for deployments.'}
           </div>
-        </div>
-      </div>
+        </Cell>
+      </GridRow>
 
       <RegisterModelModal isOpen={showRegisterModal} onClose={() => setShowRegisterModal(false)} />
+
+      {slideOverModelId && (() => {
+        const model = displayModels.find((m) => m.id === slideOverModelId);
+        if (!model) return null;
+        const overview = modelOverviewByID.get(model.id);
+        if (!overview) return null;
+        const runtime = modelRuntimeByID.get(model.id)!;
+        const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
+        return (
+          <ModelSlideOver
+            data={{ model, overview, runtime, deployState }}
+            workers={workers}
+            onClose={handleCloseSlideOver}
+            onDelete={handleRemove}
+            onVerify={handleVerifyServing}
+            verifying={verifyingModelID === slideOverModelId}
+          />
+        );
+      })()}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { CodeExample } from '../components/CodeExample';
+import { LabelText, Badge, AppShell, PublicNav } from '../components/shared';
 
 const BASE_URL = typeof window !== 'undefined' ? window.location.origin : 'https://inferai.co.in';
 
@@ -104,19 +105,8 @@ const failureChecks = [
 
 export function GettingStarted() {
   return (
-    <div className="docs-page">
-      <div className="app-shell docs-shell">
-        <header className="top-nav docs-header">
-          <div>
-            <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
-            <div className="label-text" style={{ marginTop: '0.5rem' }}>GETTING STARTED</div>
-          </div>
-          <div className="nav-group" style={{ gap: '1rem' }}>
-            <Link className="nav-link" to="/docs">API DOCS</Link>
-            <Link className="nav-link" to="/accept-invite">ACCEPT INVITE</Link>
-            <Link className="nav-link" to="/">LOGIN</Link>
-          </div>
-        </header>
+    <AppShell variant="public">
+        <PublicNav title="GETTING STARTED" />
 
         <section className="docs-hero">
           <div className="docs-kicker">First successful request</div>
@@ -139,7 +129,7 @@ export function GettingStarted() {
             <div className="docs-summary">
               {prepCards.map((card) => (
                 <div key={card.label} className="docs-summary-card">
-                  <div className="label-text">{card.label}</div>
+                  <LabelText as="div">{card.label}</LabelText>
                   <div className="docs-summary-value">{card.value}</div>
                 </div>
               ))}
@@ -149,7 +139,7 @@ export function GettingStarted() {
 
         <div className="docs-layout">
           <aside className="docs-sidebar">
-            <div className="label-text">QUICK NAV</div>
+            <LabelText as="div">QUICK NAV</LabelText>
             <nav className="docs-sidebar-nav">
               <a className="docs-sidebar-link" href="#runbook">Runbook</a>
               <a className="docs-sidebar-link" href="#copy-run">Copy and run</a>
@@ -158,7 +148,7 @@ export function GettingStarted() {
               <a className="docs-sidebar-link" href="#failures">Failure checks</a>
             </nav>
             <div className="docs-sidebar-card">
-              <div className="label-text">RULE</div>
+              <LabelText as="div">RULE</LabelText>
               <div style={{ marginTop: '0.7rem', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.65 }}>
                 Always promote complexity in order: auth, live model lookup, unary request, then streaming.
               </div>
@@ -169,7 +159,7 @@ export function GettingStarted() {
             <section className="docs-section" id="runbook">
               <div className="docs-section-head">
                 <div>
-                  <div className="label-text">RUNBOOK</div>
+                  <LabelText as="div">RUNBOOK</LabelText>
                   <h2 className="docs-section-title">Use this order. It reduces debugging time.</h2>
                 </div>
                 <div className="docs-section-copy">
@@ -190,7 +180,7 @@ export function GettingStarted() {
             <section className="docs-section tone" id="copy-run">
               <div className="docs-section-head">
                 <div>
-                  <div className="label-text">COPY AND RUN</div>
+                  <LabelText as="div">COPY AND RUN</LabelText>
                   <h2 className="docs-section-title">Two commands before you do anything clever.</h2>
                 </div>
                 <div className="docs-section-copy">
@@ -200,15 +190,15 @@ export function GettingStarted() {
               <div className="docs-code-grid">
                 <div className="docs-code-panel">
                   <div className="docs-code-toolbar">
-                    <div className="label-text">1. LIST MODELS</div>
-                    <span className="badge">DISCOVERY</span>
+                    <LabelText as="div">1. LIST MODELS</LabelText>
+                    <Badge>DISCOVERY</Badge>
                   </div>
                   <CodeExample code={modelsRequest} language="shell" />
                 </div>
                 <div className="docs-code-panel">
                   <div className="docs-code-toolbar">
-                    <div className="label-text">2. SEND CHAT</div>
-                    <span className="badge">UNARY</span>
+                    <LabelText as="div">2. SEND CHAT</LabelText>
+                    <Badge>UNARY</Badge>
                   </div>
                   <CodeExample code={chatRequest} language="shell" />
                 </div>
@@ -218,7 +208,7 @@ export function GettingStarted() {
             <section className="docs-section tone" id="sdk-examples">
               <div className="docs-section-head">
                 <div>
-                  <div className="label-text">SDK EXAMPLES</div>
+                  <LabelText as="div">SDK EXAMPLES</LabelText>
                   <h2 className="docs-section-title">Drop-in with any OpenAI-compatible SDK.</h2>
                 </div>
                 <div className="docs-section-copy">
@@ -228,15 +218,15 @@ export function GettingStarted() {
               <div className="docs-code-grid">
                 <div className="docs-code-panel">
                   <div className="docs-code-toolbar">
-                    <div className="label-text">PYTHON</div>
-                    <span className="badge">openai SDK</span>
+                    <LabelText as="div">PYTHON</LabelText>
+                    <Badge>openai SDK</Badge>
                   </div>
                   <CodeExample code={pythonSdkExample} language="python" />
                 </div>
                 <div className="docs-code-panel">
                   <div className="docs-code-toolbar">
-                    <div className="label-text">JAVASCRIPT / NODE</div>
-                    <span className="badge">openai SDK</span>
+                    <LabelText as="div">JAVASCRIPT / NODE</LabelText>
+                    <Badge>openai SDK</Badge>
                   </div>
                   <CodeExample code={jsSdkExample} language="typescript" />
                 </div>
@@ -246,7 +236,7 @@ export function GettingStarted() {
             <section className="docs-section" id="streaming">
               <div className="docs-section-head">
                 <div>
-                  <div className="label-text">STREAMING</div>
+                  <LabelText as="div">STREAMING</LabelText>
                   <h2 className="docs-section-title">Only after the unary path is green.</h2>
                 </div>
                 <div className="docs-section-copy">
@@ -255,11 +245,11 @@ export function GettingStarted() {
               </div>
               <div className="docs-card-grid">
                 <div className="docs-code-panel">
-                  <div className="label-text">STREAM REQUEST</div>
+                  <LabelText as="div">STREAM REQUEST</LabelText>
                   <CodeExample code={streamRequest} language="shell" />
                 </div>
                 <div className="docs-card">
-                  <div className="label-text">EXPECT</div>
+                  <LabelText as="div">EXPECT</LabelText>
                   <div className="docs-list">
                     <div>Content arrives in SSE chunks, not one JSON body.</div>
                     <div>The stream ends with <span className="docs-inline-code">data: [DONE]</span>.</div>
@@ -272,7 +262,7 @@ export function GettingStarted() {
             <section className="docs-section tone" id="failures">
               <div className="docs-section-head">
                 <div>
-                  <div className="label-text">FAILURE CHECKS</div>
+                  <LabelText as="div">FAILURE CHECKS</LabelText>
                   <h2 className="docs-section-title">What to verify first when a request fails.</h2>
                 </div>
                 <div className="docs-section-copy">
@@ -281,7 +271,7 @@ export function GettingStarted() {
               </div>
               <div className="docs-card-grid">
                 <div className="docs-card">
-                  <div className="label-text">CHECKLIST</div>
+                  <LabelText as="div">CHECKLIST</LabelText>
                   <div className="docs-list">
                     {failureChecks.map((item) => (
                       <div key={item}>{item}</div>
@@ -289,7 +279,7 @@ export function GettingStarted() {
                   </div>
                 </div>
                 <div className="docs-card">
-                  <div className="label-text">NEXT STEP</div>
+                  <LabelText as="div">NEXT STEP</LabelText>
                   <div style={{ marginTop: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
                     If the first request works, move to the full docs for supported fields, compatibility boundaries, and SDK examples.
                   </div>
@@ -303,7 +293,6 @@ export function GettingStarted() {
             </section>
           </main>
         </div>
-      </div>
-    </div>
+    </AppShell>
   );
 }
