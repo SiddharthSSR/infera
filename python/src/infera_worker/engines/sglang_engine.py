@@ -130,7 +130,7 @@ class SGLangEngine(TokenizerPromptEngine):
                 final_output = outputs[0]
                 text = self._extract_text(final_output)
                 first_token_time: datetime | None = None
-                prompt_tokens, completion_tokens = self._estimate_usage(final_output, request, text)
+                prompt_tokens, completion_tokens = self._estimate_usage(final_output, request, prompt, text)
             else:
                 first_token_time = None
                 chunks: list[str] = []
@@ -283,8 +283,7 @@ class SGLangEngine(TokenizerPromptEngine):
             return self._map_finish_reason(getattr(output, "finish_reason"))
         return self._map_finish_reason("stop")
 
-    def _estimate_usage(self, output: Any, request: InferenceRequest, text: str) -> tuple[int, int]:
-        prompt = self._build_prompt(request)
+    def _estimate_usage(self, output: Any, request: InferenceRequest, prompt: str, text: str) -> tuple[int, int]:
         prompt_tokens = self._count_prompt_tokens_from_prompt(request.model_id, prompt, request)
         completion_tokens = self._count_completion_tokens(request.model_id, text)
         if isinstance(output, dict):
