@@ -2,10 +2,12 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/vault"
@@ -188,6 +190,133 @@ func (g *Gateway) statsPayload() map[string]interface{} {
 	}
 }
 
+func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[string]interface{}, error) {
+	workspaceID = normalizeWorkspaceIDForGateway(workspaceID)
+	if g.auditStore == nil {
+		return nil, fmt.Errorf("audit store is not configured")
+	}
+
+	now = now.UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	summary, err := g.auditStore.UsageSummary(audit.UsageSummaryQuery{
+		Start:       monthStart,
+		End:         now,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var totals audit.UsageSummary
+	if summary != nil {
+		totals = *summary
+	}
+
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	trendStart := todayStart.AddDate(0, 0, -6)
+	trendEnd := todayStart.AddDate(0, 0, 1)
+	rows, err := g.auditStore.UsageByKey(audit.UsageQuery{
+		Start:       trendStart,
+		End:         trendEnd,
+		Bucket:      "day",
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	type usageBucket struct {
+		Requests  int64
+		Tokens    int64
+		Successes int64
+		Errors    int64
+	}
+	aggregate := make(map[int64]usageBucket, len(rows))
+	for _, row := range rows {
+		current := aggregate[row.BucketStartMS]
+		current.Requests += row.RequestCount
+		current.Tokens += row.TokenCount
+		current.Successes += row.SuccessCount
+		current.Errors += row.ErrorCount
+		aggregate[row.BucketStartMS] = current
+	}
+
+	trend := make([]map[string]any, 0, 7)
+	for bucket := trendStart; bucket.Before(trendEnd); bucket = bucket.Add(24 * time.Hour) {
+		snapshot := aggregate[bucket.UnixMilli()]
+		trend = append(trend, map[string]any{
+			"bucket_start": bucket.Format(time.RFC3339),
+			"requests":     snapshot.Requests,
+			"tokens":       snapshot.Tokens,
+			"successes":    snapshot.Successes,
+			"errors":       snapshot.Errors,
+		})
+	}
+
+	return map[string]any{
+		"workspace_id": workspaceID,
+		"period": map[string]any{
+			"current_month_start": monthStart.Format(time.RFC3339),
+			"current_period_end":  now.Format(time.RFC3339),
+			"trend_start":         trendStart.Format(time.RFC3339),
+			"trend_end":           trendEnd.Format(time.RFC3339),
+			"trend_bucket":        "day",
+		},
+		"totals": map[string]any{
+			"requests":  totals.RequestCount,
+			"tokens":    totals.TokenCount,
+			"successes": totals.SuccessCount,
+			"errors":    totals.ErrorCount,
+		},
+		"daily_trend": trend,
+	}, nil
+}
+
+func (g *Gateway) quotaStatusPayload(workspaceID string, now time.Time) (map[string]interface{}, error) {
+	workspaceID = normalizeWorkspaceIDForGateway(workspaceID)
+	if g.authHandler == nil {
+		return nil, fmt.Errorf("auth handler is not configured")
+	}
+
+	usageSummary, err := g.usageSummaryPayload(workspaceID, now)
+	if err != nil {
+		return nil, err
+	}
+
+	quota, err := g.authHandler.Store().GetWorkspaceQuota(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+
+	totals, _ := usageSummary["totals"].(map[string]any)
+	requestsUsed, _ := totals["requests"].(int64)
+	tokensUsed, _ := totals["tokens"].(int64)
+	requestPressure := computeQuotaPressure(quota.MonthlyRequestLimit, requestsUsed)
+	tokenPressure := computeQuotaPressure(quota.MonthlyTokenLimit, tokensUsed)
+
+	return map[string]any{
+		"workspace_id": workspaceID,
+		"period":       usageSummary["period"],
+		"quota": map[string]any{
+			"monthly_request_limit": quota.MonthlyRequestLimit,
+			"monthly_token_limit":   quota.MonthlyTokenLimit,
+			"enforce_hard_limits":   quota.EnforceHardLimits,
+			"updated_at":            quota.UpdatedAt.UTC().Format(time.RFC3339),
+		},
+		"usage": map[string]any{
+			"requests":  requestsUsed,
+			"tokens":    tokensUsed,
+			"successes": totals["successes"],
+			"errors":    totals["errors"],
+		},
+		"pressure": map[string]any{
+			"overall_status": deriveQuotaOverallStatus(requestPressure["status"], tokenPressure["status"]),
+			"requests":       requestPressure,
+			"tokens":         tokenPressure,
+		},
+	}, nil
+}
+
 func (h *InstanceHandlers) listInstanceEntriesForWorkspace(workspaceID string) []map[string]interface{} {
 	instances := h.manager.ListInstances()
 	if normalizeWorkspaceIDForGateway(workspaceID) != auth.DefaultWorkspaceID {
@@ -246,4 +375,49 @@ func normalizeWorkspaceIDForGateway(workspaceID string) string {
 		return auth.DefaultWorkspaceID
 	}
 	return workspaceID
+}
+
+func computeQuotaPressure(limit *int64, used int64) map[string]any {
+	if limit == nil || *limit <= 0 {
+		return map[string]any{
+			"used":   used,
+			"limit":  limit,
+			"ratio":  0.0,
+			"status": "unlimited",
+		}
+	}
+
+	ratio := float64(used) / float64(*limit)
+	status := "healthy"
+	switch {
+	case used > *limit:
+		status = "exceeded"
+	case ratio >= 0.8:
+		status = "near_limit"
+	}
+
+	return map[string]any{
+		"used":   used,
+		"limit":  *limit,
+		"ratio":  ratio,
+		"status": status,
+	}
+}
+
+func deriveQuotaOverallStatus(statuses ...any) string {
+	overall := "unlimited"
+	for _, raw := range statuses {
+		status, _ := raw.(string)
+		switch status {
+		case "exceeded":
+			return "exceeded"
+		case "near_limit":
+			overall = "near_limit"
+		case "healthy":
+			if overall != "near_limit" {
+				overall = "healthy"
+			}
+		}
+	}
+	return overall
 }

@@ -81,3 +81,8 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "hermes_api: Hermes Agents API contract and scenario coverage",
+    "mock_only: deterministic tests that rely on the built-in mock Hermes API transport",
+    "live: smoke tests against a live Hermes deployment",
+]

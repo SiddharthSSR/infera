@@ -177,6 +177,7 @@ class BaseInferenceEngine(InferenceEngine):
             "abort": FinishReason.ERROR,
             "cancelled": FinishReason.ERROR,
             "error": FinishReason.ERROR,
+            "tool_calls": FinishReason.TOOL_CALLS,
         }
         return reason_map.get(normalized, FinishReason.STOP)
 
@@ -277,17 +278,72 @@ class TokenizerPromptEngine(BaseInferenceEngine):
             return count
         return max(1, len(text) // 4) if text else 0
 
+    def _template_message(self, msg: Message) -> dict[str, Any]:
+        name = getattr(msg, "name", None)
+        tool_calls = getattr(msg, "tool_calls", None)
+        tool_call_id = getattr(msg, "tool_call_id", None)
+        payload: dict[str, Any] = {
+            "role": msg.role.value,
+            "content": msg.content or "",
+        }
+        if name:
+            payload["name"] = name
+        if tool_calls:
+            payload["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "type": tool_call.type,
+                    "function": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments,
+                    },
+                }
+                for tool_call in tool_calls
+            ]
+        if tool_call_id:
+            payload["tool_call_id"] = tool_call_id
+        return payload
+
+    def _template_messages(self, request: InferenceRequest) -> list[dict[str, Any]]:
+        return [self._template_message(msg) for msg in request.messages]
+
+    def _apply_chat_template(
+        self,
+        tokenizer: Any,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+    ) -> str:
+        base_kwargs: dict[str, Any] = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+        kwargs = dict(base_kwargs)
+        if tools is not None:
+            kwargs["tools"] = tools
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+
+        try:
+            return tokenizer.apply_chat_template(messages, **kwargs)
+        except TypeError as exc:
+            message = str(exc)
+            unsupported_tools = "tools" in kwargs and "tools" in message and "unexpected keyword" in message
+            unsupported_choice = (
+                "tool_choice" in kwargs and "tool_choice" in message and "unexpected keyword" in message
+            )
+            if not unsupported_tools and not unsupported_choice:
+                raise
+            return tokenizer.apply_chat_template(messages, **base_kwargs)
+
     def _build_prompt(self, request: InferenceRequest) -> str:
-        messages = [{"role": msg.role.value, "content": msg.content} for msg in request.messages]
+        messages = self._template_messages(request)
 
         tokenizer = self._get_tokenizer(request.model_id)
         if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
             try:
-                prompt = tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
+                prompt = self._apply_chat_template(tokenizer, messages)
                 return prompt
             except Exception:
                 pass
@@ -323,6 +379,32 @@ class TokenizerPromptEngine(BaseInferenceEngine):
             i += 1
 
         return "".join(parts)
+
+    def _build_prompt_with_tools(self, request: InferenceRequest) -> str:
+        if not request.tools:
+            return self._build_prompt(request)
+
+        tokenizer = self._get_tokenizer(request.model_id)
+        if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+            tools_schema = [
+                {"type": tool.type, "function": tool.function}
+                for tool in request.tools
+            ]
+            try:
+                return self._apply_chat_template(
+                    tokenizer,
+                    self._template_messages(request),
+                    tools=tools_schema,
+                    tool_choice=request.tool_choice,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "apply_chat_template with tools failed, falling back to base prompt",
+                    error=str(exc),
+                    model_id=request.model_id,
+                )
+
+        return self._build_prompt(request)
 
     def _build_response_message(self, text: str) -> Message:
         return Message(role=Role.ASSISTANT, content=text)

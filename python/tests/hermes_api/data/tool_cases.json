@@ -1,0 +1,113 @@
+[
+  {
+    "id": "tool-list-models",
+    "title": "List models",
+    "category": "tool",
+    "prompt": "List the models available in this workspace.",
+    "mode": "operations",
+    "expected_tools": ["list_models"],
+    "expected_arguments": {"list_models": {}},
+    "response_keywords": ["models", "available"],
+    "final_output": "Workspace models are available and ready for inspection."
+  },
+  {
+    "id": "tool-list-workers",
+    "title": "List workers",
+    "category": "tool",
+    "prompt": "Check current worker health for this workspace.",
+    "mode": "operations",
+    "expected_tools": ["list_workers"],
+    "expected_arguments": {"list_workers": {}},
+    "response_keywords": ["worker", "health"],
+    "final_output": "Worker health looks stable with a healthy serving node."
+  },
+  {
+    "id": "tool-gateway-stats",
+    "title": "Gateway stats",
+    "category": "tool",
+    "prompt": "Summarize current gateway pressure.",
+    "mode": "operations",
+    "expected_tools": ["get_gateway_stats"],
+    "expected_arguments": {"get_gateway_stats": {}},
+    "response_keywords": ["gateway", "pressure"],
+    "final_output": "Gateway pressure is low and request latency is stable."
+  },
+  {
+    "id": "tool-list-instances",
+    "title": "List instances",
+    "category": "tool",
+    "prompt": "List the provisioned instances visible to this workspace.",
+    "mode": "operations",
+    "expected_tools": ["list_instances"],
+    "expected_arguments": {"list_instances": {}},
+    "response_keywords": ["instance", "running"],
+    "final_output": "There is one running instance serving the workspace."
+  },
+  {
+    "id": "tool-list-deployments",
+    "title": "List deployments",
+    "category": "tool",
+    "prompt": "Show the 5 most recent deployments.",
+    "mode": "operations",
+    "expected_tools": ["list_deployments"],
+    "expected_arguments": {"list_deployments": {"limit": 5}},
+    "response_keywords": ["deployments", "recent"],
+    "final_output": "Recent deployments show a successful rollout for the selected model."
+  },
+  {
+    "id": "tool-provider-status",
+    "title": "Provider status",
+    "category": "tool",
+    "prompt": "Check provider connectivity status for this workspace.",
+    "mode": "operations",
+    "expected_tools": ["get_provider_status"],
+    "expected_arguments": {"get_provider_status": {}},
+    "response_keywords": ["provider", "connectivity"],
+    "final_output": "Provider connectivity is healthy and the workspace still has quota remaining."
+  },
+  {
+    "id": "tool-usage-summary",
+    "title": "Usage summary",
+    "category": "tool",
+    "prompt": "Summarize current-month usage and the last 7 days.",
+    "mode": "operations",
+    "expected_tools": ["get_usage_summary"],
+    "expected_arguments": {"get_usage_summary": {}},
+    "response_keywords": ["usage", "request", "token"],
+    "final_output": "Usage is steady this month, with moderate request and token volume over the last week."
+  },
+  {
+    "id": "tool-quota-status",
+    "title": "Quota status",
+    "category": "tool",
+    "prompt": "Am I near my workspace quota limits?",
+    "mode": "operations",
+    "expected_tools": ["get_quota_status"],
+    "expected_arguments": {"get_quota_status": {}},
+    "response_keywords": ["quota", "pressure"],
+    "final_output": "Quota pressure is low and there is no immediate risk of hitting workspace limits."
+  },
+  {
+    "id": "tool-web-search",
+    "title": "Web search",
+    "category": "tool",
+    "prompt": "Check the official RunPod status page and cite it.",
+    "mode": "research",
+    "expected_tools": ["web_search"],
+    "expected_arguments": {"web_search": {"query": "RunPod status page", "max_results": 3}},
+    "response_keywords": ["RunPod", "Sources"],
+    "final_output": "RunPod status looks healthy.\n\n- The official status page reports no active incident.\n\nSources\n- [RunPod Status](https://status.runpod.io/)"
+  },
+  {
+    "id": "tool-vision-analyze",
+    "title": "Vision analyze",
+    "category": "tool",
+    "prompt": "Inspect this screenshot and explain what it shows.",
+    "mode": "multimodal",
+    "needs_attachment": true,
+    "expected_tools": ["vision_analyze"],
+    "expected_arguments": {"vision_analyze": {"attachment_id": "$attachment_id", "question": "Inspect this screenshot and explain what it shows.", "focus": "runtime status"}},
+    "response_keywords": ["screenshot", "dashboard"],
+    "final_output": "The screenshot looks like a healthy runtime dashboard with no visible incident banner."
+  }
+]

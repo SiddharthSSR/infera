@@ -11,7 +11,7 @@ from infera_worker.config import ModelConfig, WorkerConfig
 from infera_worker.engine import MockEngine, create_engine, get_engine_definition, list_engine_definitions
 from infera_worker.engines import sglang_engine as sglang_module
 from infera_worker.engines import tensorrt_llm_engine as tensorrt_module
-from infera_worker.types import FinishReason, InferenceRequest, Message, Role
+from infera_worker.types import FinishReason, InferenceRequest, Message, Role, ToolDefinition
 
 
 @pytest.fixture
@@ -196,6 +196,70 @@ class TestSGLangEngine:
         monkeypatch.setattr(sglang_module, "SGLANG_AVAILABLE", False)
         with pytest.raises(ImportError, match="SGLang is not installed"):
             sglang_module.SGLangEngine(WorkerConfig(engine="sglang"))
+
+    @pytest.mark.asyncio
+    async def test_sglang_engine_passes_tools_to_chat_template(self, monkeypatch):
+        class FakeSGLangEngine:
+            def __init__(self, **kwargs):
+                self.server_args = SimpleNamespace(context_length=8192)
+
+            async def async_generate(self, prompts, sampling_params):
+                del sampling_params
+                assert prompts == ["templated-with-tools"]
+                return [{"text": "tool response", "meta_info": {"prompt_tokens": 4, "completion_tokens": 2}}]
+
+            def shutdown(self):
+                return None
+
+        monkeypatch.setattr(sglang_module, "SGLANG_AVAILABLE", True)
+        monkeypatch.setattr(sglang_module, "sgl", SimpleNamespace(Engine=FakeSGLangEngine))
+        monkeypatch.setattr(sglang_module, "async_stream_and_merge", None)
+
+        observed: dict[str, object] = {}
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, tools=None, tool_choice=None):
+                observed["messages"] = messages
+                observed["tools"] = tools
+                observed["tool_choice"] = tool_choice
+                assert tokenize is False
+                assert add_generation_prompt is True
+                return "templated-with-tools"
+
+            def encode(self, text, add_special_tokens=False):
+                del add_special_tokens
+                return [1, 2, 3, 4] if text == "templated-with-tools" else [1, 2]
+
+        monkeypatch.setattr(
+            sglang_module.TokenizerPromptEngine,
+            "_get_tokenizer",
+            lambda _self, _model_id: FakeTokenizer(),
+        )
+
+        engine = sglang_module.SGLangEngine(WorkerConfig(engine="sglang", tool_call_parser="hermes"))
+        await engine.load_model(ModelConfig(model_id="test-model"))
+
+        response = await engine.infer(
+            InferenceRequest(
+                request_id="sglang-tools",
+                model_id="test-model",
+                messages=[Message(role=Role.USER, content="Check weather")],
+                tools=[
+                    ToolDefinition(
+                        type="function",
+                        function={"name": "get_weather", "parameters": {"type": "object"}},
+                    )
+                ],
+                tool_choice={"type": "function", "function": {"name": "get_weather"}},
+            )
+        )
+
+        assert observed["messages"] == [{"role": "user", "content": "Check weather"}]
+        assert observed["tools"] == [
+            {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+        ]
+        assert observed["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
+        assert response.choices[0].message.content == "tool response"
 
 
 class TestTensorRTLLMEngine:

@@ -178,6 +178,12 @@ class WorkerConfig(BaseSettings):
         description="Optional TensorRT-LLM backend selector",
     )
     
+    # Tool calling
+    tool_call_parser: str = Field(
+        default="",
+        description="Tool call parser for vLLM/SGLang (e.g. 'hermes', 'mistral', 'llama3_json')",
+    )
+
     # Logging
     log_level: str = Field(default="INFO", description="Log level")
     log_format: str = Field(default="json", description="Log format: json, console")

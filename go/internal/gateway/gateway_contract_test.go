@@ -43,16 +43,18 @@ func TestHandleChatCompletionsReturnsOpenAICompatibleResponse(t *testing.T) {
 			Choices: []struct {
 				Index   int `json:"index"`
 				Message struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
+					Role      string           `json:"role"`
+					Content   string           `json:"content"`
+					ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 				} `json:"message"`
 				FinishReason string `json:"finish_reason"`
 			}{
 				{
 					Index: 0,
 					Message: struct {
-						Role    string `json:"role"`
-						Content string `json:"content"`
+						Role      string           `json:"role"`
+						Content   string           `json:"content"`
+						ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 					}{
 						Role:    "assistant",
 						Content: "hello from worker",
@@ -156,16 +158,18 @@ func TestHandleChatCompletionsPassesOpenAIParametersToWorker(t *testing.T) {
 			Choices: []struct {
 				Index   int `json:"index"`
 				Message struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
+					Role      string           `json:"role"`
+					Content   string           `json:"content"`
+					ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 				} `json:"message"`
 				FinishReason string `json:"finish_reason"`
 			}{
 				{
 					Index: 0,
 					Message: struct {
-						Role    string `json:"role"`
-						Content string `json:"content"`
+						Role      string           `json:"role"`
+						Content   string           `json:"content"`
+						ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 					}{Role: "assistant", Content: "ok"},
 					FinishReason: "stop",
 				},
@@ -201,16 +205,18 @@ func TestHandleChatCompletionsRecordsBatchAndLatencyMetrics(t *testing.T) {
 			Choices: []struct {
 				Index   int `json:"index"`
 				Message struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
+					Role      string           `json:"role"`
+					Content   string           `json:"content"`
+					ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 				} `json:"message"`
 				FinishReason string `json:"finish_reason"`
 			}{
 				{
 					Index: 0,
 					Message: struct {
-						Role    string `json:"role"`
-						Content string `json:"content"`
+						Role      string           `json:"role"`
+						Content   string           `json:"content"`
+						ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 					}{Role: "assistant", Content: "hello from metrics"},
 					FinishReason: "stop",
 				},

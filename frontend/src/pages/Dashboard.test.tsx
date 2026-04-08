@@ -91,7 +91,7 @@ describe('Dashboard', () => {
     expect(screen.queryByText('TOTAL REQUESTS')).not.toBeInTheDocument()
   })
 
-  it('renders core pipeline metrics from API data', () => {
+  it('renders core pipeline metrics from API data', async () => {
     mocks.workers = {
       data: [
         { worker_id: 'w1', status: 'healthy', gpu_utilization: 70, memory_used: 4, memory_total: 8, models: ['meta/model-a'] },
@@ -141,9 +141,9 @@ describe('Dashboard', () => {
 
     render(<Dashboard />)
 
-    expect(screen.getByText('8640.0K')).toBeInTheDocument()
-    expect(screen.getByText('124ms')).toBeInTheDocument()
-    expect(screen.getByText('100.0 r/s')).toBeInTheDocument()
+    expect(await screen.findByText('8.6M', {}, { timeout: 2000 })).toBeInTheDocument()
+    expect(await screen.findByText('124ms', {}, { timeout: 2000 })).toBeInTheDocument()
+    expect(await screen.findByText('100.0 r/s', {}, { timeout: 2000 })).toBeInTheDocument()
     expect(screen.getByText('2 / 3')).toBeInTheDocument()
     expect(screen.getByText('$3.21')).toBeInTheDocument()
     expect(screen.getByText('TODAY TOTAL')).toBeInTheDocument()

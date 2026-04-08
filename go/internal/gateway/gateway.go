@@ -53,7 +53,9 @@ type Gateway struct {
 	deploymentStore *deployments.Store
 
 	// Agents runtime
-	agentRuntime *agents.Runtime
+	agentRuntime   *agents.Runtime
+	webSearcher    WebSearcher
+	visionAnalyzer VisionAnalyzer
 
 	// Rate limiting
 	rateLimiter *RateLimiter
@@ -127,6 +129,8 @@ func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gatew
 		log:                NewLogger(),
 		workerClients:      make(map[string]*WorkerClient),
 		startedAt:          time.Now(),
+		webSearcher:        newDuckDuckGoWebSearcher(),
+		visionAnalyzer:     newScreenshotAnalyzer(),
 	}
 
 	if r != nil {
@@ -192,6 +196,14 @@ func (g *Gateway) SetAgentRuntime(runtime *agents.Runtime) {
 	g.agentRuntime = runtime
 }
 
+func (g *Gateway) SetWebSearcher(searcher WebSearcher) {
+	g.webSearcher = searcher
+}
+
+func (g *Gateway) SetVisionAnalyzer(analyzer VisionAnalyzer) {
+	g.visionAnalyzer = analyzer
+}
+
 // Start starts the HTTP server.
 func (g *Gateway) Start() error {
 	mux := http.NewServeMux()
@@ -247,8 +259,15 @@ func (g *Gateway) Start() error {
 	}
 	if g.agentRuntime != nil {
 		mux.HandleFunc("/api/agents", withAuth(g.handleAgents))
+		mux.HandleFunc("/api/agent-attachments", withAuth(g.handleAgentAttachments))
 		mux.HandleFunc("/api/agents/runs", withAuth(g.handleAgentRuns))
 		mux.HandleFunc("/api/agents/runs/", withAuth(g.handleAgentRunByID))
+		mux.HandleFunc("/api/agents/definitions", withAuth(g.handleAgentDefinitions))
+		mux.HandleFunc("/api/agents/definitions/", withAuth(g.handleAgentDefinitionByID))
+		mux.HandleFunc("/api/agents/webhooks", withAuth(g.handleAgentWebhooks))
+		mux.HandleFunc("/api/agents/webhooks/", withAuth(g.handleAgentWebhookByID))
+		// External API: API-key authenticated, rate-limited (same policy as /v1/chat/completions).
+		mux.HandleFunc("/v1/agents/runs", withAuth(withRateLimit(g.handleExternalAgentRun)))
 	}
 
 	// Apply middleware chain: recovery → request ID → body size limit.
@@ -376,16 +395,18 @@ func (g *Gateway) requireWorkerToken(next http.HandlerFunc) http.HandlerFunc {
 
 // ChatCompletionRequest is the OpenAI-compatible request format.
 type ChatCompletionRequest struct {
-	Model            string        `json:"model"`
-	Messages         []ChatMessage `json:"messages"`
-	Temperature      *float64      `json:"temperature,omitempty"`
-	TopP             *float64      `json:"top_p,omitempty"`
-	MaxTokens        *int          `json:"max_tokens,omitempty"`
-	Stop             StopSequences `json:"stop,omitempty"`
-	Stream           bool          `json:"stream,omitempty"`
-	Seed             *int64        `json:"seed,omitempty"`
-	PresencePenalty  *float64      `json:"presence_penalty,omitempty"`
-	FrequencyPenalty *float64      `json:"frequency_penalty,omitempty"`
+	Model            string            `json:"model"`
+	Messages         []ChatMessage     `json:"messages"`
+	Temperature      *float64          `json:"temperature,omitempty"`
+	TopP             *float64          `json:"top_p,omitempty"`
+	MaxTokens        *int              `json:"max_tokens,omitempty"`
+	Stop             StopSequences     `json:"stop,omitempty"`
+	Stream           bool              `json:"stream,omitempty"`
+	Seed             *int64            `json:"seed,omitempty"`
+	PresencePenalty  *float64          `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64          `json:"frequency_penalty,omitempty"`
+	Tools            []json.RawMessage `json:"tools,omitempty"`
+	ToolChoice       json.RawMessage   `json:"tool_choice,omitempty"`
 }
 
 // StopSequences accepts either a single stop string or a list of stop strings.
@@ -414,9 +435,11 @@ func (s *StopSequences) UnmarshalJSON(data []byte) error {
 
 // ChatMessage is a single message.
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-	Name    string `json:"name,omitempty"`
+	Role       string            `json:"role"`
+	Content    string            `json:"content"`
+	Name       string            `json:"name,omitempty"`
+	ToolCalls  []json.RawMessage `json:"tool_calls,omitempty"`
+	ToolCallID string            `json:"tool_call_id,omitempty"`
 }
 
 // ChatCompletionResponse is the OpenAI-compatible response format.
@@ -461,8 +484,9 @@ type ChatChunkChoice struct {
 
 // ChatDelta is the delta content in streaming.
 type ChatDelta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role      string            `json:"role,omitempty"`
+	Content   string            `json:"content,omitempty"`
+	ToolCalls []json.RawMessage `json:"tool_calls,omitempty"`
 }
 
 func hashPrompt(messages []ChatMessage) string {
@@ -754,8 +778,9 @@ func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context
 		openAIResp.Choices[i] = ChatChoice{
 			Index: choice.Index,
 			Message: ChatMessage{
-				Role:    string(choice.Message.Role),
-				Content: choice.Message.Content,
+				Role:      string(choice.Message.Role),
+				Content:   choice.Message.Content,
+				ToolCalls: marshalToolCalls(choice.Message.ToolCalls),
 			},
 			FinishReason: string(choice.FinishReason),
 		}
@@ -797,8 +822,9 @@ func (g *Gateway) writeChatCompletionResponse(w http.ResponseWriter, requestID, 
 		openAIResp.Choices[i] = ChatChoice{
 			Index: choice.Index,
 			Message: ChatMessage{
-				Role:    string(choice.Message.Role),
-				Content: choice.Message.Content,
+				Role:      string(choice.Message.Role),
+				Content:   choice.Message.Content,
+				ToolCalls: marshalToolCalls(choice.Message.ToolCalls),
 			},
 			FinishReason: string(choice.FinishReason),
 		}
@@ -911,7 +937,8 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 				{
 					Index: chunk.Index,
 					Delta: ChatDelta{
-						Content: chunk.Delta,
+						Content:   chunk.Delta,
+						ToolCalls: marshalToolCallChunkDeltas(chunk.ToolCalls),
 					},
 				},
 			},
@@ -1513,9 +1540,11 @@ func (g *Gateway) toInferenceRequest(r *http.Request, req *ChatCompletionRequest
 	messages := make([]types.Message, len(req.Messages))
 	for i, msg := range req.Messages {
 		messages[i] = types.Message{
-			Role:    types.Role(msg.Role),
-			Content: msg.Content,
-			Name:    msg.Name,
+			Role:       types.Role(msg.Role),
+			Content:    msg.Content,
+			Name:       msg.Name,
+			ToolCalls:  convertToolCalls(msg.ToolCalls),
+			ToolCallID: msg.ToolCallID,
 		}
 	}
 
@@ -1551,7 +1580,69 @@ func (g *Gateway) toInferenceRequest(r *http.Request, req *ChatCompletionRequest
 		Priority:   types.PriorityNormal,
 		Metadata:   buildAffinityMetadata(r, req),
 		CreatedAt:  time.Now(),
+		Tools:      convertToolDefinitions(req.Tools),
+		ToolChoice: req.ToolChoice,
 	}
+}
+
+// convertToolCalls unmarshals a slice of raw JSON tool call objects into typed ToolCall values.
+// Items that fail to unmarshal are silently dropped — we prefer a degraded pass-through
+// over rejecting the whole request for a single malformed entry.
+func convertToolCalls(raw []json.RawMessage) []types.ToolCall {
+	if len(raw) == 0 {
+		return nil
+	}
+	result := make([]types.ToolCall, 0, len(raw))
+	for _, r := range raw {
+		var tc types.ToolCall
+		if err := json.Unmarshal(r, &tc); err == nil {
+			result = append(result, tc)
+		}
+	}
+	return result
+}
+
+// convertToolDefinitions unmarshals a slice of raw JSON tool definition objects into typed
+// ToolDefinition values. Items that fail to unmarshal are silently dropped.
+func convertToolDefinitions(raw []json.RawMessage) []types.ToolDefinition {
+	if len(raw) == 0 {
+		return nil
+	}
+	result := make([]types.ToolDefinition, 0, len(raw))
+	for _, r := range raw {
+		var td types.ToolDefinition
+		if err := json.Unmarshal(r, &td); err == nil {
+			result = append(result, td)
+		}
+	}
+	return result
+}
+
+// marshalToolCalls serialises typed ToolCall values back into raw JSON for the API response.
+// A nil or empty input returns nil so the field is omitted from the JSON output.
+func marshalToolCalls(calls []types.ToolCall) []json.RawMessage {
+	if len(calls) == 0 {
+		return nil
+	}
+	result := make([]json.RawMessage, len(calls))
+	for i, tc := range calls {
+		data, _ := json.Marshal(tc)
+		result[i] = data
+	}
+	return result
+}
+
+// marshalToolCallChunkDeltas serialises streaming tool-call deltas into raw JSON slices.
+func marshalToolCallChunkDeltas(deltas []types.ToolCallChunkDelta) []json.RawMessage {
+	if len(deltas) == 0 {
+		return nil
+	}
+	result := make([]json.RawMessage, len(deltas))
+	for i, d := range deltas {
+		data, _ := json.Marshal(d)
+		result[i] = data
+	}
+	return result
 }
 
 func defaultRequestID(r *http.Request) string {

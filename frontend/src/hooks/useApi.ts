@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  fetchWorkers, fetchModels, fetchStats,
+  fetchWorkers, fetchModels, fetchStats, fetchAgents,
   fetchInstances, fetchOfferings, fetchProviders, fetchCosts,
   provisionInstance, terminateInstance, startInstance, stopInstance,
   fetchDeploymentAttempts, updateDeploymentVerification, markDeploymentAutoVerificationRequested,
@@ -24,6 +24,14 @@ export function useModels() {
     queryKey: ['models'],
     queryFn: fetchModels,
     refetchInterval: 10000,
+  });
+}
+
+export function useAgents() {
+  return useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    refetchInterval: 30000,
   });
 }
 

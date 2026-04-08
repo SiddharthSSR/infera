@@ -9,6 +9,7 @@ import pytest
 
 from infera_worker.config import ModelConfig, WorkerConfig
 from infera_worker.engines import vllm_engine as vllm_module
+from infera_worker.types import FunctionCall, Message, Role, ToolCall, ToolDefinition
 
 
 class FakeAsyncEngineArgs:
@@ -229,6 +230,91 @@ async def test_vllm_engine_defers_tokenizer_load_until_prompt_build(monkeypatch)
     )
     assert created_tokenizers == ["Qwen/Qwen2.5-7B-Instruct"]
     assert prompt == "templated:Hello"
+
+
+@pytest.mark.asyncio
+async def test_vllm_prompt_builder_preserves_tool_call_messages(monkeypatch):
+    monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
+    monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgs)
+    monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
+
+    observed: dict[str, object] = {}
+
+    class FakeTokenizer:
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, tools=None, tool_choice=None):
+            observed["messages"] = messages
+            observed["tools"] = tools
+            observed["tool_choice"] = tool_choice
+            return "templated:tools"
+
+    class FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model_path, trust_remote_code):
+            del model_path, trust_remote_code
+            return FakeTokenizer()
+
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer))
+
+    engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm"))
+    await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
+
+    prompt = engine._build_prompt_with_tools(
+        SimpleNamespace(
+            model_id="Qwen/Qwen2.5-7B-Instruct",
+            messages=[
+                Message(
+                    role=Role.ASSISTANT,
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            type="function",
+                            function=FunctionCall(name="get_weather", arguments="{\"city\":\"SF\"}"),
+                        )
+                    ],
+                ),
+                Message(
+                    role=Role.TOOL,
+                    content="{\"temp\":72}",
+                    tool_call_id="call_1",
+                ),
+            ],
+            tools=[
+                ToolDefinition(
+                    type="function",
+                    function={"name": "get_weather", "parameters": {"type": "object"}},
+                )
+            ],
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+    )
+
+    assert prompt == "templated:tools"
+    assert observed["messages"] == [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"city\":\"SF\"}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": "{\"temp\":72}",
+            "tool_call_id": "call_1",
+        },
+    ]
+    assert observed["tools"] == [
+        {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+    ]
+    assert observed["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,8 @@ import asyncio
 import inspect
 from typing import Any
 
+import structlog
+
 from ..config import ModelConfig, WorkerConfig
 from ..engine import EngineCapabilities, EngineDefinition, register_engine
 from ..types import Choice, InferenceRequest, InferenceResponse, LatencyStats, LoadedModel, TokenChunk, UsageStats
@@ -22,6 +24,8 @@ except ImportError:
     SGLANG_AVAILABLE = False
     sgl = None
     async_stream_and_merge = None
+
+logger = structlog.get_logger()
 
 
 class SGLangEngine(TokenizerPromptEngine):
@@ -41,7 +45,7 @@ class SGLangEngine(TokenizerPromptEngine):
 
         runtime = self.config.sglang_runtime
         engine_kwargs: dict[str, Any] = {"model_path": model_path}
-        optional_kwargs = {
+        optional_kwargs: dict[str, Any] = {
             "tp_size": runtime.tp_size,
             "mem_fraction_static": runtime.mem_fraction_static,
             "context_length": runtime.context_length,
@@ -53,6 +57,15 @@ class SGLangEngine(TokenizerPromptEngine):
             "disable_cuda_graph": runtime.disable_cuda_graph,
             "quantization": model_config.quantization,
         }
+
+        tool_call_parser = self.config.tool_call_parser.strip()
+        if tool_call_parser:
+            optional_kwargs["tool_call_parser"] = tool_call_parser
+            logger.info(
+                "SGLang tool calling enabled",
+                tool_call_parser=tool_call_parser,
+                model_id=model_config.model_id,
+            )
 
         signature = inspect.signature(sgl.Engine)
         supported_kwargs = set(signature.parameters)
@@ -110,14 +123,14 @@ class SGLangEngine(TokenizerPromptEngine):
 
         self.active_requests.add(request.request_id)
         try:
-            prompt = self._build_prompt(request)
+            prompt = self._build_prompt_with_tools(request)
             sampling_params = self._build_sampling_params(request)
             if async_stream_and_merge is None:
                 outputs = await engine.async_generate([prompt], sampling_params)
                 final_output = outputs[0]
                 text = self._extract_text(final_output)
                 first_token_time: datetime | None = None
-                prompt_tokens, completion_tokens = self._estimate_usage(final_output, request, text)
+                prompt_tokens, completion_tokens = self._estimate_usage(final_output, request, prompt, text)
             else:
                 first_token_time = None
                 chunks: list[str] = []
@@ -173,7 +186,7 @@ class SGLangEngine(TokenizerPromptEngine):
 
         self.active_requests.add(request.request_id)
         try:
-            prompt = self._build_prompt(request)
+            prompt = self._build_prompt_with_tools(request)
             sampling_params = self._build_sampling_params(request)
             chunk_index = 0
             accumulated = ""
@@ -270,8 +283,7 @@ class SGLangEngine(TokenizerPromptEngine):
             return self._map_finish_reason(getattr(output, "finish_reason"))
         return self._map_finish_reason("stop")
 
-    def _estimate_usage(self, output: Any, request: InferenceRequest, text: str) -> tuple[int, int]:
-        prompt = self._build_prompt(request)
+    def _estimate_usage(self, output: Any, request: InferenceRequest, prompt: str, text: str) -> tuple[int, int]:
         prompt_tokens = self._count_prompt_tokens_from_prompt(request.model_id, prompt, request)
         completion_tokens = self._count_completion_tokens(request.model_id, text)
         if isinstance(output, dict):

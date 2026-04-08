@@ -10,6 +10,10 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ChatContext, type ChatContextType, type Message, type PlaygroundHistoryEntry } from './lib/chat-context';
 import { lazyWithRetry } from './lib/lazyWithRetry';
 import { useIsMobile } from './hooks/useIsMobile';
+import type { AgentAnalysisDepth, AgentExecutionMode, PlaygroundMode } from './types';
+import { AppShell, PageHeader } from './components/shared';
+import { CommandPalette } from './components/CommandPalette';
+import { PageTransition } from './components/PageTransition';
 
 import { Dashboard } from './pages/Dashboard';
 import { Playground } from './pages/Playground';
@@ -297,6 +301,11 @@ function AppContent() {
   // Chat state - persisted across page switches
   const [messages, setMessages] = useState<Message[]>([]);
   const [history, setHistory] = useState<PlaygroundHistoryEntry[]>([]);
+  const [playgroundMode, setPlaygroundMode] = useState<PlaygroundMode>('chat');
+  const [selectedAgentID, setSelectedAgentID] = useState('');
+  const [agentMaxSteps, setAgentMaxSteps] = useState(8);
+  const [agentExecutionMode, setAgentExecutionMode] = useState<AgentExecutionMode>('operations');
+  const [agentAnalysisDepth, setAgentAnalysisDepth] = useState<AgentAnalysisDepth>('standard');
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
@@ -333,6 +342,11 @@ function AppContent() {
   const handleLogout = useCallback(() => {
     setMessages([]);
     setHistory([]);
+    setPlaygroundMode('chat');
+    setSelectedAgentID('');
+    setAgentMaxSteps(8);
+    setAgentExecutionMode('operations');
+    setAgentAnalysisDepth('standard');
     setSelectedModel('');
     setTemperature(0.7);
     setMaxTokens(2048);
@@ -361,6 +375,11 @@ function AppContent() {
       }
       setMessages([]);
       setHistory([]);
+      setPlaygroundMode('chat');
+      setSelectedAgentID('');
+      setAgentMaxSteps(8);
+      setAgentExecutionMode('operations');
+      setAgentAnalysisDepth('standard');
       setSelectedModel('');
       setTemperature(0.7);
       setMaxTokens(2048);
@@ -482,6 +501,16 @@ function AppContent() {
     setMessages,
     history,
     setHistory,
+    playgroundMode,
+    setPlaygroundMode,
+    selectedAgentID,
+    setSelectedAgentID,
+    agentMaxSteps,
+    setAgentMaxSteps,
+    agentExecutionMode,
+    setAgentExecutionMode,
+    agentAnalysisDepth,
+    setAgentAnalysisDepth,
     selectedModel,
     setSelectedModel,
     temperature,
@@ -502,31 +531,34 @@ function AppContent() {
       }}
     >
     <ChatContext.Provider value={chatContextValue}>
-      <div className="app-shell app-shell-auth">
+      <AppShell variant="auth">
         {!hideAppChrome && <TopNav onLogout={handleLogout} />}
         {!hideDisplayHeader && (
-          <header className="page-header">
-            <div className="page-header-eyebrow">{currentPage.eyebrow}</div>
-            <div className="page-header-title">{currentPage.title}</div>
-            <p className="page-header-description">{currentPage.description}</p>
-          </header>
+          <PageHeader
+            eyebrow={currentPage.eyebrow}
+            title={currentPage.title}
+            description={currentPage.description}
+          />
         )}
         <Suspense fallback={<RouteLoader />}>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/playground" element={<Playground />} />
-            <Route path="/models" element={<Models />} />
-            <Route path="/instances" element={<Instances />} />
-            <Route path="/logs" element={<Logs />} />
-            <Route path="/api-keys" element={<ApiKeys />} />
-            <Route path="/workspace" element={<WorkspaceAdmin />} />
-            <Route path="/docs" element={<PublicApiDocs />} />
-            <Route path="/getting-started" element={<GettingStarted />} />
-            <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <PageTransition>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/playground" element={<Playground />} />
+              <Route path="/models" element={<Models />} />
+              <Route path="/instances" element={<Instances />} />
+              <Route path="/logs" element={<Logs />} />
+              <Route path="/api-keys" element={<ApiKeys />} />
+              <Route path="/workspace" element={<WorkspaceAdmin />} />
+              <Route path="/docs" element={<PublicApiDocs />} />
+              <Route path="/getting-started" element={<GettingStarted />} />
+              <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </PageTransition>
         </Suspense>
-      </div>
+        <CommandPalette />
+      </AppShell>
     </ChatContext.Provider>
     </AuthContext.Provider>
   );

@@ -21,11 +21,14 @@ from prometheus_client import (
 
 from .config import ModelConfig, WorkerConfig
 from .types import (
+    FunctionCall,
     InferenceParameters,
     InferenceRequest,
     Message,
     Priority,
     Role,
+    ToolCall,
+    ToolDefinition,
     WorkerState,
 )
 from .worker import Worker
@@ -593,6 +596,17 @@ class HTTPServer:
                         }
                         token_count = max(token_count, chunk.usage.total_tokens)
 
+                    if chunk.tool_calls is not None:
+                        chunk_data["tool_calls"] = [
+                            {
+                                "index": tc.index,
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": tc.function,
+                            }
+                            for tc in chunk.tool_calls
+                        ]
+
                     await response.write(json.dumps(chunk_data).encode() + b"\n")
             except ValueError as e:
                 status = "invalid_request"
@@ -750,11 +764,30 @@ class HTTPServer:
 
     def _parse_request(self, data: dict[str, Any]) -> InferenceRequest:
         """Parse request data into InferenceRequest."""
+
+        def _parse_tool_calls(raw_calls: list | None) -> list[ToolCall] | None:
+            if not raw_calls:
+                return None
+            result = []
+            for tc in raw_calls:
+                fn = tc.get("function", {})
+                result.append(ToolCall(
+                    id=tc.get("id", ""),
+                    type=tc.get("type", "function"),
+                    function=FunctionCall(
+                        name=fn.get("name", ""),
+                        arguments=fn.get("arguments", ""),
+                    ),
+                ))
+            return result or None
+
         messages = [
             Message(
                 role=Role(msg.get("role", "user")),
-                content=msg.get("content", ""),
+                content=msg.get("content") or "",
                 name=msg.get("name"),
+                tool_calls=_parse_tool_calls(msg.get("tool_calls")),
+                tool_call_id=msg.get("tool_call_id"),
             )
             for msg in data.get("messages", [])
         ]
@@ -778,6 +811,19 @@ class HTTPServer:
             seed=params_data.get("seed"),
         )
 
+        tools: list[ToolDefinition] | None = None
+        raw_tools = data.get("tools")
+        if raw_tools:
+            tools = [
+                ToolDefinition(
+                    type=t.get("type", "function"),
+                    function=t.get("function", {}),
+                )
+                for t in raw_tools
+            ]
+
+        tool_choice = data.get("tool_choice")
+
         return InferenceRequest(
             request_id=data.get("request_id", ""),
             model_id=model_id,
@@ -786,24 +832,40 @@ class HTTPServer:
             stream=data.get("stream", False),
             priority=Priority(data.get("priority", 2)),
             metadata=data.get("metadata", {}),
+            tools=tools,
+            tool_choice=tool_choice,
         )
 
     def _format_response(self, response) -> dict[str, Any]:
         """Format InferenceResponse as dict."""
+        choices = []
+        for choice in response.choices:
+            choice_dict: dict[str, Any] = {
+                "index": choice.index,
+                "message": {
+                    "role": choice.message.role.value,
+                    "content": choice.message.content,
+                },
+                "finish_reason": choice.finish_reason.value,
+            }
+            if choice.message.tool_calls:
+                choice_dict["message"]["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in choice.message.tool_calls
+                ]
+            choices.append(choice_dict)
+
         return {
             "request_id": response.request_id,
             "model_id": response.model_id,
-            "choices": [
-                {
-                    "index": choice.index,
-                    "message": {
-                        "role": choice.message.role.value,
-                        "content": choice.message.content,
-                    },
-                    "finish_reason": choice.finish_reason.value,
-                }
-                for choice in response.choices
-            ],
+            "choices": choices,
             "usage": {
                 "prompt_tokens": response.usage.prompt_tokens,
                 "completion_tokens": response.usage.completion_tokens,

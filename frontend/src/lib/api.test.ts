@@ -37,6 +37,11 @@ import {
   updateDeploymentVerification,
   markDeploymentAutoVerificationRequested,
   switchSessionWorkspace,
+  fetchAgents,
+  uploadAgentAttachment,
+  createAgentRun,
+  fetchAgentRunDetail,
+  cancelAgentRun,
 } from './api'
 
 const mockFetch = vi.fn()
@@ -277,6 +282,155 @@ describe('API Functions', () => {
         '/api/deployments/attempt-1/auto-verification',
         expect.objectContaining({ method: 'PUT', credentials: 'include' }),
       )
+    })
+  })
+
+  describe('agent endpoints', () => {
+    it('fetchAgents should parse the agent list response', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          default_agent_id: 'hermes',
+          agents: [{ id: 'hermes', name: 'Hermes', description: 'Hybrid copilot', default_max_steps: 8, tools: [] }],
+        }),
+      })
+
+      await expect(fetchAgents()).resolves.toEqual({
+        default_agent_id: 'hermes',
+        agents: [{ id: 'hermes', name: 'Hermes', description: 'Hybrid copilot', default_max_steps: 8, tools: [] }],
+      })
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/agents',
+        expect.objectContaining({ credentials: 'include' }),
+      )
+    })
+
+    it('uploadAgentAttachment should submit multipart form data', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          attachment: {
+            id: 'att_1',
+            workspace_id: 'ws_alpha',
+            file_name: 'console.png',
+            mime_type: 'image/png',
+            size_bytes: 1024,
+            sha256: 'abc',
+            created_at: '2026-04-01T00:00:00Z',
+          },
+        }),
+      })
+
+      const file = new File(['hello'], 'console.png', { type: 'image/png' })
+      const attachment = await uploadAgentAttachment(file)
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/agent-attachments',
+        expect.objectContaining({
+          method: 'POST',
+          credentials: 'include',
+          body: expect.any(FormData),
+        }),
+      )
+      expect(attachment.id).toBe('att_1')
+    })
+
+    it('createAgentRun/fetchAgentRunDetail/cancelAgentRun should use the new agent API surface', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            run: {
+              id: 'run_1',
+              workspace_id: 'ws_alpha',
+              agent_id: 'hermes',
+              mode: 'research',
+              analysis_depth: 'deep',
+              model: 'Qwen/Qwen2.5-7B-Instruct',
+              input: 'Investigate provider outage',
+              status: 'queued',
+              max_steps: 12,
+              current_step: 0,
+              created_at: '2026-04-01T00:00:00Z',
+              updated_at: '2026-04-01T00:00:00Z',
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            run: {
+              id: 'run_1',
+              workspace_id: 'ws_alpha',
+              agent_id: 'hermes',
+              mode: 'research',
+              analysis_depth: 'deep',
+              model: 'Qwen/Qwen2.5-7B-Instruct',
+              input: 'Investigate provider outage',
+              status: 'succeeded',
+              max_steps: 12,
+              current_step: 2,
+              final_output: 'done',
+              created_at: '2026-04-01T00:00:00Z',
+              updated_at: '2026-04-01T00:00:02Z',
+            },
+            steps: [{ id: 1, run_id: 'run_1', index: 0, type: 'tool_call', payload: {}, created_at: '2026-04-01T00:00:01Z' }],
+            attachments: [],
+            sources: [{ title: 'RunPod Status', url: 'https://status.runpod.io/', domain: 'status.runpod.io' }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            run: {
+              id: 'run_1',
+              workspace_id: 'ws_alpha',
+              agent_id: 'hermes',
+              mode: 'research',
+              analysis_depth: 'deep',
+              model: 'Qwen/Qwen2.5-7B-Instruct',
+              input: 'Investigate provider outage',
+              status: 'canceled',
+              max_steps: 12,
+              current_step: 1,
+              created_at: '2026-04-01T00:00:00Z',
+              updated_at: '2026-04-01T00:00:01Z',
+            },
+          }),
+        })
+
+      await createAgentRun({
+        agent_id: 'hermes',
+        mode: 'research',
+        analysis_depth: 'deep',
+        model: 'Qwen/Qwen2.5-7B-Instruct',
+        input: 'Investigate provider outage',
+        max_steps: 12,
+        attachments: ['att_1'],
+      })
+      const detail = await fetchAgentRunDetail('run_1')
+      const canceled = await cancelAgentRun('run_1')
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/agents/runs',
+        expect.objectContaining({
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agent_id: 'hermes',
+            mode: 'research',
+            analysis_depth: 'deep',
+            model: 'Qwen/Qwen2.5-7B-Instruct',
+            input: 'Investigate provider outage',
+            max_steps: 12,
+            attachments: ['att_1'],
+          }),
+        }),
+      )
+      expect(detail.sources).toEqual([{ title: 'RunPod Status', url: 'https://status.runpod.io/', domain: 'status.runpod.io' }])
+      expect(canceled.status).toBe('canceled')
     })
   })
 

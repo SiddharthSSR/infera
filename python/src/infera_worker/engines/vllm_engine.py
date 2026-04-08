@@ -12,10 +12,15 @@ from ..config import ModelConfig, WorkerConfig
 from ..engine import EngineCapabilities, EngineDefinition, register_engine
 from ..types import (
     Choice,
+    FunctionCall,
     InferenceRequest,
     InferenceResponse,
     LatencyStats,
     LoadedModel,
+    Message,
+    Role,
+    ToolCall,
+    ToolCallChunkDelta,
     TokenChunk,
     UsageStats,
 )
@@ -91,6 +96,16 @@ class VLLMEngine(TokenizerPromptEngine):
             if spec_model == "[ngram]" and runtime.ngram_prompt_lookup_num_tokens > 0:
                 optional_engine_kwargs["ngram_prompt_lookup_num_tokens"] = runtime.ngram_prompt_lookup_num_tokens
 
+        tool_call_parser = self.config.tool_call_parser.strip()
+        if tool_call_parser:
+            optional_engine_kwargs["enable_auto_tool_choice"] = True
+            optional_engine_kwargs["tool_call_parser"] = tool_call_parser
+            logger.info(
+                "vLLM tool calling enabled",
+                tool_call_parser=tool_call_parser,
+                model_id=model_config.model_id,
+            )
+
         supported_kwargs = set(inspect.signature(AsyncEngineArgs).parameters)
         for key, value in optional_engine_kwargs.items():
             if key in supported_kwargs:
@@ -143,7 +158,7 @@ class VLLMEngine(TokenizerPromptEngine):
         self.active_requests.add(request.request_id)
 
         try:
-            prompt = self._build_prompt(request)
+            prompt = self._build_prompt_with_tools(request)
             sampling_params = SamplingParams(**request.parameters.to_sampling_params())
 
             results: list[RequestOutput] = []
@@ -164,13 +179,15 @@ class VLLMEngine(TokenizerPromptEngine):
                 else latency_ms
             )
 
+            response_message = self._build_response_message_with_tool_calls(completion_output)
+
             return InferenceResponse(
                 request_id=request.request_id,
                 model_id=request.model_id,
                 choices=[
                     Choice(
                         index=0,
-                        message=self._build_response_message(completion_output.text),
+                        message=response_message,
                         finish_reason=self._map_finish_reason(completion_output.finish_reason),
                     )
                 ],
@@ -200,7 +217,7 @@ class VLLMEngine(TokenizerPromptEngine):
         self.active_requests.add(request.request_id)
 
         try:
-            prompt = self._build_prompt(request)
+            prompt = self._build_prompt_with_tools(request)
             sampling_params = SamplingParams(**request.parameters.to_sampling_params())
 
             prev_text = ""
@@ -214,8 +231,11 @@ class VLLMEngine(TokenizerPromptEngine):
                 completion_output = output.outputs[0]
                 new_text = completion_output.text[len(prev_text):]
                 prev_text = completion_output.text
+                tool_call_deltas = self._build_tool_call_chunk_deltas(
+                    getattr(completion_output, "tool_calls", None)
+                )
 
-                if not new_text:
+                if not new_text and not tool_call_deltas:
                     continue
 
                 is_finished = completion_output.finish_reason is not None
@@ -226,6 +246,7 @@ class VLLMEngine(TokenizerPromptEngine):
                     index=chunk_index,
                     delta=new_text,
                     finish_reason=self._map_finish_reason(completion_output.finish_reason) if is_finished else None,
+                    tool_calls=tool_call_deltas or None,
                     usage=(
                         UsageStats(
                             prompt_tokens=prompt_tokens,
@@ -247,6 +268,54 @@ class VLLMEngine(TokenizerPromptEngine):
         for engine in self.engines.values():
             await engine.abort(request_id)
         return True
+
+    def _build_response_message_with_tool_calls(self, completion_output: Any) -> Message:
+        """Build a Message from a vLLM CompletionOutput, extracting tool_calls if present."""
+        raw_tool_calls = getattr(completion_output, "tool_calls", None)
+        if not raw_tool_calls:
+            return self._build_response_message(completion_output.text)
+
+        tool_calls: list[ToolCall] = []
+        for raw_tc in raw_tool_calls:
+            # vLLM ToolCall has .id, .type, .function (ToolCallFunction with .name/.arguments)
+            tc_id = getattr(raw_tc, "id", "") or ""
+            tc_type = getattr(raw_tc, "type", "function") or "function"
+            fn_obj = getattr(raw_tc, "function", None)
+            fn_name = getattr(fn_obj, "name", "") or "" if fn_obj is not None else ""
+            fn_args = getattr(fn_obj, "arguments", "") or "" if fn_obj is not None else ""
+            tool_calls.append(ToolCall(
+                id=tc_id,
+                type=tc_type,
+                function=FunctionCall(name=fn_name, arguments=fn_args),
+            ))
+
+        return Message(
+            role=Role.ASSISTANT,
+            content=completion_output.text or "",
+            tool_calls=tool_calls if tool_calls else None,
+        )
+
+    def _build_tool_call_chunk_deltas(self, raw_tool_calls: Any) -> list[ToolCallChunkDelta]:
+        if not raw_tool_calls:
+            return []
+
+        deltas: list[ToolCallChunkDelta] = []
+        for index, raw_tc in enumerate(raw_tool_calls):
+            fn_obj = getattr(raw_tc, "function", None)
+            fn_name = getattr(fn_obj, "name", "") or "" if fn_obj is not None else ""
+            fn_args = getattr(fn_obj, "arguments", "") or "" if fn_obj is not None else ""
+            delta_payload: dict[str, str] = {}
+            if fn_name:
+                delta_payload["name"] = fn_name
+            if fn_args:
+                delta_payload["arguments"] = fn_args
+            deltas.append(ToolCallChunkDelta(
+                index=index,
+                id=getattr(raw_tc, "id", "") or None,
+                type=getattr(raw_tc, "type", "function") or "function",
+                function=delta_payload or None,
+            ))
+        return deltas
 
     def _estimate_memory(self) -> int:
         """Estimate model memory usage."""
