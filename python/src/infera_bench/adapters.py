@@ -6,8 +6,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from .catalog import BenchmarkCatalogBundle
-from .schema import CompatibilityIssue, CompatibilityStatus, EngineSpec, HardwareSpec, ModelVariantSpec, RuntimeParameterSpec
-
+from .schema import (
+    CompatibilityIssue,
+    CompatibilityStatus,
+    EngineSpec,
+    HardwareSpec,
+    ModelVariantSpec,
+    RuntimeParameterSpec,
+)
 
 STATUS_PRIORITY: dict[CompatibilityStatus, int] = {
     "ready": 0,
@@ -76,7 +82,11 @@ class EngineRuntimeAdapter:
                 )
             )
             status = "unverified"
-        if compatibility and compatibility.supported_precisions and model.precision not in compatibility.supported_precisions:
+        if (
+            compatibility
+            and compatibility.supported_precisions
+            and model.precision not in compatibility.supported_precisions
+        ):
             issues.append(
                 CompatibilityIssue(
                     status="unsupported",
@@ -87,7 +97,11 @@ class EngineRuntimeAdapter:
                     ),
                 )
             )
-        if compatibility and compatibility.supported_quantizations and model.quantization not in compatibility.supported_quantizations:
+        if (
+            compatibility
+            and compatibility.supported_quantizations
+            and model.quantization not in compatibility.supported_quantizations
+        ):
             issues.append(
                 CompatibilityIssue(
                     status="unsupported",
@@ -148,7 +162,9 @@ class EngineRuntimeAdapter:
 
             parameter_spec = self.param_by_id.get(key)
             if parameter_spec is not None:
-                normalized_value, parameter_issue = self._validate_parameter(parameter_spec, raw_value)
+                normalized_value, parameter_issue = self._validate_parameter(
+                    parameter_spec, raw_value
+                )
                 if parameter_issue is not None:
                     issues.append(parameter_issue)
                     continue
