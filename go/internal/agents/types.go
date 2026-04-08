@@ -164,6 +164,9 @@ type ToolCallEnvelope struct {
 	ToolName  string          `json:"tool_name,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	Message   string          `json:"message,omitempty"`
+	// Sources is tolerated on final envelopes so citation metadata does not
+	// break the run when a model emits it at the top level.
+	Sources json.RawMessage `json:"sources,omitempty"`
 }
 
 type CustomDefinition struct {

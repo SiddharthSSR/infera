@@ -160,6 +160,32 @@ func TestRuntimeHappyPath(t *testing.T) {
 	}
 }
 
+func TestRuntimeFinalWithTopLevelSourcesSucceeds(t *testing.T) {
+	runner := &fakeRunner{
+		responses: []string{
+			`{"type":"final","message":"done","Sources":["https://status.openai.com/"]}`,
+		},
+	}
+	runtime := newTestRuntime(t, runner)
+	actor := &auth.KeyRecord{ID: "key-1", WorkspaceID: "ws_alpha", Role: auth.RoleOwner, PrincipalType: auth.PrincipalHuman, Status: "active"}
+
+	run, err := runtime.CreateRun(context.Background(), actor, nil, CreateRunRequest{
+		Model: "model-a",
+		Input: "inspect",
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	detail := waitForStatus(t, runtime, "ws_alpha", run.ID, StatusSucceeded)
+	if detail.Run.FinalOutput != "done" {
+		t.Fatalf("expected final output 'done', got %q", detail.Run.FinalOutput)
+	}
+	if len(detail.Steps) != 1 || detail.Steps[0].Type != StepTypeFinal {
+		t.Fatalf("expected one final step, got %+v", detail.Steps)
+	}
+}
+
 func TestRuntimeNormalizesShortcutToolAction(t *testing.T) {
 	runner := &fakeRunner{
 		responses: []string{

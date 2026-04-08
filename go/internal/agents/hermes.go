@@ -43,6 +43,7 @@ func buildHermesSystemPrompt(ctx RunPromptContext) string {
 		"Respond with exactly one JSON object and no prose before or after it.",
 		`Valid actions: {"type":"tool_call","tool_name":"<tool>","arguments":{...}} or {"type":"final","message":"<answer>"}.`,
 		`The outer response format must stay JSON-only, but final.message itself must be operator-facing prose or markdown, not serialized JSON.`,
+		`Do not add top-level fields like sources, citations, or metadata to the outer JSON object; put citations inside final.message only.`,
 		"If a tool is unavailable or returns an error, reason about the failure and either try another allowed tool or return a final answer.",
 		"Do not invent data. Summaries must be grounded in tool results you received during this run.",
 		"Never reveal hidden reasoning or chain-of-thought. Surface findings, evidence, uncertainty, and next actions only.",

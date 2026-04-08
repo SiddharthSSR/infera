@@ -1,0 +1,124 @@
+[
+  {
+    "id": "condition-missing-model",
+    "title": "Missing model",
+    "category": "request_validation",
+    "operation": "create_run",
+    "request_body": {
+      "agent_id": "hermes",
+      "mode": "operations",
+      "analysis_depth": "standard",
+      "input": "Inspect the workspace."
+    },
+    "expected_status_code": 400,
+    "expected_error_type": "invalid_request"
+  },
+  {
+    "id": "condition-missing-input",
+    "title": "Missing input",
+    "category": "request_validation",
+    "operation": "create_run",
+    "request_body": {
+      "agent_id": "hermes",
+      "mode": "operations",
+      "analysis_depth": "standard",
+      "model": "Qwen/Qwen2.5-7B-Instruct"
+    },
+    "expected_status_code": 400,
+    "expected_error_type": "invalid_request"
+  },
+  {
+    "id": "condition-attachment-wrong-mode",
+    "title": "Attachment in wrong mode",
+    "category": "request_validation",
+    "operation": "create_run",
+    "needs_attachment": true,
+    "request_body": {
+      "agent_id": "hermes",
+      "mode": "operations",
+      "analysis_depth": "standard",
+      "model": "Qwen/Qwen2.5-7B-Instruct",
+      "input": "Use this screenshot in operations mode."
+    },
+    "expected_status_code": 400,
+    "expected_error_type": "invalid_request"
+  },
+  {
+    "id": "condition-invalid-upload-mime",
+    "title": "Invalid upload mime type",
+    "category": "request_validation",
+    "operation": "upload_attachment",
+    "expected_status_code": 400,
+    "expected_error_type": "invalid_request"
+  },
+  {
+    "id": "condition-tool-invalid-arguments",
+    "title": "Invalid tool arguments",
+    "category": "tool_failure",
+    "operation": "wait_for_run",
+    "prompt": "Return deployment info using malformed tool arguments.",
+    "mode": "operations",
+    "expected_tools": ["list_deployments"],
+    "expected_arguments": {"list_deployments": {"limit": "bad"}},
+    "expected_exception": null,
+    "final_output": null,
+    "mock_behavior": "tool_invalid_arguments"
+  },
+  {
+    "id": "condition-partial-success",
+    "title": "Partial success after tool failure",
+    "category": "partial_success",
+    "operation": "wait_for_run",
+    "prompt": "Investigate health even if one check fails.",
+    "mode": "operations",
+    "expected_tools": ["list_workers", "get_gateway_stats"],
+    "expected_arguments": {"list_workers": {}, "get_gateway_stats": {}},
+    "response_keywords": ["healthy", "recovered"],
+    "final_output": "Hermes recovered from one failed check and still found the workspace to be broadly healthy.",
+    "mock_behavior": "partial_success"
+  },
+  {
+    "id": "condition-malformed-detail",
+    "title": "Malformed detail response",
+    "category": "malformed_response",
+    "operation": "get_run_detail",
+    "prompt": "Return malformed detail once.",
+    "mode": "operations",
+    "expected_status_code": 200,
+    "expected_exception": "HermesSchemaError",
+    "mock_behavior": "malformed_detail"
+  },
+  {
+    "id": "condition-transport-timeout",
+    "title": "Detail transport timeout",
+    "category": "timeout",
+    "operation": "get_run_detail",
+    "prompt": "Simulate a detail timeout.",
+    "mode": "operations",
+    "expected_status_code": 200,
+    "expected_exception": "HermesTransportError",
+    "mock_behavior": "transport_timeout"
+  },
+  {
+    "id": "condition-rate-limit-retry",
+    "title": "Rate limit retry",
+    "category": "rate_limit",
+    "operation": "wait_for_run",
+    "prompt": "Retry after a simulated rate limit and finish the run.",
+    "mode": "operations",
+    "retry_on_rate_limit": true,
+    "response_keywords": ["retried", "completed"],
+    "final_output": "Hermes retried after rate limiting and completed the run successfully.",
+    "mock_behavior": "rate_limit_then_success"
+  },
+  {
+    "id": "condition-external-wait-timeout",
+    "title": "External wait timeout",
+    "category": "timeout",
+    "operation": "external_run_wait",
+    "prompt": "Simulate a delayed external run.",
+    "mode": "operations",
+    "expected_status_code": 200,
+    "mock_behavior": "wait_timeout"
+  }
+]
