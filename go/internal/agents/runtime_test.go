@@ -160,6 +160,36 @@ func TestRuntimeHappyPath(t *testing.T) {
 	}
 }
 
+func TestRuntimeNormalizesShortcutToolAction(t *testing.T) {
+	runner := &fakeRunner{
+		responses: []string{
+			`{"type":"echo","tool_name":"echo","arguments":{}}`,
+			`{"type":"final","message":"done"}`,
+		},
+	}
+	runtime := newTestRuntime(t, runner)
+	actor := &auth.KeyRecord{ID: "key-1", WorkspaceID: "ws_alpha", Role: auth.RoleOwner, PrincipalType: auth.PrincipalHuman, Status: "active"}
+
+	run, err := runtime.CreateRun(context.Background(), actor, nil, CreateRunRequest{
+		Model: "model-a",
+		Input: "inspect",
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	detail := waitForStatus(t, runtime, "ws_alpha", run.ID, StatusSucceeded)
+	if detail.Run.FinalOutput != "done" {
+		t.Fatalf("expected final output 'done', got %q", detail.Run.FinalOutput)
+	}
+	if len(detail.Steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(detail.Steps))
+	}
+	if detail.Steps[0].ToolName != "echo" || detail.Steps[0].Type != StepTypeToolCall {
+		t.Fatalf("expected normalized tool call, got %+v", detail.Steps[0])
+	}
+}
+
 func TestRuntimeInvalidJSONFails(t *testing.T) {
 	runtime := newTestRuntime(t, &fakeRunner{responses: []string{"not json"}})
 	actor := &auth.KeyRecord{ID: "key-1", WorkspaceID: "ws_alpha", Role: auth.RoleOwner, PrincipalType: auth.PrincipalHuman, Status: "active"}

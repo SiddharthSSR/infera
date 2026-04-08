@@ -269,6 +269,10 @@ func (g *Gateway) handleAgentWebhooks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) handleListAgentWebhooks(w http.ResponseWriter, r *http.Request) {
+	if !auth.HasPermission(auth.KeyFromContext(r.Context()), auth.PermissionManageAgents) {
+		g.writeError(w, http.StatusForbidden, "forbidden", "Managing agent webhooks requires owner or admin role")
+		return
+	}
 	webhooks, err := g.agentRuntime.ListWebhookConfigs(currentWorkspaceID(r))
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "agents_unavailable", err.Error())
@@ -378,10 +382,7 @@ func (g *Gateway) handleAgentRunStream(w http.ResponseWriter, r *http.Request, r
 	// without a separate REST call.
 	detail, _ := g.agentRuntime.GetRunDetail(workspaceID, runID)
 	if detail != nil {
-		data, _ := json.Marshal(map[string]interface{}{
-			"run":   detail.Run,
-			"steps": detail.Steps,
-		})
+		data, _ := json.Marshal(agentRunDetailResponse(detail))
 		fmt.Fprintf(w, "event: status\ndata: %s\n\n", data)
 		flusher.Flush()
 		if len(detail.Steps) > 0 {
@@ -392,7 +393,7 @@ func (g *Gateway) handleAgentRunStream(w http.ResponseWriter, r *http.Request, r
 
 	// If the run is already terminal we can send "done" immediately and close.
 	if run.Status == agents.StatusSucceeded || run.Status == agents.StatusFailed || run.Status == agents.StatusCanceled {
-		data, _ := json.Marshal(map[string]interface{}{"run": run})
+		data, _ := json.Marshal(agentRunStreamTerminalPayload(detail, run))
 		fmt.Fprintf(w, "event: done\ndata: %s\n\n", data)
 		flusher.Flush()
 		return
@@ -428,7 +429,11 @@ func (g *Gateway) handleAgentRunStream(w http.ResponseWriter, r *http.Request, r
 				continue
 			}
 			if currentRun.Status == agents.StatusSucceeded || currentRun.Status == agents.StatusFailed || currentRun.Status == agents.StatusCanceled {
-				data, _ := json.Marshal(map[string]interface{}{"run": currentRun})
+				currentDetail, detailErr := g.agentRuntime.GetRunDetail(workspaceID, runID)
+				data, _ := json.Marshal(agentRunStreamTerminalPayload(currentDetail, currentRun))
+				if detailErr != nil {
+					data, _ = json.Marshal(map[string]interface{}{"run": currentRun})
+				}
 				fmt.Fprintf(w, "event: done\ndata: %s\n\n", data)
 				flusher.Flush()
 				return
@@ -460,6 +465,10 @@ func (g *Gateway) handleAgentDefinitions(w http.ResponseWriter, r *http.Request)
 }
 
 func (g *Gateway) handleListAgentDefinitions(w http.ResponseWriter, r *http.Request) {
+	if !auth.HasPermission(auth.KeyFromContext(r.Context()), auth.PermissionManageAgents) {
+		g.writeError(w, http.StatusForbidden, "forbidden", "Managing agent definitions requires owner or admin role")
+		return
+	}
 	actor := auth.KeyFromContext(r.Context())
 	workspaceID := currentWorkspaceID(r)
 
@@ -475,6 +484,22 @@ func (g *Gateway) handleListAgentDefinitions(w http.ResponseWriter, r *http.Requ
 		"built_in": builtIn,
 		"custom":   custom,
 	})
+}
+
+func agentRunDetailResponse(detail *agents.RunDetail) map[string]interface{} {
+	return map[string]interface{}{
+		"run":         detail.Run,
+		"steps":       detail.Steps,
+		"attachments": detail.Attachments,
+		"sources":     detail.Sources,
+	}
+}
+
+func agentRunStreamTerminalPayload(detail *agents.RunDetail, run *agents.Run) map[string]interface{} {
+	if detail != nil {
+		return agentRunDetailResponse(detail)
+	}
+	return map[string]interface{}{"run": run}
 }
 
 func (g *Gateway) handleCreateAgentDefinition(w http.ResponseWriter, r *http.Request) {

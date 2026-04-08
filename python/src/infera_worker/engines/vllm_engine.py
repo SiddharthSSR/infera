@@ -20,6 +20,7 @@ from ..types import (
     Message,
     Role,
     ToolCall,
+    ToolCallChunkDelta,
     TokenChunk,
     UsageStats,
 )
@@ -230,8 +231,11 @@ class VLLMEngine(TokenizerPromptEngine):
                 completion_output = output.outputs[0]
                 new_text = completion_output.text[len(prev_text):]
                 prev_text = completion_output.text
+                tool_call_deltas = self._build_tool_call_chunk_deltas(
+                    getattr(completion_output, "tool_calls", None)
+                )
 
-                if not new_text:
+                if not new_text and not tool_call_deltas:
                     continue
 
                 is_finished = completion_output.finish_reason is not None
@@ -242,6 +246,7 @@ class VLLMEngine(TokenizerPromptEngine):
                     index=chunk_index,
                     delta=new_text,
                     finish_reason=self._map_finish_reason(completion_output.finish_reason) if is_finished else None,
+                    tool_calls=tool_call_deltas or None,
                     usage=(
                         UsageStats(
                             prompt_tokens=prompt_tokens,
@@ -331,6 +336,28 @@ class VLLMEngine(TokenizerPromptEngine):
             content=completion_output.text or "",
             tool_calls=tool_calls if tool_calls else None,
         )
+
+    def _build_tool_call_chunk_deltas(self, raw_tool_calls: Any) -> list[ToolCallChunkDelta]:
+        if not raw_tool_calls:
+            return []
+
+        deltas: list[ToolCallChunkDelta] = []
+        for index, raw_tc in enumerate(raw_tool_calls):
+            fn_obj = getattr(raw_tc, "function", None)
+            fn_name = getattr(fn_obj, "name", "") or "" if fn_obj is not None else ""
+            fn_args = getattr(fn_obj, "arguments", "") or "" if fn_obj is not None else ""
+            delta_payload: dict[str, str] = {}
+            if fn_name:
+                delta_payload["name"] = fn_name
+            if fn_args:
+                delta_payload["arguments"] = fn_args
+            deltas.append(ToolCallChunkDelta(
+                index=index,
+                id=getattr(raw_tc, "id", "") or None,
+                type=getattr(raw_tc, "type", "function") or "function",
+                function=delta_payload or None,
+            ))
+        return deltas
 
     def _estimate_memory(self) -> int:
         """Estimate model memory usage."""

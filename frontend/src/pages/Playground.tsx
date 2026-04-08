@@ -52,6 +52,32 @@ const toolLabelMap: Record<string, string> = {
   vision_analyze: 'screenshot review',
 };
 
+const agentModeOptions: Array<{
+  value: AgentExecutionMode;
+  label: string;
+  eyebrow: string;
+  description: string;
+}> = [
+  {
+    value: 'operations',
+    label: 'OPERATIONS',
+    eyebrow: 'DEFAULT',
+    description: 'Workspace health, deployments, provider signals, and quota-aware checks.',
+  },
+  {
+    value: 'research',
+    label: 'RESEARCH',
+    eyebrow: 'CITED',
+    description: 'Official docs, status pages, and release notes with evidence-backed answers.',
+  },
+  {
+    value: 'multimodal',
+    label: 'MULTIMODAL',
+    eyebrow: 'SCREENSHOT',
+    description: 'Image-backed investigation for uploaded workspace screenshots and console captures.',
+  },
+];
+
 function promptPreview(prompt: string) {
   return prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '');
 }
@@ -728,18 +754,68 @@ export function Playground() {
           </div>
 
           <LabelText as="label" style={{ marginBottom: '0.75rem', display: 'block' }}>AGENT MODE</LabelText>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem', marginBottom: '1.5rem' }}>
-            {(['operations', 'research', 'multimodal'] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={agentExecutionMode === mode ? 'btn-primary' : 'btn-secondary'}
-                aria-pressed={agentExecutionMode === mode}
-                onClick={() => setAgentExecutionMode(mode)}
-              >
-                {mode.toUpperCase()}
-              </button>
-            ))}
+          <div style={{ display: 'grid', gap: '0.7rem', marginBottom: '1rem' }}>
+            {agentModeOptions.map((mode) => {
+              const isActive = agentExecutionMode === mode.value;
+              return (
+                <button
+                  key={mode.value}
+                  type="button"
+                  aria-label={mode.label}
+                  aria-pressed={isActive}
+                  onClick={() => setAgentExecutionMode(mode.value)}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    border: isActive ? '1px solid #161B2C' : '1px solid rgba(22, 27, 44, 0.12)',
+                    background: isActive
+                      ? 'linear-gradient(135deg, #161B2C 0%, #232C46 100%)'
+                      : 'linear-gradient(135deg, rgba(255,255,255,0.94) 0%, rgba(244,242,238,0.88) 100%)',
+                    color: isActive ? '#F7F5F1' : 'var(--text-primary)',
+                    padding: '0.9rem 0.95rem',
+                    display: 'grid',
+                    gap: '0.35rem',
+                    cursor: 'pointer',
+                    boxShadow: isActive ? '0 10px 24px rgba(22, 27, 44, 0.14)' : 'none',
+                    transition: 'background 180ms ease, box-shadow 180ms ease, border-color 180ms ease',
+                  }}
+                >
+                  <div
+                    className="mono"
+                    style={{
+                      fontSize: '0.62rem',
+                      letterSpacing: '0.08em',
+                      color: isActive ? 'rgba(247, 245, 241, 0.68)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    {mode.eyebrow}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                    <span style={{ fontSize: '0.95rem', fontWeight: 600, letterSpacing: '0.01em' }}>{mode.label}</span>
+                    <span
+                      className="mono"
+                      style={{
+                        fontSize: '0.58rem',
+                        padding: '0.18rem 0.38rem',
+                        border: isActive ? '1px solid rgba(247, 245, 241, 0.24)' : '1px solid rgba(22, 27, 44, 0.14)',
+                        color: isActive ? 'rgba(247, 245, 241, 0.8)' : 'var(--text-secondary)',
+                      }}
+                    >
+                      {isActive ? 'ACTIVE' : 'MODE'}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '0.79rem',
+                      lineHeight: 1.6,
+                      color: isActive ? 'rgba(247, 245, 241, 0.82)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    {mode.description}
+                  </div>
+                </button>
+              );
+            })}
           </div>
 
           <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '1.5rem' }}>

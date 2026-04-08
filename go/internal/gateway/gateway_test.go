@@ -416,6 +416,167 @@ func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *
 	}
 }
 
+func TestWorkerClientInferWithContextForwardsAndDecodesToolCalls(t *testing.T) {
+	client := NewWorkerClient("worker.test:8081")
+	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/infer" {
+			t.Fatalf("expected /infer request, got %s", r.URL.Path)
+		}
+		var payload WorkerInferRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(payload.Tools) != 1 || payload.Tools[0].Function.Name != "web_search" {
+			t.Fatalf("expected forwarded tools, got %+v", payload.Tools)
+		}
+		if string(payload.ToolChoice) != `{"type":"function","function":{"name":"web_search"}}` {
+			t.Fatalf("expected forwarded tool_choice, got %s", string(payload.ToolChoice))
+		}
+		if len(payload.Messages) != 3 || len(payload.Messages[1].ToolCalls) != 1 || payload.Messages[2].ToolCallID != "call_1" {
+			t.Fatalf("expected tool-call message history, got %+v", payload.Messages)
+		}
+
+		return jsonHTTPResponse(http.StatusOK, `{
+			"request_id":"req-1",
+			"model_id":"model-1",
+			"choices":[{
+				"index":0,
+				"message":{
+					"role":"assistant",
+					"content":"",
+					"tool_calls":[{
+						"id":"call_2",
+						"type":"function",
+						"function":{"name":"web_search","arguments":"{\"query\":\"rust\"}"}
+					}]
+				},
+				"finish_reason":"tool_calls"
+			}],
+			"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6},
+			"latency":{"queue_ms":1,"inference_ms":2,"total_ms":3,"time_to_first_token_ms":1}
+		}`), nil
+	})
+
+	resp, err := client.InferWithContext(context.Background(), &types.InferenceRequest{
+		RequestID: "req-1",
+		ModelID:   "model-1",
+		Messages: []types.Message{
+			{Role: types.RoleUser, Content: "search for go vs rust"},
+			{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{
+				ID:   "call_1",
+				Type: "function",
+				Function: types.FunctionCall{
+					Name:      "web_search",
+					Arguments: `{"query":"go"}`,
+				},
+			}}},
+			{Role: types.RoleTool, Content: `{"ok":true}`, ToolCallID: "call_1"},
+		},
+		Parameters: types.DefaultInferenceParameters(),
+		Tools: []types.ToolDefinition{{
+			Type: "function",
+			Function: types.FunctionSchema{
+				Name: "web_search",
+			},
+		}},
+		ToolChoice: json.RawMessage(`{"type":"function","function":{"name":"web_search"}}`),
+	})
+	if err != nil {
+		t.Fatalf("InferWithContext: %v", err)
+	}
+	if len(resp.Choices) != 1 || len(resp.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("expected tool calls in response, got %+v", resp.Choices)
+	}
+	if resp.Choices[0].Message.ToolCalls[0].Function.Name != "web_search" {
+		t.Fatalf("expected decoded tool call, got %+v", resp.Choices[0].Message.ToolCalls[0])
+	}
+}
+
+func TestWorkerClientInferStreamForwardsAndDecodesToolCallChunks(t *testing.T) {
+	client := NewWorkerClient("worker.test:8081")
+	client.streamingHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/infer/stream" {
+			t.Fatalf("expected /infer/stream request, got %s", r.URL.Path)
+		}
+		var payload WorkerInferRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(payload.Tools) != 1 || payload.Tools[0].Function.Name != "web_search" {
+			t.Fatalf("expected forwarded tools, got %+v", payload.Tools)
+		}
+		if len(payload.Messages) != 1 || len(payload.Messages[0].ToolCalls) != 1 {
+			t.Fatalf("expected forwarded tool-call messages, got %+v", payload.Messages)
+		}
+
+		var builder strings.Builder
+		encoder := json.NewEncoder(&builder)
+		if err := encoder.Encode(map[string]any{
+			"delta": "",
+			"tool_calls": []map[string]any{
+				{
+					"index": 0,
+					"id":    "call_1",
+					"type":  "function",
+					"function": map[string]any{
+						"name":      "web_search",
+						"arguments": `{"query":"go"}`,
+					},
+				},
+			},
+			"finish_reason": "tool_calls",
+			"usage": map[string]int{
+				"prompt_tokens":     5,
+				"completion_tokens": 1,
+				"total_tokens":      6,
+			},
+		}); err != nil {
+			t.Fatalf("encode chunk: %v", err)
+		}
+		return jsonHTTPResponse(http.StatusOK, builder.String()), nil
+	})
+
+	chunks, err := client.InferStream(context.Background(), &types.InferenceRequest{
+		RequestID: "req-1",
+		ModelID:   "model-1",
+		Messages: []types.Message{
+			{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{
+				ID:   "call_0",
+				Type: "function",
+				Function: types.FunctionCall{
+					Name:      "web_search",
+					Arguments: `{"query":"rust"}`,
+				},
+			}}},
+		},
+		Parameters: types.DefaultInferenceParameters(),
+		Tools: []types.ToolDefinition{{
+			Type: "function",
+			Function: types.FunctionSchema{
+				Name: "web_search",
+			},
+		}},
+		ToolChoice: json.RawMessage(`{"type":"function","function":{"name":"web_search"}}`),
+	})
+	if err != nil {
+		t.Fatalf("InferStream: %v", err)
+	}
+
+	var got []*types.TokenChunk
+	for chunk := range chunks {
+		got = append(got, chunk)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected one chunk, got %d", len(got))
+	}
+	if len(got[0].ToolCalls) != 1 || got[0].ToolCalls[0].Function.Name != "web_search" {
+		t.Fatalf("expected decoded tool-call deltas, got %+v", got[0].ToolCalls)
+	}
+	if got[0].FinishReason == nil || *got[0].FinishReason != types.FinishReasonToolCalls {
+		t.Fatalf("expected tool_calls finish reason, got %+v", got[0].FinishReason)
+	}
+}
+
 func TestHandleChatCompletions_RejectsWhenWorkspaceQuotaExceeded(t *testing.T) {
 	r := router.New(router.DefaultConfig())
 	defer r.Stop()

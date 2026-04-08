@@ -905,6 +905,12 @@ func ParseActionEnvelope(raw string) (ToolCallEnvelope, error) {
 	envelope.Type = strings.TrimSpace(envelope.Type)
 	envelope.ToolName = strings.TrimSpace(envelope.ToolName)
 	envelope.Message = strings.TrimSpace(envelope.Message)
+	if envelope.Type != "" && envelope.Type != "tool_call" && envelope.Type != "final" && envelope.Message == "" {
+		if envelope.ToolName == "" {
+			envelope.ToolName = envelope.Type
+		}
+		envelope.Type = "tool_call"
+	}
 	if envelope.Type == "" {
 		return ToolCallEnvelope{}, fmt.Errorf("type is required")
 	}

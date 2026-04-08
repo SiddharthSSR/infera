@@ -596,6 +596,17 @@ class HTTPServer:
                         }
                         token_count = max(token_count, chunk.usage.total_tokens)
 
+                    if chunk.tool_calls is not None:
+                        chunk_data["tool_calls"] = [
+                            {
+                                "index": tc.index,
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": tc.function,
+                            }
+                            for tc in chunk.tool_calls
+                        ]
+
                     await response.write(json.dumps(chunk_data).encode() + b"\n")
             except ValueError as e:
                 status = "invalid_request"

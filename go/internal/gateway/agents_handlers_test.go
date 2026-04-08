@@ -358,3 +358,85 @@ func TestHandleCreateAgentWebhookRejectsUnsafeURL(t *testing.T) {
 		t.Fatalf("expected unsafe webhook validation error, got %s", w.Body.String())
 	}
 }
+
+func TestHandleListAgentWebhooksRequiresManageAgents(t *testing.T) {
+	g, _ := newGatewayWithAgentsRuntime(t, "meta-llama/Meta-Llama-3.1-8B-Instruct", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"meta-llama/Meta-Llama-3.1-8B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":"{\"type\":\"final\",\"message\":\"ok\"}"},"finish_reason":"stop"}]}`), nil
+	}))
+	if _, err := g.agentRuntime.CreateWebhookConfig("ws_alpha", "https://example.com/hook", "", []string{"succeeded"}); err != nil {
+		t.Fatalf("CreateWebhookConfig: %v", err)
+	}
+
+	req := authedWorkspaceRequest(httptest.NewRequest(http.MethodGet, "/api/agents/webhooks", nil), auth.RoleReadOnly, "ws_alpha")
+	w := httptest.NewRecorder()
+	g.handleAgentWebhooks(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleListAgentDefinitionsRequiresManageAgents(t *testing.T) {
+	g, _ := newGatewayWithAgentsRuntime(t, "meta-llama/Meta-Llama-3.1-8B-Instruct", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"meta-llama/Meta-Llama-3.1-8B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":"{\"type\":\"final\",\"message\":\"ok\"}"},"finish_reason":"stop"}]}`), nil
+	}))
+	if _, err := g.agentRuntime.CreateCustomDefinition("ws_alpha", agents.CreateCustomDefinitionRequest{
+		Name:         "Custom Investigator",
+		SystemPrompt: "Use the available tools to investigate.",
+	}); err != nil {
+		t.Fatalf("CreateCustomDefinition: %v", err)
+	}
+
+	req := authedWorkspaceRequest(httptest.NewRequest(http.MethodGet, "/api/agents/definitions", nil), auth.RoleReadOnly, "ws_alpha")
+	w := httptest.NewRecorder()
+	g.handleAgentDefinitions(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleAgentRunStreamIncludesAttachmentsAndSources(t *testing.T) {
+	g, store := newGatewayWithAgentsRuntime(t, "meta-llama/Meta-Llama-3.1-8B-Instruct", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"meta-llama/Meta-Llama-3.1-8B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":"{\"type\":\"final\",\"message\":\"ok\"}"},"finish_reason":"stop"}]}`), nil
+	}))
+
+	now := time.Now().UTC()
+	run, err := store.CreateRun("ws_alpha", "key-1", "hermes", agents.RunModeMultimodal, agents.AnalysisDepthStandard, "meta-llama/Meta-Llama-3.1-8B-Instruct", "inspect", 4, now)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	attachment, err := store.CreateAttachment("ws_alpha", "key-1", "console.png", "image/png", 1024, 1280, 720, "abc123", filepath.Join(t.TempDir(), "console.png"), now)
+	if err != nil {
+		t.Fatalf("CreateAttachment: %v", err)
+	}
+	if err := store.AttachAttachmentsToRun("ws_alpha", run.ID, []string{attachment.ID}); err != nil {
+		t.Fatalf("AttachAttachmentsToRun: %v", err)
+	}
+	if _, err := store.AppendStep(run.WorkspaceID, run.ID, agents.StepTypeToolResult, "web_search", map[string]any{
+		"ok": true,
+		"result": map[string]any{
+			"results": []map[string]any{
+				{"title": "RunPod Status", "url": "https://status.runpod.io/", "domain": "status.runpod.io"},
+			},
+		},
+	}, now.Add(time.Second)); err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+	if err := store.CompleteRun(run.WorkspaceID, run.ID, agents.StatusSucceeded, "done", "", now.Add(2*time.Second)); err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+
+	req := authedWorkspaceRequest(httptest.NewRequest(http.MethodGet, "/api/agents/runs/"+run.ID+"/stream", nil), auth.RoleOwner, "ws_alpha")
+	w := httptest.NewRecorder()
+	g.handleAgentRunByID(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"attachments":[`) || !strings.Contains(body, `"sources":[`) {
+		t.Fatalf("expected stream payload to include attachments and sources, got %s", body)
+	}
+	if strings.Count(body, `"attachments":[`) < 2 || strings.Count(body, `"sources":[`) < 2 {
+		t.Fatalf("expected both status and done events to include attachments and sources, got %s", body)
+	}
+}
