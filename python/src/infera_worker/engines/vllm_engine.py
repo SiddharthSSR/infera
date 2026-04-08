@@ -269,48 +269,6 @@ class VLLMEngine(TokenizerPromptEngine):
             await engine.abort(request_id)
         return True
 
-    def _build_prompt_with_tools(self, request: InferenceRequest) -> str:
-        """Build a prompt string, injecting tools into the chat template when present.
-
-        When tools are provided and a tokenizer with apply_chat_template is available,
-        the tools list is forwarded to the template so the model sees tool definitions
-        in its system context (Hermes, Mistral, llama3_json all rely on this).
-        Falls back to the base _build_prompt when no tools or no template support.
-        """
-        if not request.tools:
-            return self._build_prompt(request)
-
-        messages = [
-            {"role": msg.role.value, "content": msg.content or ""}
-            for msg in request.messages
-        ]
-        tools_schema = [
-            {"type": td.type, "function": td.function}
-            for td in request.tools
-        ]
-        tool_choice = request.tool_choice
-
-        tokenizer = self._get_tokenizer(request.model_id)
-        if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
-            try:
-                template_kwargs: dict[str, Any] = {
-                    "tokenize": False,
-                    "add_generation_prompt": True,
-                    "tools": tools_schema,
-                }
-                if tool_choice is not None:
-                    template_kwargs["tool_choice"] = tool_choice
-                prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
-                return prompt
-            except Exception as exc:
-                logger.warning(
-                    "apply_chat_template with tools failed, falling back to base prompt",
-                    error=str(exc),
-                    model_id=request.model_id,
-                )
-
-        return self._build_prompt(request)
-
     def _build_response_message_with_tool_calls(self, completion_output: Any) -> Message:
         """Build a Message from a vLLM CompletionOutput, extracting tool_calls if present."""
         raw_tool_calls = getattr(completion_output, "tool_calls", None)

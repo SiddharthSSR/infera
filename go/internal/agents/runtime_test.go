@@ -446,6 +446,52 @@ func TestRuntimeGetRunDetailCollectsResearchSources(t *testing.T) {
 	}
 }
 
+func TestNormalizeWebhookEventsAcceptsCompletedEvent(t *testing.T) {
+	events, err := normalizeWebhookEvents([]string{webhookEventRunComplete, "failed"})
+	if err != nil {
+		t.Fatalf("normalizeWebhookEvents: %v", err)
+	}
+	if len(events) != 2 || events[0] != webhookEventRunComplete || events[1] != "failed" {
+		t.Fatalf("unexpected normalized events: %v", events)
+	}
+}
+
+func TestRuntimeActiveWebhooksForRunDeduplicatesMatchingSubscriptions(t *testing.T) {
+	runtime := newTestRuntime(t, &fakeRunner{responses: []string{`{"type":"final","message":"done"}`}})
+	if _, err := runtime.store.CreateWebhookConfig("ws_alpha", "https://a.example.com/hook", "", []string{webhookEventRunComplete}); err != nil {
+		t.Fatalf("CreateWebhookConfig completed: %v", err)
+	}
+	if _, err := runtime.store.CreateWebhookConfig("ws_alpha", "https://b.example.com/hook", "", []string{"failed"}); err != nil {
+		t.Fatalf("CreateWebhookConfig failed: %v", err)
+	}
+	combined, err := runtime.store.CreateWebhookConfig("ws_alpha", "https://c.example.com/hook", "", []string{webhookEventRunComplete, "failed"})
+	if err != nil {
+		t.Fatalf("CreateWebhookConfig combined: %v", err)
+	}
+
+	webhooks, err := runtime.activeWebhooksForRun(&Run{
+		ID:          "run_1",
+		WorkspaceID: "ws_alpha",
+		Status:      StatusFailed,
+	})
+	if err != nil {
+		t.Fatalf("activeWebhooksForRun: %v", err)
+	}
+	if len(webhooks) != 3 {
+		t.Fatalf("expected 3 unique webhooks, got %d", len(webhooks))
+	}
+
+	count := 0
+	for _, webhook := range webhooks {
+		if webhook.ID == combined.ID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected combined webhook once, got %d occurrences", count)
+	}
+}
+
 func TestCreateRunSupportsCustomDefinitions(t *testing.T) {
 	runtime := newTestRuntime(t, &fakeRunner{
 		responses: []string{`{"type":"final","message":"done"}`},

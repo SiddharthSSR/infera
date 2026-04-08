@@ -21,7 +21,10 @@ import (
 	"github.com/infera/infera/go/pkg/types"
 )
 
-const defaultTimeout = 45 * time.Second
+const (
+	defaultTimeout          = 45 * time.Second
+	webhookEventRunComplete = "agent.run.completed"
+)
 
 type Runtime struct {
 	store  *Store
@@ -742,7 +745,7 @@ func (r *Runtime) failRun(run *Run, reason string) {
 // status and dispatches each delivery in a separate goroutine so that
 // webhook latency never delays run completion or SSE polling.
 func (r *Runtime) fireWebhooks(run *Run) {
-	webhooks, err := r.store.GetActiveWebhooksForEvent(run.WorkspaceID, string(run.Status))
+	webhooks, err := r.activeWebhooksForRun(run)
 	if err != nil || len(webhooks) == 0 {
 		return
 	}
@@ -762,6 +765,34 @@ func (r *Runtime) fireWebhooks(run *Run) {
 	}
 }
 
+func (r *Runtime) activeWebhooksForRun(run *Run) ([]*WebhookConfig, error) {
+	if run == nil {
+		return nil, nil
+	}
+
+	events := []string{webhookEventRunComplete}
+	if status := strings.TrimSpace(string(run.Status)); status != "" {
+		events = append(events, status)
+	}
+
+	merged := make([]*WebhookConfig, 0)
+	seen := make(map[string]struct{})
+	for _, event := range events {
+		webhooks, err := r.store.GetActiveWebhooksForEvent(run.WorkspaceID, event)
+		if err != nil {
+			return nil, err
+		}
+		for _, webhook := range webhooks {
+			if _, ok := seen[webhook.ID]; ok {
+				continue
+			}
+			seen[webhook.ID] = struct{}{}
+			merged = append(merged, webhook)
+		}
+	}
+	return merged, nil
+}
+
 // deliverWebhook performs a single HTTPS POST to the registered webhook URL.
 // It signs the payload with HMAC-SHA256 when a secret is configured and
 // silently discards errors so that a misbehaving receiver never affects the
@@ -779,7 +810,10 @@ func (r *Runtime) deliverWebhook(wh *WebhookConfig, payload []byte) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Infera-Event", "agent.run.completed")
+	req.Header.Set("X-Infera-Event", webhookEventRunComplete)
+	if eventStatus := payloadEventStatus(payload); eventStatus != "" {
+		req.Header.Set("X-Infera-Run-Status", eventStatus)
+	}
 
 	// HMAC-SHA256 signature so receivers can verify the request origin.
 	if wh.Secret != "" {
@@ -797,15 +831,26 @@ func (r *Runtime) deliverWebhook(wh *WebhookConfig, payload []byte) {
 	defer resp.Body.Close()
 }
 
+func payloadEventStatus(payload []byte) string {
+	var body struct {
+		Event string `json:"event"`
+	}
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(body.Event)
+}
+
 func normalizeWebhookEvents(events []string) ([]string, error) {
 	if len(events) == 0 {
-		return []string{"succeeded", "failed"}, nil
+		return []string{webhookEventRunComplete}, nil
 	}
 
 	allowed := map[string]struct{}{
-		"succeeded": {},
-		"failed":    {},
-		"canceled":  {},
+		webhookEventRunComplete: {},
+		"succeeded":             {},
+		"failed":                {},
+		"canceled":              {},
 	}
 	seen := make(map[string]struct{}, len(events))
 	out := make([]string, 0, len(events))

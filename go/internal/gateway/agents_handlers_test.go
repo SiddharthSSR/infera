@@ -363,7 +363,7 @@ func TestHandleListAgentWebhooksRequiresManageAgents(t *testing.T) {
 	g, _ := newGatewayWithAgentsRuntime(t, "meta-llama/Meta-Llama-3.1-8B-Instruct", roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"meta-llama/Meta-Llama-3.1-8B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":"{\"type\":\"final\",\"message\":\"ok\"}"},"finish_reason":"stop"}]}`), nil
 	}))
-	if _, err := g.agentRuntime.CreateWebhookConfig("ws_alpha", "https://example.com/hook", "", []string{"succeeded"}); err != nil {
+	if _, err := g.agentRuntime.CreateWebhookConfig("ws_alpha", "https://example.com/hook", "", []string{"agent.run.completed"}); err != nil {
 		t.Fatalf("CreateWebhookConfig: %v", err)
 	}
 

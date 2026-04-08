@@ -123,7 +123,7 @@ class SGLangEngine(TokenizerPromptEngine):
 
         self.active_requests.add(request.request_id)
         try:
-            prompt = self._build_prompt(request)
+            prompt = self._build_prompt_with_tools(request)
             sampling_params = self._build_sampling_params(request)
             if async_stream_and_merge is None:
                 outputs = await engine.async_generate([prompt], sampling_params)
@@ -186,7 +186,7 @@ class SGLangEngine(TokenizerPromptEngine):
 
         self.active_requests.add(request.request_id)
         try:
-            prompt = self._build_prompt(request)
+            prompt = self._build_prompt_with_tools(request)
             sampling_params = self._build_sampling_params(request)
             chunk_index = 0
             accumulated = ""

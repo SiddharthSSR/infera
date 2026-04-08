@@ -109,7 +109,7 @@ var agentMigrations = []migrate.Migration{
 			workspace_id TEXT NOT NULL,
 			url          TEXT NOT NULL,
 			secret       TEXT NOT NULL DEFAULT '',
-			events       TEXT NOT NULL DEFAULT '["succeeded","failed"]',
+			events       TEXT NOT NULL DEFAULT '["agent.run.completed"]',
 			active       INTEGER NOT NULL DEFAULT 1,
 			created_at   TEXT NOT NULL,
 			updated_at   TEXT NOT NULL
@@ -965,7 +965,7 @@ func webhookFromRow(
 	}
 	var events []string
 	if err := json.Unmarshal([]byte(eventsJSON), &events); err != nil {
-		events = []string{"succeeded", "failed"}
+		events = []string{webhookEventRunComplete}
 	}
 	return &WebhookConfig{
 		ID:          id,
@@ -986,7 +986,7 @@ func (s *Store) CreateWebhookConfig(workspaceID, url, secret string, events []st
 		return nil, fmt.Errorf("url is required")
 	}
 	if len(events) == 0 {
-		events = []string{"succeeded", "failed"}
+		events = []string{webhookEventRunComplete}
 	}
 	eventsJSON, err := json.Marshal(events)
 	if err != nil {

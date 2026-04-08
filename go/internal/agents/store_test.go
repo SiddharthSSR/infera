@@ -279,7 +279,7 @@ func TestDeleteCustomDefinition(t *testing.T) {
 func TestCreateWebhookConfig(t *testing.T) {
 	store := newTestStore(t)
 
-	wh, err := store.CreateWebhookConfig("ws_alpha", "https://example.com/hook", "secret123", []string{"succeeded", "failed"})
+	wh, err := store.CreateWebhookConfig("ws_alpha", "https://example.com/hook", "secret123", []string{webhookEventRunComplete})
 	if err != nil {
 		t.Fatalf("CreateWebhookConfig: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestCreateWebhookConfig(t *testing.T) {
 	if !wh.Active {
 		t.Fatal("expected webhook to be active")
 	}
-	if len(wh.Events) != 2 {
+	if len(wh.Events) != 1 || wh.Events[0] != webhookEventRunComplete {
 		t.Fatalf("unexpected events: %v", wh.Events)
 	}
 }
@@ -307,8 +307,8 @@ func TestCreateWebhookConfigDefaultEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWebhookConfig: %v", err)
 	}
-	if len(wh.Events) != 2 || wh.Events[0] != "succeeded" || wh.Events[1] != "failed" {
-		t.Fatalf("expected default events [succeeded, failed], got %v", wh.Events)
+	if len(wh.Events) != 1 || wh.Events[0] != webhookEventRunComplete {
+		t.Fatalf("expected default events [%s], got %v", webhookEventRunComplete, wh.Events)
 	}
 }
 
@@ -374,17 +374,17 @@ func TestDeleteWebhookConfig(t *testing.T) {
 func TestGetActiveWebhooksForEvent(t *testing.T) {
 	store := newTestStore(t)
 
-	_, _ = store.CreateWebhookConfig("ws_alpha", "https://a.example.com/hook", "", []string{"succeeded"})
-	_, _ = store.CreateWebhookConfig("ws_alpha", "https://b.example.com/hook", "", []string{"succeeded", "failed"})
+	_, _ = store.CreateWebhookConfig("ws_alpha", "https://a.example.com/hook", "", []string{webhookEventRunComplete})
+	_, _ = store.CreateWebhookConfig("ws_alpha", "https://b.example.com/hook", "", []string{webhookEventRunComplete, "failed"})
 	_, _ = store.CreateWebhookConfig("ws_alpha", "https://c.example.com/hook", "", []string{"failed"})
 
-	// "succeeded" → A and B
-	webhooks, err := store.GetActiveWebhooksForEvent("ws_alpha", "succeeded")
+	// "agent.run.completed" → A and B
+	webhooks, err := store.GetActiveWebhooksForEvent("ws_alpha", webhookEventRunComplete)
 	if err != nil {
-		t.Fatalf("GetActiveWebhooksForEvent succeeded: %v", err)
+		t.Fatalf("GetActiveWebhooksForEvent completed: %v", err)
 	}
 	if len(webhooks) != 2 {
-		t.Fatalf("expected 2 webhooks for 'succeeded', got %d", len(webhooks))
+		t.Fatalf("expected 2 webhooks for %q, got %d", webhookEventRunComplete, len(webhooks))
 	}
 
 	// "failed" → B and C
@@ -403,7 +403,7 @@ func TestGetActiveWebhooksForEvent(t *testing.T) {
 	}
 
 	// Wrong workspace → empty
-	webhooks, _ = store.GetActiveWebhooksForEvent("ws_other", "succeeded")
+	webhooks, _ = store.GetActiveWebhooksForEvent("ws_other", webhookEventRunComplete)
 	if len(webhooks) != 0 {
 		t.Fatalf("expected 0 webhooks for wrong workspace, got %d", len(webhooks))
 	}

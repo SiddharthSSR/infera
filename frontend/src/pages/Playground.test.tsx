@@ -392,6 +392,111 @@ describe('Playground agent mode', () => {
     });
   });
 
+  it('re-uploads the screenshot for each multimodal run', async () => {
+    apiMocks.uploadAgentAttachment
+      .mockResolvedValueOnce({
+        id: 'att_1',
+        workspace_id: 'ws_alpha',
+        file_name: 'console.png',
+        mime_type: 'image/png',
+        size_bytes: 1024,
+        sha256: 'abc',
+        created_at: '2026-03-31T12:00:00Z',
+      })
+      .mockResolvedValueOnce({
+        id: 'att_2',
+        workspace_id: 'ws_alpha',
+        file_name: 'console.png',
+        mime_type: 'image/png',
+        size_bytes: 1024,
+        sha256: 'def',
+        created_at: '2026-03-31T12:00:10Z',
+      });
+    apiMocks.createAgentRun
+      .mockResolvedValueOnce({
+        id: 'run_4',
+        workspace_id: 'ws_alpha',
+        agent_id: 'hermes',
+        mode: 'multimodal',
+        analysis_depth: 'standard',
+        model: 'Qwen/Qwen2.5-7B-Instruct',
+        input: 'What does this screenshot imply?',
+        status: 'queued',
+        max_steps: 8,
+        current_step: 0,
+        created_at: '2026-03-31T12:00:00Z',
+        updated_at: '2026-03-31T12:00:00Z',
+      })
+      .mockResolvedValueOnce({
+        id: 'run_5',
+        workspace_id: 'ws_alpha',
+        agent_id: 'hermes',
+        mode: 'multimodal',
+        analysis_depth: 'standard',
+        model: 'Qwen/Qwen2.5-7B-Instruct',
+        input: 'What does this screenshot imply?',
+        status: 'queued',
+        max_steps: 8,
+        current_step: 0,
+        created_at: '2026-03-31T12:00:10Z',
+        updated_at: '2026-03-31T12:00:10Z',
+      });
+    apiMocks.fetchAgentRunDetail
+      .mockResolvedValueOnce({
+        ...successDetail(),
+        run: {
+          ...successDetail().run,
+          id: 'run_4',
+          mode: 'multimodal',
+          analysis_depth: 'standard',
+        },
+      })
+      .mockResolvedValueOnce({
+        ...successDetail(),
+        run: {
+          ...successDetail().run,
+          id: 'run_5',
+          mode: 'multimodal',
+          analysis_depth: 'standard',
+        },
+      });
+
+    render(
+      <PlaygroundProvider>
+        <Playground />
+      </PlaygroundProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'AGENT' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MULTIMODAL' }));
+    fireEvent.change(screen.getByPlaceholderText(/what this screenshot shows/i), {
+      target: { value: 'What does this screenshot imply?' },
+    });
+
+    const input = screen.getByLabelText(/screenshot upload/i) as HTMLInputElement;
+    const file = new File(['test'], 'console.png', { type: 'image/png' });
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [file] } });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'RUN AGENT' }));
+    await waitFor(() => {
+      expect(apiMocks.createAgentRun).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        attachments: ['att_1'],
+      }));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'RUN AGENT' }));
+    await waitFor(() => {
+      expect(apiMocks.uploadAgentAttachment).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(apiMocks.createAgentRun).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        attachments: ['att_2'],
+      }));
+    });
+  });
+
   it('filters the visible tool list by selected agent mode', () => {
     render(
       <PlaygroundProvider>

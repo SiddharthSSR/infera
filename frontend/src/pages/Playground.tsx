@@ -469,13 +469,10 @@ export function Playground() {
     if (!screenshotFile) {
       throw new Error('Select a screenshot before running multimodal analysis');
     }
-    if (uploadedAttachment) {
-      return [uploadedAttachment.id];
-    }
     const attachment = await uploadAgentAttachment(screenshotFile);
     setUploadedAttachment(attachment);
     return [attachment.id];
-  }, [agentExecutionMode, screenshotFile, uploadedAttachment]);
+  }, [agentExecutionMode, screenshotFile]);
 
   const handleAgentRun = useCallback(async () => {
     if (!prompt.trim() || !selectedModel || !selectedAgentID) {
