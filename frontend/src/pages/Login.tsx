@@ -169,12 +169,12 @@ export function Login({ onAuthenticated }: LoginProps) {
       <div className="login-shell animate-fade-in">
         <section className="login-brand-panel">
           <div className="login-brand-content">
-            <div className="login-kicker">Inference control plane</div>
+            <div className="login-kicker login-stagger login-stagger-1">Inference control plane</div>
             <div className="login-brand-grid">
               <div className="login-brand-hero">
-                <div className="login-brand-principle">Technical. Minimal. Precise.</div>
+                <div className="login-brand-principle login-stagger login-stagger-2">Technical. Minimal. Precise.</div>
                 <h1 className="login-brand-title">INFERA</h1>
-                <p className="login-brand-subtitle">
+                <p className="login-brand-subtitle login-stagger login-stagger-3">
                   Self-hosted inference infrastructure with a product-grade operator surface.
                 </p>
               </div>
@@ -185,8 +185,8 @@ export function Login({ onAuthenticated }: LoginProps) {
                   <div className="mono login-runtime-endpoint">/health</div>
                 </div>
                 <div className="login-runtime-grid">
-                  {runtimeBrief.map((item) => (
-                    <div key={item.label} className="login-runtime-card">
+                  {runtimeBrief.map((item, i) => (
+                    <div key={item.label} className={`login-runtime-card login-stagger login-stagger-${i + 4}`}>
                       <div className="login-runtime-label-row">
                         <span className="label-text">{item.label}</span>
                         <span className={`status-dot ${item.tone === 'online' ? '' : item.tone === 'offline' ? 'error' : 'neutral'}`} />
@@ -201,8 +201,8 @@ export function Login({ onAuthenticated }: LoginProps) {
           </div>
 
           <div className="login-feature-list">
-            {featureHighlights.map((feature) => (
-              <div key={feature.label} className="login-feature-item">
+            {featureHighlights.map((feature, i) => (
+              <div key={feature.label} className={`login-feature-item login-stagger login-stagger-${i + 5}`}>
                 <div className="login-feature-meta">
                   <span className="login-feature-index mono">{feature.index}</span>
                   <div className="login-feature-title">{feature.label}</div>
@@ -213,7 +213,7 @@ export function Login({ onAuthenticated }: LoginProps) {
             ))}
           </div>
 
-          <div className="login-brand-footer">
+          <div className="login-brand-footer login-stagger login-stagger-8">
             <LabelText className="mono">
             {healthData?.version ? `v${healthData.version}` : 'v0.1.0'}
             </LabelText>
@@ -223,9 +223,10 @@ export function Login({ onAuthenticated }: LoginProps) {
 
         <section className="login-form-panel">
           <div className="login-form-card">
-            <div className="login-status-row">
+            <div className="login-status-row login-stagger login-stagger-1">
               <StatusDot
                 tone={health === 'offline' ? 'error' : health === 'checking' ? 'neutral' : 'success'}
+                className={health === 'online' ? 'online-pulse' : undefined}
                 style={health === 'checking' ? {
                   animation: 'skeleton-pulse 1.5s ease-in-out infinite',
                 } : undefined}
@@ -247,7 +248,7 @@ export function Login({ onAuthenticated }: LoginProps) {
               </span>
             </div>
 
-            <div className="login-form-copy">
+            <div className="login-form-copy login-stagger login-stagger-2">
               <LabelText as="div">Connect</LabelText>
               <h2 className="login-form-title">Sign in with an admin key</h2>
               <p className="login-form-description">
@@ -255,7 +256,7 @@ export function Login({ onAuthenticated }: LoginProps) {
               </p>
             </div>
 
-            <div className="login-session-grid">
+            <div className="login-session-grid login-stagger login-stagger-3">
               {sessionNotes.map((note) => (
                 <div key={note.label} className="login-session-card">
                   <div className="label-text">{note.label}</div>
@@ -265,7 +266,7 @@ export function Login({ onAuthenticated }: LoginProps) {
               ))}
             </div>
 
-            <form onSubmit={handleSubmit} className="login-form-fields">
+            <form onSubmit={handleSubmit} className="login-form-fields login-stagger login-stagger-4">
               <div className="login-field">
                 <div className="login-field-header">
                   <LabelText as="label" htmlFor="login-api-key">API key</LabelText>
@@ -295,7 +296,7 @@ export function Login({ onAuthenticated }: LoginProps) {
               </div>
 
               {error && (
-                <div className="login-error">{error}</div>
+                <div className="login-error" role="alert">{error}</div>
               )}
 
               <ActionButton
@@ -313,7 +314,7 @@ export function Login({ onAuthenticated }: LoginProps) {
               </ActionButton>
             </form>
 
-            <div className="login-help">
+            <div className="login-help login-stagger login-stagger-5">
               <div className="login-help-note">
                 Keys are generated by your gateway admin. The session is stored server-side and scoped to the workspace attached to the key you use.
               </div>

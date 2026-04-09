@@ -3570,6 +3570,7 @@ a {
   background-size: 90px 90px;
   opacity: 0.2;
   pointer-events: none;
+  animation: login-grid-drift 25s linear infinite;
 }
 
 .login-brand-content,
@@ -3680,6 +3681,12 @@ a {
   border: 1px solid rgba(248, 250, 252, 0.1);
   border-radius: 20px;
   background: rgba(248, 250, 252, 0.05);
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+
+.login-runtime-card:hover {
+  border-color: rgba(248, 250, 252, 0.2);
+  background: rgba(248, 250, 252, 0.08);
 }
 
 .login-runtime-label-row {
@@ -3720,6 +3727,13 @@ a {
   border: 1px solid rgba(248, 250, 252, 0.12);
   border-radius: 22px;
   background: rgba(248, 250, 252, 0.05);
+  transition: border-color 0.25s ease, background 0.25s ease, transform 0.25s ease;
+}
+
+.login-feature-item:hover {
+  border-color: rgba(248, 250, 252, 0.22);
+  background: rgba(248, 250, 252, 0.08);
+  transform: translateX(4px);
 }
 
 .login-feature-meta {
@@ -3836,6 +3850,12 @@ a {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 242, 235, 0.9)),
     rgba(255, 255, 255, 0.9);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.login-session-card:hover {
+  border-color: rgba(89, 99, 122, 0.22);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
 .login-session-card .label-text {
@@ -3895,8 +3915,8 @@ a {
 }
 
 .login-input-shell:focus-within {
-  border-color: rgba(5, 5, 5, 0.24);
-  box-shadow: 0 0 0 4px rgba(5, 5, 5, 0.04);
+  border-color: rgba(5, 5, 5, 0.28);
+  box-shadow: 0 0 0 4px rgba(5, 5, 5, 0.05);
   background: #ffffff;
 }
 
@@ -3934,6 +3954,12 @@ a {
   background: rgba(198, 40, 40, 0.06);
   color: var(--color-error);
   font-size: 0.84rem;
+  animation: login-error-enter 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes login-error-enter {
+  0% { opacity: 0; transform: translateY(-4px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 
 .login-submit {
@@ -3941,6 +3967,15 @@ a {
   min-height: 3.15rem;
   border-radius: 16px;
   letter-spacing: 0.18em;
+  transition: background 0.3s ease, opacity 0.2s ease, transform 0.15s ease;
+}
+
+.login-submit:disabled {
+  cursor: default;
+}
+
+.login-submit .login-submit-state {
+  animation: login-reveal-up 0.3s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .login-submit-state {
@@ -3981,6 +4016,81 @@ a {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.74);
   color: var(--text-primary);
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.login-help-links .nav-link:hover {
+  border-color: rgba(89, 99, 122, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+/* Login stagger-reveal animations */
+@keyframes login-grid-drift {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 90px 0, 0 90px; }
+}
+
+@keyframes login-reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes login-reveal-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes login-online-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(46, 125, 50, 0.45); }
+  50% { box-shadow: 0 0 0 5px rgba(46, 125, 50, 0); }
+}
+
+.login-stagger {
+  opacity: 0;
+  animation: login-reveal-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.login-stagger-1 { animation-delay: 0ms; }
+.login-stagger-2 { animation-delay: 60ms; }
+.login-stagger-3 { animation-delay: 120ms; }
+.login-stagger-4 { animation-delay: 180ms; }
+.login-stagger-5 { animation-delay: 240ms; }
+.login-stagger-6 { animation-delay: 300ms; }
+.login-stagger-7 { animation-delay: 360ms; }
+.login-stagger-8 { animation-delay: 420ms; }
+
+.login-status-row .status-dot.online-pulse {
+  animation: login-online-pulse 2.5s ease-in-out infinite;
+}
+
+.login-runtime-board {
+  opacity: 0;
+  animation: login-reveal-scale 0.6s cubic-bezier(0.22, 1, 0.36, 1) 200ms forwards;
+}
+
+.login-brand-title {
+  opacity: 0;
+  animation: login-reveal-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 80ms forwards;
+}
+
+.login-submit {
+  transition: opacity 0.2s ease, transform 0.15s ease;
+}
+
+.login-submit:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .models-toolbar {
