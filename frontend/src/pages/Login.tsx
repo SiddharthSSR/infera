@@ -17,11 +17,26 @@ interface HealthData {
   healthy_workers?: number;
 }
 
+function formatUptime(uptimeSeconds?: number) {
+  if (uptimeSeconds == null || !Number.isFinite(uptimeSeconds)) return 'Awaiting';
+
+  const totalMinutes = Math.max(0, Math.floor(uptimeSeconds / 60));
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return '<1m';
+}
+
 export function Login({ onAuthenticated }: LoginProps) {
   const [key, setKey] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [showKey, setShowKey] = useState(false);
   const [health, setHealth] = useState<HealthState>('checking');
   const [healthData, setHealthData] = useState<HealthData | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -83,9 +98,70 @@ export function Login({ onAuthenticated }: LoginProps) {
   };
 
   const featureHighlights = [
-    { label: 'OPEN SOURCE', desc: 'Run anywhere: cloud, bare metal, or hybrid. Keep the control plane in your hands.' },
-    { label: 'OPENAI COMPATIBLE', desc: 'Point existing clients at your Infera base URL and keep the rest of the integration surface familiar.' },
-    { label: 'MULTI-PROVIDER', desc: 'Provision across provider backends while keeping one workspace-level operator experience.' },
+    {
+      index: '01',
+      label: 'OPEN SOURCE',
+      desc: 'Run anywhere: cloud, bare metal, or hybrid. Keep the control plane in your hands.',
+      meta: 'Own the control surface',
+    },
+    {
+      index: '02',
+      label: 'OPENAI COMPATIBLE',
+      desc: 'Point existing clients at your Infera base URL and keep the rest of the integration surface familiar.',
+      meta: 'Drop-in client adoption',
+    },
+    {
+      index: '03',
+      label: 'MULTI-PROVIDER',
+      desc: 'Provision across provider backends while keeping one workspace-level operator experience.',
+      meta: 'One workspace, multiple runtimes',
+    },
+  ];
+
+  const gatewayTone = health === 'offline' ? 'offline' : health === 'checking' ? 'checking' : 'online';
+  const gatewayStatus = health === 'online' ? 'Online' : health === 'checking' ? 'Probing' : 'Offline';
+  const workerCount = healthData?.workers ?? 0;
+  const workerSummary = healthData?.healthy_workers != null && healthData?.workers != null
+    ? `${healthData.healthy_workers}/${healthData.workers} healthy`
+    : workerCount > 0
+      ? `${workerCount} connected`
+      : 'Waiting for workers';
+  const runtimeBrief = [
+    {
+      label: 'Gateway',
+      value: gatewayStatus,
+      detail: health === 'online' ? 'Health endpoint responding' : health === 'checking' ? 'Polling /health' : 'No control-plane response',
+      tone: gatewayTone,
+    },
+    {
+      label: 'Workers',
+      value: String(workerCount),
+      detail: workerSummary,
+      tone: workerCount > 0 ? 'online' : 'checking',
+    },
+    {
+      label: 'Uptime',
+      value: formatUptime(healthData?.uptime_seconds),
+      detail: healthData?.version ? `Gateway ${healthData.version}` : 'Awaiting runtime metadata',
+      tone: health === 'offline' ? 'offline' : 'checking',
+    },
+  ];
+  const sessionNotes = [
+    {
+      label: 'Auth boundary',
+      value: 'Admin only',
+      detail: 'Full operator access only.',
+    },
+    {
+      label: 'Session mode',
+      value: 'Server-side',
+      detail: 'Cookie issued after validation.',
+    },
+    {
+      label: 'Workspace scope',
+      value: 'Attached',
+      detail: 'Bound to the key workspace.',
+    },
   ];
 
   return (
@@ -94,17 +170,45 @@ export function Login({ onAuthenticated }: LoginProps) {
         <section className="login-brand-panel">
           <div className="login-brand-content">
             <div className="login-kicker">Inference control plane</div>
-            <h1 className="login-brand-title">INFERA</h1>
-            <p className="login-brand-subtitle">
-              Self-hosted inference infrastructure with a product-grade operator surface.
-            </p>
+            <div className="login-brand-grid">
+              <div className="login-brand-hero">
+                <div className="login-brand-principle">Technical. Minimal. Precise.</div>
+                <h1 className="login-brand-title">INFERA</h1>
+                <p className="login-brand-subtitle">
+                  Self-hosted inference infrastructure with a product-grade operator surface.
+                </p>
+              </div>
+
+              <div className="login-runtime-board">
+                <div className="login-runtime-header">
+                  <div className="label-text">Gateway signal</div>
+                  <div className="mono login-runtime-endpoint">/health</div>
+                </div>
+                <div className="login-runtime-grid">
+                  {runtimeBrief.map((item) => (
+                    <div key={item.label} className="login-runtime-card">
+                      <div className="login-runtime-label-row">
+                        <span className="label-text">{item.label}</span>
+                        <span className={`status-dot ${item.tone === 'online' ? '' : item.tone === 'offline' ? 'error' : 'neutral'}`} />
+                      </div>
+                      <div className="login-runtime-value">{item.value}</div>
+                      <div className="login-runtime-detail">{item.detail}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="login-feature-list">
             {featureHighlights.map((feature) => (
               <div key={feature.label} className="login-feature-item">
-                <div className="login-feature-title">{feature.label}</div>
+                <div className="login-feature-meta">
+                  <span className="login-feature-index mono">{feature.index}</span>
+                  <div className="login-feature-title">{feature.label}</div>
+                </div>
                 <div className="login-feature-copy">{feature.desc}</div>
+                <div className="login-feature-signal">{feature.meta}</div>
               </div>
             ))}
           </div>
@@ -120,26 +224,26 @@ export function Login({ onAuthenticated }: LoginProps) {
         <section className="login-form-panel">
           <div className="login-form-card">
             <div className="login-status-row">
-            <StatusDot
-              tone={health === 'offline' ? 'inactive' : 'success'}
-              style={health === 'checking' ? {
-                animation: 'skeleton-pulse 1.5s ease-in-out infinite',
-              } : undefined}
-            />
+              <StatusDot
+                tone={health === 'offline' ? 'error' : health === 'checking' ? 'neutral' : 'success'}
+                style={health === 'checking' ? {
+                  animation: 'skeleton-pulse 1.5s ease-in-out infinite',
+                } : undefined}
+              />
               <span className="mono login-status-copy">
-              {health === 'checking' && 'Checking gateway...'}
-              {health === 'online' && (
-                <>
-                  Gateway online
-                  {healthData?.workers != null && (
-                    <>
-                      <span style={{ color: 'var(--border-color)', margin: '0 6px' }}>·</span>
-                      {healthData.workers} worker{healthData.workers !== 1 ? 's' : ''} connected
-                    </>
-                  )}
-                </>
-              )}
-              {health === 'offline' && 'Gateway unreachable'}
+                {health === 'checking' && 'Checking gateway...'}
+                {health === 'online' && (
+                  <>
+                    Gateway online
+                    {healthData?.workers != null && (
+                      <>
+                        <span style={{ color: 'var(--border-color)', margin: '0 6px' }}>·</span>
+                        {healthData.workers} worker{healthData.workers !== 1 ? 's' : ''} connected
+                      </>
+                    )}
+                  </>
+                )}
+                {health === 'offline' && 'Gateway unreachable'}
               </span>
             </div>
 
@@ -151,22 +255,48 @@ export function Login({ onAuthenticated }: LoginProps) {
               </p>
             </div>
 
+            <div className="login-session-grid">
+              {sessionNotes.map((note) => (
+                <div key={note.label} className="login-session-card">
+                  <div className="label-text">{note.label}</div>
+                  <div className="login-session-value">{note.value}</div>
+                  <p>{note.detail}</p>
+                </div>
+              ))}
+            </div>
+
             <form onSubmit={handleSubmit} className="login-form-fields">
               <div className="login-field">
-                <LabelText as="div">API key</LabelText>
-                <ControlInput
-                  type="password"
-                  placeholder="inf_..."
-                  value={key}
-                  onChange={e => { setKey(e.target.value); setError(''); }}
-                  autoFocus
-                  autoComplete="current-password"
-                />
+                <div className="login-field-header">
+                  <LabelText as="label" htmlFor="login-api-key">API key</LabelText>
+                  <div className="mono login-field-meta">POST /api/auth/session</div>
+                </div>
+                <div className="login-input-shell">
+                  <ControlInput
+                    id="login-api-key"
+                    type={showKey ? 'text' : 'password'}
+                    className="login-key-input"
+                    placeholder="inf_..."
+                    value={key}
+                    onChange={e => { setKey(e.target.value); setError(''); }}
+                    autoFocus
+                    autoComplete="current-password"
+                    aria-invalid={error ? 'true' : 'false'}
+                  />
+                  <button
+                    type="button"
+                    className="login-visibility-toggle"
+                    onClick={() => setShowKey((visible) => !visible)}
+                    aria-label={showKey ? 'Hide API key' : 'Show API key'}
+                  >
+                    {showKey ? 'Hide' : 'Show'}
+                  </button>
+                </div>
               </div>
 
-            {error && (
+              {error && (
                 <div className="login-error">{error}</div>
-            )}
+              )}
 
               <ActionButton
                 variant="primary"
@@ -184,7 +314,7 @@ export function Login({ onAuthenticated }: LoginProps) {
             </form>
 
             <div className="login-help">
-              <div>
+              <div className="login-help-note">
                 Keys are generated by your gateway admin. The session is stored server-side and scoped to the workspace attached to the key you use.
               </div>
               <div className="login-help-links">
