@@ -42,8 +42,10 @@ Reasons for deferral:
 
 Passed:
 
-- `go test ./internal/gateway -count=1`
-- `CGO_ENABLED=0 go test ./internal/router ./internal/router/registry -count=1`
+- `go test ./internal/auth ./internal/deployments ./internal/gateway ./internal/vault -count=1`
+- `go test ./internal/audit ./internal/migrate -count=1`
+- `CGO_ENABLED=0 go test ./internal/router/... -count=1`
+- `CGO_ENABLED=0 go test ./internal/providers/... ./pkg/types/... -count=1`
 - `npm run test:run` in `frontend`
   - Result: 22 test files passed, 113 tests passed.
 - `npm run build` in `frontend`
@@ -59,8 +61,8 @@ Passed:
 
 Not completed:
 
-- Python worker tests were not run. The system default Python is 3.9, while the worker requires Python >=3.10. Python 3.12 is installed, but installing Python dev dependencies into a 3.12 venv was blocked by the approval/usage system.
-- Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for router test binaries with cgo enabled. The touched router packages pass with `CGO_ENABLED=0`; gateway tests require cgo because SQLite-backed tests use `go-sqlite3`.
+- Python worker tests were not run. The system default Python is 3.9, while the worker requires Python >=3.10. Python 3.12 is installed, but it does not have `pytest`, `pydantic`, or other project dependencies available.
+- Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for several non-SQLite test binaries with cgo enabled. SQLite-backed packages were tested with cgo enabled; router, provider, and shared type packages were tested with `CGO_ENABLED=0`.
 
 ## Remaining Manual Production Checks
 
