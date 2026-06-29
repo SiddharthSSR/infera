@@ -23,6 +23,9 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
 - `43aabe7 fix(release): allow model-less smoke verification`
   - Aligns `scripts/smoke-test.sh` with README/deployment docs so `INFERA_SMOKE_MODEL` is optional.
   - Keeps health and `/v1/models` smoke coverage when chat checks are skipped.
+- Additional release guard:
+  - Adds a release guard that rejects missing, untagged, or `:latest` worker images.
+  - Runs the guard from the production compose smoke path before Docker startup.
 
 ## Deferred
 
@@ -59,7 +62,11 @@ Passed:
   - Result: all checks passed.
 - `PYTHONPYCACHEPREFIX=/private/tmp/infera-pycache /opt/homebrew/bin/python3.12 -m py_compile $(find python/src python/tests -type f -name '*.py' -print)`
   - Result: Python worker source and tests syntax-compile successfully with Python 3.12.
-- `bash -n scripts/smoke-test.sh scripts/release-verify.sh scripts/compose-smoke-prod.sh scripts/build-docker.sh scripts/backup-sqlite.sh scripts/validate-worker-targets.sh`
+- `bash -n scripts/smoke-test.sh scripts/release-verify.sh scripts/compose-smoke-prod.sh scripts/build-docker.sh scripts/backup-sqlite.sh scripts/validate-worker-targets.sh scripts/validate-worker-image-pin.sh`
+- `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:v1.3.0`
+- `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker@sha256:0123456789abcdef`
+- `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:latest`
+  - Result: failed as expected because `latest` is not production-pinned.
 - `INFERA_SMOKE_API_KEY=inf_test SMOKE_TIMEOUT=3 ./scripts/smoke-test.sh http://127.0.0.1:18080`
   - Result: passed against a local mock health/models server with no `INFERA_SMOKE_MODEL`.
 - `INFERA_SMOKE_API_KEY=inf_test VERIFY_TIMEOUT=3 SMOKE_TIMEOUT=3 INFERA_DASHBOARD_URL=http://127.0.0.1:18081 INFERA_GATEWAY_INTERNAL_URL=http://127.0.0.1:18081 ./scripts/release-verify.sh http://127.0.0.1:18081`
@@ -74,7 +81,7 @@ Not completed:
 
 ## Remaining Manual Production Checks
 
-- Pin the production worker image by tag or digest in `INFERA_WORKER_IMAGE`.
+- Set the production `INFERA_WORKER_IMAGE` to the exact release tag or digest and record it in release notes.
 - Render production compose with real env values, not dummy values.
 - Run `scripts/release-verify.sh` against the canary deployment with a real `INFERA_SMOKE_API_KEY`.
 - If a live model should be checked, set `INFERA_SMOKE_MODEL` and optionally `INFERA_SMOKE_STREAM=1`.

@@ -29,6 +29,12 @@ git pull origin main
   - [ ] `ALERT_SMTP_SMARTHOST`
   - [ ] `ALERT_SMTP_USERNAME`
   - [ ] `ALERT_SMTP_PASSWORD`
+- [ ] Worker image is pinned to a non-`latest` tag or digest:
+
+```bash
+./scripts/validate-worker-image-pin.sh
+```
+
 - [ ] `data` directory exists for persistent DB files:
 
 ```bash

@@ -57,6 +57,8 @@ export RUNPOD_API_KEY
 export VASTAI_API_KEY
 export HF_TOKEN
 
+bash "$(dirname "$0")/validate-worker-image-pin.sh"
+
 prepare_smoke_compose_file() {
   local smoke_override_file="${TMP_DIR}/docker-compose.smoke.override.yml"
   local smoke_data_dir="${TMP_DIR}/data"
