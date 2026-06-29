@@ -623,6 +623,116 @@
       ],
       "title": "Batch Size avg by Model",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "infera-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 29
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "lastNotNull"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (reason) (rate(infera_gateway_inference_rejected_total[5m])) or vector(0)",
+          "legendFormat": "reason={{reason}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Gateway Inference Rejections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "infera-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 29
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "lastNotNull"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (event, to_status) (rate(infera_gateway_worker_health_transitions_total[5m])) or vector(0)",
+          "legendFormat": "{{event}} to {{to_status}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Worker Health Transitions",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",
@@ -644,6 +754,6 @@
   "timezone": "browser",
   "title": "Infera Overview",
   "uid": "infera-overview",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }

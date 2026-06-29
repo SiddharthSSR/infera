@@ -10,7 +10,7 @@ Date: 2026-06-29
 
 ## Changes Kept
 
-This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds four small release-readiness changes:
+This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds five small release-readiness changes:
 
 - `c09cd52 chore(release): add worker health transition metrics`
   - Adds registry-driven worker health transition events.
@@ -20,6 +20,8 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
   - Exposes `infera_gateway_inference_rejected_total{reason="overloaded"}`.
   - Records gateway max in-flight backpressure rejections.
   - Adds `InferaGatewayOverloadRejections` alert and runbook guidance.
+- Additional observability update:
+  - Adds dashboard panels for gateway inference rejections and worker health transitions.
 - `43aabe7 fix(release): allow model-less smoke verification`
   - Aligns `scripts/smoke-test.sh` with README/deployment docs so `INFERA_SMOKE_MODEL` is optional.
   - Keeps health and `/v1/models` smoke coverage when chat checks are skipped.
@@ -63,6 +65,7 @@ Passed:
 - `PYTHONPYCACHEPREFIX=/private/tmp/infera-pycache /opt/homebrew/bin/python3.12 -m py_compile $(find python/src python/tests -type f -name '*.py' -print)`
   - Result: Python worker source and tests syntax-compile successfully with Python 3.12.
 - `bash -n scripts/smoke-test.sh scripts/release-verify.sh scripts/compose-smoke-prod.sh scripts/build-docker.sh scripts/backup-sqlite.sh scripts/validate-worker-targets.sh scripts/validate-worker-image-pin.sh`
+- `python3 -m json.tool deploy/observability/grafana/dashboards/infera-overview.json`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:v1.3.0`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker@sha256:0123456789abcdef`
