@@ -10,7 +10,7 @@ Date: 2026-06-29
 
 ## Changes Kept
 
-This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds three small release-readiness commits:
+This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds four small release-readiness changes:
 
 - `c09cd52 chore(release): add worker health transition metrics`
   - Adds registry-driven worker health transition events.
@@ -23,7 +23,7 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
 - `43aabe7 fix(release): allow model-less smoke verification`
   - Aligns `scripts/smoke-test.sh` with README/deployment docs so `INFERA_SMOKE_MODEL` is optional.
   - Keeps health and `/v1/models` smoke coverage when chat checks are skipped.
-- Additional release guard:
+- `56b5f5b chore(release): validate worker image pinning`
   - Adds a release guard that rejects missing, untagged, or `:latest` worker images.
   - Runs the guard from the production compose smoke path before Docker startup.
 
@@ -78,6 +78,7 @@ Not completed:
 
 - Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for several non-SQLite test binaries with cgo enabled. SQLite-backed packages were tested with cgo enabled; router, provider, and shared type packages were tested with `CGO_ENABLED=0`.
 - `REMOVE_COMPOSE_VOLUMES=true SMOKE_TIMEOUT=180 ./scripts/compose-smoke-prod.sh` was attempted but did not run because Docker could not connect to the local daemon at `unix:///Users/siddharthsingh/.docker/run/docker.sock`.
+- `docker info --format '{{.ServerVersion}}'` was retried after the worker-image guard landed and still could not connect to the same Docker daemon socket.
 
 ## Remaining Manual Production Checks
 
