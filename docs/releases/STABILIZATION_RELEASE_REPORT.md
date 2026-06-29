@@ -51,7 +51,9 @@ Passed:
 
 - `go test ./internal/auth ./internal/deployments ./internal/gateway ./internal/vault -count=1`
 - `go test ./internal/audit ./internal/migrate -count=1`
+- `GOCACHE=/private/tmp/infera-go-cache go test ./internal/gateway -count=1`
 - `CGO_ENABLED=0 go test ./internal/router/... -count=1`
+- `CGO_ENABLED=0 GOCACHE=/private/tmp/infera-go-cache go test ./internal/router/... -count=1`
 - `CGO_ENABLED=0 go test ./internal/providers/... ./pkg/types/... -count=1`
 - `npm run test:run` in `frontend`
   - Result: 22 test files passed, 113 tests passed.
@@ -68,6 +70,8 @@ Passed:
   - Result: Python worker source and tests syntax-compile successfully with Python 3.12.
 - `bash -n scripts/smoke-test.sh scripts/release-verify.sh scripts/compose-smoke-prod.sh scripts/build-docker.sh scripts/backup-sqlite.sh scripts/validate-worker-targets.sh scripts/validate-worker-image-pin.sh`
 - `python3 -m json.tool deploy/observability/grafana/dashboards/infera-overview.json`
+- `python3` YAML load of `deploy/observability/prometheus/rules/infera-alerts.yml`
+  - Result: parsed successfully and confirmed `InferaGatewayOverloadRejections` and `InferaWorkerHealthTransitionsHigh` exist.
 - `rg -n 'validate-worker-image-pin|non-\`latest\`|sha256' README.md docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:v1.3.0`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
