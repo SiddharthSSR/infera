@@ -55,6 +55,9 @@ type Router struct {
 	cancel          context.CancelFunc
 }
 
+// WorkerHealthTransition describes a registry-driven worker health event.
+type WorkerHealthTransition = registry.HealthTransition
+
 type batchRouteResult struct {
 	routed *types.RoutedRequest
 	err    error
@@ -297,6 +300,12 @@ func (r *Router) onBatchReady(batch *types.BatchContext) {
 // OnBatchDispatch sets a callback invoked once per dispatched batch.
 func (r *Router) OnBatchDispatch(callback func(batch *types.BatchContext)) {
 	r.onBatchDispatch = callback
+}
+
+// OnWorkerHealthTransition sets a callback invoked when registry health checks
+// mark workers unhealthy or remove them after missed heartbeats.
+func (r *Router) OnWorkerHealthTransition(callback func(WorkerHealthTransition)) {
+	r.registry.OnHealthTransition(callback)
 }
 
 // Stop shuts down the router.

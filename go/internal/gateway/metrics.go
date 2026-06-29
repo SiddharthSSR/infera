@@ -30,7 +30,8 @@ type GatewayMetrics struct {
 	batchWait         *prometheus.HistogramVec
 	inferenceTokens   prometheus.Counter
 
-	workerQueueDepth *prometheus.GaugeVec
+	workerQueueDepth        *prometheus.GaugeVec
+	workerHealthTransitions *prometheus.CounterVec
 }
 
 var inferenceDurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60}
@@ -98,6 +99,10 @@ func NewGatewayMetrics() *GatewayMetrics {
 			Name: "infera_gateway_worker_queue_depth",
 			Help: "Current request queue depth per worker, as reported by the last heartbeat.",
 		}, []string{"worker_id"}),
+		workerHealthTransitions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "infera_gateway_worker_health_transitions_total",
+			Help: "Total number of registry-driven worker health transitions.",
+		}, []string{"event", "from_status", "to_status"}),
 	}
 
 	registry.MustRegister(
@@ -115,6 +120,7 @@ func NewGatewayMetrics() *GatewayMetrics {
 		m.batchWait,
 		m.inferenceTokens,
 		m.workerQueueDepth,
+		m.workerHealthTransitions,
 	)
 	m.gatewayInfo.WithLabelValues("gateway", inferaEnv(), inferaVersion()).Set(1)
 
@@ -174,6 +180,14 @@ func (m *GatewayMetrics) RecordTPOT(model string, stream bool, duration time.Dur
 
 func (m *GatewayMetrics) RecordWorkerQueueDepth(workerID string, depth int) {
 	m.workerQueueDepth.WithLabelValues(strings.TrimSpace(workerID)).Set(float64(depth))
+}
+
+func (m *GatewayMetrics) RecordWorkerHealthTransition(event string, fromStatus string, toStatus string) {
+	m.workerHealthTransitions.WithLabelValues(
+		strings.TrimSpace(event),
+		strings.TrimSpace(fromStatus),
+		strings.TrimSpace(toStatus),
+	).Inc()
 }
 
 func (m *GatewayMetrics) RecordBatch(model string, size int, wait time.Duration) {

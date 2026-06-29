@@ -64,6 +64,7 @@ func TestGatewayMetricsRecordInference(t *testing.T) {
 	m.RecordTTFT("model-1", false, 250*time.Millisecond)
 	m.RecordTPOT("model-1", false, 25*time.Millisecond)
 	m.RecordBatch("model-1", 4, 40*time.Millisecond)
+	m.RecordWorkerHealthTransition("marked_unhealthy", "healthy", "unhealthy")
 
 	successCount := testutil.ToFloat64(m.inferenceRequests.WithLabelValues("true", "success"))
 	if successCount != 1 {
@@ -105,6 +106,11 @@ func TestGatewayMetricsRecordInference(t *testing.T) {
 	}); got != 1 {
 		t.Fatalf("expected batch wait histogram count=1, got %d", got)
 	}
+
+	healthTransitions := testutil.ToFloat64(m.workerHealthTransitions.WithLabelValues("marked_unhealthy", "healthy", "unhealthy"))
+	if healthTransitions != 1 {
+		t.Fatalf("expected worker health transition count=1, got %v", healthTransitions)
+	}
 }
 
 func TestGatewayMetricsHandler(t *testing.T) {
@@ -122,6 +128,7 @@ func TestGatewayMetricsHandler(t *testing.T) {
 	m.RecordTTFT("model-1", false, 200*time.Millisecond)
 	m.RecordTPOT("model-1", false, 20*time.Millisecond)
 	m.RecordBatch("model-1", 2, 30*time.Millisecond)
+	m.RecordWorkerHealthTransition("removed", "unhealthy", "offline")
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -144,6 +151,7 @@ func TestGatewayMetricsHandler(t *testing.T) {
 		"infera_gateway_batch_size",
 		"infera_gateway_batch_wait_seconds",
 		"infera_gateway_inference_tokens_total",
+		"infera_gateway_worker_health_transitions_total",
 	} {
 		if !strings.Contains(body, metric) {
 			t.Fatalf("expected /metrics output to contain %q", metric)

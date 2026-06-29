@@ -48,6 +48,13 @@
 3. If batch size stays small while wait time rises, reduce `MaxBatchWaitMS` or add warm capacity for that model.
 4. If wait time rises with large batches, decode throughput is saturated and additional worker capacity is likely needed.
 
+## InferaWorkerHealthTransitionsHigh
+
+1. Inspect gateway logs for `marking worker unhealthy after missed heartbeats` and `removing worker after missed heartbeats`.
+2. Check whether transitions are concentrated on one provider, model, or worker image revision.
+3. Verify gateway-to-worker network reachability and that workers are still sending heartbeats with the expected shared token.
+4. If transitions started after a deploy, roll back the worker image or gateway revision and reprovision affected workers.
+
 ## InferaWorkerHeartbeatAuthRejected
 
 1. Confirm gateway and worker shared token values match exactly.

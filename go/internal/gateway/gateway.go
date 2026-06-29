@@ -137,6 +137,16 @@ func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gatew
 			}
 			gw.metrics.RecordBatch(batch.ModelID, batch.Size(), wait)
 		})
+		r.OnWorkerHealthTransition(func(transition router.WorkerHealthTransition) {
+			if gw.metrics == nil {
+				return
+			}
+			gw.metrics.RecordWorkerHealthTransition(
+				string(transition.Event),
+				string(transition.FromStatus),
+				string(transition.ToStatus),
+			)
+		})
 	}
 
 	if instanceMgr != nil {

@@ -12,10 +12,28 @@ import (
 
 // WorkerRegistry maintains the pool of available workers.
 type WorkerRegistry struct {
-	workers    map[string]*types.WorkerInfo
-	modelIndex map[string]map[string]struct{}
-	mu         sync.RWMutex
-	config     RegistryConfig
+	workers            map[string]*types.WorkerInfo
+	modelIndex         map[string]map[string]struct{}
+	mu                 sync.RWMutex
+	config             RegistryConfig
+	onHealthTransition func(HealthTransition)
+}
+
+// HealthTransitionEvent identifies a registry-driven worker health event.
+type HealthTransitionEvent string
+
+const (
+	HealthTransitionMarkedUnhealthy HealthTransitionEvent = "marked_unhealthy"
+	HealthTransitionRemoved         HealthTransitionEvent = "removed"
+)
+
+// HealthTransition describes a worker health transition detected by the registry.
+type HealthTransition struct {
+	Event          HealthTransitionEvent
+	WorkerID       string
+	FromStatus     types.WorkerStatus
+	ToStatus       types.WorkerStatus
+	SinceHeartbeat time.Duration
 }
 
 // RegistryConfig configures the registry behavior.
@@ -41,6 +59,14 @@ func NewWorkerRegistry(config RegistryConfig) *WorkerRegistry {
 		modelIndex: make(map[string]map[string]struct{}),
 		config:     config,
 	}
+}
+
+// OnHealthTransition sets a callback invoked when the registry marks a worker
+// unhealthy or removes it after missed heartbeats.
+func (r *WorkerRegistry) OnHealthTransition(callback func(HealthTransition)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onHealthTransition = callback
 }
 
 // Register adds a worker to the registry.
@@ -225,12 +251,20 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 		removalThreshold   time.Duration
 	}
 	logEntries := []registryLogEntry{}
+	transitions := []HealthTransition{}
 
 	for workerID, worker := range r.workers {
 		timeSinceHeartbeat := now.Sub(worker.LastHealthCheck)
 
 		if timeSinceHeartbeat > r.config.RemovalThreshold {
 			toRemove = append(toRemove, workerID)
+			transitions = append(transitions, HealthTransition{
+				Event:          HealthTransitionRemoved,
+				WorkerID:       workerID,
+				FromStatus:     worker.Status,
+				ToStatus:       types.WorkerStatusOffline,
+				SinceHeartbeat: timeSinceHeartbeat,
+			})
 			logEntries = append(logEntries, registryLogEntry{
 				message:          "removing worker after missed heartbeats",
 				workerID:         workerID,
@@ -239,6 +273,13 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 			})
 		} else if timeSinceHeartbeat > r.config.UnhealthyThreshold {
 			if worker.Status != types.WorkerStatusUnhealthy {
+				transitions = append(transitions, HealthTransition{
+					Event:          HealthTransitionMarkedUnhealthy,
+					WorkerID:       workerID,
+					FromStatus:     worker.Status,
+					ToStatus:       types.WorkerStatusUnhealthy,
+					SinceHeartbeat: timeSinceHeartbeat,
+				})
 				logEntries = append(logEntries, registryLogEntry{
 					message:            "marking worker unhealthy after missed heartbeats",
 					workerID:           workerID,
@@ -249,6 +290,7 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 			worker.UpdateStatus(types.WorkerStatusUnhealthy)
 		}
 	}
+	onHealthTransition := r.onHealthTransition
 
 	for _, workerID := range toRemove {
 		worker := r.workers[workerID]
@@ -259,6 +301,11 @@ func (r *WorkerRegistry) checkWorkerHealth() {
 	}
 
 	r.mu.Unlock()
+	if onHealthTransition != nil {
+		for _, transition := range transitions {
+			onHealthTransition(transition)
+		}
+	}
 	for _, entry := range logEntries {
 		attrs := []any{
 			slog.String("worker_id", entry.workerID),

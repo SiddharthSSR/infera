@@ -95,6 +95,17 @@ groups:
           description: Model {{ $labels.model }} has p95 batch queue wait above 200ms for 10 minutes.
           runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferabatchwaithigh
 
+      - alert: InferaWorkerHealthTransitionsHigh
+        expr: sum(increase(infera_gateway_worker_health_transitions_total[10m])) > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: Worker health transitions are elevated
+          description: More than 3 workers were marked unhealthy or removed by registry health checks in the last 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferaworkerhealthtransitionshigh
+
   - name: infera-worker-alerts
     rules:
       - alert: InferaWorkerHeartbeatAuthRejected

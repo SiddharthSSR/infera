@@ -267,6 +267,65 @@ func TestHealthChecker(t *testing.T) {
 	}
 }
 
+func TestHealthTransitionCallback(t *testing.T) {
+	cfg := RegistryConfig{
+		HealthCheckInterval: time.Hour,
+		UnhealthyThreshold:  50 * time.Millisecond,
+		RemovalThreshold:    100 * time.Millisecond,
+	}
+
+	t.Run("marks unhealthy", func(t *testing.T) {
+		r := NewWorkerRegistry(cfg)
+		w := makeWorker("stale-unhealthy", "a:1", types.WorkerStatusHealthy, []string{"model"})
+		w.LastHealthCheck = time.Now().Add(-75 * time.Millisecond)
+		r.Register(w)
+
+		var transitions []HealthTransition
+		r.OnHealthTransition(func(transition HealthTransition) {
+			transitions = append(transitions, transition)
+		})
+
+		r.checkWorkerHealth()
+
+		if len(transitions) != 1 {
+			t.Fatalf("expected 1 transition, got %d", len(transitions))
+		}
+		if transitions[0].Event != HealthTransitionMarkedUnhealthy {
+			t.Fatalf("expected marked_unhealthy event, got %s", transitions[0].Event)
+		}
+		if transitions[0].FromStatus != types.WorkerStatusHealthy || transitions[0].ToStatus != types.WorkerStatusUnhealthy {
+			t.Fatalf("unexpected status transition: %s -> %s", transitions[0].FromStatus, transitions[0].ToStatus)
+		}
+	})
+
+	t.Run("removes stale worker", func(t *testing.T) {
+		r := NewWorkerRegistry(cfg)
+		w := makeWorker("stale-removed", "a:1", types.WorkerStatusUnhealthy, []string{"model"})
+		w.LastHealthCheck = time.Now().Add(-150 * time.Millisecond)
+		r.Register(w)
+
+		var transitions []HealthTransition
+		r.OnHealthTransition(func(transition HealthTransition) {
+			transitions = append(transitions, transition)
+		})
+
+		r.checkWorkerHealth()
+
+		if len(transitions) != 1 {
+			t.Fatalf("expected 1 transition, got %d", len(transitions))
+		}
+		if transitions[0].Event != HealthTransitionRemoved {
+			t.Fatalf("expected removed event, got %s", transitions[0].Event)
+		}
+		if transitions[0].FromStatus != types.WorkerStatusUnhealthy || transitions[0].ToStatus != types.WorkerStatusOffline {
+			t.Fatalf("unexpected status transition: %s -> %s", transitions[0].FromStatus, transitions[0].ToStatus)
+		}
+		if r.Count() != 0 {
+			t.Fatalf("expected worker to be removed, got count %d", r.Count())
+		}
+	})
+}
+
 func TestGetAllWorkers(t *testing.T) {
 	r := newTestRegistry()
 	r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, nil))
