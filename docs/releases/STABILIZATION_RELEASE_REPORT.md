@@ -53,6 +53,8 @@ Passed:
   - Note: Vite still warns that the main JS chunk is larger than 500 kB; this is inherited and non-blocking for this stabilization branch.
 - `npm run lint` in `frontend`
   - Result: exits successfully with warnings.
+- `PYTHONPYCACHEPREFIX=/private/tmp/infera-pycache /opt/homebrew/bin/python3.12 -m py_compile $(find python/src python/tests -type f -name '*.py' -print)`
+  - Result: Python worker source and tests syntax-compile successfully with Python 3.12.
 - `bash -n scripts/smoke-test.sh scripts/release-verify.sh scripts/compose-smoke-prod.sh scripts/build-docker.sh scripts/backup-sqlite.sh scripts/validate-worker-targets.sh`
 - `INFERA_SMOKE_API_KEY=inf_test SMOKE_TIMEOUT=3 ./scripts/smoke-test.sh http://127.0.0.1:18080`
   - Result: passed against a local mock health/models server with no `INFERA_SMOKE_MODEL`.
@@ -61,7 +63,7 @@ Passed:
 
 Not completed:
 
-- Python worker tests were not run. The system default Python is 3.9, while the worker requires Python >=3.10. Python 3.12 is installed, but it does not have `pytest`, `pydantic`, or other project dependencies available.
+- Python worker pytest suites were not run. The system default Python is 3.9, while the worker requires Python >=3.10. Python 3.12 is installed, but it does not have `pytest`, `pydantic`, or other project dependencies available.
 - Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for several non-SQLite test binaries with cgo enabled. SQLite-backed packages were tested with cgo enabled; router, provider, and shared type packages were tested with `CGO_ENABLED=0`.
 
 ## Remaining Manual Production Checks
