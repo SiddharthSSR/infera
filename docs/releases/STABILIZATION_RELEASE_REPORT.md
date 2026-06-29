@@ -53,6 +53,10 @@ Passed:
   - Note: Vite still warns that the main JS chunk is larger than 500 kB; this is inherited and non-blocking for this stabilization branch.
 - `npm run lint` in `frontend`
   - Result: exits successfully with warnings.
+- `/private/tmp/infera-py312-venv/bin/pytest -q` in `python`
+  - Result: 108 passed.
+- `/private/tmp/infera-py312-venv/bin/ruff check .` in `python`
+  - Result: all checks passed.
 - `PYTHONPYCACHEPREFIX=/private/tmp/infera-pycache /opt/homebrew/bin/python3.12 -m py_compile $(find python/src python/tests -type f -name '*.py' -print)`
   - Result: Python worker source and tests syntax-compile successfully with Python 3.12.
 - `bash -n scripts/smoke-test.sh scripts/release-verify.sh scripts/compose-smoke-prod.sh scripts/build-docker.sh scripts/backup-sqlite.sh scripts/validate-worker-targets.sh`
@@ -63,7 +67,6 @@ Passed:
 
 Not completed:
 
-- Python worker pytest suites were not run. The system default Python is 3.9, while the worker requires Python >=3.10. Python 3.12 is installed, but it does not have `pytest`, `pydantic`, or other project dependencies available.
 - Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for several non-SQLite test binaries with cgo enabled. SQLite-backed packages were tested with cgo enabled; router, provider, and shared type packages were tested with `CGO_ENABLED=0`.
 - `REMOVE_COMPOSE_VOLUMES=true SMOKE_TIMEOUT=180 ./scripts/compose-smoke-prod.sh` was attempted but did not run because Docker could not connect to the local daemon at `unix:///Users/siddharthsingh/.docker/run/docker.sock`.
 

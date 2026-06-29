@@ -2,17 +2,18 @@
 
 import asyncio
 from types import SimpleNamespace
+
 import pytest
 
 from infera_worker import worker as worker_module
-from infera_worker.worker import Worker
-from infera_worker.config import WorkerConfig, ModelConfig
+from infera_worker.config import ModelConfig, WorkerConfig
 from infera_worker.types import (
     InferenceRequest,
     Message,
     Role,
     WorkerState,
 )
+from infera_worker.worker import Worker
 
 
 @pytest.fixture
@@ -40,20 +41,20 @@ class TestWorker:
         config = WorkerConfig(engine="mock")
         worker1 = Worker(config)
         worker2 = Worker(config)
-        
+
         # Each worker should have unique ID
         assert worker1.worker_id != worker2.worker_id
 
     def test_worker_custom_id(self):
         config = WorkerConfig(engine="mock", worker_id="custom-worker-id")
         worker = Worker(config)
-        
+
         assert worker.worker_id == "custom-worker-id"
 
     @pytest.mark.asyncio
     async def test_start_worker(self, worker):
         await worker.start()
-        
+
         assert worker.state == WorkerState.READY
         assert worker.engine is not None
         startup = worker.get_startup_status()
@@ -138,7 +139,7 @@ class TestWorker:
     async def test_stop_worker(self, worker):
         await worker.start()
         await worker.stop()
-        
+
         # State should be SHUTTING_DOWN at the end
 
     @pytest.mark.asyncio
@@ -154,9 +155,9 @@ class TestWorker:
     @pytest.mark.asyncio
     async def test_load_model(self, worker):
         await worker.start()
-        
+
         model = await worker.load_model(ModelConfig(model_id="test-model"))
-        
+
         assert model.model_id == "test-model"
         assert model in worker.get_loaded_models()
 
@@ -164,18 +165,18 @@ class TestWorker:
     async def test_unload_model(self, worker):
         await worker.start()
         await worker.load_model(ModelConfig(model_id="to-unload"))
-        
+
         result = await worker.unload_model("to-unload")
-        
+
         assert result is True
         assert len(worker.get_loaded_models()) == 0
 
     @pytest.mark.asyncio
     async def test_get_loaded_models_empty(self, worker):
         await worker.start()
-        
+
         models = worker.get_loaded_models()
-        
+
         assert len(models) == 0
 
     @pytest.mark.asyncio
@@ -183,18 +184,18 @@ class TestWorker:
         await worker.start()
         await worker.load_model(ModelConfig(model_id="model-1"))
         await worker.load_model(ModelConfig(model_id="model-2"))
-        
+
         models = worker.get_loaded_models()
-        
+
         assert len(models) == 2
 
     @pytest.mark.asyncio
     async def test_infer(self, worker, sample_request):
         await worker.start()
         await worker.load_model(ModelConfig(model_id="test-model"))
-        
+
         response = await worker.infer(sample_request)
-        
+
         assert response.request_id == sample_request.request_id
         assert len(response.choices) > 0
 
@@ -208,7 +209,7 @@ class TestWorker:
     async def test_infer_model_not_loaded(self, worker, sample_request):
         await worker.start()
         # Don't load the model
-        
+
         with pytest.raises(ValueError, match="not loaded"):
             await worker.infer(sample_request)
 
@@ -216,11 +217,11 @@ class TestWorker:
     async def test_infer_stream(self, worker, sample_request):
         await worker.start()
         await worker.load_model(ModelConfig(model_id="test-model"))
-        
+
         chunks = []
         async for chunk in worker.infer_stream(sample_request):
             chunks.append(chunk)
-        
+
         assert len(chunks) > 0
         # Last chunk should be final
         assert chunks[-1].is_final()
@@ -228,18 +229,18 @@ class TestWorker:
     @pytest.mark.asyncio
     async def test_cancel(self, worker):
         await worker.start()
-        
+
         result = await worker.cancel("some-request-id")
-        
+
         # Mock engine should handle this gracefully
         assert isinstance(result, bool)
 
     @pytest.mark.asyncio
     async def test_get_stats(self, worker):
         await worker.start()
-        
+
         stats = worker.get_stats()
-        
+
         assert stats.queue_depth >= 0
         assert stats.active_requests >= 0
         assert stats.memory_total_bytes >= 0
@@ -266,13 +267,13 @@ class TestWorker:
     async def test_get_stats_after_requests(self, worker, sample_request):
         await worker.start()
         await worker.load_model(ModelConfig(model_id="test-model"))
-        
+
         # Make some requests
         for _ in range(5):
             await worker.infer(sample_request)
-        
+
         stats = worker.get_stats()
-        
+
         assert stats.requests_per_second >= 0
         assert stats.avg_latency_ms >= 0
 
@@ -339,11 +340,11 @@ class TestWorker:
             preload_models=["preload-model-1", "preload-model-2"],
         )
         worker = Worker(config)
-        
+
         await worker.start()
-        
+
         models = worker.get_loaded_models()
         model_ids = [m.model_id for m in models]
-        
+
         assert "preload-model-1" in model_ids
         assert "preload-model-2" in model_ids

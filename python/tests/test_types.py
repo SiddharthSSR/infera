@@ -1,21 +1,20 @@
 """Tests for infera_worker types."""
 
-import pytest
 from datetime import datetime
 
 from infera_worker.types import (
-    Message,
-    Role,
+    Choice,
+    FinishReason,
     InferenceRequest,
     InferenceResponse,
-    TokenChunk,
-    Choice,
-    UsageStats,
     LatencyStats,
     LoadedModel,
-    WorkerStats,
+    Message,
+    Role,
+    TokenChunk,
+    UsageStats,
     WorkerState,
-    FinishReason,
+    WorkerStats,
 )
 
 

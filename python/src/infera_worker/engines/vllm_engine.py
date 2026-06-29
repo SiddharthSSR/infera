@@ -1,33 +1,33 @@
 """vLLM inference engine implementation."""
 
-from collections.abc import AsyncGenerator
-from datetime import datetime
 import asyncio
 import inspect
 import os
+from collections.abc import AsyncGenerator, Callable
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import structlog
 
+from ..config import ModelConfig, WorkerConfig
+from ..engine import InferenceEngine
 from ..types import (
+    Choice,
+    FinishReason,
     InferenceRequest,
     InferenceResponse,
-    TokenChunk,
-    Choice,
-    Message,
-    Role,
-    FinishReason,
-    UsageStats,
     LatencyStats,
     LoadedModel,
+    Message,
+    Role,
+    TokenChunk,
+    UsageStats,
 )
-from ..config import WorkerConfig, ModelConfig
-from ..engine import InferenceEngine
 
 # vLLM imports are optional - only loaded when engine is used
 try:
-    from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
+    from vllm import AsyncEngineArgs, AsyncLLMEngine, SamplingParams
     from vllm.outputs import RequestOutput
     VLLM_AVAILABLE = True
 except ImportError:
@@ -50,7 +50,7 @@ class VLLMEngine(InferenceEngine):
             raise ImportError(
                 "vLLM is not installed. Install with: pip install vllm"
             )
-        
+
         self.config = config
         self.engines: dict[str, AsyncLLMEngine] = {}
         self.loaded_models: dict[str, LoadedModel] = {}
@@ -105,17 +105,17 @@ class VLLMEngine(InferenceEngine):
             inferred_hf_snapshot_count=cache_probe["inferred_hf_snapshot_count"],
         )
 
-        engine_kwargs: dict = dict(
-            model=model_path,
-            revision=model_config.revision,
-            tensor_parallel_size=self.config.vllm_tensor_parallel_size,
-            gpu_memory_utilization=self.config.vllm_gpu_memory_utilization,
-            max_model_len=self.config.vllm_max_model_len,
-            quantization=model_config.quantization,
-            trust_remote_code=True,
-            enable_prefix_caching=self.config.vllm_enable_prefix_caching,
-            enable_chunked_prefill=self.config.vllm_enable_chunked_prefill,
-        )
+        engine_kwargs: dict = {
+            "model": model_path,
+            "revision": model_config.revision,
+            "tensor_parallel_size": self.config.vllm_tensor_parallel_size,
+            "gpu_memory_utilization": self.config.vllm_gpu_memory_utilization,
+            "max_model_len": self.config.vllm_max_model_len,
+            "quantization": model_config.quantization,
+            "trust_remote_code": True,
+            "enable_prefix_caching": self.config.vllm_enable_prefix_caching,
+            "enable_chunked_prefill": self.config.vllm_enable_chunked_prefill,
+        }
 
         optional_engine_kwargs: dict[str, Any] = {}
         if self.config.vllm_max_num_batched_tokens is not None:
@@ -197,7 +197,7 @@ class VLLMEngine(InferenceEngine):
     async def infer(self, request: InferenceRequest) -> InferenceResponse:
         """Run inference with vLLM."""
         start_time = datetime.now()
-        
+
         engine = self.engines.get(request.model_id)
         if engine is None:
             raise ValueError(f"Model {request.model_id} not loaded")
@@ -269,9 +269,8 @@ class VLLMEngine(InferenceEngine):
         self, request: InferenceRequest
     ) -> AsyncGenerator[TokenChunk, None]:
         """Stream tokens from vLLM."""
-        start_time = datetime.now()
         first_token_time: datetime | None = None
-        
+
         engine = self.engines.get(request.model_id)
         if engine is None:
             raise ValueError(f"Model {request.model_id} not loaded")
@@ -287,7 +286,7 @@ class VLLMEngine(InferenceEngine):
             prev_text = ""
             chunk_index = 0
             prompt_tokens = 0
-            
+
             async for output in engine.generate(
                 prompt,
                 sampling_params,
@@ -365,7 +364,7 @@ class VLLMEngine(InferenceEngine):
             {"role": msg.role.value, "content": msg.content}
             for msg in request.messages
         ]
-        
+
         # Try to use tokenizer's chat template
         tokenizer = self._get_tokenizer(request.model_id)
         if tokenizer is not None and hasattr(tokenizer, 'apply_chat_template'):
@@ -378,40 +377,40 @@ class VLLMEngine(InferenceEngine):
                 return prompt
             except Exception:
                 pass
-        
+
         # Fallback: Mistral-style format
         # Format: <s>[INST] {user_message} [/INST] {assistant_response}</s>[INST] {next_user} [/INST]
         parts = []
         system_prompt = ""
-        
+
         i = 0
         while i < len(request.messages):
             msg = request.messages[i]
-            
+
             if msg.role == Role.SYSTEM:
                 system_prompt = msg.content
                 i += 1
                 continue
-                
+
             if msg.role == Role.USER:
                 user_content = msg.content
                 if system_prompt:
                     user_content = f"{system_prompt}\n\n{user_content}"
                     system_prompt = ""
-                
+
                 # Check if next message is assistant
                 assistant_content = ""
                 if i + 1 < len(request.messages) and request.messages[i + 1].role == Role.ASSISTANT:
                     assistant_content = request.messages[i + 1].content
                     i += 1
-                
+
                 if assistant_content:
                     parts.append(f"<s>[INST] {user_content} [/INST] {assistant_content}</s>")
                 else:
                     parts.append(f"<s>[INST] {user_content} [/INST]")
-            
+
             i += 1
-        
+
         return "".join(parts)
 
     def _get_tokenizer(self, model_id: str) -> Any:

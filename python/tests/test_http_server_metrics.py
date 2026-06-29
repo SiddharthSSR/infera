@@ -1,9 +1,9 @@
 """Tests for worker HTTP server metrics."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-import asyncio
 
 import pytest
 from aiohttp.test_utils import make_mocked_request

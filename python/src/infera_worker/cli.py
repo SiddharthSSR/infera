@@ -3,11 +3,12 @@
 import asyncio
 import signal
 import sys
+
 import structlog
 
 from .config import WorkerConfig
-from .worker import Worker
 from .http_server import HTTPServer
+from .worker import Worker
 
 
 def setup_logging(config: WorkerConfig) -> None:
@@ -20,7 +21,7 @@ def setup_logging(config: WorkerConfig) -> None:
         processors.append(structlog.processors.JSONRenderer())
     else:
         processors.append(structlog.dev.ConsoleRenderer())
-    
+
     structlog.configure(processors=processors)
 
 
@@ -50,14 +51,14 @@ async def run_worker(config: WorkerConfig) -> None:
 
         # Register only after the worker is actually ready for traffic.
         await http_server.activate_gateway_reporting()
-        
+
         logger.info(
             "Worker running",
             worker_id=worker.worker_id,
             http_port=config.http_port,
             engine=config.engine,
         )
-        
+
         # Wait for shutdown signal from OS or worker-internal path.
         local_shutdown = asyncio.create_task(shutdown_event.wait())
         worker_shutdown = asyncio.create_task(worker.wait_for_shutdown())
@@ -69,11 +70,11 @@ async def run_worker(config: WorkerConfig) -> None:
             task.cancel()
         for task in done:
             task.result()
-        
+
     except Exception as e:
         logger.error("Worker error", error=str(e))
         raise
-        
+
     finally:
         logger.info("Shutting down...")
         await http_server.stop()
@@ -85,7 +86,7 @@ def main() -> None:
     """Main entry point."""
     config = WorkerConfig()
     setup_logging(config)
-    
+
     logger = structlog.get_logger()
     logger.info(
         "Starting Infera Worker",

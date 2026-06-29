@@ -2,7 +2,7 @@
 
 import json
 import os
-from typing import Any
+
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,7 +12,7 @@ class WorkerConfig(BaseSettings):
 
     # Worker identity
     worker_id: str = Field(default="", description="Unique worker identifier")
-    
+
     # Network
     http_port: int = Field(default=8081, description="HTTP server port")
     grpc_port: int = Field(default=50051, description="gRPC server port")
@@ -20,29 +20,29 @@ class WorkerConfig(BaseSettings):
     worker_address: str = Field(default="", description="Public address of this worker (for registration)")
     vault_address: str = Field(default="localhost:50053", description="Vault address")
     worker_shared_token: str = Field(default="", description="Shared token for gateway worker auth")
-    
+
     # Capacity
     max_concurrent_requests: int = Field(default=32, description="Max concurrent requests")
     max_batch_size: int = Field(default=8, description="Max batch size")
     request_timeout_ms: int = Field(default=30000, description="Request timeout in ms")
-    
+
     # Model management
     model_cache_size: int = Field(default=2, description="Max models in memory")
     # Optional constructor-level preload list; env parsing still handled via computed field below.
     preload_models_input: list[str] = Field(default_factory=list, alias="preload_models")
     # NOTE: preload_models is handled via computed_field to avoid pydantic-settings JSON parsing issues
-    
+
     # GPU/Device
     device: str = Field(default="auto", description="Device: auto, cuda, mps, cpu")
     gpu_memory_fraction: float = Field(default=0.9, description="GPU memory fraction to use")
-    
+
     # Health reporting
     health_report_interval_ms: int = Field(default=5000, description="Health report interval")
     drain_timeout_s: int = Field(default=30, description="Seconds to wait for in-flight requests to finish on graceful shutdown")
-    
+
     # Inference engine
     engine: str = Field(default="vllm", description="Inference engine: vllm, mlx, mock")
-    
+
     # vLLM specific
     vllm_tensor_parallel_size: int = Field(default=1, description="Tensor parallel size")
     vllm_gpu_memory_utilization: float = Field(default=0.9, description="GPU memory utilization")
@@ -63,7 +63,7 @@ class WorkerConfig(BaseSettings):
     vllm_speculative_model: str = Field(default="", description="Draft model ID or '[ngram]' for speculative decoding")
     vllm_num_speculative_tokens: int = Field(default=0, description="Tokens to speculate per step (0 = disabled)")
     vllm_ngram_prompt_lookup_num_tokens: int = Field(default=0, description="Ngram look-back window (ngram mode only)")
-    
+
     # Logging
     log_level: str = Field(default="INFO", description="Log level")
     log_format: str = Field(default="json", description="Log format: json, console")
@@ -73,10 +73,10 @@ class WorkerConfig(BaseSettings):
     def preload_models(self) -> list[str]:
         """
         Get preload_models from environment variable.
-        
+
         This is a computed field that reads directly from os.environ
         to avoid pydantic-settings trying to JSON parse the value.
-        
+
         Supports:
         - Empty string: ""
         - Comma-separated: "model1,model2"
@@ -86,14 +86,14 @@ class WorkerConfig(BaseSettings):
             return [m for m in self.preload_models_input if m]
 
         value = os.environ.get("INFERA_PRELOAD_MODELS", "")
-        
+
         if not value:
             return []
-        
+
         value = value.strip()
         if not value:
             return []
-        
+
         # Try JSON array first
         if value.startswith("["):
             try:
@@ -102,7 +102,7 @@ class WorkerConfig(BaseSettings):
                     return [str(m) for m in parsed if m]
             except json.JSONDecodeError:
                 pass
-        
+
         # Comma-separated
         return [m.strip() for m in value.split(",") if m.strip()]
 
@@ -128,7 +128,7 @@ class ModelConfig(BaseSettings):
     quantization: str | None = None  # awq, gptq, int8, int4
     max_batch_size: int = 8
     max_sequence_length: int = 4096
-    
+
     model_config = {
         "extra": "allow",
     }

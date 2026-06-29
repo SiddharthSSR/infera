@@ -1,17 +1,25 @@
 """Inference engine interface and implementations."""
 
-from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator
-from datetime import datetime
 import asyncio
 import random
-from typing import Any, Callable
+from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator, Callable
+from datetime import datetime
+from typing import Any
 
+from .config import ModelConfig, WorkerConfig
 from .types import (
-    InferenceRequest, InferenceResponse, TokenChunk, Choice, Message,
-    Role, FinishReason, UsageStats, LatencyStats, LoadedModel,
+    Choice,
+    FinishReason,
+    InferenceRequest,
+    InferenceResponse,
+    LatencyStats,
+    LoadedModel,
+    Message,
+    Role,
+    TokenChunk,
+    UsageStats,
 )
-from .config import WorkerConfig, ModelConfig
 
 
 class InferenceEngine(ABC):
