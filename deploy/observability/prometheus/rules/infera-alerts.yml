@@ -95,6 +95,17 @@ groups:
           description: Model {{ $labels.model }} has p95 batch queue wait above 200ms for 10 minutes.
           runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferabatchwaithigh
 
+      - alert: InferaGatewayOverloadRejections
+        expr: sum(rate(infera_gateway_inference_rejected_total{reason="overloaded"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: Gateway is shedding inference requests
+          description: Gateway max in-flight backpressure is rejecting more than 0.05 inference requests per second for 5 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewayoverloadrejections
+
       - alert: InferaWorkerHealthTransitionsHigh
         expr: sum(increase(infera_gateway_worker_health_transitions_total[10m])) > 3
         for: 5m

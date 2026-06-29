@@ -48,6 +48,13 @@
 3. If batch size stays small while wait time rises, reduce `MaxBatchWaitMS` or add warm capacity for that model.
 4. If wait time rises with large batches, decode throughput is saturated and additional worker capacity is likely needed.
 
+## InferaGatewayOverloadRejections
+
+1. Check `infera_gateway_http_in_flight_requests` against the configured `INFERA_MAX_IN_FLIGHT_REQUESTS`.
+2. Compare overload rejection rate with `Batch Wait p95 by Model` and worker queue depth to identify whether pressure is gateway-local or worker-capacity related.
+3. If worker capacity is healthy and gateway CPU/memory are saturated, scale the gateway or raise `INFERA_MAX_IN_FLIGHT_REQUESTS` cautiously.
+4. If workers are saturated, add capacity for the affected models before raising the gateway limit.
+
 ## InferaWorkerHealthTransitionsHigh
 
 1. Inspect gateway logs for `marking worker unhealthy after missed heartbeats` and `removing worker after missed heartbeats`.

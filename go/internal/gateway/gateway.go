@@ -561,6 +561,9 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	if current > g.maxInFlightDefault {
 		w.Header().Set("Retry-After", "5")
+		if g.metrics != nil {
+			g.metrics.RecordInferenceRejected("overloaded")
+		}
 		g.writeError(w, http.StatusServiceUnavailable, "overloaded", "Server is overloaded. Please retry shortly.")
 		return
 	}

@@ -7,8 +7,11 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
@@ -338,6 +341,26 @@ func TestHandlePrometheusWorkerTargets(t *testing.T) {
 	}
 	if got := payload[0].Labels["version"]; got != "test-version" {
 		t.Fatalf("expected version label, got %q", got)
+	}
+}
+
+func TestHandleChatCompletionsRecordsOverloadRejection(t *testing.T) {
+	g := New(Config{MaxInFlight: 1}, nil, nil)
+	atomic.StoreInt64(&g.inFlightRequests, 1)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"model-1","messages":[{"role":"user","content":"hello"}]}`))
+	rec := httptest.NewRecorder()
+	g.handleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("expected Retry-After header 5, got %q", got)
+	}
+	rejected := testutil.ToFloat64(g.metrics.inferenceRejected.WithLabelValues("overloaded"))
+	if rejected != 1 {
+		t.Fatalf("expected overload rejection metric=1, got %v", rejected)
 	}
 }
 

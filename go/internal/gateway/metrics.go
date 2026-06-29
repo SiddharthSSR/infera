@@ -29,6 +29,7 @@ type GatewayMetrics struct {
 	batchSize         *prometheus.HistogramVec
 	batchWait         *prometheus.HistogramVec
 	inferenceTokens   prometheus.Counter
+	inferenceRejected *prometheus.CounterVec
 
 	workerQueueDepth        *prometheus.GaugeVec
 	workerHealthTransitions *prometheus.CounterVec
@@ -95,6 +96,10 @@ func NewGatewayMetrics() *GatewayMetrics {
 			Name: "infera_gateway_inference_tokens_total",
 			Help: "Total number of tokens generated/used by inference requests.",
 		}),
+		inferenceRejected: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "infera_gateway_inference_rejected_total",
+			Help: "Total number of inference requests rejected before worker dispatch.",
+		}, []string{"reason"}),
 		workerQueueDepth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "infera_gateway_worker_queue_depth",
 			Help: "Current request queue depth per worker, as reported by the last heartbeat.",
@@ -119,6 +124,7 @@ func NewGatewayMetrics() *GatewayMetrics {
 		m.batchSize,
 		m.batchWait,
 		m.inferenceTokens,
+		m.inferenceRejected,
 		m.workerQueueDepth,
 		m.workerHealthTransitions,
 	)
@@ -176,6 +182,14 @@ func (m *GatewayMetrics) RecordTPOT(model string, stream bool, duration time.Dur
 		return
 	}
 	m.inferenceTPOT.WithLabelValues(strings.TrimSpace(model), strconv.FormatBool(stream)).Observe(duration.Seconds())
+}
+
+func (m *GatewayMetrics) RecordInferenceRejected(reason string) {
+	reasonLabel := strings.TrimSpace(reason)
+	if reasonLabel == "" {
+		reasonLabel = "unknown"
+	}
+	m.inferenceRejected.WithLabelValues(reasonLabel).Inc()
 }
 
 func (m *GatewayMetrics) RecordWorkerQueueDepth(workerID string, depth int) {
