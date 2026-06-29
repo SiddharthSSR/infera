@@ -43,6 +43,11 @@ These should be confirmed before merging `roadmap` into `main`:
 1. Pin the production worker image.
    - Confirm [deploy/docker/Dockerfile.worker.vllm](/Users/siddharthsingh/codingtensor/infera/deploy/docker/Dockerfile.worker.vllm) has produced the intended image.
    - Set `INFERA_WORKER_IMAGE` in production to a pinned tag or digest, not `latest`.
+   - Validate it before deploy:
+
+     ```bash
+     ./scripts/validate-worker-image-pin.sh
+     ```
 
 2. Confirm required production env values.
    Required by [docker-compose.prod.yml](/Users/siddharthsingh/codingtensor/infera/docker-compose.prod.yml):

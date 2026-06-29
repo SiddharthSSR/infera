@@ -131,7 +131,13 @@ HF_TOKEN=... # optional
 Notes:
 
 - Keep `INFERA_WORKER_SHARED_TOKEN` identical on gateway and workers.
-- Avoid using `latest` for worker image in production.
+- Use a non-`latest` worker image tag or a full `@sha256:<64-hex-digest>` pin in production.
+- Validate the worker image pin before deploy:
+
+```bash
+./scripts/validate-worker-image-pin.sh
+```
+
 - Alertmanager values in `docker-compose.prod.yml` are required in production; do not leave them as placeholders.
 
 ### 3. Deploy
@@ -343,7 +349,7 @@ Compatibility notes:
 | `INFERA_GATEWAY_ADDRESS` | — | Public gateway URL workers use for registration/heartbeat |
 | `INFERA_ALLOWED_ORIGINS` | `*` | CORS allowlist (comma-separated) |
 | `INFERA_WORKER_SHARED_TOKEN` | — | Shared secret required for worker register/heartbeat |
-| `INFERA_WORKER_IMAGE` | — | Custom worker Docker image |
+| `INFERA_WORKER_IMAGE` | — | Custom worker Docker image pinned to a non-`latest` tag or full digest |
 | `INFERA_DEFAULT_MODEL` | `mistralai/Mistral-7B-Instruct-v0.2` | Default model to load |
 | `INFERA_GITHUB_REPO` | — | GitHub repo to install worker from |
 | `HF_TOKEN` | — | HuggingFace token (for gated models) |

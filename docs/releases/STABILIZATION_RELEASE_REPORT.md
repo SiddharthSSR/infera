@@ -10,7 +10,7 @@ Date: 2026-06-29
 
 ## Changes Kept
 
-This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds five small release-readiness changes:
+This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds six small release-readiness changes:
 
 - `c09cd52 chore(release): add worker health transition metrics`
   - Adds registry-driven worker health transition events.
@@ -28,6 +28,8 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
 - `56b5f5b chore(release): validate worker image pinning`
   - Adds a release guard that rejects missing, untagged, or `:latest` worker images.
   - Runs the guard from the production compose smoke path before Docker startup.
+- Documentation alignment:
+  - Adds the worker image validator to README and roadmap release checklist deployment steps.
 
 ## Deferred
 
@@ -66,6 +68,7 @@ Passed:
   - Result: Python worker source and tests syntax-compile successfully with Python 3.12.
 - `bash -n scripts/smoke-test.sh scripts/release-verify.sh scripts/compose-smoke-prod.sh scripts/build-docker.sh scripts/backup-sqlite.sh scripts/validate-worker-targets.sh scripts/validate-worker-image-pin.sh`
 - `python3 -m json.tool deploy/observability/grafana/dashboards/infera-overview.json`
+- `rg -n 'validate-worker-image-pin|non-\`latest\`|sha256' README.md docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:v1.3.0`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker@sha256:0123456789abcdef`
