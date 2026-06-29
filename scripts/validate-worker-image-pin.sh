@@ -11,7 +11,12 @@ if [[ -z "${worker_image}" ]]; then
 fi
 
 if [[ "${worker_image}" == *@sha256:* ]]; then
-  exit 0
+  digest="${worker_image##*@sha256:}"
+  if [[ "${digest}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    exit 0
+  fi
+  echo "ERROR: INFERA_WORKER_IMAGE digest must be sha256 plus 64 hexadecimal characters." >&2
+  exit 1
 fi
 
 image_name="${worker_image##*/}"

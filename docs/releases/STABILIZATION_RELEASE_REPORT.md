@@ -64,7 +64,9 @@ Passed:
   - Result: Python worker source and tests syntax-compile successfully with Python 3.12.
 - `bash -n scripts/smoke-test.sh scripts/release-verify.sh scripts/compose-smoke-prod.sh scripts/build-docker.sh scripts/backup-sqlite.sh scripts/validate-worker-targets.sh scripts/validate-worker-image-pin.sh`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:v1.3.0`
+- `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker@sha256:0123456789abcdef`
+  - Result: failed as expected because the digest is not a full SHA-256 hex digest.
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:latest`
   - Result: failed as expected because `latest` is not production-pinned.
 - `INFERA_SMOKE_API_KEY=inf_test SMOKE_TIMEOUT=3 ./scripts/smoke-test.sh http://127.0.0.1:18080`
