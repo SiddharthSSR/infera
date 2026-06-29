@@ -65,6 +65,7 @@ Not completed:
 
 - Python worker pytest suites were not run. The system default Python is 3.9, while the worker requires Python >=3.10. Python 3.12 is installed, but it does not have `pytest`, `pydantic`, or other project dependencies available.
 - Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for several non-SQLite test binaries with cgo enabled. SQLite-backed packages were tested with cgo enabled; router, provider, and shared type packages were tested with `CGO_ENABLED=0`.
+- `REMOVE_COMPOSE_VOLUMES=true SMOKE_TIMEOUT=180 ./scripts/compose-smoke-prod.sh` was attempted but did not run because Docker could not connect to the local daemon at `unix:///Users/siddharthsingh/.docker/run/docker.sock`.
 
 ## Remaining Manual Production Checks
 
