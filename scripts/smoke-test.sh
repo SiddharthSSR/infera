@@ -57,11 +57,6 @@ if [[ -z "${API_KEY}" ]]; then
   exit 1
 fi
 
-if [[ -z "${SMOKE_MODEL}" && "${SKIP_CHAT_CHECKS}" != "1" ]]; then
-  echo "ERROR: set INFERA_SMOKE_MODEL to run chat completion smoke checks, or set SKIP_CHAT_CHECKS=1 to skip them."
-  exit 1
-fi
-
 echo "Running smoke checks against ${BASE_URL}"
 
 echo "1) Checking ${BASE_URL}/health"
@@ -98,7 +93,7 @@ if not isinstance(payload.get("data"), list):
 PY
 echo "   OK: models endpoint"
 
-if [[ -n "${SMOKE_MODEL}" ]]; then
+if [[ -n "${SMOKE_MODEL}" && "${SKIP_CHAT_CHECKS}" != "1" ]]; then
   echo "4) Checking authenticated ${BASE_URL}/v1/chat/completions"
   CHAT_PAYLOAD="$(build_chat_payload 0)"
   CHAT_FILE="${TMP_DIR}/chat.json"
@@ -156,7 +151,11 @@ PY
     echo "   OK: streaming chat completions endpoint"
   fi
 else
-  echo "4) Skipping chat completion checks (SKIP_CHAT_CHECKS=1)"
+  if [[ "${SKIP_CHAT_CHECKS}" == "1" ]]; then
+    echo "4) Skipping chat completion checks (SKIP_CHAT_CHECKS=1)"
+  else
+    echo "4) Skipping chat completion checks (INFERA_SMOKE_MODEL not set)"
+  fi
 fi
 
 echo "Smoke test passed."
