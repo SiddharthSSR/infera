@@ -38,6 +38,7 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
 - Documentation alignment:
   - Adds the worker image validator to README and roadmap release checklist deployment steps.
   - Adds an explicit production compose render gate to README and `DEPLOYMENT_CHECKLIST.md`.
+  - Marks the roadmap checklist's March release-candidate status as historical and points stabilization operators back to this report.
 
 ## Deferred
 
@@ -82,6 +83,7 @@ Passed:
 - `python3` YAML load of `deploy/observability/prometheus/rules/infera-alerts.yml`
   - Result: parsed successfully and confirmed `InferaGatewayOverloadRejections` and `InferaWorkerHealthTransitionsHigh` exist.
 - `rg -n 'validate-worker-image-pin|non-\`latest\`|sha256' README.md docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md`
+- `rg -n "2026-06-30|STABILIZATION_RELEASE_REPORT|Do not promote" docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md`
 - `git fetch origin --prune`
 - `git diff --stat origin/main...origin/roadmap`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:v1.3.0`

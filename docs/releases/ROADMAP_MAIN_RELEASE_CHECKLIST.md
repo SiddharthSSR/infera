@@ -1,10 +1,13 @@
 # Roadmap to Main Release Checklist
 
-Use this checklist when promoting `roadmap` to `main`.
+Use this checklist only when intentionally promoting the full `roadmap` branch to `main`.
+For the stabilization release candidate, use [STABILIZATION_RELEASE_REPORT.md](/Users/siddharthsingh/codingtensor/infera/docs/releases/STABILIZATION_RELEASE_REPORT.md) instead.
 
 ## Release Status
 
-As of `2026-03-24`, `roadmap` is a reasonable release candidate pending one production canary pass and confirmation of production environment values.
+As of `2026-03-24`, `roadmap` was considered a reasonable release candidate pending one production canary pass and confirmation of production environment values.
+
+As of the refreshed `2026-06-30` stabilization audit, `origin/roadmap` has grown into a broad mixed branch with Hermes agents/runtime, benchmark lab, worker engine images, frontend rewrites, generated/test artifacts, and newer login-page polish. Do not promote it directly as the stabilization release without a fresh branch-wide audit, green validation, and canary pass.
 
 Cleanup already completed on `roadmap`:
 
