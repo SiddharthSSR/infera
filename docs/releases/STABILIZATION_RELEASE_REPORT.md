@@ -37,6 +37,7 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
   - Runs the guard from the production compose smoke path before Docker startup.
 - Documentation alignment:
   - Adds the worker image validator to README and roadmap release checklist deployment steps.
+  - Adds an explicit production compose render gate to README and `DEPLOYMENT_CHECKLIST.md`.
 
 ## Deferred
 
@@ -94,6 +95,7 @@ Passed:
 - `INFERA_SMOKE_API_KEY=inf_test VERIFY_TIMEOUT=3 SMOKE_TIMEOUT=3 INFERA_DASHBOARD_URL=http://127.0.0.1:18081 INFERA_GATEWAY_INTERNAL_URL=http://127.0.0.1:18081 ./scripts/release-verify.sh http://127.0.0.1:18081`
   - Result: passed against a local mock app/dashboard/gateway server with worker-target discovery and no `INFERA_SMOKE_MODEL`.
 - `docker compose -f docker-compose.prod.yml config --quiet` with dummy required env vars.
+- `rg -n "docker compose -f docker-compose.prod.yml config --quiet" README.md DEPLOYMENT_CHECKLIST.md`
 - `git diff --check`
 
 Not completed:

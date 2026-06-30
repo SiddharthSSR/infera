@@ -35,6 +35,12 @@ git pull origin main
 ./scripts/validate-worker-image-pin.sh
 ```
 
+- [ ] Production compose renders with the current `.env`:
+
+```bash
+docker compose -f docker-compose.prod.yml config --quiet
+```
+
 - [ ] `data` directory exists for persistent DB files:
 
 ```bash
