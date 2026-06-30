@@ -99,8 +99,12 @@ Passed:
   - Result: failed as expected because `latest` is not production-pinned.
 - `ENV_FILE=/tmp/infera-prod-env-test ./scripts/validate-prod-env.sh`
   - Result: passed with dummy required env values and did not print secret values.
+- `ENV_FILE=/tmp/does-not-exist INFERA_ADMIN_KEY=... INFERA_ALLOWED_ORIGINS=... INFERA_GATEWAY_ADDRESS=... INFERA_WORKER_SHARED_TOKEN=... INFERA_WORKER_IMAGE=ghcr.io/example/infera-worker:v1.3.0 GRAFANA_ADMIN_USER=... GRAFANA_ADMIN_PASSWORD=... ALERT_EMAIL_TO=... ALERT_SMTP_FROM=... ALERT_SMTP_SMARTHOST=... ALERT_SMTP_USERNAME=... ALERT_SMTP_PASSWORD=... ./scripts/validate-prod-env.sh`
+  - Result: passed using exported env values and did not print secret values.
 - `ENV_FILE=/tmp/infera-prod-env-missing ./scripts/validate-prod-env.sh`
   - Result: failed as expected and printed only missing variable names.
+- `ENV_FILE=/tmp/infera-prod-env-latest ./scripts/validate-prod-env.sh`
+  - Result: failed as expected through worker image pin validation.
 - `INFERA_SMOKE_API_KEY=inf_test SMOKE_TIMEOUT=3 ./scripts/smoke-test.sh http://127.0.0.1:18080`
   - Result: passed against a local mock health/models server with no `INFERA_SMOKE_MODEL`.
 - `INFERA_SMOKE_API_KEY=inf_test VERIFY_TIMEOUT=3 SMOKE_TIMEOUT=3 INFERA_DASHBOARD_URL=http://127.0.0.1:18081 INFERA_GATEWAY_INTERNAL_URL=http://127.0.0.1:18081 ./scripts/release-verify.sh http://127.0.0.1:18081`
