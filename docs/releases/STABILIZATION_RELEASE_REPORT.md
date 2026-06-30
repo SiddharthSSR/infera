@@ -1,12 +1,16 @@
 # Stabilization Release Report
 
-Date: 2026-06-29
+Date: 2026-06-30
 
 ## Branch
 
 - Stabilization branch: `task/stabilization-release`
 - Base: `origin/main` / `v1.3.0` (`57394a8`)
 - Rationale: `origin/main` is the last known stable baseline. `origin/roadmap` and the original checkout contain a large mixed stack of Hermes, modular engines, benchmark lab, frontend refactors, generated contracts, and uncommitted work. Those changes should land later as complete, tested units rather than being carried into a stabilization release blindly.
+- Refreshed remote audit after `git fetch origin --prune` on 2026-06-30:
+  - `origin/main` remains `57394a8` (`v1.3.0`).
+  - `origin/roadmap` is `a9714db` and remains a broad mixed branch: 259 files changed versus `origin/main`, about 44k insertions, including Hermes agents/runtime, benchmark lab, frontend UI rewrites, worker engine images, generated/test artifacts, and recent login page refinements.
+  - The original checkout at `/Users/siddharthsingh/codingtensor/infera` is still a dirty `task/reduce-control-plane-polling` worktree with many modified and untracked roadmap files; it was not edited by this stabilization branch.
 
 ## Changes Kept
 
@@ -37,6 +41,7 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
 - Modular multi-engine worker backend, including SGLang and TensorRT-LLM adapters.
 - Benchmark lab expansion and generated benchmark artifacts.
 - Large frontend componentization/contract-generation changes from the dirty roadmap worktree.
+- Latest `origin/roadmap` login-page animation/refinement commits (`a9714db`, `7c738ba`) because they are UI polish on top of the larger roadmap stack, not isolated release-risk fixes.
 - Engine-specific worker image matrix beyond the stable `INFERA_WORKER_IMAGE` path already required by production compose.
 
 Reasons for deferral:
@@ -73,6 +78,8 @@ Passed:
 - `python3` YAML load of `deploy/observability/prometheus/rules/infera-alerts.yml`
   - Result: parsed successfully and confirmed `InferaGatewayOverloadRejections` and `InferaWorkerHealthTransitionsHigh` exist.
 - `rg -n 'validate-worker-image-pin|non-\`latest\`|sha256' README.md docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md`
+- `git fetch origin --prune`
+- `git diff --stat origin/main...origin/roadmap`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:v1.3.0`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker@sha256:0123456789abcdef`
