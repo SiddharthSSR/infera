@@ -70,7 +70,7 @@
 ## Deploy Notes
 
 - Set `INFERA_WORKER_IMAGE` to the exact release worker image tag or full digest.
-- Record the production worker image here before publishing:
+- The locally configured worker image pin was validated without printing its value. Record the exact production worker image here before publishing release notes externally:
   - `INFERA_WORKER_IMAGE=<registry>/infera-worker:<tag-or-@sha256-digest>`
 - Validate required env names without printing values:
   - `./scripts/validate-prod-env.sh`
@@ -82,7 +82,8 @@
 
 ## Known Follow-ups
 
-- Run canary verification with real production env values.
-- Run one live RunPod or Vast.ai provisioning and inference smoke with provider credentials.
+- Fill the missing real production env values before canary deploy: `INFERA_ALLOWED_ORIGINS`, `INFERA_WORKER_SHARED_TOKEN`, Grafana admin credentials, and Alertmanager SMTP/email settings.
+- Provide canary URL values and `INFERA_SMOKE_API_KEY`, then run canary verification.
+- Run one live RunPod or Vast.ai provisioning and inference smoke with provider credentials plus the gateway smoke/admin key.
 - Watch gateway, Caddy, Prometheus, Grafana, and Alertmanager logs for at least 10-15 minutes after canary deploy.
-- Decide whether to publish this stabilization branch or cherry-pick its small release-readiness commits.
+- Publish `task/stabilization-release` or cherry-pick its small release-readiness commits after explicitly approving export of this branch to `https://github.com/SiddharthSSR/infera.git`.

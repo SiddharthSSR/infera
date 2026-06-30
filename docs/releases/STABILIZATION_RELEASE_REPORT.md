@@ -119,17 +119,26 @@ Passed:
 - `REMOVE_COMPOSE_VOLUMES=true SMOKE_TIMEOUT=180 ./scripts/compose-smoke-prod.sh`
   - Result: passed. Production env validation ran without printing values, gateway and frontend images built, gateway and frontend health checks passed, Caddy started, ingress `/health`, authenticated `/v1/models`, and root HTML checks passed.
 - `git diff --check`
+- `set -a; . /Users/siddharthsingh/codingtensor/infera/.env; set +a; ./scripts/validate-worker-image-pin.sh`
+  - Result: the locally configured `INFERA_WORKER_IMAGE` is pinned to an explicit non-`latest` tag or digest. The exact value was not printed.
 
 Not completed:
 
 - Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for several non-SQLite test binaries with cgo enabled. SQLite-backed packages were tested with cgo enabled; router, provider, and shared type packages were tested with `CGO_ENABLED=0`.
+- Real production env validation could not pass from the available local `.env`; it is missing `INFERA_ALLOWED_ORIGINS`, `INFERA_WORKER_SHARED_TOKEN`, `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD`, `ALERT_EMAIL_TO`, `ALERT_SMTP_FROM`, `ALERT_SMTP_SMARTHOST`, `ALERT_SMTP_USERNAME`, and `ALERT_SMTP_PASSWORD`.
+- Real production compose render could not pass from the available local `.env`; `docker compose --env-file /Users/siddharthsingh/codingtensor/infera/.env -f docker-compose.prod.yml config --quiet` fails at `INFERA_ALLOWED_ORIGINS`.
+- Canary verification could not run because the available local `.env` does not define `INFERA_BASE_URL`, `INFERA_DASHBOARD_URL`, `INFERA_GATEWAY_INTERNAL_URL`, or `INFERA_SMOKE_API_KEY`.
+- Live RunPod/Vast.ai smoke could not run honestly from local state. A RunPod key is present, but the gateway/canary URL and smoke/admin API key required to provision through Infera and verify `/v1/models` or `/v1/chat/completions` are not present. No Vast.ai key was present.
+- Post-deploy log watch could not run because no production deployment target or remote log access was available in local configuration.
+- Publishing `task/stabilization-release` to `origin` was attempted after user approval, but the approval reviewer blocked the push because it would export repository contents to the GitHub remote. It can be retried only after explicit approval with that disclosure.
 
 ## Remaining Manual Production Checks
 
-- Set the production `INFERA_WORKER_IMAGE` to the exact release tag or digest and record it in release notes.
+- Fill the missing production env values listed above, then rerun `ENV_FILE=<prod-env> ./scripts/validate-prod-env.sh`.
 - Render production compose with real env values, not dummy values.
 - Run `scripts/release-verify.sh` against the canary deployment with a real `INFERA_SMOKE_API_KEY`.
 - If a live model should be checked, set `INFERA_SMOKE_MODEL` and optionally `INFERA_SMOKE_STREAM=1`.
 - Confirm worker discovery returns targets from `/internal/prometheus/worker-targets`.
 - Run one live RunPod or Vast.ai provisioning smoke if provider credentials are available.
 - Watch gateway, Caddy, Prometheus, Grafana, and Alertmanager logs for at least 10-15 minutes after canary deploy.
+- Retry `git push -u origin task/stabilization-release` only after explicitly approving export of this branch to `https://github.com/SiddharthSSR/infera.git`.
