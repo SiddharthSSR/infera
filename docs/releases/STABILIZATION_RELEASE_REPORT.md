@@ -15,7 +15,7 @@ Date: 2026-06-30
 
 ## Changes Kept
 
-This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds seven small release-readiness changes:
+This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds eight small release-readiness changes:
 
 - `c09cd52 chore(release): add worker health transition metrics`
   - Adds registry-driven worker health transition events.
@@ -36,9 +36,11 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
 - `56b5f5b chore(release): validate worker image pinning`
   - Adds a release guard that rejects missing, untagged, or `:latest` worker images.
   - Runs the guard from the production compose smoke path before Docker startup.
+- `de242c8 chore(release): validate production env inputs`
+  - Adds `scripts/validate-prod-env.sh` to check required production variable names without printing secret values.
+  - Reuses worker image pin validation for `INFERA_WORKER_IMAGE`.
 - Documentation alignment:
   - Adds the worker image validator to README and roadmap release checklist deployment steps.
-  - Adds production env validation that checks required variable names without printing secret values.
   - Adds an explicit production compose render gate to README and `DEPLOYMENT_CHECKLIST.md`.
   - Marks the roadmap checklist's March release-candidate status as historical and points stabilization operators back to this report.
   - Adds a stabilization-specific release notes draft and points release hygiene at it.

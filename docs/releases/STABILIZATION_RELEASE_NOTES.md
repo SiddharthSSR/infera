@@ -59,7 +59,7 @@
 - Python Ruff passed: `ruff check .`.
 - Frontend tests passed: `22` test files, `113` tests.
 - Frontend production build passed with the inherited large-chunk warning.
-- Shell syntax checks passed for release, smoke, compose, backup, worker-target, and worker-image-pin scripts.
+- Shell syntax checks passed for release, smoke, compose, backup, worker-target, worker-image-pin, and prod-env scripts.
 - Grafana dashboard JSON parses.
 - Prometheus alert YAML parses and includes the new release alerts.
 - Production compose config renders with dummy required env values.
