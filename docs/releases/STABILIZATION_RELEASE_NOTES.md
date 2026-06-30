@@ -26,8 +26,9 @@
 - Added a production worker image pin guard for missing, untagged, `:latest`, and malformed digest values.
 - Added a production env validator that checks required variable names without printing secret values.
 - Added explicit production compose render checks to deployment docs.
+- Hardened production compose smoke ingress checks with retries after Caddy startup.
 - Confirmed `docker-compose.prod.yml` renders with dummy required env values.
-- Confirmed `scripts/compose-smoke-prod.sh` passes with Docker available.
+- Confirmed `scripts/compose-smoke-prod.sh` validates required env names and passes with Docker available.
 
 ### Observability
 

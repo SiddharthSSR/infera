@@ -57,7 +57,7 @@ export RUNPOD_API_KEY
 export VASTAI_API_KEY
 export HF_TOKEN
 
-bash "$(dirname "$0")/validate-worker-image-pin.sh"
+bash "$(dirname "$0")/validate-prod-env.sh"
 
 prepare_smoke_compose_file() {
   local smoke_override_file="${TMP_DIR}/docker-compose.smoke.override.yml"
@@ -144,6 +144,28 @@ wait_for_service() {
   return 1
 }
 
+fetch_ingress() {
+  local label="$1"
+  local url="$2"
+  local output_file="$3"
+  local elapsed=0
+
+  while (( elapsed < SMOKE_TIMEOUT )); do
+    if curl -fsS --max-time 10 \
+      -H "Host: ${INGRESS_HOST}" \
+      "${@:4}" \
+      "${url}" >"${output_file}"; then
+      return 0
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+
+  echo "ERROR: ${label} did not respond successfully within ${SMOKE_TIMEOUT}s"
+  compose logs caddy --tail=200 || true
+  return 1
+}
+
 prepare_smoke_compose_file
 prepare_ci_caddyfile
 
@@ -166,9 +188,9 @@ echo "Waiting for caddy"
 wait_for_service caddy "${SMOKE_TIMEOUT}"
 
 echo "Checking ingress /health"
-HEALTH_BODY="$(curl -fsS --max-time 10 \
-  -H "Host: ${INGRESS_HOST}" \
-  "${INGRESS_URL}/health")"
+HEALTH_FILE="${TMP_DIR}/health.txt"
+fetch_ingress "ingress /health" "${INGRESS_URL}/health" "${HEALTH_FILE}"
+HEALTH_BODY="$(cat "${HEALTH_FILE}")"
 HEALTH_BODY="${HEALTH_BODY}" python3 - <<'PY'
 import os
 
@@ -178,10 +200,10 @@ if "healthy" not in body and "ok" not in body:
 PY
 
 echo "Checking authenticated ingress /v1/models"
-MODELS_BODY="$(curl -fsS --max-time 10 \
-  -H "Host: ${INGRESS_HOST}" \
-  -H "Authorization: Bearer ${INFERA_ADMIN_KEY}" \
-  "${INGRESS_URL}/v1/models")"
+MODELS_FILE="${TMP_DIR}/models.json"
+fetch_ingress "authenticated ingress /v1/models" "${INGRESS_URL}/v1/models" "${MODELS_FILE}" \
+  -H "Authorization: Bearer ${INFERA_ADMIN_KEY}"
+MODELS_BODY="$(cat "${MODELS_FILE}")"
 MODELS_BODY="${MODELS_BODY}" python3 - <<'PY'
 import json
 import os
@@ -192,9 +214,9 @@ if not isinstance(payload.get("data"), list):
 PY
 
 echo "Checking ingress root document"
-FRONTEND_BODY="$(curl -fsS --max-time 10 \
-  -H "Host: ${INGRESS_HOST}" \
-  "${INGRESS_URL}/")"
+FRONTEND_FILE="${TMP_DIR}/frontend.html"
+fetch_ingress "ingress root document" "${INGRESS_URL}/" "${FRONTEND_FILE}"
+FRONTEND_BODY="$(cat "${FRONTEND_FILE}")"
 if [[ "${FRONTEND_BODY}" != *"<html"* ]]; then
   echo "ERROR: frontend root did not return HTML"
   exit 1

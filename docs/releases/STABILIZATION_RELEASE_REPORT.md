@@ -15,7 +15,7 @@ Date: 2026-06-30
 
 ## Changes Kept
 
-This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds eight small release-readiness changes:
+This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds nine small release-readiness changes:
 
 - `c09cd52 chore(release): add worker health transition metrics`
   - Adds registry-driven worker health transition events.
@@ -39,6 +39,9 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
 - `de242c8 chore(release): validate production env inputs`
   - Adds `scripts/validate-prod-env.sh` to check required production variable names without printing secret values.
   - Reuses worker image pin validation for `INFERA_WORKER_IMAGE`.
+  - Runs from the production compose smoke path before Docker startup.
+- Compose smoke hardening:
+  - Retries ingress checks so Caddy can finish accepting HTTP traffic after the container reaches `running`.
 - Documentation alignment:
   - Adds the worker image validator to README and roadmap release checklist deployment steps.
   - Adds an explicit production compose render gate to README and `DEPLOYMENT_CHECKLIST.md`.
@@ -114,7 +117,7 @@ Passed:
 - `docker compose -f docker-compose.prod.yml config --quiet` with dummy required env vars.
 - `rg -n "docker compose -f docker-compose.prod.yml config --quiet" README.md DEPLOYMENT_CHECKLIST.md`
 - `REMOVE_COMPOSE_VOLUMES=true SMOKE_TIMEOUT=180 ./scripts/compose-smoke-prod.sh`
-  - Result: passed. Gateway and frontend images built, gateway and frontend health checks passed, Caddy started, ingress `/health`, authenticated `/v1/models`, and root HTML checks passed.
+  - Result: passed. Production env validation ran without printing values, gateway and frontend images built, gateway and frontend health checks passed, Caddy started, ingress `/health`, authenticated `/v1/models`, and root HTML checks passed.
 - `git diff --check`
 
 Not completed:
