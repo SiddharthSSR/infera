@@ -6,6 +6,7 @@ Date: 2026-06-30
 
 - Stabilization branch: `task/stabilization-release`
 - Base: `origin/main` / `v1.3.0` (`57394a8`)
+- Release notes draft: [STABILIZATION_RELEASE_NOTES.md](/Users/siddharthsingh/codingtensor/infera/docs/releases/STABILIZATION_RELEASE_NOTES.md)
 - Rationale: `origin/main` is the last known stable baseline. `origin/roadmap` and the original checkout contain a large mixed stack of Hermes, modular engines, benchmark lab, frontend refactors, generated contracts, and uncommitted work. Those changes should land later as complete, tested units rather than being carried into a stabilization release blindly.
 - Refreshed remote audit after `git fetch origin --prune` on 2026-06-30:
   - `origin/main` remains `57394a8` (`v1.3.0`).
@@ -39,6 +40,7 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
   - Adds the worker image validator to README and roadmap release checklist deployment steps.
   - Adds an explicit production compose render gate to README and `DEPLOYMENT_CHECKLIST.md`.
   - Marks the roadmap checklist's March release-candidate status as historical and points stabilization operators back to this report.
+  - Adds a stabilization-specific release notes draft and points release hygiene at it.
 
 ## Deferred
 
@@ -84,6 +86,8 @@ Passed:
   - Result: parsed successfully and confirmed `InferaGatewayOverloadRejections` and `InferaWorkerHealthTransitionsHigh` exist.
 - `rg -n 'validate-worker-image-pin|non-\`latest\`|sha256' README.md docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md`
 - `rg -n "2026-06-30|STABILIZATION_RELEASE_REPORT|Do not promote" docs/releases/ROADMAP_MAIN_RELEASE_CHECKLIST.md`
+- `rg -n "Stabilization Release Notes Draft|INFERA_WORKER_IMAGE|Production compose smoke passed" docs/releases/STABILIZATION_RELEASE_NOTES.md`
+- `rg -n "STABILIZATION_RELEASE_NOTES|RELEASE_TEMPLATE" DEPLOYMENT_CHECKLIST.md`
 - `git fetch origin --prune`
 - `git diff --stat origin/main...origin/roadmap`
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:v1.3.0`

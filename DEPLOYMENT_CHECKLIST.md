@@ -208,7 +208,7 @@ git tag -a v1.1.0 -m "v1.1.0 release"
 git push origin v1.1.0
 ```
 
-- [ ] Add/update GitHub release notes using `docs/releases/RELEASE_TEMPLATE.md`.
+- [ ] Add/update GitHub release notes using `docs/releases/STABILIZATION_RELEASE_NOTES.md` for this stabilization release, or `docs/releases/RELEASE_TEMPLATE.md` for a future full roadmap release.
 - [ ] Record deployment timestamp and commit hash.
 
 ---
