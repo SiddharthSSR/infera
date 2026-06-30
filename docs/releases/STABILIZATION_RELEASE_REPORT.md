@@ -96,13 +96,13 @@ Passed:
   - Result: passed against a local mock app/dashboard/gateway server with worker-target discovery and no `INFERA_SMOKE_MODEL`.
 - `docker compose -f docker-compose.prod.yml config --quiet` with dummy required env vars.
 - `rg -n "docker compose -f docker-compose.prod.yml config --quiet" README.md DEPLOYMENT_CHECKLIST.md`
+- `REMOVE_COMPOSE_VOLUMES=true SMOKE_TIMEOUT=180 ./scripts/compose-smoke-prod.sh`
+  - Result: passed. Gateway and frontend images built, gateway and frontend health checks passed, Caddy started, ingress `/health`, authenticated `/v1/models`, and root HTML checks passed.
 - `git diff --check`
 
 Not completed:
 
 - Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for several non-SQLite test binaries with cgo enabled. SQLite-backed packages were tested with cgo enabled; router, provider, and shared type packages were tested with `CGO_ENABLED=0`.
-- `REMOVE_COMPOSE_VOLUMES=true SMOKE_TIMEOUT=180 ./scripts/compose-smoke-prod.sh` was attempted but did not run because Docker could not connect to the local daemon at `unix:///Users/siddharthsingh/.docker/run/docker.sock`.
-- `docker info --format '{{.ServerVersion}}'` was retried after the worker-image guard landed and still could not connect to the same Docker daemon socket.
 
 ## Remaining Manual Production Checks
 
