@@ -14,7 +14,7 @@ Date: 2026-06-30
 
 ## Changes Kept
 
-This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds six small release-readiness changes:
+This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds seven small release-readiness changes:
 
 - `c09cd52 chore(release): add worker health transition metrics`
   - Adds registry-driven worker health transition events.
@@ -29,6 +29,9 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
 - `43aabe7 fix(release): allow model-less smoke verification`
   - Aligns `scripts/smoke-test.sh` with README/deployment docs so `INFERA_SMOKE_MODEL` is optional.
   - Keeps health and `/v1/models` smoke coverage when chat checks are skipped.
+- `c356e02 chore(python): satisfy worker lint checks`
+  - Applies Ruff-compatible cleanup across Python worker and focused tests.
+  - Keeps the existing worker runtime surface intact while making `ruff check .` pass.
 - `56b5f5b chore(release): validate worker image pinning`
   - Adds a release guard that rejects missing, untagged, or `:latest` worker images.
   - Runs the guard from the production compose smoke path before Docker startup.
