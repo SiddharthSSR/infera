@@ -132,9 +132,10 @@ Notes:
 
 - Keep `INFERA_WORKER_SHARED_TOKEN` identical on gateway and workers.
 - Use a non-`latest` worker image tag or a full `@sha256:<64-hex-digest>` pin in production.
-- Validate the worker image pin before deploy:
+- Validate required production env and the worker image pin before deploy:
 
 ```bash
+./scripts/validate-prod-env.sh
 ./scripts/validate-worker-image-pin.sh
 ```
 

@@ -29,6 +29,12 @@ git pull origin main
   - [ ] `ALERT_SMTP_SMARTHOST`
   - [ ] `ALERT_SMTP_USERNAME`
   - [ ] `ALERT_SMTP_PASSWORD`
+- [ ] Required production env vars validate without printing secret values:
+
+```bash
+./scripts/validate-prod-env.sh
+```
+
 - [ ] Worker image is pinned to a non-`latest` tag or digest:
 
 ```bash

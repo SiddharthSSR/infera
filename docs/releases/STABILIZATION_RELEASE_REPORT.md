@@ -38,6 +38,7 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
   - Runs the guard from the production compose smoke path before Docker startup.
 - Documentation alignment:
   - Adds the worker image validator to README and roadmap release checklist deployment steps.
+  - Adds production env validation that checks required variable names without printing secret values.
   - Adds an explicit production compose render gate to README and `DEPLOYMENT_CHECKLIST.md`.
   - Marks the roadmap checklist's March release-candidate status as historical and points stabilization operators back to this report.
   - Adds a stabilization-specific release notes draft and points release hygiene at it.
@@ -80,7 +81,7 @@ Passed:
   - Result: all checks passed.
 - `PYTHONPYCACHEPREFIX=/private/tmp/infera-pycache /opt/homebrew/bin/python3.12 -m py_compile $(find python/src python/tests -type f -name '*.py' -print)`
   - Result: Python worker source and tests syntax-compile successfully with Python 3.12.
-- `bash -n scripts/smoke-test.sh scripts/release-verify.sh scripts/compose-smoke-prod.sh scripts/build-docker.sh scripts/backup-sqlite.sh scripts/validate-worker-targets.sh scripts/validate-worker-image-pin.sh`
+- `bash -n scripts/smoke-test.sh scripts/release-verify.sh scripts/compose-smoke-prod.sh scripts/build-docker.sh scripts/backup-sqlite.sh scripts/validate-worker-targets.sh scripts/validate-worker-image-pin.sh scripts/validate-prod-env.sh`
 - `python3 -m json.tool deploy/observability/grafana/dashboards/infera-overview.json`
 - `python3` YAML load of `deploy/observability/prometheus/rules/infera-alerts.yml`
   - Result: parsed successfully and confirmed `InferaGatewayOverloadRejections` and `InferaWorkerHealthTransitionsHigh` exist.
@@ -96,6 +97,10 @@ Passed:
   - Result: failed as expected because the digest is not a full SHA-256 hex digest.
 - `bash scripts/validate-worker-image-pin.sh ghcr.io/example/infera-worker:latest`
   - Result: failed as expected because `latest` is not production-pinned.
+- `ENV_FILE=/tmp/infera-prod-env-test ./scripts/validate-prod-env.sh`
+  - Result: passed with dummy required env values and did not print secret values.
+- `ENV_FILE=/tmp/infera-prod-env-missing ./scripts/validate-prod-env.sh`
+  - Result: failed as expected and printed only missing variable names.
 - `INFERA_SMOKE_API_KEY=inf_test SMOKE_TIMEOUT=3 ./scripts/smoke-test.sh http://127.0.0.1:18080`
   - Result: passed against a local mock health/models server with no `INFERA_SMOKE_MODEL`.
 - `INFERA_SMOKE_API_KEY=inf_test VERIFY_TIMEOUT=3 SMOKE_TIMEOUT=3 INFERA_DASHBOARD_URL=http://127.0.0.1:18081 INFERA_GATEWAY_INTERNAL_URL=http://127.0.0.1:18081 ./scripts/release-verify.sh http://127.0.0.1:18081`

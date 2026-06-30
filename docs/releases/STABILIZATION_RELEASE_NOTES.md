@@ -24,6 +24,7 @@
 ### Reliability and Deployment
 
 - Added a production worker image pin guard for missing, untagged, `:latest`, and malformed digest values.
+- Added a production env validator that checks required variable names without printing secret values.
 - Added explicit production compose render checks to deployment docs.
 - Confirmed `docker-compose.prod.yml` renders with dummy required env values.
 - Confirmed `scripts/compose-smoke-prod.sh` passes with Docker available.
@@ -70,6 +71,8 @@
 - Set `INFERA_WORKER_IMAGE` to the exact release worker image tag or full digest.
 - Record the production worker image here before publishing:
   - `INFERA_WORKER_IMAGE=<registry>/infera-worker:<tag-or-@sha256-digest>`
+- Validate required env names without printing values:
+  - `./scripts/validate-prod-env.sh`
 - Render production compose with real env before deploying:
   - `docker compose -f docker-compose.prod.yml config --quiet`
 - Run canary verification with a real smoke key:
