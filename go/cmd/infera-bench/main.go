@@ -72,7 +72,13 @@ type usage struct {
 }
 
 type chatResponse struct {
-	Usage usage `json:"usage"`
+	Choices []chatChoice `json:"choices"`
+	Usage   usage        `json:"usage"`
+}
+
+type chatChoice struct {
+	Message      message `json:"message"`
+	FinishReason string  `json:"finish_reason"`
 }
 
 type streamChunk struct {
@@ -118,6 +124,7 @@ type concurrencyResult struct {
 	RequestsPerSec       float64        `json:"requests_per_sec"`
 	TokensPerSec         *float64       `json:"tokens_per_sec,omitempty"`
 	LatencyMS            metricSummary  `json:"latency_ms"`
+	FailedLatencyMS      *metricSummary `json:"failed_latency_ms,omitempty"`
 	TTFTMS               *metricSummary `json:"ttft_ms,omitempty"`
 	TPOTMS               *metricSummary `json:"tpot_ms,omitempty"`
 	RepresentativeErrors []string       `json:"representative_errors,omitempty"`
@@ -404,7 +411,28 @@ func runRequest(ctx context.Context, client *http.Client, endpoint, model, apiKe
 	if parsed.Usage.TotalTokens > 0 || parsed.Usage.PromptTokens > 0 || parsed.Usage.CompletionTokens > 0 {
 		result.Usage = &parsed.Usage
 	}
+	if err := validateChatResponse(parsed); err != nil {
+		result.Error = err.Error()
+	}
 	return result
+}
+
+func validateChatResponse(resp chatResponse) error {
+	if len(resp.Choices) == 0 {
+		return errors.New("response missing choices")
+	}
+	for _, choice := range resp.Choices {
+		if strings.TrimSpace(choice.Message.Content) != "" {
+			return nil
+		}
+		if strings.TrimSpace(choice.FinishReason) != "" {
+			return nil
+		}
+	}
+	if resp.Usage.TotalTokens > 0 || resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 {
+		return nil
+	}
+	return errors.New("response choices did not include assistant content, finish reason, or usage")
 }
 
 func readStream(body io.Reader, start time.Time) sample {
@@ -486,6 +514,7 @@ func mergeUsage(current, next *usage) *usage {
 func summarize(concurrency, requested int, run levelRun) concurrencyResult {
 	samples := run.Samples
 	latencies := make([]float64, 0, len(samples))
+	failedLatencies := make([]float64, 0)
 	ttfts := []float64{}
 	tpots := []float64{}
 	errorsOut := []string{}
@@ -493,16 +522,19 @@ func summarize(concurrency, requested int, run levelRun) concurrencyResult {
 	totalTokens := 0
 
 	for _, s := range samples {
-		if s.LatencyMS > 0 {
-			latencies = append(latencies, s.LatencyMS)
-		}
 		if s.Error != "" {
+			if s.LatencyMS > 0 {
+				failedLatencies = append(failedLatencies, s.LatencyMS)
+			}
 			if len(errorsOut) < 5 {
 				errorsOut = append(errorsOut, s.Error)
 			}
 			continue
 		}
 		successes++
+		if s.LatencyMS > 0 {
+			latencies = append(latencies, s.LatencyMS)
+		}
 		if s.TTFTMS != nil {
 			ttfts = append(ttfts, *s.TTFTMS)
 		}
@@ -523,6 +555,10 @@ func summarize(concurrency, requested int, run levelRun) concurrencyResult {
 		RequestsPerSec:       ratio(successes, elapsedSeconds),
 		LatencyMS:            summarizeMetric(latencies),
 		RepresentativeErrors: errorsOut,
+	}
+	if len(failedLatencies) > 0 {
+		v := summarizeMetric(failedLatencies)
+		result.FailedLatencyMS = &v
 	}
 	if totalTokens > 0 && elapsedSeconds > 0 {
 		v := float64(totalTokens) / elapsedSeconds
@@ -579,10 +615,11 @@ func renderMarkdown(rep report) string {
 		fmt.Fprintf(&b, "- Git commit: `%s`\n", rep.GitCommit)
 	}
 	fmt.Fprintf(&b, "\n## Results\n\n")
-	fmt.Fprintf(&b, "| Concurrency | Requests | Successes | Errors | Error Rate | Req/s | Tok/s | Latency p50/p95/p99 ms | TTFT p50/p95/p99 ms | TPOT p50/p95/p99 ms |\n")
-	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |\n")
+	fmt.Fprintf(&b, "Latency summarizes successful requests only. Failed request latency is reported separately. Approx TPOT is inter-delta timing for streaming chunks, not exact token-level TPOT.\n\n")
+	fmt.Fprintf(&b, "| Concurrency | Requests | Successes | Errors | Error Rate | Req/s | Tok/s | Latency p50/p95/p99 ms | Failed latency p50/p95/p99 ms | TTFT p50/p95/p99 ms | Approx TPOT p50/p95/p99 ms |\n")
+	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |\n")
 	for _, r := range rep.Results {
-		fmt.Fprintf(&b, "| %d | %d | %d | %d | %.2f%% | %.2f | %s | %s | %s | %s |\n",
+		fmt.Fprintf(&b, "| %d | %d | %d | %d | %.2f%% | %.2f | %s | %s | %s | %s | %s |\n",
 			r.Concurrency,
 			r.Requests,
 			r.Successes,
@@ -591,6 +628,7 @@ func renderMarkdown(rep report) string {
 			r.RequestsPerSec,
 			formatOptionalFloat(r.TokensPerSec),
 			formatMetric(r.LatencyMS),
+			formatOptionalMetric(r.FailedLatencyMS),
 			formatOptionalMetric(r.TTFTMS),
 			formatOptionalMetric(r.TPOTMS),
 		)

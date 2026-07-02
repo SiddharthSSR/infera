@@ -74,8 +74,11 @@ func TestSummarizeComputesPercentilesAndErrorRate(t *testing.T) {
 	if got.ErrorRate < 0.33 || got.ErrorRate > 0.34 {
 		t.Fatalf("unexpected error rate: %f", got.ErrorRate)
 	}
-	if got.LatencyMS.P50 != 200 || got.LatencyMS.P95 != 300 || got.LatencyMS.P99 != 300 {
+	if got.LatencyMS.P50 != 100 || got.LatencyMS.P95 != 200 || got.LatencyMS.P99 != 200 {
 		t.Fatalf("unexpected latency percentiles: %+v", got.LatencyMS)
+	}
+	if got.FailedLatencyMS == nil || got.FailedLatencyMS.P50 != 300 {
+		t.Fatalf("unexpected failed latency percentiles: %+v", got.FailedLatencyMS)
 	}
 	if got.TTFTMS == nil || got.TTFTMS.P50 != 10 {
 		t.Fatalf("unexpected ttft summary: %+v", got.TTFTMS)
@@ -101,10 +104,33 @@ func TestRenderMarkdownIncludesLimitations(t *testing.T) {
 		}},
 	}
 	md := renderMarkdown(rep)
-	for _, want := range []string{"# Infera Benchmark Report", "Cost metrics are not implemented yet", "Route decision metrics are not implemented yet"} {
+	for _, want := range []string{"# Infera Benchmark Report", "Cost metrics are not implemented yet", "Route decision metrics are not implemented yet", "Approx TPOT", "Latency summarizes successful requests only"} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
 		}
+	}
+}
+
+func TestSummarizeFailedRequestLatencyDoesNotAffectSuccessLatency(t *testing.T) {
+	got := summarize(1, 3, levelRun{
+		Elapsed: time.Second,
+		Samples: []sample{
+			{LatencyMS: 100},
+			{LatencyMS: 120},
+			{LatencyMS: 1, Error: "fast failure"},
+		},
+	})
+	if got.LatencyMS.P50 != 100 || got.LatencyMS.P95 != 120 || got.LatencyMS.P99 != 120 {
+		t.Fatalf("successful latency included failure sample: %+v", got.LatencyMS)
+	}
+	if got.FailedLatencyMS == nil {
+		t.Fatal("expected failed latency summary")
+	}
+	if got.FailedLatencyMS.P50 != 1 || got.FailedLatencyMS.P95 != 1 || got.FailedLatencyMS.P99 != 1 {
+		t.Fatalf("unexpected failed latency summary: %+v", got.FailedLatencyMS)
+	}
+	if got.ErrorRate < 0.33 || got.ErrorRate > 0.34 {
+		t.Fatalf("unexpected error rate: %f", got.ErrorRate)
 	}
 }
 
@@ -161,6 +187,39 @@ func TestRunRequestUsesAPIKeyAndParsesUsage(t *testing.T) {
 	}
 }
 
+func TestRunRequestRejectsNonStreamingResponseWithoutChoices(t *testing.T) {
+	client := &http.Client{Transport: staticJSONTransport(`{"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)}
+	got := runRequest(context.Background(), client, "https://example.test/v1/chat/completions", "test-model", "", prompt{
+		ID:       "hello",
+		Messages: []message{{Role: "user", Content: "Say hello."}},
+	}, false)
+	if !strings.Contains(got.Error, "missing choices") {
+		t.Fatalf("expected missing choices error, got %q", got.Error)
+	}
+}
+
+func TestRunRequestRejectsNonStreamingResponseWithEmptyChoice(t *testing.T) {
+	client := &http.Client{Transport: staticJSONTransport(`{"choices":[{"message":{"role":"assistant","content":""}}]}`)}
+	got := runRequest(context.Background(), client, "https://example.test/v1/chat/completions", "test-model", "", prompt{
+		ID:       "hello",
+		Messages: []message{{Role: "user", Content: "Say hello."}},
+	}, false)
+	if !strings.Contains(got.Error, "did not include assistant content") {
+		t.Fatalf("expected empty choice error, got %q", got.Error)
+	}
+}
+
+func TestRunRequestAcceptsNonStreamingResponseWithChoiceContent(t *testing.T) {
+	client := &http.Client{Transport: staticJSONTransport(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)}
+	got := runRequest(context.Background(), client, "https://example.test/v1/chat/completions", "test-model", "", prompt{
+		ID:       "hello",
+		Messages: []message{{Role: "user", Content: "Say hello."}},
+	}, false)
+	if got.Error != "" {
+		t.Fatalf("expected success, got error %q", got.Error)
+	}
+}
+
 func TestReadStreamMeasuresTTFTAndRequiresDone(t *testing.T) {
 	body := strings.NewReader("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
 		"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n" +
@@ -214,4 +273,14 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func ioNopCloser(body string) io.ReadCloser {
 	return io.NopCloser(strings.NewReader(body))
+}
+
+func staticJSONTransport(body string) http.RoundTripper {
+	return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       ioNopCloser(body),
+		}, nil
+	})
 }

@@ -90,11 +90,12 @@ The MVP reports:
 
 - request success and error counts;
 - representative errors;
-- end-to-end latency p50/p95/p99;
+- end-to-end latency p50/p95/p99 for successful requests only;
+- failed request latency p50/p95/p99 when failures occur;
 - requests/sec;
 - token/sec when response usage is available;
 - streaming TTFT p50/p95/p99 when a non-empty content delta is observed;
-- approximate streaming TPOT p50/p95/p99 from inter-delta timing.
+- Approx TPOT p50/p95/p99 from streaming inter-delta timing.
 
 ## Intentional MVP Gaps
 
@@ -109,4 +110,4 @@ The MVP does not implement:
 - cost-aware routing;
 - automatic GPU right-sizing.
 
-Non-streaming TTFT and TPOT are marked unavailable unless a future gateway response exposes enough timing detail to measure them honestly.
+Non-streaming TTFT and TPOT are marked unavailable unless a future gateway response exposes enough timing detail to measure them honestly. Streaming TPOT in the MVP is approximate inter-delta timing, not exact token-level TPOT.
