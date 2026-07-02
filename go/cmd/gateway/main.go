@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -210,6 +211,9 @@ func main() {
 	instanceMgr.SetWorkspaceProviderConfigResolver(func(workspaceID string, providerType providers.ProviderType) (*providers.ProviderConfig, error) {
 		apiKey, apiSecret, endpoint, err := authStore.ResolveWorkspaceProviderConfig(workspaceID, string(providerType))
 		if err != nil {
+			if errors.Is(err, auth.ErrWorkspaceProviderConfigNotFound) {
+				return nil, nil
+			}
 			return nil, err
 		}
 		return &providers.ProviderConfig{

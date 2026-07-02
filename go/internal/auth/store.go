@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -17,6 +18,8 @@ import (
 	"github.com/infera/infera/go/internal/migrate"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+var ErrWorkspaceProviderConfigNotFound = errors.New("workspace provider config not found")
 
 // authMigrations defines the versioned schema for the auth database.
 var authMigrations = []migrate.Migration{
@@ -983,12 +986,12 @@ func (s *Store) ResolveWorkspaceProviderConfig(workspaceID, provider string) (ap
 	)
 	if err := row.Scan(&apiKey, &apiSecret, &endpoint); err != nil {
 		if err == sql.ErrNoRows {
-			return "", "", "", fmt.Errorf("provider %s is not configured for workspace %s", provider, workspaceID)
+			return "", "", "", fmt.Errorf("%w: provider %s is not configured for workspace %s", ErrWorkspaceProviderConfigNotFound, provider, workspaceID)
 		}
 		return "", "", "", err
 	}
 	if strings.TrimSpace(apiKey) == "" && strings.TrimSpace(apiSecret) == "" {
-		return "", "", "", fmt.Errorf("provider %s is not configured for workspace %s", provider, workspaceID)
+		return "", "", "", fmt.Errorf("%w: provider %s is not configured for workspace %s", ErrWorkspaceProviderConfigNotFound, provider, workspaceID)
 	}
 	return apiKey, apiSecret, endpoint, nil
 }

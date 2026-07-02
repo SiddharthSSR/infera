@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -418,6 +419,8 @@ func TestWorkspaceProviderConfigLifecycle(t *testing.T) {
 	}
 	if _, _, _, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod"); err == nil {
 		t.Fatal("expected resolve to fail after delete")
+	} else if !errors.Is(err, ErrWorkspaceProviderConfigNotFound) {
+		t.Fatalf("expected ErrWorkspaceProviderConfigNotFound, got %v", err)
 	}
 }
 

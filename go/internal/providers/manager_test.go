@@ -361,6 +361,42 @@ func TestManagerWorkspaceScopedProviderResolution(t *testing.T) {
 	}
 }
 
+func TestManagerWorkspaceProviderResolutionFallsBackToRegisteredProvider(t *testing.T) {
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(newMockTestProvider())
+	mgr.SetWorkspaceProviderConfigResolver(func(workspaceID string, providerType ProviderType) (*ProviderConfig, error) {
+		return nil, nil
+	})
+
+	offerings, err := mgr.ListOfferingsForWorkspace(context.Background(), "ws_alpha")
+	if err != nil {
+		t.Fatalf("ListOfferingsForWorkspace: %v", err)
+	}
+	foundOffering := false
+	for _, offering := range offerings {
+		if offering.Provider == ProviderMock {
+			foundOffering = true
+		}
+	}
+	if !foundOffering {
+		t.Fatalf("expected fallback mock offering, got %+v", offerings)
+	}
+
+	statuses := mgr.GetProviderStatusForWorkspace(context.Background(), "ws_alpha")
+	foundStatus := false
+	for _, status := range statuses {
+		if status.Provider == ProviderMock {
+			foundStatus = true
+			if !status.Connected {
+				t.Fatalf("expected fallback mock provider to be connected: %+v", status)
+			}
+		}
+	}
+	if !foundStatus {
+		t.Fatalf("expected fallback mock status, got %+v", statuses)
+	}
+}
+
 func TestManagerProvisionUnregisteredProvider(t *testing.T) {
 	mgr := newTestManager(t, ManagerConfig{})
 	// Don't register any providers

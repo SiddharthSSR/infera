@@ -105,11 +105,6 @@ func (m *Manager) resolveProvider(workspaceID string, providerType ProviderType)
 			}
 			return CreateProvider(*config)
 		}
-		return nil, &ProviderError{
-			Provider: providerType,
-			Code:     ProviderErrorInvalidConfig,
-			Message:  fmt.Sprintf("provider %s is not configured for workspace %s", providerType, workspaceID),
-		}
 	}
 
 	provider, exists := m.GetProvider(providerType)
