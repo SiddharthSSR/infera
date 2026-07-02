@@ -1,0 +1,30 @@
+prompts:
+  - id: short_hello
+    messages:
+      - role: system
+        content: You are a concise assistant.
+      - role: user
+        content: Reply with one short sentence about why latency benchmarks matter.
+    max_tokens: 32
+    temperature: 0.2
+    tags:
+      - short
+      - non_streaming
+  - id: short_extract
+    messages:
+      - role: user
+        content: Extract the two key nouns from this sentence: Fast inference keeps interactive products usable.
+    max_tokens: 24
+    temperature: 0
+    tags:
+      - short
+      - extraction
+  - id: short_reasoning
+    messages:
+      - role: user
+        content: In two bullets, name signals that show an inference worker is overloaded.
+    max_tokens: 48
+    temperature: 0.2
+    tags:
+      - short
+      - operational

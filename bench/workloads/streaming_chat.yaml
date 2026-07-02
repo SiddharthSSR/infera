@@ -1,0 +1,30 @@
+prompts:
+  - id: stream_summary
+    messages:
+      - role: system
+        content: You answer clearly and briefly.
+      - role: user
+        content: Stream a four-sentence explanation of time to first token.
+    max_tokens: 96
+    temperature: 0.3
+    tags:
+      - streaming
+      - ttft
+  - id: stream_steps
+    messages:
+      - role: user
+        content: Stream five short steps for safely running a production benchmark.
+    max_tokens: 96
+    temperature: 0.2
+    tags:
+      - streaming
+      - operations
+  - id: stream_compare
+    messages:
+      - role: user
+        content: Briefly compare throughput, latency, and error rate as benchmark metrics.
+    max_tokens: 96
+    temperature: 0.2
+    tags:
+      - streaming
+      - metrics
