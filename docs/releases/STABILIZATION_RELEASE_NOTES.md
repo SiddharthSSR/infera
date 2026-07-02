@@ -68,6 +68,9 @@
 - The local production `.env` now validates and production compose renders with that env file.
 - Local production compose smoke passed with the completed local `.env`.
 - Local mock `smoke-test.sh` and `release-verify.sh` checks passed without `INFERA_SMOKE_MODEL`.
+- Production droplet `infera-prod-1` was audited on 2026-07-02: compose is running and public site/dashboard health checks pass, but the droplet is still deployed from `main` at `57394a8`, not this stabilization branch.
+- Production gateway health is degraded because no workers are registered; internal worker-target discovery returns `[]`.
+- Internal authenticated `/v1/models` smoke passes on the droplet with the deployed admin key; the local `.env` key is not valid against production public ingress.
 
 ## Deploy Notes
 
@@ -85,7 +88,7 @@
 ## Known Follow-ups
 
 - Replace placeholder Alertmanager SMTP values with real mail credentials before relying on email notifications.
-- Point canary URL values at a trusted deployment that serves Infera routes, then run canary verification with `INFERA_SMOKE_API_KEY`.
-- Run one live RunPod or Vast.ai provisioning and inference smoke with provider credentials plus a trusted gateway smoke/admin key.
-- Watch gateway, Caddy, Prometheus, Grafana, and Alertmanager logs for at least 10-15 minutes after canary deploy.
-- Publish `task/stabilization-release` or cherry-pick its small release-readiness commits after explicitly approving export of this branch to `https://github.com/SiddharthSSR/infera.git`.
+- Deploy `origin/task/stabilization-release` to `/opt/infera` on `infera-prod-1` after explicit approval for the live rebuild.
+- Run `scripts/release-verify.sh` on the production droplet with the deployed admin/smoke key and local compose access for worker-target discovery.
+- Run one live RunPod or Vast.ai provisioning and inference smoke with provider credentials plus the deployed gateway smoke/admin key.
+- Watch gateway, Caddy, Prometheus, Grafana, and Alertmanager logs for at least 10-15 minutes after deployment.
