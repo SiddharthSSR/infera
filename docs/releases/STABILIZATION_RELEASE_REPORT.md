@@ -138,12 +138,14 @@ Passed:
   - Result: passed.
 - `GOCACHE=/private/tmp/infera-go-cache go test ./internal/gateway -count=1`
   - Result: passed.
+- Live RunPod worker provisioning smoke passed after explicit approval for ongoing GPU cost. One `A100_80GB` worker was launched on RunPod with `provider_gpu_type_id="NVIDIA A100 80GB PCIe"` and model `Qwen/Qwen2.5-7B-Instruct`; instance/provider ID `52uwxf7gdw5ebv`. The worker registered with the gateway and production `/health` reported `status: healthy`, `workers: 1`, `healthy_workers: 1`. The worker was intentionally left running.
+- Live inference smoke passed against `Qwen/Qwen2.5-7B-Instruct`: `/v1/chat/completions` returned `200`, object `chat.completion`, content preview `OK`, and usage `{prompt_tokens: 36, completion_tokens: 2, total_tokens: 38}`.
+- Production `./scripts/release-verify.sh https://inferai.co.in` passed on `infera-prod-1` with the deployed admin key, dashboard URL, `INFERA_SMOKE_MODEL=Qwen/Qwen2.5-7B-Instruct`, and `INFERA_SMOKE_STREAM=1`.
+  - Result: public site root, public `/health`, dashboard `/api/health`, internal gateway worker discovery, authenticated `/v1/models`, non-streaming chat completions, and streaming chat completions all passed.
 
 Not completed:
 
 - Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for several non-SQLite test binaries with cgo enabled. SQLite-backed packages were tested with cgo enabled; router, provider, and shared type packages were tested with `CGO_ENABLED=0`.
-- Live RunPod worker provisioning smoke passed after explicit approval for ongoing GPU cost. One `A100_80GB` worker was launched on RunPod with `provider_gpu_type_id="NVIDIA A100 80GB PCIe"` and model `Qwen/Qwen2.5-7B-Instruct`; instance/provider ID `52uwxf7gdw5ebv`. The worker registered with the gateway and production `/health` reported `status: healthy`, `workers: 1`, `healthy_workers: 1`. The worker was intentionally left running.
-- Live inference smoke passed against `Qwen/Qwen2.5-7B-Instruct`: `/v1/chat/completions` returned `200`, object `chat.completion`, content preview `OK`, and usage `{prompt_tokens: 36, completion_tokens: 2, total_tokens: 38}`.
 - Vast.ai live smoke was not run because no `VASTAI_API_KEY` is configured in production.
 
 ## Production Droplet Audit
@@ -152,21 +154,22 @@ Checked on 2026-07-02:
 
 - DigitalOcean production droplet found: `infera-prod-1`, public IP `157.245.103.209`, region `blr1`, tags `infera` and `production`.
 - Production compose project found at `/opt/infera`; six services are running: gateway, frontend, Caddy, Prometheus, Grafana, and Alertmanager.
-- Deployed code is `task/stabilization-release` at `cbe0d24`.
+- Deployed code is `task/stabilization-release` at `756d34f`.
 - Production `.env` on the droplet has all required production variables present, including `INFERA_ADMIN_KEY`, `INFERA_WORKER_SHARED_TOKEN`, `INFERA_WORKER_IMAGE`, Grafana credentials, Alertmanager SMTP settings, `RUNPOD_API_KEY`, and `HF_TOKEN`. Values were not printed.
 - `docker compose -f docker-compose.prod.yml config --quiet` passes on the droplet. Docker Compose warns that `VASTAI_API_KEY` is unset and defaults to blank.
 - Internal gateway auth smoke with the deployed `INFERA_ADMIN_KEY` passes: `/v1/models` returns a JSON `data` array with 13 model records.
 - Public checks pass for `https://inferai.co.in/`, `https://inferai.co.in/health`, `https://inferai.co.in/api/health`, `https://dashboard.inferai.co.in/`, and `https://dashboard.inferai.co.in/api/health`.
 - Public authenticated `/v1/models` passes with the deployed production admin key and returns 13 model records.
-- RunPod provider status now passes through the production API: `connected: true`, `active_instances: 0`, and account ID is returned. Values were not printed beyond non-secret status fields.
+- RunPod provider status now passes through the production API: `connected: true`, and account ID is returned. Values were not printed beyond non-secret status fields.
 - Production offerings now pass through the API: `/api/offerings` returns 150 RunPod offerings, including `NVIDIA A100 80GB PCIe` availability at about `$1.19/hr` for one GPU.
 - Gateway health is healthy after the approved RunPod worker launch: `/health` reported `workers: 1`, `healthy_workers: 1`.
-- Worker registration is confirmed by the gateway health response after launching RunPod instance `52uwxf7gdw5ebv`.
-- Public `/internal/prometheus/worker-targets` returns frontend HTML, not JSON, because Caddy does not route `/internal/*` publicly. This is expected for public ingress but means `release-verify.sh` needs `INFERA_GATEWAY_INTERNAL_URL` to be run on the host or against a trusted internal endpoint.
+- Worker registration is confirmed by the gateway health response and `/api/workers` after launching RunPod instance `52uwxf7gdw5ebv`; the registered worker serves `Qwen/Qwen2.5-7B-Instruct`, reports queue depth `0`, and is healthy.
+- Public `/internal/prometheus/worker-targets` returns frontend HTML, not JSON, because Caddy does not route `/internal/*` publicly. This is expected for public ingress. Running `release-verify.sh` on the production host uses `docker compose exec gateway` for trusted internal worker discovery and passes.
 - Authenticated public smoke with the local `.env` key fails with `401`; the local key is not the deployed production admin key.
 - Gateway and frontend were rebuilt/restarted from `task/stabilization-release`; both became healthy.
 - 10-minute post-deploy watch completed from `2026-07-02T06:12:16Z` to `2026-07-02T06:22:16Z`. Gateway and frontend remained healthy, and Caddy/Grafana logs showed routine maintenance/check activity only.
 - Live RunPod `A100_80GB` worker launch executed after explicit approval and was left running: instance/provider ID `52uwxf7gdw5ebv`.
+- Final production log snapshot on 2026-07-02 showed successful non-streaming and streaming inference audit entries for `Qwen/Qwen2.5-7B-Instruct`; recent frontend logs only included routine health checks plus missing icon variant 404s.
 
 ## Remaining Manual Production Checks
 

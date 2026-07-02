@@ -68,12 +68,13 @@
 - The local production `.env` now validates and production compose renders with that env file.
 - Local production compose smoke passed with the completed local `.env`.
 - Local mock `smoke-test.sh` and `release-verify.sh` checks passed without `INFERA_SMOKE_MODEL`.
-- Production droplet `infera-prod-1` is deployed from `task/stabilization-release` at `cbe0d24`.
+- Production droplet `infera-prod-1` is deployed from `task/stabilization-release` at `756d34f`.
 - Public site, public gateway health, public Grafana health, and authenticated `/v1/models` pass on production.
 - Production RunPod provider visibility is restored: `/api/providers` returns connected RunPod status and `/api/offerings` returns 150 offerings.
 - Production gateway health is healthy after the approved RunPod worker launch; `/health` reports one healthy worker.
 - Live RunPod worker smoke passed with instance/provider ID `52uwxf7gdw5ebv` using `A100_80GB`, `NVIDIA A100 80GB PCIe`, and `Qwen/Qwen2.5-7B-Instruct`.
 - Live `/v1/chat/completions` smoke passed against `Qwen/Qwen2.5-7B-Instruct`; the response returned `OK` with usage accounting.
+- Production `release-verify.sh` passed on `infera-prod-1` with the deployed admin key, including public site health, dashboard health, internal worker discovery, authenticated `/v1/models`, non-streaming chat, and streaming chat.
 - A 10-minute post-deploy watch completed after the rebuild with gateway/frontend healthy and only routine Caddy/Grafana log activity.
 
 ## Deploy Notes
@@ -88,6 +89,7 @@
 - Run canary verification with a real smoke key:
   - `INFERA_SMOKE_API_KEY=<smoke-key> ./scripts/release-verify.sh <canary-url>`
 - If validating live inference, set `INFERA_SMOKE_MODEL` and optionally `INFERA_SMOKE_STREAM=1`.
+  - Production was verified with `INFERA_SMOKE_MODEL=Qwen/Qwen2.5-7B-Instruct` and `INFERA_SMOKE_STREAM=1`.
 
 ## Known Follow-ups
 
