@@ -65,6 +65,8 @@
 - Prometheus alert YAML parses and includes the new release alerts.
 - Production compose config renders with dummy required env values.
 - Production compose smoke passed locally.
+- The local production `.env` now validates and production compose renders with that env file.
+- Local production compose smoke passed with the completed local `.env`.
 - Local mock `smoke-test.sh` and `release-verify.sh` checks passed without `INFERA_SMOKE_MODEL`.
 
 ## Deploy Notes
@@ -82,8 +84,8 @@
 
 ## Known Follow-ups
 
-- Fill the missing real production env values before canary deploy: `INFERA_ALLOWED_ORIGINS`, `INFERA_WORKER_SHARED_TOKEN`, Grafana admin credentials, and Alertmanager SMTP/email settings.
-- Provide canary URL values and `INFERA_SMOKE_API_KEY`, then run canary verification.
-- Run one live RunPod or Vast.ai provisioning and inference smoke with provider credentials plus the gateway smoke/admin key.
+- Replace placeholder Alertmanager SMTP values with real mail credentials before relying on email notifications.
+- Point canary URL values at a trusted deployment that serves Infera routes, then run canary verification with `INFERA_SMOKE_API_KEY`.
+- Run one live RunPod or Vast.ai provisioning and inference smoke with provider credentials plus a trusted gateway smoke/admin key.
 - Watch gateway, Caddy, Prometheus, Grafana, and Alertmanager logs for at least 10-15 minutes after canary deploy.
 - Publish `task/stabilization-release` or cherry-pick its small release-readiness commits after explicitly approving export of this branch to `https://github.com/SiddharthSSR/infera.git`.
