@@ -1,6 +1,7 @@
 # Stabilization Release Report
 
 Date: 2026-06-30
+Last updated: 2026-07-02
 
 ## Branch
 
@@ -15,7 +16,7 @@ Date: 2026-06-30
 
 ## Changes Kept
 
-This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds nine small release-readiness changes:
+This branch keeps the `v1.3.0` production hardening already on `origin/main`, then adds ten small release-readiness changes:
 
 - `c09cd52 chore(release): add worker health transition metrics`
   - Adds registry-driven worker health transition events.
@@ -42,6 +43,10 @@ This branch keeps the `v1.3.0` production hardening already on `origin/main`, th
   - Runs from the production compose smoke path before Docker startup.
 - Compose smoke hardening:
   - Retries ingress checks so Caddy can finish accepting HTTP traffic after the container reaches `running`.
+- `cbe0d24 fix(gateway): fall back to env provider config`
+  - Preserves workspace-specific provider credentials when configured.
+  - Falls back to globally registered env provider credentials when a workspace has no provider override.
+  - Restores production `RUNPOD_API_KEY` visibility for default-workspace provider, offering, and provisioning APIs.
 - Documentation alignment:
   - Adds the worker image validator to README and roadmap release checklist deployment steps.
   - Adds an explicit production compose render gate to README and `DEPLOYMENT_CHECKLIST.md`.
@@ -127,15 +132,19 @@ Passed:
   - Result: passed with the completed local `.env`.
 - `set -a; . /Users/siddharthsingh/codingtensor/infera/.env; set +a; REMOVE_COMPOSE_VOLUMES=true SMOKE_TIMEOUT=180 ./scripts/compose-smoke-prod.sh`
   - Result: passed with the completed local `.env`. Gateway and frontend built, gateway and frontend became healthy, Caddy started, ingress `/health`, authenticated `/v1/models`, and root HTML checks passed.
+- `GOCACHE=/private/tmp/infera-go-cache go test ./internal/auth ./internal/providers ./cmd/gateway -count=1`
+  - Result: `./internal/auth` passed and `./cmd/gateway` compiled; `./internal/providers` hit the known local macOS cgo test-binary `dyld: missing LC_UUID load command` issue.
+- `CGO_ENABLED=0 GOCACHE=/private/tmp/infera-go-cache go test ./internal/providers -count=1`
+  - Result: passed.
+- `GOCACHE=/private/tmp/infera-go-cache go test ./internal/gateway -count=1`
+  - Result: passed.
 
 Not completed:
 
 - Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for several non-SQLite test binaries with cgo enabled. SQLite-backed packages were tested with cgo enabled; router, provider, and shared type packages were tested with `CGO_ENABLED=0`.
-- Canary unauthenticated reachability was attempted against the configured `INFERA_BASE_URL` from `.env`; the ngrok URL responded `404` for `/`, `/health`, and `/api/health`, so it is not currently pointing at the expected Infera app/gateway routes.
-- Authenticated canary verification was not run because the approval reviewer blocked sending the local admin/smoke key as a bearer token to the configured external ngrok URL until that destination is explicitly approved as trusted.
-- Live RunPod/Vast.ai smoke still could not run honestly from local state. A RunPod key is present, but the configured canary URL is not serving Infera routes and no trusted gateway endpoint is available for authenticated provisioning/inference verification. No Vast.ai key was present.
-- Post-deploy log watch could not run against production because no production deployment target or remote log access was available in local configuration. Local compose smoke logs were exercised by the smoke script before cleanup.
-- `task/stabilization-release` has been published to `origin/task/stabilization-release` after explicit approval to export the branch to GitHub.
+- Live RunPod worker provisioning smoke was not run. The approval reviewer blocked launching a real paid `A100_80GB` RunPod worker and leaving it running because that creates ongoing cloud cost. Production RunPod connectivity and offerings are verified, but worker registration remains unproven until that billable action is explicitly approved.
+- Vast.ai live smoke was not run because no `VASTAI_API_KEY` is configured in production.
+- `scripts/release-verify.sh` is still not a complete production verifier for this deployment because it requires a non-empty worker-target list. With no workers registered, `/internal/prometheus/worker-targets` correctly returns `[]`.
 
 ## Production Droplet Audit
 
@@ -143,23 +152,25 @@ Checked on 2026-07-02:
 
 - DigitalOcean production droplet found: `infera-prod-1`, public IP `157.245.103.209`, region `blr1`, tags `infera` and `production`.
 - Production compose project found at `/opt/infera`; six services are running: gateway, frontend, Caddy, Prometheus, Grafana, and Alertmanager.
-- Deployed code is still `main` at `57394a8`, not `origin/task/stabilization-release`.
+- Deployed code is `task/stabilization-release` at `cbe0d24`.
 - Production `.env` on the droplet has all required production variables present, including `INFERA_ADMIN_KEY`, `INFERA_WORKER_SHARED_TOKEN`, `INFERA_WORKER_IMAGE`, Grafana credentials, Alertmanager SMTP settings, `RUNPOD_API_KEY`, and `HF_TOKEN`. Values were not printed.
 - `docker compose -f docker-compose.prod.yml config --quiet` passes on the droplet. Docker Compose warns that `VASTAI_API_KEY` is unset and defaults to blank.
 - Internal gateway auth smoke with the deployed `INFERA_ADMIN_KEY` passes: `/v1/models` returns a JSON `data` array with 13 model records.
-- Public unauthenticated checks pass for `https://inferai.co.in/`, `https://inferai.co.in/health`, `https://inferai.co.in/api/health`, `https://dashboard.inferai.co.in/`, and `https://dashboard.inferai.co.in/api/health`.
+- Public checks pass for `https://inferai.co.in/`, `https://inferai.co.in/health`, `https://inferai.co.in/api/health`, `https://dashboard.inferai.co.in/`, and `https://dashboard.inferai.co.in/api/health`.
+- Public authenticated `/v1/models` passes with the deployed production admin key and returns 13 model records.
+- RunPod provider status now passes through the production API: `connected: true`, `active_instances: 0`, and account ID is returned. Values were not printed beyond non-secret status fields.
+- Production offerings now pass through the API: `/api/offerings` returns 150 RunPod offerings, including `NVIDIA A100 80GB PCIe` availability at about `$1.19/hr` for one GPU.
 - Gateway health is still degraded because no workers are registered: `/health` reports `workers: 0`, `healthy_workers: 0`.
 - Internal worker-target discovery returns an empty array: `/internal/prometheus/worker-targets` -> `[]`.
 - Public `/internal/prometheus/worker-targets` returns frontend HTML, not JSON, because Caddy does not route `/internal/*` publicly. This is expected for public ingress but means `release-verify.sh` needs `INFERA_GATEWAY_INTERNAL_URL` to be run on the host or against a trusted internal endpoint.
 - Authenticated public smoke with the local `.env` key fails with `401`; the local key is not the deployed production admin key.
-- Deployment of `origin/task/stabilization-release` to the live droplet was prepared but not executed because the approval reviewer requires explicit approval for the production service-disruption risk of resetting `/opt/infera` and rebuilding the live compose stack.
+- Gateway and frontend were rebuilt/restarted from `task/stabilization-release`; both became healthy.
+- 10-minute post-deploy watch completed from `2026-07-02T06:12:16Z` to `2026-07-02T06:22:16Z`. Gateway and frontend remained healthy, and Caddy/Grafana logs showed routine maintenance/check activity only.
+- Live RunPod `A100_80GB` worker launch was prepared but not executed because it would create ongoing paid GPU cost without explicit approval for that exact billable action.
 
 ## Remaining Manual Production Checks
 
 - Replace placeholder Alertmanager SMTP values in `.env` with real mail credentials before relying on production email notifications.
-- Deploy `origin/task/stabilization-release` to `/opt/infera` on `infera-prod-1` after explicit approval for the live rebuild.
-- Run `scripts/release-verify.sh` on the production droplet using the deployed `INFERA_SMOKE_API_KEY`/`INFERA_ADMIN_KEY` and local compose access for worker-target discovery.
-- If a live model should be checked, set `INFERA_SMOKE_MODEL` and optionally `INFERA_SMOKE_STREAM=1`.
-- Confirm worker discovery returns targets from `/internal/prometheus/worker-targets`.
-- Run one live RunPod or Vast.ai provisioning smoke if provider credentials are available.
-- Watch gateway, Caddy, Prometheus, Grafana, and Alertmanager logs for at least 10-15 minutes after canary deploy.
+- Explicitly approve launching a paid RunPod worker if production should be kept non-degraded. The verified available smoke target is one `A100_80GB` RunPod worker with `provider_gpu_type_id="NVIDIA A100 80GB PCIe"` at about `$1.19/hr`, model `Qwen/Qwen2.5-7B-Instruct`.
+- After a worker is launched, confirm `/health` reports at least one healthy worker, `/internal/prometheus/worker-targets` returns targets, and one `/v1/chat/completions` request succeeds.
+- Add or configure a `VASTAI_API_KEY` before attempting Vast.ai live smoke.

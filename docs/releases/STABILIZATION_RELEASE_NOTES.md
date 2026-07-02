@@ -68,9 +68,11 @@
 - The local production `.env` now validates and production compose renders with that env file.
 - Local production compose smoke passed with the completed local `.env`.
 - Local mock `smoke-test.sh` and `release-verify.sh` checks passed without `INFERA_SMOKE_MODEL`.
-- Production droplet `infera-prod-1` was audited on 2026-07-02: compose is running and public site/dashboard health checks pass, but the droplet is still deployed from `main` at `57394a8`, not this stabilization branch.
-- Production gateway health is degraded because no workers are registered; internal worker-target discovery returns `[]`.
-- Internal authenticated `/v1/models` smoke passes on the droplet with the deployed admin key; the local `.env` key is not valid against production public ingress.
+- Production droplet `infera-prod-1` is deployed from `task/stabilization-release` at `cbe0d24`.
+- Public site, public gateway health, public Grafana health, and authenticated `/v1/models` pass on production.
+- Production RunPod provider visibility is restored: `/api/providers` returns connected RunPod status and `/api/offerings` returns 150 offerings.
+- Production gateway health is degraded only because no workers are registered; internal worker-target discovery returns `[]`.
+- A 10-minute post-deploy watch completed after the rebuild with gateway/frontend healthy and only routine Caddy/Grafana log activity.
 
 ## Deploy Notes
 
@@ -88,7 +90,6 @@
 ## Known Follow-ups
 
 - Replace placeholder Alertmanager SMTP values with real mail credentials before relying on email notifications.
-- Deploy `origin/task/stabilization-release` to `/opt/infera` on `infera-prod-1` after explicit approval for the live rebuild.
-- Run `scripts/release-verify.sh` on the production droplet with the deployed admin/smoke key and local compose access for worker-target discovery.
-- Run one live RunPod or Vast.ai provisioning and inference smoke with provider credentials plus the deployed gateway smoke/admin key.
-- Watch gateway, Caddy, Prometheus, Grafana, and Alertmanager logs for at least 10-15 minutes after deployment.
+- Explicitly approve launching a paid RunPod worker if production should be kept non-degraded. The verified available smoke target is one `A100_80GB` worker using `NVIDIA A100 80GB PCIe` at about `$1.19/hr`.
+- After a worker is running, run production worker-target discovery and one `/v1/chat/completions` smoke.
+- Add or configure `VASTAI_API_KEY` before attempting Vast.ai live smoke.
