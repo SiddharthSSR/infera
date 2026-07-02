@@ -142,9 +142,9 @@ Passed:
 Not completed:
 
 - Full `go test ./...` was not used as the primary validation command because macOS Go 1.22.4 produced `dyld: missing LC_UUID load command` for several non-SQLite test binaries with cgo enabled. SQLite-backed packages were tested with cgo enabled; router, provider, and shared type packages were tested with `CGO_ENABLED=0`.
-- Live RunPod worker provisioning smoke was not run. The approval reviewer blocked launching a real paid `A100_80GB` RunPod worker and leaving it running because that creates ongoing cloud cost. Production RunPod connectivity and offerings are verified, but worker registration remains unproven until that billable action is explicitly approved.
+- Live RunPod worker provisioning smoke passed after explicit approval for ongoing GPU cost. One `A100_80GB` worker was launched on RunPod with `provider_gpu_type_id="NVIDIA A100 80GB PCIe"` and model `Qwen/Qwen2.5-7B-Instruct`; instance/provider ID `52uwxf7gdw5ebv`. The worker registered with the gateway and production `/health` reported `status: healthy`, `workers: 1`, `healthy_workers: 1`. The worker was intentionally left running.
+- Live inference smoke passed against `Qwen/Qwen2.5-7B-Instruct`: `/v1/chat/completions` returned `200`, object `chat.completion`, content preview `OK`, and usage `{prompt_tokens: 36, completion_tokens: 2, total_tokens: 38}`.
 - Vast.ai live smoke was not run because no `VASTAI_API_KEY` is configured in production.
-- `scripts/release-verify.sh` is still not a complete production verifier for this deployment because it requires a non-empty worker-target list. With no workers registered, `/internal/prometheus/worker-targets` correctly returns `[]`.
 
 ## Production Droplet Audit
 
@@ -160,17 +160,16 @@ Checked on 2026-07-02:
 - Public authenticated `/v1/models` passes with the deployed production admin key and returns 13 model records.
 - RunPod provider status now passes through the production API: `connected: true`, `active_instances: 0`, and account ID is returned. Values were not printed beyond non-secret status fields.
 - Production offerings now pass through the API: `/api/offerings` returns 150 RunPod offerings, including `NVIDIA A100 80GB PCIe` availability at about `$1.19/hr` for one GPU.
-- Gateway health is still degraded because no workers are registered: `/health` reports `workers: 0`, `healthy_workers: 0`.
-- Internal worker-target discovery returns an empty array: `/internal/prometheus/worker-targets` -> `[]`.
+- Gateway health is healthy after the approved RunPod worker launch: `/health` reported `workers: 1`, `healthy_workers: 1`.
+- Worker registration is confirmed by the gateway health response after launching RunPod instance `52uwxf7gdw5ebv`.
 - Public `/internal/prometheus/worker-targets` returns frontend HTML, not JSON, because Caddy does not route `/internal/*` publicly. This is expected for public ingress but means `release-verify.sh` needs `INFERA_GATEWAY_INTERNAL_URL` to be run on the host or against a trusted internal endpoint.
 - Authenticated public smoke with the local `.env` key fails with `401`; the local key is not the deployed production admin key.
 - Gateway and frontend were rebuilt/restarted from `task/stabilization-release`; both became healthy.
 - 10-minute post-deploy watch completed from `2026-07-02T06:12:16Z` to `2026-07-02T06:22:16Z`. Gateway and frontend remained healthy, and Caddy/Grafana logs showed routine maintenance/check activity only.
-- Live RunPod `A100_80GB` worker launch was prepared but not executed because it would create ongoing paid GPU cost without explicit approval for that exact billable action.
+- Live RunPod `A100_80GB` worker launch executed after explicit approval and was left running: instance/provider ID `52uwxf7gdw5ebv`.
 
 ## Remaining Manual Production Checks
 
 - Replace placeholder Alertmanager SMTP values in `.env` with real mail credentials before relying on production email notifications.
-- Explicitly approve launching a paid RunPod worker if production should be kept non-degraded. The verified available smoke target is one `A100_80GB` RunPod worker with `provider_gpu_type_id="NVIDIA A100 80GB PCIe"` at about `$1.19/hr`, model `Qwen/Qwen2.5-7B-Instruct`.
-- After a worker is launched, confirm `/health` reports at least one healthy worker, `/internal/prometheus/worker-targets` returns targets, and one `/v1/chat/completions` request succeeds.
+- Decide how long to keep RunPod instance `52uwxf7gdw5ebv` running; it was intentionally left running after smoke approval and continues to incur GPU cost.
 - Add or configure a `VASTAI_API_KEY` before attempting Vast.ai live smoke.

@@ -71,7 +71,9 @@
 - Production droplet `infera-prod-1` is deployed from `task/stabilization-release` at `cbe0d24`.
 - Public site, public gateway health, public Grafana health, and authenticated `/v1/models` pass on production.
 - Production RunPod provider visibility is restored: `/api/providers` returns connected RunPod status and `/api/offerings` returns 150 offerings.
-- Production gateway health is degraded only because no workers are registered; internal worker-target discovery returns `[]`.
+- Production gateway health is healthy after the approved RunPod worker launch; `/health` reports one healthy worker.
+- Live RunPod worker smoke passed with instance/provider ID `52uwxf7gdw5ebv` using `A100_80GB`, `NVIDIA A100 80GB PCIe`, and `Qwen/Qwen2.5-7B-Instruct`.
+- Live `/v1/chat/completions` smoke passed against `Qwen/Qwen2.5-7B-Instruct`; the response returned `OK` with usage accounting.
 - A 10-minute post-deploy watch completed after the rebuild with gateway/frontend healthy and only routine Caddy/Grafana log activity.
 
 ## Deploy Notes
@@ -90,6 +92,5 @@
 ## Known Follow-ups
 
 - Replace placeholder Alertmanager SMTP values with real mail credentials before relying on email notifications.
-- Explicitly approve launching a paid RunPod worker if production should be kept non-degraded. The verified available smoke target is one `A100_80GB` worker using `NVIDIA A100 80GB PCIe` at about `$1.19/hr`.
-- After a worker is running, run production worker-target discovery and one `/v1/chat/completions` smoke.
+- Decide how long to keep RunPod instance `52uwxf7gdw5ebv` running; it was intentionally left running after smoke approval and continues to incur GPU cost.
 - Add or configure `VASTAI_API_KEY` before attempting Vast.ai live smoke.
