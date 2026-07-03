@@ -445,6 +445,9 @@ export function Dashboard() {
 
   const activeInstances = instances?.filter(i => i.status === 'running') || [];
   const healthyWorkers = workers?.filter(w => w.status === 'healthy') || [];
+  const totalWorkerCount = stats?.workers?.total ?? workers?.length;
+  const healthyWorkerCount = stats?.workers?.healthy ?? healthyWorkers.length;
+  const showZeroWorkerWarning = !isLoading && totalWorkerCount != null && (totalWorkerCount === 0 || healthyWorkerCount === 0);
   const loadedModels = models?.filter(m => m.loaded !== false) || [];
   const visibleProviders = useMemo(
     () => (providers || []).filter((provider) => provider.provider !== 'mock' && provider.provider !== 'lambda'),
@@ -695,6 +698,23 @@ export function Dashboard() {
                 )}
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {showZeroWorkerWarning && (
+        <div className="grid-row">
+          <div className="cell dashboard-alert-item dashboard-alert-critical" style={{ gridColumn: 'span 4' }} role="alert">
+            <div className="dashboard-alert-title-row">
+              <span className="badge status-error">CRITICAL</span>
+              <span style={{ fontSize: '0.95rem', fontWeight: 600 }}>No healthy inference workers</span>
+            </div>
+            <div className="dashboard-summary-text">
+              No healthy inference workers are registered. The gateway is reachable, but inference requests will fail until a worker is restored.
+            </div>
+            <button className="action-btn" style={{ marginTop: '0.95rem' }} onClick={() => navigate('/instances')}>
+              OPEN NODES
+            </button>
           </div>
         </div>
       )}

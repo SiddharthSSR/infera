@@ -155,12 +155,13 @@ func (c *TokenChunk) IsFinal() bool {
 type ErrorCode string
 
 const (
-	ErrorCodeInvalidRequest  ErrorCode = "invalid_request"
-	ErrorCodeModelNotFound   ErrorCode = "model_not_found"
-	ErrorCodeRateLimited     ErrorCode = "rate_limited"
-	ErrorCodeModelOverloaded ErrorCode = "model_overloaded"
-	ErrorCodeInternalError   ErrorCode = "internal_error"
-	ErrorCodeTimeout         ErrorCode = "timeout"
+	ErrorCodeInvalidRequest     ErrorCode = "invalid_request"
+	ErrorCodeModelNotFound      ErrorCode = "model_not_found"
+	ErrorCodeNoWorkersAvailable ErrorCode = "no_workers_available"
+	ErrorCodeRateLimited        ErrorCode = "rate_limited"
+	ErrorCodeModelOverloaded    ErrorCode = "model_overloaded"
+	ErrorCodeInternalError      ErrorCode = "internal_error"
+	ErrorCodeTimeout            ErrorCode = "timeout"
 )
 
 // InferaError represents an API error.

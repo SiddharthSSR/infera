@@ -38,19 +38,26 @@ Production was restored by provisioning exactly one RunPod `A100_80GB` worker fo
 
 ## Metrics and Alerts
 
-Existing metrics should be reused where available. Missing metrics should be added with stable names and clear labels.
+Existing metrics should be reused where available. P0 exposes worker registry counts directly from the gateway at scrape time.
 
-Proposed metrics:
+Implemented P0 metrics:
 
 - `infera_workers_total`: gauge for total workers currently registered in the gateway registry.
 - `infera_healthy_workers_total`: gauge for healthy workers currently registered in the gateway registry.
+- `infera_unhealthy_workers_total`: gauge for registered workers that are not healthy.
 - `infera_gateway_worker_health_transitions_total`: existing counter for registry-driven worker health transition events.
-- `infera_zero_healthy_workers`: gauge set to `1` when healthy workers are zero, otherwise `0`.
+
+Deferred metric ideas:
+
 - `infera_model_not_found_total`: counter for inference route failures where no worker serves the requested model.
+- provider/gateway reconciliation metrics for provider inventory that does not align with gateway worker registration.
 
-Proposed alert rules:
+Implemented P0 alert rule:
 
-- `InferaZeroHealthyWorkers`: fire when `infera_healthy_workers_total == 0` or `infera_zero_healthy_workers == 1` for a configured duration such as 2-5 minutes.
+- `InferaZeroHealthyWorkers`: fires when `infera_healthy_workers_total == 0` for 3 minutes.
+
+Future alert rules:
+
 - `InferaWorkerRegistryEmpty`: fire when `infera_workers_total == 0` for a configured duration.
 - `InferaModelNotFoundSpike`: fire when `infera_model_not_found_total` increases sharply for production traffic.
 - `InferaProviderGatewayInstanceMismatch`: fire when provider inventory shows running or recently active instances while gateway worker count remains zero, or when provider state cannot be reconciled with registry state.
@@ -67,20 +74,20 @@ Inference errors should distinguish these cases:
 - Workers exist but none serve the requested model.
 - The model is genuinely unknown to the catalog.
 
-Recommended response when no healthy worker serves the requested model:
+Implemented P0 response when no healthy workers exist at all:
 
 ```json
 {
   "error": {
     "code": "no_workers_available",
-    "message": "No healthy workers are currently serving model Qwen/Qwen2.5-7B-Instruct",
+    "message": "No healthy workers are currently available to serve the requested model.",
     "type": "service_unavailable",
     "retryable": true
   }
 }
 ```
 
-This should use an HTTP status that reflects temporary unavailability, such as `503`, when the model is known but no healthy serving capacity exists. A true unknown model can continue to use a not-found style error.
+This uses HTTP `503`. If healthy workers exist but none serve the requested model, the existing model unavailable/not-found behavior is preserved so a genuinely unknown model is still distinguishable from global zero-capacity.
 
 ## Dashboard Behavior
 
@@ -90,8 +97,8 @@ The dashboard should expose the worker-plane state directly:
 - Healthy workers.
 - Models currently served by registered workers.
 - Provider instances grouped by state.
-- Warning banner when `workers=0`.
-- Warning banner when `healthy_workers=0`.
+- P0 warning banner when `workers=0` or `healthy_workers=0`:
+  "No healthy inference workers are registered. The gateway is reachable, but inference requests will fail until a worker is restored."
 - Warning when provider has active/stopped/recent instances but the gateway has no workers.
 - Last worker heartbeat time.
 - Last worker health transition event.
@@ -192,11 +199,11 @@ Use this procedure when production is reachable but inference fails, or when `/h
 
 ### P0
 
-- Ensure metrics expose total worker count and healthy worker count.
-- Add or verify a zero-worker alert.
-- Improve inference errors when a model is unavailable because no workers exist.
-- Add a dashboard zero-worker warning.
-- Add a runbook link from docs and operational surfaces.
+- Implemented: metrics expose total, healthy, and unhealthy worker counts.
+- Implemented: `InferaZeroHealthyWorkers` fires when healthy workers remain zero for 3 minutes.
+- Implemented: inference returns `503` with `no_workers_available` when no healthy workers exist.
+- Implemented: dashboard shows a prominent zero-worker warning.
+- Implemented: alert annotations link to this runbook.
 
 ### P1
 

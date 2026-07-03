@@ -211,7 +211,7 @@ func (g *Gateway) Start() error {
 	mux.HandleFunc("/v1/chat/completions", withAuth(withRateLimit(g.handleChatCompletions)))
 	mux.HandleFunc("/v1/models", withAuth(g.handleListModels))
 	if g.metrics != nil {
-		mux.Handle("/metrics", g.metrics.Handler())
+		mux.HandleFunc("/metrics", g.handleMetrics)
 	}
 
 	// Public endpoints (no auth — workers need these, plus health checks)
@@ -683,6 +683,10 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			auditStatus = "failed"
 			auditErrorCode = string(inferaErr.Code)
 			status := g.errorCodeToStatus(inferaErr.Code)
+			if inferaErr.Code == types.ErrorCodeNoWorkersAvailable {
+				g.writeRetryableError(w, status, string(inferaErr.Code), "service_unavailable", inferaErr.Message)
+				return
+			}
 			g.writeError(w, status, string(inferaErr.Code), inferaErr.Message)
 			return
 		}
@@ -1804,12 +1808,32 @@ func (g *Gateway) RemoveWorkerClient(workerID string) {
 	delete(g.workerClients, workerID)
 }
 
+func (g *Gateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if g.metrics == nil {
+		http.NotFound(w, r)
+		return
+	}
+	g.recordWorkerCountMetrics()
+	g.metrics.Handler().ServeHTTP(w, r)
+}
+
+func (g *Gateway) recordWorkerCountMetrics() {
+	if g.metrics == nil || g.router == nil {
+		return
+	}
+	total := len(g.router.GetWorkers("", false))
+	healthy := len(g.router.GetWorkers("", true))
+	g.metrics.RecordWorkerCounts(total, healthy)
+}
+
 func (g *Gateway) errorCodeToStatus(code types.ErrorCode) int {
 	switch code {
 	case types.ErrorCodeInvalidRequest:
 		return http.StatusBadRequest
 	case types.ErrorCodeModelNotFound:
 		return http.StatusNotFound
+	case types.ErrorCodeNoWorkersAvailable:
+		return http.StatusServiceUnavailable
 	case types.ErrorCodeRateLimited:
 		return http.StatusTooManyRequests
 	case types.ErrorCodeModelOverloaded:
@@ -1832,6 +1856,17 @@ func (g *Gateway) writeError(w http.ResponseWriter, status int, errType, message
 		"error": map[string]interface{}{
 			"type":    errType,
 			"message": message,
+		},
+	})
+}
+
+func (g *Gateway) writeRetryableError(w http.ResponseWriter, status int, code, errType, message string) {
+	g.writeJSON(w, status, map[string]interface{}{
+		"error": map[string]interface{}{
+			"code":      code,
+			"message":   message,
+			"type":      errType,
+			"retryable": true,
 		},
 	})
 }

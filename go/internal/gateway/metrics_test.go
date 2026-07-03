@@ -65,6 +65,7 @@ func TestGatewayMetricsRecordInference(t *testing.T) {
 	m.RecordTPOT("model-1", false, 25*time.Millisecond)
 	m.RecordBatch("model-1", 4, 40*time.Millisecond)
 	m.RecordInferenceRejected("overloaded")
+	m.RecordWorkerCounts(3, 2)
 	m.RecordWorkerHealthTransition("marked_unhealthy", "healthy", "unhealthy")
 
 	successCount := testutil.ToFloat64(m.inferenceRequests.WithLabelValues("true", "success"))
@@ -113,6 +114,18 @@ func TestGatewayMetricsRecordInference(t *testing.T) {
 		t.Fatalf("expected rejected inference count=1, got %v", rejected)
 	}
 
+	if workersTotal := testutil.ToFloat64(m.workersTotal); workersTotal != 3 {
+		t.Fatalf("expected workers total=3, got %v", workersTotal)
+	}
+
+	if healthyWorkersTotal := testutil.ToFloat64(m.healthyWorkersTotal); healthyWorkersTotal != 2 {
+		t.Fatalf("expected healthy workers total=2, got %v", healthyWorkersTotal)
+	}
+
+	if unhealthyWorkersTotal := testutil.ToFloat64(m.unhealthyWorkersTotal); unhealthyWorkersTotal != 1 {
+		t.Fatalf("expected unhealthy workers total=1, got %v", unhealthyWorkersTotal)
+	}
+
 	healthTransitions := testutil.ToFloat64(m.workerHealthTransitions.WithLabelValues("marked_unhealthy", "healthy", "unhealthy"))
 	if healthTransitions != 1 {
 		t.Fatalf("expected worker health transition count=1, got %v", healthTransitions)
@@ -135,6 +148,7 @@ func TestGatewayMetricsHandler(t *testing.T) {
 	m.RecordTPOT("model-1", false, 20*time.Millisecond)
 	m.RecordBatch("model-1", 2, 30*time.Millisecond)
 	m.RecordInferenceRejected("overloaded")
+	m.RecordWorkerCounts(2, 1)
 	m.RecordWorkerHealthTransition("removed", "unhealthy", "offline")
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
@@ -159,6 +173,9 @@ func TestGatewayMetricsHandler(t *testing.T) {
 		"infera_gateway_batch_wait_seconds",
 		"infera_gateway_inference_tokens_total",
 		"infera_gateway_inference_rejected_total",
+		"infera_workers_total",
+		"infera_healthy_workers_total",
+		"infera_unhealthy_workers_total",
 		"infera_gateway_worker_health_transitions_total",
 	} {
 		if !strings.Contains(body, metric) {

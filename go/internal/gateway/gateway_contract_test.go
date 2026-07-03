@@ -500,6 +500,61 @@ func TestHandleChatCompletionsRejectsInvalidStopType(t *testing.T) {
 	}
 }
 
+func TestHandleChatCompletionsNoWorkersReturnsServiceUnavailable(t *testing.T) {
+	r := router.New(router.DefaultConfig())
+	t.Cleanup(r.Stop)
+	g := New(DefaultConfig(), r, nil)
+
+	body := `{"model":"Qwen/Qwen2.5-7B-Instruct","messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	g.handleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode error payload: %v", err)
+	}
+	if payload["error"]["code"] != "no_workers_available" {
+		t.Fatalf("expected no_workers_available code, got %#v", payload)
+	}
+	if payload["error"]["type"] != "service_unavailable" {
+		t.Fatalf("expected service_unavailable type, got %#v", payload)
+	}
+	if payload["error"]["retryable"] != true {
+		t.Fatalf("expected retryable=true, got %#v", payload)
+	}
+}
+
+func TestHandleChatCompletionsUnknownModelWithHealthyWorkersReturnsModelNotFound(t *testing.T) {
+	g := newGatewayWithTestWorker(t, "known-model", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected worker dispatch for unknown model")
+		return nil, nil
+	}))
+
+	body := `{"model":"unknown-model","messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	g.handleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode error payload: %v", err)
+	}
+	if payload["error"]["type"] != "model_not_found" {
+		t.Fatalf("expected model_not_found type, got %#v", payload)
+	}
+}
+
 func TestHandleChatCompletionsStreamingWorkerErrorBeforeCommitReturnsJSONError(t *testing.T) {
 	t.Parallel()
 

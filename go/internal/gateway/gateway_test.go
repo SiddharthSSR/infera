@@ -344,6 +344,46 @@ func TestHandlePrometheusWorkerTargets(t *testing.T) {
 	}
 }
 
+func TestHandleMetricsExposesWorkerCounts(t *testing.T) {
+	r := router.New(router.DefaultConfig())
+	defer r.Stop()
+
+	if err := r.RegisterWorker(&types.WorkerInfo{
+		WorkerID: "worker-healthy",
+		Address:  "worker-healthy:8081",
+		Status:   types.WorkerStatusHealthy,
+	}); err != nil {
+		t.Fatalf("RegisterWorker healthy: %v", err)
+	}
+	if err := r.RegisterWorker(&types.WorkerInfo{
+		WorkerID: "worker-unhealthy",
+		Address:  "worker-unhealthy:8081",
+		Status:   types.WorkerStatusUnhealthy,
+	}); err != nil {
+		t.Fatalf("RegisterWorker unhealthy: %v", err)
+	}
+
+	g := New(DefaultConfig(), r, nil)
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	g.handleMetrics(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"infera_workers_total 2",
+		"infera_healthy_workers_total 1",
+		"infera_unhealthy_workers_total 1",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected metrics output to contain %q, got:\n%s", want, body)
+		}
+	}
+}
+
 func TestHandleChatCompletionsRecordsOverloadRejection(t *testing.T) {
 	g := New(Config{MaxInFlight: 1}, nil, nil)
 	atomic.StoreInt64(&g.inFlightRequests, 1)

@@ -32,6 +32,9 @@ type GatewayMetrics struct {
 	inferenceRejected *prometheus.CounterVec
 
 	workerQueueDepth        *prometheus.GaugeVec
+	workersTotal            prometheus.Gauge
+	healthyWorkersTotal     prometheus.Gauge
+	unhealthyWorkersTotal   prometheus.Gauge
 	workerHealthTransitions *prometheus.CounterVec
 }
 
@@ -104,6 +107,18 @@ func NewGatewayMetrics() *GatewayMetrics {
 			Name: "infera_gateway_worker_queue_depth",
 			Help: "Current request queue depth per worker, as reported by the last heartbeat.",
 		}, []string{"worker_id"}),
+		workersTotal: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "infera_workers_total",
+			Help: "Current number of workers registered with the gateway.",
+		}),
+		healthyWorkersTotal: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "infera_healthy_workers_total",
+			Help: "Current number of healthy workers registered with the gateway.",
+		}),
+		unhealthyWorkersTotal: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "infera_unhealthy_workers_total",
+			Help: "Current number of registered workers that are not healthy.",
+		}),
 		workerHealthTransitions: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "infera_gateway_worker_health_transitions_total",
 			Help: "Total number of registry-driven worker health transitions.",
@@ -126,6 +141,9 @@ func NewGatewayMetrics() *GatewayMetrics {
 		m.inferenceTokens,
 		m.inferenceRejected,
 		m.workerQueueDepth,
+		m.workersTotal,
+		m.healthyWorkersTotal,
+		m.unhealthyWorkersTotal,
 		m.workerHealthTransitions,
 	)
 	m.gatewayInfo.WithLabelValues("gateway", inferaEnv(), inferaVersion()).Set(1)
@@ -194,6 +212,21 @@ func (m *GatewayMetrics) RecordInferenceRejected(reason string) {
 
 func (m *GatewayMetrics) RecordWorkerQueueDepth(workerID string, depth int) {
 	m.workerQueueDepth.WithLabelValues(strings.TrimSpace(workerID)).Set(float64(depth))
+}
+
+func (m *GatewayMetrics) RecordWorkerCounts(total int, healthy int) {
+	if total < 0 {
+		total = 0
+	}
+	if healthy < 0 {
+		healthy = 0
+	}
+	if healthy > total {
+		healthy = total
+	}
+	m.workersTotal.Set(float64(total))
+	m.healthyWorkersTotal.Set(float64(healthy))
+	m.unhealthyWorkersTotal.Set(float64(total - healthy))
 }
 
 func (m *GatewayMetrics) RecordWorkerHealthTransition(event string, fromStatus string, toStatus string) {

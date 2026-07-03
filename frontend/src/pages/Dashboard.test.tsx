@@ -151,6 +151,29 @@ describe('Dashboard', () => {
     expect(screen.getByText('7')).toBeInTheDocument()
   })
 
+  it('shows a prominent zero-worker warning', () => {
+    mocks.workers = { data: [], isLoading: false, isError: false }
+    mocks.stats = {
+      data: {
+        workers: { total: 0, healthy: 0 },
+        models: { available: 1 },
+        requests: { per_second: 0, queue_depth: 0 },
+        latency: { avg_ms: 0 },
+        gpu: { avg_utilization: 0 },
+        memory: { used_bytes: 0, total_bytes: 0 },
+        uptime_seconds: 300,
+      },
+      isLoading: false,
+      isError: false,
+    }
+
+    render(<Dashboard />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'No healthy inference workers are registered. The gateway is reachable, but inference requests will fail until a worker is restored.',
+    )
+  })
+
   it('renders dashboard serving summary from deployment history', async () => {
     mocks.deploymentAttempts = { data: [
       {

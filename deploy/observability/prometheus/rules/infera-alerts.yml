@@ -117,6 +117,17 @@ groups:
           description: More than 3 workers were marked unhealthy or removed by registry health checks in the last 10 minutes.
           runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferaworkerhealthtransitionshigh
 
+      - alert: InferaZeroHealthyWorkers
+        expr: infera_healthy_workers_total == 0
+        for: 3m
+        labels:
+          severity: critical
+          service: gateway
+        annotations:
+          summary: No healthy inference workers are registered
+          description: The gateway is reachable, but inference is unavailable because no healthy workers are registered.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/docs/reliability/zero-worker-detection.md#runbook
+
   - name: infera-worker-alerts
     rules:
       - alert: InferaWorkerHeartbeatAuthRejected

@@ -347,6 +347,14 @@ func (r *Router) completeBatchRoute(requestID string, result batchRouteResult) {
 }
 
 func (r *Router) validateModelAvailability(request *types.InferenceRequest) error {
+	healthyWorkers := r.registry.GetHealthyWorkers()
+	if len(healthyWorkers) == 0 {
+		return types.NewInferaError(
+			types.ErrorCodeNoWorkersAvailable,
+			"No healthy workers are currently available to serve the requested model.",
+		).WithRequestID(request.RequestID)
+	}
+
 	allWorkers := r.registry.GetWorkersForModel(request.ModelID)
 	if len(allWorkers) == 0 {
 		return types.NewInferaError(
