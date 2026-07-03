@@ -31,6 +31,9 @@ type GatewayMetrics struct {
 	inferenceTokens   prometheus.Counter
 	inferenceRejected *prometheus.CounterVec
 
+	routeDecisions           *prometheus.CounterVec
+	routeCandidatesEvaluated prometheus.Histogram
+
 	workerQueueDepth        *prometheus.GaugeVec
 	workersTotal            prometheus.Gauge
 	healthyWorkersTotal     prometheus.Gauge
@@ -103,6 +106,15 @@ func NewGatewayMetrics() *GatewayMetrics {
 			Name: "infera_gateway_inference_rejected_total",
 			Help: "Total number of inference requests rejected before worker dispatch.",
 		}, []string{"reason"}),
+		routeDecisions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "infera_route_decisions_total",
+			Help: "Total number of route decisions by strategy and result.",
+		}, []string{"strategy", "result"}),
+		routeCandidatesEvaluated: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "infera_route_candidates_evaluated",
+			Help:    "Number of workers evaluated for route decisions.",
+			Buckets: []float64{0, 1, 2, 3, 5, 8, 13, 21, 34},
+		}),
 		workerQueueDepth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "infera_gateway_worker_queue_depth",
 			Help: "Current request queue depth per worker, as reported by the last heartbeat.",
@@ -140,6 +152,8 @@ func NewGatewayMetrics() *GatewayMetrics {
 		m.batchWait,
 		m.inferenceTokens,
 		m.inferenceRejected,
+		m.routeDecisions,
+		m.routeCandidatesEvaluated,
 		m.workerQueueDepth,
 		m.workersTotal,
 		m.healthyWorkersTotal,
@@ -208,6 +222,21 @@ func (m *GatewayMetrics) RecordInferenceRejected(reason string) {
 		reasonLabel = "unknown"
 	}
 	m.inferenceRejected.WithLabelValues(reasonLabel).Inc()
+}
+
+func (m *GatewayMetrics) RecordRouteDecision(strategy string, result string, candidatesEvaluated int) {
+	strategyLabel := strings.TrimSpace(strategy)
+	if strategyLabel == "" {
+		strategyLabel = "unknown"
+	}
+	resultLabel := strings.TrimSpace(result)
+	if resultLabel == "" {
+		resultLabel = "unknown"
+	}
+	m.routeDecisions.WithLabelValues(strategyLabel, resultLabel).Inc()
+	if candidatesEvaluated >= 0 {
+		m.routeCandidatesEvaluated.Observe(float64(candidatesEvaluated))
+	}
 }
 
 func (m *GatewayMetrics) RecordWorkerQueueDepth(workerID string, depth int) {

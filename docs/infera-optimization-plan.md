@@ -88,6 +88,8 @@ Current limitation: circuit breaker state is not yet part of a rich route decisi
 
 Production compose includes Prometheus, Alertmanager, and Grafana. The stabilization release added metrics and alerts for overload rejections and worker health transitions. Existing metrics also cover gateway request behavior, inference totals, batch size, and batch wait.
 
+Route decision logging is now the next foundation for optimization work. The gateway emits structured route decision logs and Prometheus metrics for route decisions and candidates evaluated. See `docs/optimization/route-decision-logging.md`.
+
 Current limitation: Infera does not yet expose the main optimization metrics as first-class dashboards and reports: TTFT, TPOT, p95/p99 route latency by strategy, route decision quality, cache hit rate, and cost per 1M tokens.
 
 ### Cost tracking
@@ -224,6 +226,12 @@ Each workload should define:
 ## 7. Routing Optimization Roadmap
 
 Routing changes should follow benchmark instrumentation. Do not add new strategies until `infera-bench` can prove whether they improve the target metric.
+
+### `route_decision_logging`
+
+Status: implemented as the instrumentation foundation. The router enriches the existing route decision object with selected worker, strategy, reason, candidate count, selected provider/GPU metadata when available, and key worker load/latency signals. The gateway logs `route_decision` and `route_decision_failed` events and exports route decision metrics.
+
+This is not a routing strategy. It exists so future cost-aware and SLO-aware strategies can be evaluated with evidence.
 
 ### `min_latency`
 

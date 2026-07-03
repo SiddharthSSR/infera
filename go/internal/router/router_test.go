@@ -2,6 +2,8 @@ package router
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +51,125 @@ func TestRouteSoloRequestAvoidsFullBatchWait(t *testing.T) {
 	// first-request batch timeout is shortened.
 	if elapsed > 200*time.Millisecond {
 		t.Fatalf("expected shortened route wait (<200ms), took %v", elapsed)
+	}
+}
+
+func TestRouteDecisionIncludesSelectedWorkerSignals(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableBatching = false
+
+	r := New(cfg)
+	defer r.Stop()
+
+	if err := r.RegisterWorker(&types.WorkerInfo{
+		WorkerID: "worker-1",
+		Address:  "worker-1:8081",
+		Status:   types.WorkerStatusHealthy,
+		Tags: map[string]string{
+			"provider": "runpod",
+			"gpu_type": "A100_80GB",
+		},
+		LoadedModels: []types.LoadedModel{{ModelID: "model-1"}},
+		Stats: types.WorkerStats{
+			QueueDepth:     2,
+			ActiveRequests: 1,
+			GPUUtilization: 0.25,
+			P50LatencyMS:   623,
+			P99LatencyMS:   900,
+		},
+	}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	routed, err := r.Route(context.Background(), &types.InferenceRequest{
+		RequestID: "req-123",
+		ModelID:   "model-1",
+		Messages:  []types.Message{{Role: types.RoleUser, Content: "secret prompt"}},
+		APIKeyID:  "sk-secret",
+		Priority:  types.PriorityNormal,
+	})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+
+	decision := routed.RoutingDecision
+	if decision.RequestID != "req-123" {
+		t.Fatalf("expected request id req-123, got %q", decision.RequestID)
+	}
+	if decision.Model != "model-1" {
+		t.Fatalf("expected model-1, got %q", decision.Model)
+	}
+	if decision.Strategy != types.StrategyLeastLoaded {
+		t.Fatalf("expected least_loaded strategy, got %s", decision.Strategy)
+	}
+	if decision.SelectedWorker != "worker-1" {
+		t.Fatalf("expected selected worker worker-1, got %q", decision.SelectedWorker)
+	}
+	if decision.SelectedProvider != "runpod" {
+		t.Fatalf("expected provider runpod, got %q", decision.SelectedProvider)
+	}
+	if decision.SelectedGPUType != "A100_80GB" {
+		t.Fatalf("expected gpu type A100_80GB, got %q", decision.SelectedGPUType)
+	}
+	if decision.CandidatesEvaluated != 1 {
+		t.Fatalf("expected candidates evaluated=1, got %d", decision.CandidatesEvaluated)
+	}
+	if decision.WorkerQueueDepth == nil || *decision.WorkerQueueDepth != 2 {
+		t.Fatalf("expected worker queue depth=2, got %#v", decision.WorkerQueueDepth)
+	}
+	if decision.WorkerActiveRequests == nil || *decision.WorkerActiveRequests != 1 {
+		t.Fatalf("expected active requests=1, got %#v", decision.WorkerActiveRequests)
+	}
+	if decision.WorkerP50LatencyMS == nil || *decision.WorkerP50LatencyMS != 623 {
+		t.Fatalf("expected p50 latency=623, got %#v", decision.WorkerP50LatencyMS)
+	}
+	if decision.WorkerP99LatencyMS == nil || *decision.WorkerP99LatencyMS != 900 {
+		t.Fatalf("expected p99 latency=900, got %#v", decision.WorkerP99LatencyMS)
+	}
+	if decision.WorkerLoad == nil {
+		t.Fatalf("expected worker load to be captured")
+	}
+	if decision.DecisionTimestamp.IsZero() {
+		t.Fatalf("expected decision timestamp")
+	}
+}
+
+func TestRouteDecisionDoesNotExposePromptOrAPIKey(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableBatching = false
+
+	r := New(cfg)
+	defer r.Stop()
+
+	if err := r.RegisterWorker(&types.WorkerInfo{
+		WorkerID:     "worker-1",
+		Address:      "worker-1:8081",
+		Status:       types.WorkerStatusHealthy,
+		LoadedModels: []types.LoadedModel{{ModelID: "model-1"}},
+	}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	routed, err := r.Route(context.Background(), &types.InferenceRequest{
+		RequestID: "req-123",
+		ModelID:   "model-1",
+		Messages:  []types.Message{{Role: types.RoleUser, Content: "do not log this prompt"}},
+		APIKeyID:  "sk-do-not-log",
+		Priority:  types.PriorityNormal,
+	})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+
+	payload, err := json.Marshal(routed.RoutingDecision)
+	if err != nil {
+		t.Fatalf("marshal decision: %v", err)
+	}
+	body := string(payload)
+	for _, forbidden := range []string{"do not log this prompt", "sk-do-not-log"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("route decision leaked %q in %s", forbidden, body)
+		}
 	}
 }
 

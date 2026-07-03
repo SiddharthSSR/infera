@@ -14,10 +14,22 @@ const (
 
 // RoutingDecision captures why a worker was selected.
 type RoutingDecision struct {
-	Strategy            StrategyType `json:"strategy"`
-	Reason              string       `json:"reason"`
-	CandidatesEvaluated int          `json:"candidates_evaluated"`
-	SelectedWorkerScore float64      `json:"selected_worker_score"`
+	RequestID            string       `json:"request_id,omitempty"`
+	Model                string       `json:"model,omitempty"`
+	Strategy             StrategyType `json:"strategy"`
+	SelectedWorker       string       `json:"selected_worker,omitempty"`
+	SelectedProvider     string       `json:"selected_provider,omitempty"`
+	SelectedGPUType      string       `json:"selected_gpu_type,omitempty"`
+	Reason               string       `json:"reason"`
+	CandidatesEvaluated  int          `json:"candidates_evaluated"`
+	WorkerQueueDepth     *int         `json:"worker_queue_depth,omitempty"`
+	WorkerActiveRequests *int         `json:"worker_active_requests,omitempty"`
+	WorkerP50LatencyMS   *float64     `json:"worker_p50_latency_ms,omitempty"`
+	WorkerP95LatencyMS   *float64     `json:"worker_p95_latency_ms,omitempty"`
+	WorkerP99LatencyMS   *float64     `json:"worker_p99_latency_ms,omitempty"`
+	WorkerLoad           *float64     `json:"worker_load,omitempty"`
+	DecisionTimestamp    time.Time    `json:"decision_timestamp,omitempty"`
+	SelectedWorkerScore  float64      `json:"selected_worker_score"`
 }
 
 // RoutedRequest wraps an InferenceRequest with routing metadata.

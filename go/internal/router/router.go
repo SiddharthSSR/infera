@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,7 +146,7 @@ func (r *Router) Route(ctx context.Context, request *types.InferenceRequest) (*t
 	}
 
 	routed.WorkerID = selection.Worker.WorkerID
-	routed.RoutingDecision = selection.Decision
+	routed.RoutingDecision = r.enrichRoutingDecision(request, selection)
 	tracker.CurrentWorker = selection.Worker.WorkerID
 	return routed, nil
 }
@@ -188,7 +189,7 @@ func (r *Router) HandleFailure(request *types.RoutedRequest, err error) (*types.
 	}
 
 	retry.WorkerID = selection.Worker.WorkerID
-	retry.RoutingDecision = selection.Decision
+	retry.RoutingDecision = r.enrichRoutingDecision(request.Request, selection)
 	retry.RoutedAt = time.Now()
 
 	return retry, nil
@@ -291,7 +292,7 @@ func (r *Router) onBatchReady(batch *types.BatchContext) {
 		req.WorkerID = selection.Worker.WorkerID
 		req.BatchSize = batch.Size()
 		req.BatchWaitMS = batchWait.Milliseconds()
-		req.RoutingDecision = selection.Decision
+		req.RoutingDecision = r.enrichRoutingDecision(req.Request, selection)
 		req.RoutedAt = time.Now()
 		r.completeBatchRoute(req.Request.RequestID, batchRouteResult{routed: req})
 	}
@@ -401,6 +402,50 @@ func (r *Router) selectWorkerForModel(modelID string) (*strategy.Selection, erro
 		Priority:  types.PriorityNormal,
 	}
 	return r.selectWorker(req)
+}
+
+func (r *Router) enrichRoutingDecision(request *types.InferenceRequest, selection *strategy.Selection) types.RoutingDecision {
+	decision := selection.Decision
+	if request != nil {
+		decision.RequestID = request.RequestID
+		decision.Model = request.ModelID
+	}
+	decision.DecisionTimestamp = time.Now().UTC()
+
+	if selection.Worker == nil {
+		return decision
+	}
+
+	worker := selection.Worker.Clone()
+	decision.SelectedWorker = worker.WorkerID
+	decision.SelectedProvider = strings.TrimSpace(worker.Tags["provider"])
+	decision.SelectedGPUType = firstNonEmptyTag(worker.Tags, "gpu_type", "gpu", "provider_gpu_type")
+
+	queueDepth := worker.Stats.QueueDepth
+	activeRequests := worker.Stats.ActiveRequests
+	p50Latency := worker.Stats.P50LatencyMS
+	p99Latency := worker.Stats.P99LatencyMS
+	load := worker.Stats.CurrentLoad()
+
+	decision.WorkerQueueDepth = &queueDepth
+	decision.WorkerActiveRequests = &activeRequests
+	if p50Latency > 0 {
+		decision.WorkerP50LatencyMS = &p50Latency
+	}
+	if p99Latency > 0 {
+		decision.WorkerP99LatencyMS = &p99Latency
+	}
+	decision.WorkerLoad = &load
+	return decision
+}
+
+func firstNonEmptyTag(tags map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(tags[key]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // Stats contains router statistics.

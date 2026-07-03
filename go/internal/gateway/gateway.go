@@ -669,19 +669,14 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		if errors.Is(err, context.DeadlineExceeded) {
 			auditStatus = "failed"
 			auditErrorCode = "inference_timeout"
+			g.logRouteDecisionFailed(inferenceReq, "inference_timeout", "Inference request timed out")
 			g.writeError(w, http.StatusGatewayTimeout, "inference_timeout", "Inference request timed out")
 			return
 		}
-		g.log.Warn("inference.route_failed",
-			slog.String("request_id", requestID),
-			slog.String("key_id", keyID),
-			slog.String("model", req.Model),
-			slog.String("error", err.Error()),
-			slog.Int64("latency_ms", time.Since(requestStart).Milliseconds()),
-		)
 		if inferaErr, ok := err.(*types.InferaError); ok {
 			auditStatus = "failed"
 			auditErrorCode = string(inferaErr.Code)
+			g.logRouteDecisionFailed(inferenceReq, string(inferaErr.Code), inferaErr.Message)
 			status := g.errorCodeToStatus(inferaErr.Code)
 			if inferaErr.Code == types.ErrorCodeNoWorkersAvailable {
 				g.writeRetryableError(w, status, string(inferaErr.Code), "service_unavailable", inferaErr.Message)
@@ -693,9 +688,11 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		// No healthy workers → 503
 		auditStatus = "failed"
 		auditErrorCode = "no_workers"
+		g.logRouteDecisionFailed(inferenceReq, "no_workers", err.Error())
 		g.writeError(w, http.StatusServiceUnavailable, "no_workers", "No healthy workers available for model: "+req.Model)
 		return
 	}
+	g.logRouteDecision(routed.RoutingDecision)
 
 	// Get worker client
 	auditWorkerID = routed.WorkerID
@@ -997,6 +994,73 @@ func (g *Gateway) recordNonStreamingLatencyMetrics(model string, resp *types.Inf
 	g.metrics.RecordTPOT(model, false, (total-ttft)/time.Duration(completionTokens-1))
 }
 
+func (g *Gateway) logRouteDecision(decision types.RoutingDecision) {
+	if g.metrics != nil {
+		g.metrics.RecordRouteDecision(string(decision.Strategy), "success", decision.CandidatesEvaluated)
+	}
+
+	attrs := []any{
+		slog.String("request_id", decision.RequestID),
+		slog.String("model", decision.Model),
+		slog.String("strategy", string(decision.Strategy)),
+		slog.String("selected_worker", decision.SelectedWorker),
+		slog.Int("candidates_evaluated", decision.CandidatesEvaluated),
+		slog.String("reason", decision.Reason),
+		slog.Float64("selected_worker_score", decision.SelectedWorkerScore),
+	}
+	if decision.SelectedProvider != "" {
+		attrs = append(attrs, slog.String("selected_provider", decision.SelectedProvider))
+	}
+	if decision.SelectedGPUType != "" {
+		attrs = append(attrs, slog.String("selected_gpu_type", decision.SelectedGPUType))
+	}
+	if decision.WorkerQueueDepth != nil {
+		attrs = append(attrs, slog.Int("worker_queue_depth", *decision.WorkerQueueDepth))
+	}
+	if decision.WorkerActiveRequests != nil {
+		attrs = append(attrs, slog.Int("worker_active_requests", *decision.WorkerActiveRequests))
+	}
+	if decision.WorkerP50LatencyMS != nil {
+		attrs = append(attrs, slog.Float64("worker_p50_latency_ms", *decision.WorkerP50LatencyMS))
+	}
+	if decision.WorkerP95LatencyMS != nil {
+		attrs = append(attrs, slog.Float64("worker_p95_latency_ms", *decision.WorkerP95LatencyMS))
+	}
+	if decision.WorkerP99LatencyMS != nil {
+		attrs = append(attrs, slog.Float64("worker_p99_latency_ms", *decision.WorkerP99LatencyMS))
+	}
+	if decision.WorkerLoad != nil {
+		attrs = append(attrs, slog.Float64("worker_load", *decision.WorkerLoad))
+	}
+	if !decision.DecisionTimestamp.IsZero() {
+		attrs = append(attrs, slog.Time("decision_timestamp", decision.DecisionTimestamp))
+	}
+	g.log.Info("route_decision", attrs...)
+}
+
+func (g *Gateway) logRouteDecisionFailed(req *types.InferenceRequest, errorCode string, reason string) {
+	model := ""
+	requestID := ""
+	healthyWorkers := 0
+	if req != nil {
+		model = req.ModelID
+		requestID = req.RequestID
+	}
+	if g.router != nil {
+		healthyWorkers = len(g.router.GetWorkers("", true))
+	}
+	if g.metrics != nil {
+		g.metrics.RecordRouteDecision("", "failure", -1)
+	}
+	g.log.Warn("route_decision_failed",
+		slog.String("request_id", requestID),
+		slog.String("model", model),
+		slog.String("error_code", strings.TrimSpace(errorCode)),
+		slog.String("reason", strings.TrimSpace(reason)),
+		slog.Int("healthy_workers", healthyWorkers),
+	)
+}
+
 func (g *Gateway) handlePrometheusWorkerTargets(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
@@ -1281,7 +1345,8 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 			MaxBatchSize      int    `json:"max_batch_size"`
 			MaxSequenceLength int    `json:"max_sequence_length"`
 		} `json:"loaded_models"`
-		Stats struct {
+		GPUType string `json:"gpu_type"`
+		Stats   struct {
 			QueueDepth        int     `json:"queue_depth"`
 			ActiveRequests    int     `json:"active_requests"`
 			GPUUtilization    float64 `json:"gpu_utilization"`
@@ -1296,6 +1361,14 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON")
 		return
+	}
+	if req.Tags == nil {
+		req.Tags = map[string]string{}
+	}
+	if gpuType := strings.TrimSpace(req.GPUType); gpuType != "" && gpuType != "unknown" {
+		if strings.TrimSpace(req.Tags["gpu_type"]) == "" {
+			req.Tags["gpu_type"] = gpuType
+		}
 	}
 
 	// Convert to WorkerInfo

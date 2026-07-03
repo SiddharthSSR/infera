@@ -1,13 +1,17 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/pkg/types"
@@ -259,6 +263,84 @@ func TestHandleChatCompletionsRecordsBatchAndLatencyMetrics(t *testing.T) {
 	// takes the fast-path directly to the worker, so no batch metric is emitted.
 }
 
+func TestHandleChatCompletionsLogsRouteDecisionAndMetrics(t *testing.T) {
+	const modelID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
+	var logs bytes.Buffer
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusOK, `{
+			"request_id":"req-worker",
+			"model":"`+modelID+`",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6},
+			"latency":{"total_ms":25}
+		}`), nil
+	})
+	r := router.New(router.DefaultConfig())
+	t.Cleanup(r.Stop)
+	if err := r.RegisterWorker(&types.WorkerInfo{
+		WorkerID: "worker-1",
+		Address:  "worker.test:8081",
+		Status:   types.WorkerStatusHealthy,
+		Tags:     map[string]string{"provider": "runpod", "gpu_type": "A100_80GB"},
+		LoadedModels: []types.LoadedModel{
+			{ModelID: modelID},
+		},
+		Stats: types.WorkerStats{
+			QueueDepth:     0,
+			ActiveRequests: 1,
+			GPUUtilization: 0.25,
+			P50LatencyMS:   623,
+			P99LatencyMS:   900,
+		},
+	}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+	g := New(DefaultConfig(), r, nil)
+	g.log = slog.New(slog.NewJSONHandler(&logs, nil))
+	g.workerClients["worker-1"] = &WorkerClient{
+		address:             "worker.test:8081",
+		httpClient:          &http.Client{Transport: transport},
+		streamingHTTPClient: &http.Client{Transport: transport},
+		breaker:             NewCircuitBreaker(),
+	}
+
+	body := `{"model":"` + modelID + `","messages":[{"role":"user","content":"do not log this prompt"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-do-not-log")
+	rec := httptest.NewRecorder()
+
+	g.handleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	logBody := logs.String()
+	for _, want := range []string{
+		`"msg":"route_decision"`,
+		`"strategy":"least_loaded"`,
+		`"selected_worker":"worker-1"`,
+		`"selected_provider":"runpod"`,
+		`"selected_gpu_type":"A100_80GB"`,
+		`"candidates_evaluated":1`,
+		`"worker_p50_latency_ms":623`,
+	} {
+		if !strings.Contains(logBody, want) {
+			t.Fatalf("expected route log to contain %s, got logs:\n%s", want, logBody)
+		}
+	}
+	for _, forbidden := range []string{"do not log this prompt", "sk-do-not-log", "Authorization"} {
+		if strings.Contains(logBody, forbidden) {
+			t.Fatalf("route decision log leaked %q in logs:\n%s", forbidden, logBody)
+		}
+	}
+
+	if got := testutil.ToFloat64(g.metrics.routeDecisions.WithLabelValues("least_loaded", "success")); got != 1 {
+		t.Fatalf("expected successful route decision metric=1, got %v", got)
+	}
+}
+
 func TestHandleChatCompletionsStreamingReturnsSSEChunksAndDone(t *testing.T) {
 	t.Parallel()
 
@@ -504,9 +586,12 @@ func TestHandleChatCompletionsNoWorkersReturnsServiceUnavailable(t *testing.T) {
 	r := router.New(router.DefaultConfig())
 	t.Cleanup(r.Stop)
 	g := New(DefaultConfig(), r, nil)
+	var logs bytes.Buffer
+	g.log = slog.New(slog.NewJSONHandler(&logs, nil))
 
-	body := `{"model":"Qwen/Qwen2.5-7B-Instruct","messages":[{"role":"user","content":"hello"}]}`
+	body := `{"model":"Qwen/Qwen2.5-7B-Instruct","messages":[{"role":"user","content":"do not log failed prompt"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-failed-do-not-log")
 	rec := httptest.NewRecorder()
 
 	g.handleChatCompletions(rec, req)
@@ -527,6 +612,26 @@ func TestHandleChatCompletionsNoWorkersReturnsServiceUnavailable(t *testing.T) {
 	}
 	if payload["error"]["retryable"] != true {
 		t.Fatalf("expected retryable=true, got %#v", payload)
+	}
+
+	logBody := logs.String()
+	for _, want := range []string{
+		`"msg":"route_decision_failed"`,
+		`"model":"Qwen/Qwen2.5-7B-Instruct"`,
+		`"error_code":"no_workers_available"`,
+		`"healthy_workers":0`,
+	} {
+		if !strings.Contains(logBody, want) {
+			t.Fatalf("expected failed route log to contain %s, got logs:\n%s", want, logBody)
+		}
+	}
+	for _, forbidden := range []string{"do not log failed prompt", "sk-failed-do-not-log", "Authorization"} {
+		if strings.Contains(logBody, forbidden) {
+			t.Fatalf("failed route decision log leaked %q in logs:\n%s", forbidden, logBody)
+		}
+	}
+	if got := testutil.ToFloat64(g.metrics.routeDecisions.WithLabelValues("unknown", "failure")); got != 1 {
+		t.Fatalf("expected failed route decision metric=1, got %v", got)
 	}
 }
 

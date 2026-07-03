@@ -65,6 +65,8 @@ func TestGatewayMetricsRecordInference(t *testing.T) {
 	m.RecordTPOT("model-1", false, 25*time.Millisecond)
 	m.RecordBatch("model-1", 4, 40*time.Millisecond)
 	m.RecordInferenceRejected("overloaded")
+	m.RecordRouteDecision("least_loaded", "success", 3)
+	m.RecordRouteDecision("", "failure", 0)
 	m.RecordWorkerCounts(3, 2)
 	m.RecordWorkerHealthTransition("marked_unhealthy", "healthy", "unhealthy")
 
@@ -114,6 +116,16 @@ func TestGatewayMetricsRecordInference(t *testing.T) {
 		t.Fatalf("expected rejected inference count=1, got %v", rejected)
 	}
 
+	routeSuccess := testutil.ToFloat64(m.routeDecisions.WithLabelValues("least_loaded", "success"))
+	if routeSuccess != 1 {
+		t.Fatalf("expected route success count=1, got %v", routeSuccess)
+	}
+
+	routeFailure := testutil.ToFloat64(m.routeDecisions.WithLabelValues("unknown", "failure"))
+	if routeFailure != 1 {
+		t.Fatalf("expected route failure count=1, got %v", routeFailure)
+	}
+
 	if workersTotal := testutil.ToFloat64(m.workersTotal); workersTotal != 3 {
 		t.Fatalf("expected workers total=3, got %v", workersTotal)
 	}
@@ -148,6 +160,7 @@ func TestGatewayMetricsHandler(t *testing.T) {
 	m.RecordTPOT("model-1", false, 20*time.Millisecond)
 	m.RecordBatch("model-1", 2, 30*time.Millisecond)
 	m.RecordInferenceRejected("overloaded")
+	m.RecordRouteDecision("least_loaded", "success", 2)
 	m.RecordWorkerCounts(2, 1)
 	m.RecordWorkerHealthTransition("removed", "unhealthy", "offline")
 
@@ -173,6 +186,8 @@ func TestGatewayMetricsHandler(t *testing.T) {
 		"infera_gateway_batch_wait_seconds",
 		"infera_gateway_inference_tokens_total",
 		"infera_gateway_inference_rejected_total",
+		"infera_route_decisions_total",
+		"infera_route_candidates_evaluated",
 		"infera_workers_total",
 		"infera_healthy_workers_total",
 		"infera_unhealthy_workers_total",
