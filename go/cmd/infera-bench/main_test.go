@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -67,7 +68,7 @@ func TestSummarizeComputesPercentilesAndErrorRate(t *testing.T) {
 		{LatencyMS: 200, Usage: &usage{TotalTokens: 20}},
 		{LatencyMS: 300, Error: "boom"},
 	}
-	got := summarize(2, 3, levelRun{Samples: samples, Elapsed: time.Second})
+	got := summarize(2, 3, levelRun{Samples: samples, Elapsed: time.Second}, false)
 	if got.Successes != 2 || got.Errors != 1 {
 		t.Fatalf("unexpected success/error counts: %+v", got)
 	}
@@ -104,7 +105,7 @@ func TestRenderMarkdownIncludesLimitations(t *testing.T) {
 		}},
 	}
 	md := renderMarkdown(rep)
-	for _, want := range []string{"# Infera Benchmark Report", "Cost metrics are not implemented yet", "Route decision metrics are not implemented yet", "Approx TPOT", "Latency summarizes successful requests only"} {
+	for _, want := range []string{"# Infera Benchmark Report", "Cost metrics are not implemented yet", "Route decision metadata is available only when `--capture-route-decision` is enabled", "Approx TPOT", "Latency summarizes successful requests only"} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
 		}
@@ -119,7 +120,7 @@ func TestSummarizeFailedRequestLatencyDoesNotAffectSuccessLatency(t *testing.T) 
 			{LatencyMS: 120},
 			{LatencyMS: 1, Error: "fast failure"},
 		},
-	})
+	}, false)
 	if got.LatencyMS.P50 != 100 || got.LatencyMS.P95 != 120 || got.LatencyMS.P99 != 120 {
 		t.Fatalf("successful latency included failure sample: %+v", got.LatencyMS)
 	}
@@ -155,7 +156,7 @@ func TestRunRequestUsesAPIKeyAndParsesUsage(t *testing.T) {
 		}},
 		MaxTokens:   8,
 		Temperature: 0.1,
-	}, false)
+	}, false, false)
 	if got.Error != "" {
 		t.Fatalf("runRequest returned error: %s", got.Error)
 	}
@@ -192,7 +193,7 @@ func TestRunRequestRejectsNonStreamingResponseWithoutChoices(t *testing.T) {
 	got := runRequest(context.Background(), client, "https://example.test/v1/chat/completions", "test-model", "", prompt{
 		ID:       "hello",
 		Messages: []message{{Role: "user", Content: "Say hello."}},
-	}, false)
+	}, false, false)
 	if !strings.Contains(got.Error, "missing choices") {
 		t.Fatalf("expected missing choices error, got %q", got.Error)
 	}
@@ -203,7 +204,7 @@ func TestRunRequestRejectsNonStreamingResponseWithEmptyChoice(t *testing.T) {
 	got := runRequest(context.Background(), client, "https://example.test/v1/chat/completions", "test-model", "", prompt{
 		ID:       "hello",
 		Messages: []message{{Role: "user", Content: "Say hello."}},
-	}, false)
+	}, false, false)
 	if !strings.Contains(got.Error, "did not include assistant content") {
 		t.Fatalf("expected empty choice error, got %q", got.Error)
 	}
@@ -214,9 +215,103 @@ func TestRunRequestAcceptsNonStreamingResponseWithChoiceContent(t *testing.T) {
 	got := runRequest(context.Background(), client, "https://example.test/v1/chat/completions", "test-model", "", prompt{
 		ID:       "hello",
 		Messages: []message{{Role: "user", Content: "Say hello."}},
-	}, false)
+	}, false, false)
 	if got.Error != "" {
 		t.Fatalf("expected success, got error %q", got.Error)
+	}
+}
+
+func TestRunRequestCapturesRouteDecisionWhenEnabled(t *testing.T) {
+	routeHeader := encodeTestRouteDecisionHeader(t, routeDecisionMetadata{
+		RequestID:           "req-test",
+		Model:               "test-model",
+		Strategy:            "least_loaded",
+		SelectedWorker:      "worker-1",
+		SelectedProvider:    "runpod",
+		CandidatesEvaluated: intPtr(2),
+	})
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get("X-Infera-Debug-Route"); got != "true" {
+			t.Fatalf("expected debug route header, got %q", got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type":            []string{"application/json"},
+				"X-Infera-Route-Decision": []string{routeHeader},
+			},
+			Body: ioNopCloser(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`),
+		}, nil
+	})}
+	got := runRequest(context.Background(), client, "https://example.test/v1/chat/completions", "test-model", "secret", prompt{
+		ID:       "hello",
+		Messages: []message{{Role: "user", Content: "do not expose"}},
+	}, false, true)
+	if got.Error != "" {
+		t.Fatalf("expected success, got error %q", got.Error)
+	}
+	if got.RouteDecision == nil {
+		t.Fatal("expected route decision metadata")
+	}
+	if got.RouteDecision.Strategy != "least_loaded" || got.RouteDecision.SelectedWorker != "worker-1" {
+		t.Fatalf("unexpected route decision: %+v", got.RouteDecision)
+	}
+}
+
+func TestRunRequestDoesNotRequestRouteDecisionByDefault(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get("X-Infera-Debug-Route"); got != "" {
+			t.Fatalf("expected no debug route header by default, got %q", got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       ioNopCloser(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`),
+		}, nil
+	})}
+	got := runRequest(context.Background(), client, "https://example.test/v1/chat/completions", "test-model", "", prompt{
+		ID:       "hello",
+		Messages: []message{{Role: "user", Content: "Say hello."}},
+	}, false, false)
+	if got.Error != "" {
+		t.Fatalf("expected success, got error %q", got.Error)
+	}
+	if got.RouteDecision != nil {
+		t.Fatalf("expected no route decision metadata by default, got %+v", got.RouteDecision)
+	}
+}
+
+func TestSummarizeAndMarkdownReportRouteDecisionMetadata(t *testing.T) {
+	candidates := 2
+	got := summarize(1, 3, levelRun{
+		Elapsed: time.Second,
+		Samples: []sample{
+			{LatencyMS: 100, RouteDecision: &routeDecisionMetadata{Strategy: "least_loaded", SelectedWorker: "worker-1", CandidatesEvaluated: &candidates}},
+			{LatencyMS: 110, RouteDecision: &routeDecisionMetadata{Strategy: "affinity", SelectedWorker: "worker-1", CandidatesEvaluated: &candidates}},
+			{LatencyMS: 120},
+		},
+	}, true)
+	if got.RouteDecision == nil {
+		t.Fatal("expected route decision summary")
+	}
+	if got.RouteDecision.StrategiesObserved["least_loaded"] != 1 || got.RouteDecision.StrategiesObserved["affinity"] != 1 {
+		t.Fatalf("unexpected strategies: %+v", got.RouteDecision.StrategiesObserved)
+	}
+	if got.RouteDecision.MissingMetadataCount != 1 {
+		t.Fatalf("unexpected missing metadata count: %d", got.RouteDecision.MissingMetadataCount)
+	}
+	if got.RouteDecision.CandidatesEvaluated == nil || got.RouteDecision.CandidatesEvaluated.P50 != 2 {
+		t.Fatalf("unexpected candidate summary: %+v", got.RouteDecision.CandidatesEvaluated)
+	}
+	md := renderMarkdown(report{
+		RunID:                "bench_routes",
+		CaptureRouteDecision: true,
+		Results:              []concurrencyResult{got},
+	})
+	for _, want := range []string{"## Route Decisions", "least_loaded=1", "affinity=1", "worker-1=2", "Missing route metadata"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
 	}
 }
 
@@ -283,4 +378,17 @@ func staticJSONTransport(body string) http.RoundTripper {
 			Body:       ioNopCloser(body),
 		}, nil
 	})
+}
+
+func encodeTestRouteDecisionHeader(t *testing.T, metadata routeDecisionMetadata) string {
+	t.Helper()
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func intPtr(v int) *int {
+	return &v
 }

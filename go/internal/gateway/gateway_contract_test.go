@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -338,6 +339,117 @@ func TestHandleChatCompletionsLogsRouteDecisionAndMetrics(t *testing.T) {
 
 	if got := testutil.ToFloat64(g.metrics.routeDecisions.WithLabelValues("least_loaded", "success")); got != 1 {
 		t.Fatalf("expected successful route decision metric=1, got %v", got)
+	}
+}
+
+func TestHandleChatCompletionsRouteDecisionHeaderAbsentByDefault(t *testing.T) {
+	t.Parallel()
+
+	const modelID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
+	g := newGatewayWithTestWorker(t, modelID, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusOK, `{
+			"request_id":"req-worker",
+			"model":"`+modelID+`",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]
+		}`), nil
+	}))
+
+	body := `{"model":"` + modelID + `","messages":[{"role":"user","content":"say hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	g.handleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get(headerRouteDecision); got != "" {
+		t.Fatalf("expected no route decision header by default, got %q", got)
+	}
+}
+
+func TestHandleChatCompletionsRouteDecisionHeaderWhenRequestedIsSafe(t *testing.T) {
+	t.Parallel()
+
+	const modelID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
+	g := newGatewayWithTestWorker(t, modelID, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusOK, `{
+			"request_id":"req-worker",
+			"model":"`+modelID+`",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]
+		}`), nil
+	}))
+
+	body := `{"model":"` + modelID + `","messages":[{"role":"user","content":"do not expose this prompt"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-do-not-expose")
+	req.Header.Set(headerDebugRouteDecision, "true")
+	rec := httptest.NewRecorder()
+
+	g.handleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rawHeader := rec.Header().Get(headerRouteDecision)
+	if rawHeader == "" {
+		t.Fatal("expected route decision header when requested")
+	}
+	metadata, rawJSON := decodeRouteDecisionHeader(t, rawHeader)
+	if metadata["model"] != modelID {
+		t.Fatalf("expected model %q, got %#v", modelID, metadata["model"])
+	}
+	if metadata["strategy"] != "least_loaded" {
+		t.Fatalf("expected least_loaded strategy, got %#v", metadata["strategy"])
+	}
+	if metadata["selected_worker"] != "worker-1" {
+		t.Fatalf("expected selected worker, got %#v", metadata["selected_worker"])
+	}
+	if metadata["candidates_evaluated"] != float64(1) {
+		t.Fatalf("expected one candidate evaluated, got %#v", metadata["candidates_evaluated"])
+	}
+	for _, forbidden := range []string{"do not expose this prompt", "sk-do-not-expose", "Authorization", "messages"} {
+		if strings.Contains(rawJSON, forbidden) {
+			t.Fatalf("route decision header leaked %q in %s", forbidden, rawJSON)
+		}
+	}
+}
+
+func TestHandleChatCompletionsStreamingRouteDecisionHeaderWhenRequested(t *testing.T) {
+	t.Parallel()
+
+	const modelID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
+	g := newGatewayWithTestWorker(t, modelID, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/infer/stream" {
+			t.Fatalf("unexpected worker path: %s", r.URL.Path)
+		}
+		return jsonHTTPResponse(http.StatusOK, "{\"delta\":\"hello\"}\n{\"finish_reason\":\"stop\"}\n"), nil
+	}))
+
+	body := `{"model":"` + modelID + `","stream":true,"messages":[{"role":"user","content":"say hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set(headerDebugRouteDecision, "true")
+	rec := httptest.NewRecorder()
+
+	g.handleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/event-stream") {
+		t.Fatalf("expected event-stream content-type, got %q", got)
+	}
+	rawHeader := rec.Header().Get(headerRouteDecision)
+	if rawHeader == "" {
+		t.Fatal("expected route decision header before stream body")
+	}
+	metadata, _ := decodeRouteDecisionHeader(t, rawHeader)
+	if metadata["strategy"] != "least_loaded" || metadata["selected_worker"] != "worker-1" {
+		t.Fatalf("unexpected streaming route metadata: %#v", metadata)
 	}
 }
 
@@ -752,4 +864,17 @@ func jsonHTTPResponse(status int, body string) *http.Response {
 		},
 		Body: io.NopCloser(strings.NewReader(body)),
 	}
+}
+
+func decodeRouteDecisionHeader(t *testing.T, raw string) (map[string]any, string) {
+	t.Helper()
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		t.Fatalf("decode route decision header: %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		t.Fatalf("unmarshal route decision header %q: %v", string(data), err)
+	}
+	return metadata, string(data)
 }

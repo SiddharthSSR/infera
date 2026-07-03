@@ -312,7 +312,7 @@ func (g *Gateway) handleCORS(next http.HandlerFunc) http.HandlerFunc {
 				w.Header().Set("Vary", "Origin")
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Worker-Token, X-API-Key")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Worker-Token, X-API-Key, X-Infera-Debug-Route")
 
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
@@ -670,6 +670,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			auditStatus = "failed"
 			auditErrorCode = "inference_timeout"
 			g.logRouteDecisionFailed(inferenceReq, "inference_timeout", "Inference request timed out")
+			setFailedRouteDecisionHeader(w, r, inferenceReq, "Inference request timed out")
 			g.writeError(w, http.StatusGatewayTimeout, "inference_timeout", "Inference request timed out")
 			return
 		}
@@ -677,6 +678,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			auditStatus = "failed"
 			auditErrorCode = string(inferaErr.Code)
 			g.logRouteDecisionFailed(inferenceReq, string(inferaErr.Code), inferaErr.Message)
+			setFailedRouteDecisionHeader(w, r, inferenceReq, inferaErr.Message)
 			status := g.errorCodeToStatus(inferaErr.Code)
 			if inferaErr.Code == types.ErrorCodeNoWorkersAvailable {
 				g.writeRetryableError(w, status, string(inferaErr.Code), "service_unavailable", inferaErr.Message)
@@ -689,10 +691,12 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		auditStatus = "failed"
 		auditErrorCode = "no_workers"
 		g.logRouteDecisionFailed(inferenceReq, "no_workers", err.Error())
+		setFailedRouteDecisionHeader(w, r, inferenceReq, "No healthy workers available for model: "+req.Model)
 		g.writeError(w, http.StatusServiceUnavailable, "no_workers", "No healthy workers available for model: "+req.Model)
 		return
 	}
 	g.logRouteDecision(routed.RoutingDecision)
+	setRouteDecisionHeader(w, r, routed.RoutingDecision)
 
 	// Get worker client
 	auditWorkerID = routed.WorkerID

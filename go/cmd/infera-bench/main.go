@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -26,18 +27,19 @@ import (
 const defaultTimeout = 60 * time.Second
 
 type config struct {
-	BaseURL     string
-	APIKey      string
-	APIKeyFile  string
-	Model       string
-	Workload    string
-	Concurrency []int
-	Requests    int
-	Warmup      int
-	Stream      bool
-	Timeout     time.Duration
-	OutJSON     string
-	OutMD       string
+	BaseURL              string
+	APIKey               string
+	APIKeyFile           string
+	Model                string
+	Workload             string
+	Concurrency          []int
+	Requests             int
+	Warmup               int
+	Stream               bool
+	Timeout              time.Duration
+	OutJSON              string
+	OutMD                string
+	CaptureRouteDecision bool
 }
 
 type workload struct {
@@ -91,11 +93,29 @@ type streamChunk struct {
 }
 
 type sample struct {
-	LatencyMS float64
-	TTFTMS    *float64
-	TPOTMS    []float64
-	Usage     *usage
-	Error     string
+	LatencyMS     float64
+	TTFTMS        *float64
+	TPOTMS        []float64
+	Usage         *usage
+	RouteDecision *routeDecisionMetadata
+	Error         string
+}
+
+type routeDecisionMetadata struct {
+	RequestID            string   `json:"request_id,omitempty"`
+	Model                string   `json:"model,omitempty"`
+	Strategy             string   `json:"strategy,omitempty"`
+	SelectedWorker       string   `json:"selected_worker,omitempty"`
+	SelectedProvider     string   `json:"selected_provider,omitempty"`
+	SelectedGPUType      string   `json:"selected_gpu_type,omitempty"`
+	Reason               string   `json:"reason,omitempty"`
+	CandidatesEvaluated  *int     `json:"candidates_evaluated,omitempty"`
+	WorkerQueueDepth     *int     `json:"worker_queue_depth,omitempty"`
+	WorkerActiveRequests *int     `json:"worker_active_requests,omitempty"`
+	WorkerP50LatencyMS   *float64 `json:"worker_p50_latency_ms,omitempty"`
+	WorkerP95LatencyMS   *float64 `json:"worker_p95_latency_ms,omitempty"`
+	WorkerLoad           *float64 `json:"worker_load,omitempty"`
+	DecisionTimestamp    string   `json:"decision_timestamp,omitempty"`
 }
 
 type levelRun struct {
@@ -104,36 +124,45 @@ type levelRun struct {
 }
 
 type report struct {
-	RunID       string              `json:"run_id"`
-	StartedAt   time.Time           `json:"started_at"`
-	CompletedAt time.Time           `json:"completed_at"`
-	BaseURL     string              `json:"base_url"`
-	Model       string              `json:"model"`
-	Workload    string              `json:"workload"`
-	Streaming   bool                `json:"streaming"`
-	GitCommit   string              `json:"git_commit,omitempty"`
-	Results     []concurrencyResult `json:"concurrency_results"`
+	RunID                string              `json:"run_id"`
+	StartedAt            time.Time           `json:"started_at"`
+	CompletedAt          time.Time           `json:"completed_at"`
+	BaseURL              string              `json:"base_url"`
+	Model                string              `json:"model"`
+	Workload             string              `json:"workload"`
+	Streaming            bool                `json:"streaming"`
+	CaptureRouteDecision bool                `json:"capture_route_decision,omitempty"`
+	GitCommit            string              `json:"git_commit,omitempty"`
+	Results              []concurrencyResult `json:"concurrency_results"`
 }
 
 type concurrencyResult struct {
-	Concurrency          int            `json:"concurrency"`
-	Requests             int            `json:"requests"`
-	Successes            int            `json:"successes"`
-	Errors               int            `json:"errors"`
-	ErrorRate            float64        `json:"error_rate"`
-	RequestsPerSec       float64        `json:"requests_per_sec"`
-	TokensPerSec         *float64       `json:"tokens_per_sec,omitempty"`
-	LatencyMS            metricSummary  `json:"latency_ms"`
-	FailedLatencyMS      *metricSummary `json:"failed_latency_ms,omitempty"`
-	TTFTMS               *metricSummary `json:"ttft_ms,omitempty"`
-	TPOTMS               *metricSummary `json:"tpot_ms,omitempty"`
-	RepresentativeErrors []string       `json:"representative_errors,omitempty"`
+	Concurrency          int                   `json:"concurrency"`
+	Requests             int                   `json:"requests"`
+	Successes            int                   `json:"successes"`
+	Errors               int                   `json:"errors"`
+	ErrorRate            float64               `json:"error_rate"`
+	RequestsPerSec       float64               `json:"requests_per_sec"`
+	TokensPerSec         *float64              `json:"tokens_per_sec,omitempty"`
+	LatencyMS            metricSummary         `json:"latency_ms"`
+	FailedLatencyMS      *metricSummary        `json:"failed_latency_ms,omitempty"`
+	TTFTMS               *metricSummary        `json:"ttft_ms,omitempty"`
+	TPOTMS               *metricSummary        `json:"tpot_ms,omitempty"`
+	RouteDecision        *routeDecisionSummary `json:"route_decision,omitempty"`
+	RepresentativeErrors []string              `json:"representative_errors,omitempty"`
 }
 
 type metricSummary struct {
 	P50 float64 `json:"p50"`
 	P95 float64 `json:"p95"`
 	P99 float64 `json:"p99"`
+}
+
+type routeDecisionSummary struct {
+	StrategiesObserved      map[string]int `json:"strategies_observed,omitempty"`
+	SelectedWorkersObserved map[string]int `json:"selected_workers_observed,omitempty"`
+	CandidatesEvaluated     *metricSummary `json:"candidates_evaluated,omitempty"`
+	MissingMetadataCount    int            `json:"missing_metadata_count"`
 }
 
 func main() {
@@ -164,14 +193,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 	client := &http.Client{Timeout: cfg.Timeout}
 	started := time.Now().UTC()
 	rep := report{
-		RunID:     "bench_" + started.Format("20060102_150405"),
-		StartedAt: started,
-		BaseURL:   strings.TrimRight(cfg.BaseURL, "/"),
-		Model:     cfg.Model,
-		Workload:  cfg.Workload,
-		Streaming: cfg.Stream,
-		GitCommit: gitCommit(),
-		Results:   make([]concurrencyResult, 0, len(cfg.Concurrency)),
+		RunID:                "bench_" + started.Format("20060102_150405"),
+		StartedAt:            started,
+		BaseURL:              strings.TrimRight(cfg.BaseURL, "/"),
+		Model:                cfg.Model,
+		Workload:             cfg.Workload,
+		Streaming:            cfg.Stream,
+		CaptureRouteDecision: cfg.CaptureRouteDecision,
+		GitCommit:            gitCommit(),
+		Results:              make([]concurrencyResult, 0, len(cfg.Concurrency)),
 	}
 
 	for _, c := range cfg.Concurrency {
@@ -185,7 +215,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("benchmark concurrency %d: %w", c, err)
 		}
-		rep.Results = append(rep.Results, summarize(c, cfg.Requests, result))
+		rep.Results = append(rep.Results, summarize(c, cfg.Requests, result, cfg.CaptureRouteDecision))
 	}
 
 	rep.CompletedAt = time.Now().UTC()
@@ -230,6 +260,7 @@ func parseFlags(args []string) (config, error) {
 	fs.IntVar(&cfg.Requests, "requests", 3, "measured requests per concurrency level")
 	fs.IntVar(&cfg.Warmup, "warmup", 0, "warmup requests per concurrency level")
 	fs.BoolVar(&cfg.Stream, "stream", false, "use streaming chat completions")
+	fs.BoolVar(&cfg.CaptureRouteDecision, "capture-route-decision", false, "request and report safe route decision response metadata")
 	fs.StringVar(&timeout, "timeout", defaultTimeout.String(), "per-request timeout")
 	fs.StringVar(&cfg.OutJSON, "out-json", "", "JSON report path")
 	fs.StringVar(&cfg.OutMD, "out-md", "", "Markdown report path")
@@ -345,7 +376,7 @@ func runLevel(ctx context.Context, client *http.Client, cfg config, wl workload,
 			defer wg.Done()
 			for idx := range jobs {
 				p := wl.Prompts[idx%len(wl.Prompts)]
-				results <- runRequest(ctx, client, endpoint, cfg.Model, apiKey, p, cfg.Stream)
+				results <- runRequest(ctx, client, endpoint, cfg.Model, apiKey, p, cfg.Stream, cfg.CaptureRouteDecision)
 			}
 		}()
 	}
@@ -365,7 +396,7 @@ func runLevel(ctx context.Context, client *http.Client, cfg config, wl workload,
 	return levelRun{Samples: out, Elapsed: elapsed}, nil
 }
 
-func runRequest(ctx context.Context, client *http.Client, endpoint, model, apiKey string, p prompt, stream bool) sample {
+func runRequest(ctx context.Context, client *http.Client, endpoint, model, apiKey string, p prompt, stream bool, captureRouteDecision bool) sample {
 	body := chatRequest{
 		Model:       model,
 		Messages:    p.Messages,
@@ -389,6 +420,9 @@ func runRequest(ctx context.Context, client *http.Client, endpoint, model, apiKe
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	if captureRouteDecision {
+		req.Header.Set("X-Infera-Debug-Route", "true")
+	}
 
 	start := time.Now()
 	resp, err := client.Do(req)
@@ -398,16 +432,19 @@ func runRequest(ctx context.Context, client *http.Client, endpoint, model, apiKe
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg := readErrorBody(resp.Body)
-		return sample{LatencyMS: sinceMS(start), Error: fmt.Sprintf("http %d: %s", resp.StatusCode, msg)}
+		return sample{LatencyMS: sinceMS(start), RouteDecision: parseRouteDecisionHeader(resp.Header), Error: fmt.Sprintf("http %d: %s", resp.StatusCode, msg)}
 	}
+	routeDecision := parseRouteDecisionHeader(resp.Header)
 	if stream {
-		return readStream(resp.Body, start)
+		result := readStream(resp.Body, start)
+		result.RouteDecision = routeDecision
+		return result
 	}
 	var parsed chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return sample{LatencyMS: sinceMS(start), Error: "decode response: " + err.Error()}
 	}
-	result := sample{LatencyMS: sinceMS(start)}
+	result := sample{LatencyMS: sinceMS(start), RouteDecision: routeDecision}
 	if parsed.Usage.TotalTokens > 0 || parsed.Usage.PromptTokens > 0 || parsed.Usage.CompletionTokens > 0 {
 		result.Usage = &parsed.Usage
 	}
@@ -415,6 +452,22 @@ func runRequest(ctx context.Context, client *http.Client, endpoint, model, apiKe
 		result.Error = err.Error()
 	}
 	return result
+}
+
+func parseRouteDecisionHeader(header http.Header) *routeDecisionMetadata {
+	raw := strings.TrimSpace(header.Get("X-Infera-Route-Decision"))
+	if raw == "" {
+		return nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil
+	}
+	var metadata routeDecisionMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return nil
+	}
+	return &metadata
 }
 
 func validateChatResponse(resp chatResponse) error {
@@ -511,7 +564,7 @@ func mergeUsage(current, next *usage) *usage {
 	return current
 }
 
-func summarize(concurrency, requested int, run levelRun) concurrencyResult {
+func summarize(concurrency, requested int, run levelRun, captureRouteDecision bool) concurrencyResult {
 	samples := run.Samples
 	latencies := make([]float64, 0, len(samples))
 	failedLatencies := make([]float64, 0)
@@ -520,9 +573,16 @@ func summarize(concurrency, requested int, run levelRun) concurrencyResult {
 	errorsOut := []string{}
 	successes := 0
 	totalTokens := 0
+	strategies := map[string]int{}
+	selectedWorkers := map[string]int{}
+	candidatesEvaluated := []float64{}
+	missingRouteMetadata := 0
 
 	for _, s := range samples {
 		if s.Error != "" {
+			if captureRouteDecision && s.RouteDecision == nil {
+				missingRouteMetadata++
+			}
 			if s.LatencyMS > 0 {
 				failedLatencies = append(failedLatencies, s.LatencyMS)
 			}
@@ -532,6 +592,21 @@ func summarize(concurrency, requested int, run levelRun) concurrencyResult {
 			continue
 		}
 		successes++
+		if captureRouteDecision {
+			if s.RouteDecision == nil {
+				missingRouteMetadata++
+			} else {
+				if s.RouteDecision.Strategy != "" {
+					strategies[s.RouteDecision.Strategy]++
+				}
+				if s.RouteDecision.SelectedWorker != "" {
+					selectedWorkers[s.RouteDecision.SelectedWorker]++
+				}
+				if s.RouteDecision.CandidatesEvaluated != nil {
+					candidatesEvaluated = append(candidatesEvaluated, float64(*s.RouteDecision.CandidatesEvaluated))
+				}
+			}
+		}
 		if s.LatencyMS > 0 {
 			latencies = append(latencies, s.LatencyMS)
 		}
@@ -571,6 +646,18 @@ func summarize(concurrency, requested int, run levelRun) concurrencyResult {
 	if len(tpots) > 0 {
 		v := summarizeMetric(tpots)
 		result.TPOTMS = &v
+	}
+	if captureRouteDecision {
+		routeSummary := routeDecisionSummary{
+			StrategiesObserved:      strategies,
+			SelectedWorkersObserved: selectedWorkers,
+			MissingMetadataCount:    missingRouteMetadata,
+		}
+		if len(candidatesEvaluated) > 0 {
+			v := summarizeMetric(candidatesEvaluated)
+			routeSummary.CandidatesEvaluated = &v
+		}
+		result.RouteDecision = &routeSummary
 	}
 	return result
 }
@@ -644,9 +731,31 @@ func renderMarkdown(rep report) string {
 	if !wroteError {
 		fmt.Fprintf(&b, "No representative errors recorded.\n")
 	}
+	if rep.CaptureRouteDecision {
+		fmt.Fprintf(&b, "\n## Route Decisions\n\n")
+		fmt.Fprintf(&b, "| Concurrency | Strategies observed | Selected workers observed | Candidates evaluated p50/p95/p99 | Missing route metadata |\n")
+		fmt.Fprintf(&b, "| ---: | --- | --- | --- | ---: |\n")
+		for _, r := range rep.Results {
+			if r.RouteDecision == nil {
+				fmt.Fprintf(&b, "| %d | n/a | n/a | n/a | %d |\n", r.Concurrency, r.Requests)
+				continue
+			}
+			fmt.Fprintf(&b, "| %d | %s | %s | %s | %d |\n",
+				r.Concurrency,
+				formatCounts(r.RouteDecision.StrategiesObserved),
+				formatCounts(r.RouteDecision.SelectedWorkersObserved),
+				formatOptionalMetric(r.RouteDecision.CandidatesEvaluated),
+				r.RouteDecision.MissingMetadataCount,
+			)
+		}
+	}
 	fmt.Fprintf(&b, "\n## MVP Limitations\n\n")
 	fmt.Fprintf(&b, "- Cost metrics are not implemented yet.\n")
-	fmt.Fprintf(&b, "- Route decision metrics are not implemented yet.\n")
+	if rep.CaptureRouteDecision {
+		fmt.Fprintf(&b, "- Route decision metadata is opt-in and limited to safe response header fields.\n")
+	} else {
+		fmt.Fprintf(&b, "- Route decision metadata is available only when `--capture-route-decision` is enabled.\n")
+	}
 	fmt.Fprintf(&b, "- TTFT is measured only for streaming responses with a non-empty content delta.\n")
 	fmt.Fprintf(&b, "- TPOT is approximate in streaming mode because token boundaries are inferred from content chunks unless usage metadata is present.\n")
 	return b.String()
@@ -720,6 +829,22 @@ func formatOptionalFloat(v *float64) string {
 		return "n/a"
 	}
 	return fmt.Sprintf("%.2f", *v)
+}
+
+func formatCounts(values map[string]int) string {
+	if len(values) == 0 {
+		return "n/a"
+	}
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", sanitizeInline(k), values[k]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func sanitizeInline(s string) string {

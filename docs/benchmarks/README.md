@@ -97,14 +97,27 @@ The MVP reports:
 - streaming TTFT p50/p95/p99 when a non-empty content delta is observed;
 - Approx TPOT p50/p95/p99 from streaming inter-delta timing.
 
+## Route Decision Capture
+
+Use `--capture-route-decision` when you need benchmark reports to include safe routing metadata:
+
+```bash
+go run ./cmd/infera-bench \
+  --base-url https://inferai.co.in \
+  --api-key-file ../.secrets/prod-smoke-key.txt \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --workload ../bench/workloads/short_chat.yaml \
+  --capture-route-decision
+```
+
+The flag sends `X-Infera-Debug-Route: true` and reads the gateway's `X-Infera-Route-Decision` response header. Reports summarize strategies observed, selected workers observed, candidates evaluated, and missing route metadata. The header is opt-in and excludes prompt text, chat messages, API keys, authorization headers, worker tokens, provider credentials, and raw response bodies.
+
 ## Intentional MVP Gaps
 
 The MVP does not implement:
 
 - cost per request;
 - cost per 1M tokens;
-- selected worker/provider extraction;
-- route decision metrics;
 - p95/p99 routing decisions;
 - SLO-aware routing;
 - cost-aware routing;
