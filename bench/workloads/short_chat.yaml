@@ -13,7 +13,7 @@ prompts:
   - id: short_extract
     messages:
       - role: user
-        content: Extract the two key nouns from this sentence: Fast inference keeps interactive products usable.
+        content: "Extract the two key nouns from this sentence: Fast inference keeps interactive products usable."
     max_tokens: 24
     temperature: 0
     tags:
