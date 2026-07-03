@@ -142,6 +142,8 @@ Use this procedure when production is reachable but inference fails, or when `/h
    - Stopped/terminated instance with zero workers means serving capacity is absent.
    - Provider active count mismatch should be treated as a reconciliation signal, not as proof of serving capacity.
 
+   For RunPod-specific diagnosis of a provider-running instance that never registers with the gateway, see [RunPod Worker Registration Reliability](./runpod-worker-registration.md).
+
 5. Inspect worker logs through the provider or deployment tooling.
 
    Look for:
