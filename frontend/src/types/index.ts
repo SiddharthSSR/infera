@@ -94,6 +94,18 @@ export type ProviderType = 'runpod' | 'vastai' | 'lambda' | 'mock';
 export type KnownGPUType = 'RTX_4090' | 'RTX_4080' | 'A100_40GB' | 'A100_80GB' | 'H100' | 'L40S';
 export type GPUType = KnownGPUType | (string & {});
 export type InstanceStatus = 'pending' | 'provisioning' | 'running' | 'stopping' | 'stopped' | 'terminating' | 'terminated' | 'error';
+export type WorkerRegistrationStatus =
+  | 'pending'
+  | 'provider_running_no_network'
+  | 'provider_running_worker_unregistered'
+  | 'worker_unreachable'
+  | 'worker_health_unavailable'
+  | 'model_loading'
+  | 'model_load_failed'
+  | 'registration_failed'
+  | 'heartbeat_missing'
+  | 'registered_unhealthy'
+  | 'ready';
 
 export interface Instance {
   id: string;
@@ -111,6 +123,15 @@ export interface Instance {
   ssh_port?: number;
   worker_id?: string;
   models?: string[];
+  worker_registration_status?: WorkerRegistrationStatus;
+  worker_registration_deadline?: string;
+  last_worker_registration_error?: string;
+  last_worker_registration_check_at?: string;
+  worker_registered_at?: string;
+  worker_last_heartbeat_at?: string;
+  worker_health_url?: string;
+  provider_network_ready?: boolean;
+  provider_network_error?: string;
   cost_per_hour: number;
   spot_instance: boolean;
   created_at: string;

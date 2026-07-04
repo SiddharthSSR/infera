@@ -63,6 +63,42 @@ describe('getInstanceReadiness', () => {
     expect(readiness.verified).toBe(false);
   });
 
+  it('uses provider-running-no-network lifecycle state from the instance API', () => {
+    const readiness = getInstanceReadiness(
+      {
+        ...baseInstance,
+        worker_id: undefined,
+        worker_registration_status: 'provider_running_no_network',
+        provider_network_error: 'Provider reports instance running, but no public/proxy endpoint is available yet.',
+      },
+      [],
+      new Date('2026-03-14T10:08:00.000Z'),
+    );
+
+    expect(readiness.label).toBe('NO NETWORK');
+    expect(readiness.tone).toBe('error');
+    expect(readiness.detail).toContain('no public/proxy endpoint');
+    expect(readiness.serving).toBe(false);
+  });
+
+  it('uses provider-running-worker-unregistered lifecycle state from the instance API', () => {
+    const readiness = getInstanceReadiness(
+      {
+        ...baseInstance,
+        worker_id: undefined,
+        worker_registration_status: 'provider_running_worker_unregistered',
+        last_worker_registration_error: 'Provider reports instance running, but no gateway worker registered before the deadline.',
+      },
+      [],
+      new Date('2026-03-14T10:12:00.000Z'),
+    );
+
+    expect(readiness.label).toBe('WORKER NOT REGISTERED');
+    expect(readiness.tone).toBe('error');
+    expect(readiness.detail).toContain('no gateway worker registered');
+    expect(readiness.verified).toBe(false);
+  });
+
   it('marks serving as unverified when the worker heartbeat is stale', () => {
     const readiness = getInstanceReadiness(
       baseInstance,
