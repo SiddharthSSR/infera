@@ -906,6 +906,7 @@ func (g *Gateway) linkWorkerToInstance(worker *types.WorkerInfo) {
 	}
 
 	if instance, found := g.instanceManager.GetInstanceByWorker(worker.WorkerID); found && instance != nil {
+		g.instanceManager.RecordWorkerHeartbeat(worker.WorkerID, worker.LastHealthCheck)
 		return
 	}
 

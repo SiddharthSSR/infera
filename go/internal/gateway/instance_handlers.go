@@ -457,8 +457,25 @@ func instanceToMap(inst *providers.Instance) map[string]interface{} {
 		"storage_gb": inst.StorageGB, "public_ip": inst.PublicIP,
 		"http_port": inst.HTTPPort, "ssh_port": inst.SSHPort,
 		"worker_id": inst.WorkerID, "models": inst.Models, "engine": inst.Engine,
-		"cost_per_hour": inst.CostPerHour, "spot_instance": inst.SpotInstance,
+		"worker_registration_status":     inst.WorkerRegistrationStatus,
+		"last_worker_registration_error": inst.LastWorkerRegistrationError,
+		"worker_health_url":              inst.WorkerHealthURL,
+		"provider_network_ready":         inst.ProviderNetworkReady,
+		"provider_network_error":         inst.ProviderNetworkError,
+		"cost_per_hour":                  inst.CostPerHour, "spot_instance": inst.SpotInstance,
 		"created_at": inst.CreatedAt, "error": inst.ErrorMessage,
+	}
+	if inst.WorkerRegistrationDeadline != nil {
+		m["worker_registration_deadline"] = inst.WorkerRegistrationDeadline
+	}
+	if inst.LastWorkerRegistrationCheckAt != nil {
+		m["last_worker_registration_check_at"] = inst.LastWorkerRegistrationCheckAt
+	}
+	if inst.WorkerRegisteredAt != nil {
+		m["worker_registered_at"] = inst.WorkerRegisteredAt
+	}
+	if inst.WorkerLastHeartbeatAt != nil {
+		m["worker_last_heartbeat_at"] = inst.WorkerLastHeartbeatAt
 	}
 	if inst.StartedAt != nil {
 		m["started_at"] = inst.StartedAt

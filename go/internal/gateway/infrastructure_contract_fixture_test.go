@@ -97,6 +97,10 @@ func newInfrastructureFixtureHandlers(t *testing.T, withInstance bool) *Instance
 		}); err != nil {
 			t.Fatalf("seed fixture instance: %v", err)
 		}
+		heartbeatAt := time.Date(2026, time.April, 10, 0, 5, 0, 0, time.UTC)
+		if !manager.RecordWorkerHeartbeat("worker-fixture-1", heartbeatAt) {
+			t.Fatal("seed fixture worker heartbeat")
+		}
 	}
 
 	return NewInstanceHandlers(manager)

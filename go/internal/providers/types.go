@@ -107,6 +107,23 @@ const (
 	InstanceStatusError        InstanceStatus = "error"
 )
 
+// WorkerRegistrationStatus represents the worker-side lifecycle for a provider instance.
+type WorkerRegistrationStatus string
+
+const (
+	WorkerRegistrationPending                     WorkerRegistrationStatus = "pending"
+	WorkerRegistrationProviderRunningNoNetwork    WorkerRegistrationStatus = "provider_running_no_network"
+	WorkerRegistrationProviderRunningUnregistered WorkerRegistrationStatus = "provider_running_worker_unregistered"
+	WorkerRegistrationWorkerUnreachable           WorkerRegistrationStatus = "worker_unreachable"
+	WorkerRegistrationHealthUnavailable           WorkerRegistrationStatus = "worker_health_unavailable"
+	WorkerRegistrationModelLoading                WorkerRegistrationStatus = "model_loading"
+	WorkerRegistrationModelLoadFailed             WorkerRegistrationStatus = "model_load_failed"
+	WorkerRegistrationFailed                      WorkerRegistrationStatus = "registration_failed"
+	WorkerRegistrationHeartbeatMissing            WorkerRegistrationStatus = "heartbeat_missing"
+	WorkerRegistrationRegisteredUnhealthy         WorkerRegistrationStatus = "registered_unhealthy"
+	WorkerRegistrationReady                       WorkerRegistrationStatus = "ready"
+)
+
 // Instance represents a GPU instance from any provider.
 type Instance struct {
 	ID          string         `json:"id"`
@@ -132,6 +149,17 @@ type Instance struct {
 	WorkerID string          `json:"worker_id,omitempty"`
 	Models   []string        `json:"models,omitempty"`
 	Engine   InferenceEngine `json:"engine,omitempty"`
+
+	// Worker registration lifecycle
+	WorkerRegistrationStatus      WorkerRegistrationStatus `json:"worker_registration_status,omitempty"`
+	WorkerRegistrationDeadline    *time.Time               `json:"worker_registration_deadline,omitempty"`
+	LastWorkerRegistrationError   string                   `json:"last_worker_registration_error,omitempty"`
+	LastWorkerRegistrationCheckAt *time.Time               `json:"last_worker_registration_check_at,omitempty"`
+	WorkerRegisteredAt            *time.Time               `json:"worker_registered_at,omitempty"`
+	WorkerLastHeartbeatAt         *time.Time               `json:"worker_last_heartbeat_at,omitempty"`
+	WorkerHealthURL               string                   `json:"worker_health_url,omitempty"`
+	ProviderNetworkReady          bool                     `json:"provider_network_ready"`
+	ProviderNetworkError          string                   `json:"provider_network_error,omitempty"`
 
 	// Cost
 	CostPerHour  float64 `json:"cost_per_hour"`

@@ -48,11 +48,13 @@ Every step should be observable enough that an operator can identify where the c
 
 ## Failure States To Represent
 
-The instance API, dashboard, and operator runbooks should distinguish these states:
+The P0 implementation exposes `worker_registration_status` on managed instances. The instance API, dashboard, and operator runbooks should distinguish these states:
 
 | State | Meaning |
 | --- | --- |
+| `pending` | Provider instance is not yet running or is still within the registration window. |
 | `provider_running_no_network` | Provider reports the instance running, but public/proxy/SSH metadata is missing. |
+| `provider_running_worker_unregistered` | Provider reports the instance running and network metadata is present, but no gateway worker registered before the deadline. |
 | `worker_unreachable` | Network metadata exists, but the worker endpoint does not respond. |
 | `worker_health_unavailable` | Worker responds but `/health` is missing, failing, or malformed. |
 | `model_loading` | Worker is reachable and actively loading the configured model. |
@@ -61,6 +63,32 @@ The instance API, dashboard, and operator runbooks should distinguish these stat
 | `heartbeat_missing` | Gateway registered the worker but no current heartbeat is present. |
 | `registered_unhealthy` | Gateway registry has the worker but marks it unhealthy. |
 | `ready` | Provider, worker health, model load, registration, heartbeat, and model listing are all valid. |
+
+P0 currently computes `pending`, `provider_running_no_network`, `provider_running_worker_unregistered`, `registration_failed`, `heartbeat_missing`, and `ready` from the provider status, network metadata, gateway worker link, and heartbeat timestamps. The remaining states are reserved for P1 worker-health and model-load probes.
+
+## Implemented P0 Behavior
+
+Managed instances now include these safe lifecycle fields in `/api/instances` and `/api/instances/{id}`:
+
+| Field | Purpose |
+| --- | --- |
+| `worker_registration_status` | Current provider-to-gateway registration state. |
+| `worker_registration_deadline` | Time by which a running provider instance should have registered a gateway worker. |
+| `last_worker_registration_error` | Operator-facing non-secret explanation for the current failure state. |
+| `last_worker_registration_check_at` | Last time the gateway reconciled registration state. |
+| `worker_registered_at` | First observed time the gateway linked a worker to this instance. |
+| `worker_last_heartbeat_at` | Last heartbeat observed for the linked worker. |
+| `worker_health_url` | Safe health URL derived from public/proxy metadata when available. |
+| `provider_network_ready` | Whether provider network metadata is sufficient for worker reachability. |
+| `provider_network_error` | Operator-facing non-secret explanation when provider network metadata is missing. |
+
+Registration timeout is controlled by `INFERA_WORKER_REGISTRATION_TIMEOUT` on the gateway. The default is `10m`. If an instance reaches provider `running` with usable network metadata but no gateway worker registers before this deadline, the instance surfaces `provider_running_worker_unregistered`.
+
+If an instance reaches provider `running` without a public/proxy endpoint, the gateway surfaces `provider_running_no_network` immediately. This matches the observed `2ticqy47pk6zn3` failure mode where RunPod reported `running` but did not provide enough endpoint metadata for a worker health check or registration diagnosis.
+
+The dashboard uses the same lifecycle fields in its instance readiness badge. It shows prominent error states such as `NO NETWORK`, `WORKER NOT REGISTERED`, `REGISTRATION FAILED`, and `HEARTBEAT MISSING` while preserving the existing serving-ready path for healthy registered workers.
+
+The API does not expose provider credentials, worker registration tokens, authorization headers, API keys, or raw provider metadata.
 
 ## Diagnostic Commands And Checks
 
@@ -137,10 +165,10 @@ These checks must not print API keys, worker shared tokens, provider credentials
 
 ### P0
 
-- Surface provider-running-but-unregistered state in the instance API and dashboard.
-- Add a timeout for worker registration after provider state becomes running.
-- Store and expose last worker startup error/status.
-- Improve provider instance reconciliation when network/proxy details are missing.
+- Surface provider-running-but-unregistered state in the instance API and dashboard. Implemented with `worker_registration_status`.
+- Add a timeout for worker registration after provider state becomes running. Implemented with `INFERA_WORKER_REGISTRATION_TIMEOUT`, default `10m`.
+- Store and expose last worker startup error/status. Implemented with `last_worker_registration_error` and `last_worker_registration_check_at`.
+- Improve provider instance reconciliation when network/proxy details are missing. Implemented with `provider_network_ready`, `provider_network_error`, and `worker_health_url`.
 - Add a release/smoke verification check that fails clearly if provider instances are running but gateway workers are zero.
 
 ### P1
@@ -149,6 +177,7 @@ These checks must not print API keys, worker shared tokens, provider credentials
 - Add dashboard lifecycle visualization.
 - Add a retry/recreate policy when RunPod proxy details never appear.
 - Add an alert for provider running but no gateway worker after a configured duration.
+- Probe worker health and model-load state so `worker_unreachable`, `worker_health_unavailable`, `model_loading`, and `model_load_failed` can be populated from direct worker observations.
 
 ### P2
 

@@ -89,11 +89,12 @@ func main() {
 	}
 
 	instanceMgr, err := providers.NewManager(providers.ManagerConfig{
-		DefaultProvider: providers.ProviderMock,
-		WorkerImage:     workerImage,
-		WorkerImages:    workerImages,
-		GatewayAddress:  gatewayAddress,
-		CostDBPath:      "data/costs.db",
+		DefaultProvider:           providers.ProviderMock,
+		WorkerImage:               workerImage,
+		WorkerImages:              workerImages,
+		GatewayAddress:            gatewayAddress,
+		CostDBPath:                "data/costs.db",
+		WorkerRegistrationTimeout: parseDurationEnv("INFERA_WORKER_REGISTRATION_TIMEOUT", 10*time.Minute),
 	})
 	if err != nil {
 		log.Error("failed to initialize instance manager", slog.String("error", err.Error()))
@@ -376,6 +377,18 @@ func parseBoolEnv(raw string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func parseDurationEnv(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	duration, err := time.ParseDuration(raw)
+	if err != nil || duration <= 0 {
+		return fallback
+	}
+	return duration
 }
 
 func parseRateLimiterConfigFromEnv() *gateway.RateLimiterConfig {

@@ -108,6 +108,115 @@ func TestManagerProvisionSetsDefaultGatewayAddress(t *testing.T) {
 	}
 }
 
+func TestManagerSurfacesRunningInstanceWithoutNetwork(t *testing.T) {
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{
+		DefaultProvider:           ProviderMock,
+		WorkerRegistrationTimeout: 5 * time.Minute,
+	})
+	mgr.RegisterProvider(provider)
+
+	inst, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name:    "missing-network",
+		GPUType: GPUA100_80,
+		Models:  []string{"Qwen/Qwen2.5-7B-Instruct"},
+	})
+	if err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+
+	if inst.WorkerRegistrationStatus != WorkerRegistrationProviderRunningNoNetwork {
+		t.Fatalf("expected provider_running_no_network, got %q", inst.WorkerRegistrationStatus)
+	}
+	if inst.ProviderNetworkReady {
+		t.Fatal("expected provider network to be not ready")
+	}
+	if inst.ProviderNetworkError == "" || inst.LastWorkerRegistrationError == "" {
+		t.Fatalf("expected network and registration errors, got provider=%q registration=%q", inst.ProviderNetworkError, inst.LastWorkerRegistrationError)
+	}
+	if inst.WorkerRegistrationDeadline == nil {
+		t.Fatal("expected worker registration deadline")
+	}
+}
+
+func TestManagerSurfacesRunningInstanceRegistrationTimeout(t *testing.T) {
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{
+		DefaultProvider:           ProviderMock,
+		WorkerRegistrationTimeout: 5 * time.Minute,
+	})
+	mgr.RegisterProvider(provider)
+
+	inst, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name:    "registration-timeout",
+		GPUType: GPUA100_80,
+	})
+	if err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	mgr.instances.update(inst.ID, func(stored *Instance) {
+		stored.StartedAt = &old
+		stored.CreatedAt = old
+		stored.PublicIP = "203.0.113.10"
+		stored.HTTPPort = 8081
+		stored.WorkerRegistrationDeadline = nil
+		mgr.evaluateWorkerRegistration(stored, time.Now())
+	})
+
+	got, ok := mgr.GetInstance(inst.ID)
+	if !ok {
+		t.Fatalf("expected instance %s", inst.ID)
+	}
+	if got.WorkerRegistrationStatus != WorkerRegistrationProviderRunningUnregistered {
+		t.Fatalf("expected provider_running_worker_unregistered, got %q", got.WorkerRegistrationStatus)
+	}
+	if !got.ProviderNetworkReady {
+		t.Fatal("expected provider network to be ready")
+	}
+	if got.WorkerHealthURL != "http://203.0.113.10:8081/health" {
+		t.Fatalf("unexpected worker health URL %q", got.WorkerHealthURL)
+	}
+	if got.LastWorkerRegistrationError == "" {
+		t.Fatal("expected registration timeout error")
+	}
+}
+
+func TestManagerLinkWorkerMarksInstanceReady(t *testing.T) {
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(provider)
+
+	inst, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name:    "ready-worker",
+		GPUType: GPUA100_80,
+	})
+	if err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+
+	if err := mgr.LinkWorker(inst.ID, "worker-123"); err != nil {
+		t.Fatalf("LinkWorker failed: %v", err)
+	}
+	if !mgr.RecordWorkerHeartbeat("worker-123", time.Now()) {
+		t.Fatal("expected heartbeat to be recorded")
+	}
+
+	got, ok := mgr.GetInstance(inst.ID)
+	if !ok {
+		t.Fatalf("expected instance %s", inst.ID)
+	}
+	if got.WorkerRegistrationStatus != WorkerRegistrationReady {
+		t.Fatalf("expected ready, got %q", got.WorkerRegistrationStatus)
+	}
+	if got.WorkerRegisteredAt == nil || got.WorkerLastHeartbeatAt == nil {
+		t.Fatalf("expected registration and heartbeat timestamps, got registered=%v heartbeat=%v", got.WorkerRegisteredAt, got.WorkerLastHeartbeatAt)
+	}
+	if got.LastWorkerRegistrationError != "" {
+		t.Fatalf("expected no registration error, got %q", got.LastWorkerRegistrationError)
+	}
+}
+
 func (p *mockTestProvider) Terminate(ctx context.Context, instanceID string) error {
 	return nil
 }
