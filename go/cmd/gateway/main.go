@@ -172,7 +172,18 @@ func main() {
 	gw.SetVaultHandler(vault.NewHandler(vaultStore))
 
 	// Initialize auth (API key authentication)
-	authStore, err := auth.NewStore("data/auth.db")
+	providerCredentialEncryptionKey := strings.TrimSpace(os.Getenv("INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY"))
+	var authStore *auth.Store
+	if providerCredentialEncryptionKey == "" {
+		if os.Getenv("INFERA_DEV_MODE") != "1" {
+			log.Error("INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY is required outside development mode")
+			os.Exit(1)
+		}
+		log.Warn("workspace provider credential storage is disabled without INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY")
+		authStore, err = auth.NewStore("data/auth.db")
+	} else {
+		authStore, err = auth.NewStoreWithProviderCredentialEncryption("data/auth.db", providerCredentialEncryptionKey)
+	}
 	if err != nil {
 		log.Error("failed to initialize auth store", slog.String("error", err.Error()))
 		os.Exit(1)

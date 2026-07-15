@@ -233,12 +233,13 @@ type WorkspaceProviderConfigRecord struct {
 
 // Store is a SQLite-backed API key store.
 type Store struct {
-	db         *sql.DB
-	lastUsedCh chan string
-	lastSeenCh chan string
-	shutdownCh chan struct{}
-	wg         sync.WaitGroup
-	closeOnce  sync.Once
+	db                       *sql.DB
+	providerCredentialCipher *providerCredentialCipher
+	lastUsedCh               chan string
+	lastSeenCh               chan string
+	shutdownCh               chan struct{}
+	wg                       sync.WaitGroup
+	closeOnce                sync.Once
 }
 
 var bootstrapKeyPattern = regexp.MustCompile(`^inf_[0-9a-fA-F]{48}$`)
@@ -251,6 +252,21 @@ const (
 
 // NewStore opens a SQLite database and runs migrations.
 func NewStore(dbPath string) (*Store, error) {
+	return newStore(dbPath, nil)
+}
+
+// NewStoreWithProviderCredentialEncryption opens the auth store with AES-256-GCM
+// encryption for workspace provider API credentials. encodedKey must be the
+// base64 representation of exactly 32 random bytes.
+func NewStoreWithProviderCredentialEncryption(dbPath, encodedKey string) (*Store, error) {
+	credentialCipher, err := newProviderCredentialCipher(encodedKey)
+	if err != nil {
+		return nil, err
+	}
+	return newStore(dbPath, credentialCipher)
+}
+
+func newStore(dbPath string, credentialCipher *providerCredentialCipher) (*Store, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open auth database: %w", err)
@@ -264,14 +280,21 @@ func NewStore(dbPath string) (*Store, error) {
 	db.SetMaxIdleConns(1)
 
 	s := &Store{
-		db:         db,
-		lastUsedCh: make(chan string, 2048),
-		lastSeenCh: make(chan string, 2048),
-		shutdownCh: make(chan struct{}),
+		db:                       db,
+		providerCredentialCipher: credentialCipher,
+		lastUsedCh:               make(chan string, 2048),
+		lastSeenCh:               make(chan string, 2048),
+		shutdownCh:               make(chan struct{}),
 	}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to run auth migrations: %w", err)
+	}
+	if credentialCipher != nil {
+		if err := s.encryptLegacyProviderCredentials(); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("failed to secure provider credentials: %w", err)
+		}
 	}
 	s.startLastUsedUpdater()
 	s.startSessionLastSeenUpdater()
@@ -999,6 +1022,17 @@ func (s *Store) ResolveWorkspaceProviderConfig(workspaceID, provider string) (ap
 	if strings.TrimSpace(apiKey) == "" && strings.TrimSpace(apiSecret) == "" {
 		return "", "", "", nil, fmt.Errorf("provider %s is not configured for workspace %s", provider, workspaceID)
 	}
+	if s.providerCredentialCipher == nil {
+		return "", "", "", nil, fmt.Errorf("provider credential encryption is not configured")
+	}
+	apiKey, err = s.providerCredentialCipher.decrypt(apiKey, workspaceID, provider, "api_key")
+	if err != nil {
+		return "", "", "", nil, fmt.Errorf("failed to decrypt provider %s API key for workspace %s: %w", provider, workspaceID, err)
+	}
+	apiSecret, err = s.providerCredentialCipher.decrypt(apiSecret, workspaceID, provider, "api_secret")
+	if err != nil {
+		return "", "", "", nil, fmt.Errorf("failed to decrypt provider %s API secret for workspace %s: %w", provider, workspaceID, err)
+	}
 	options, err = parseWorkspaceProviderOptions(optionsJSON)
 	if err != nil {
 		return "", "", "", nil, fmt.Errorf("invalid provider %s options for workspace %s: %w", provider, workspaceID, err)
@@ -1014,6 +1048,22 @@ func (s *Store) UpsertWorkspaceProviderConfig(workspaceID, provider, apiKey, api
 	}
 	if _, err := s.getWorkspace(workspaceID); err != nil {
 		return nil, err
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	apiSecret = strings.TrimSpace(apiSecret)
+	if (apiKey != "" || apiSecret != "") && s.providerCredentialCipher == nil {
+		return nil, fmt.Errorf("provider credential encryption is not configured")
+	}
+	var err error
+	if s.providerCredentialCipher != nil {
+		apiKey, err = s.providerCredentialCipher.encrypt(apiKey, workspaceID, provider, "api_key")
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt provider API key: %w", err)
+		}
+		apiSecret, err = s.providerCredentialCipher.encrypt(apiSecret, workspaceID, provider, "api_secret")
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt provider API secret: %w", err)
+		}
 	}
 	optionsJSON, err := marshalWorkspaceProviderOptions(options)
 	if err != nil {
@@ -1031,8 +1081,8 @@ func (s *Store) UpsertWorkspaceProviderConfig(workspaceID, provider, apiKey, api
 			updated_at = excluded.updated_at`,
 		workspaceID,
 		provider,
-		strings.TrimSpace(apiKey),
-		strings.TrimSpace(apiSecret),
+		apiKey,
+		apiSecret,
 		strings.TrimSpace(endpoint),
 		optionsJSON,
 		now,
@@ -1042,6 +1092,78 @@ func (s *Store) UpsertWorkspaceProviderConfig(workspaceID, provider, apiKey, api
 		return nil, fmt.Errorf("failed to update workspace provider config: %w", err)
 	}
 	return s.GetWorkspaceProviderConfig(workspaceID, provider)
+}
+
+func (s *Store) encryptLegacyProviderCredentials() error {
+	type storedCredential struct {
+		workspaceID string
+		provider    string
+		apiKey      string
+		apiSecret   string
+	}
+	rows, err := s.db.Query(`
+		SELECT workspace_id, provider, api_key, api_secret
+		FROM workspace_provider_configs`)
+	if err != nil {
+		return err
+	}
+	var credentials []storedCredential
+	for rows.Next() {
+		var credential storedCredential
+		if err := rows.Scan(&credential.workspaceID, &credential.provider, &credential.apiKey, &credential.apiSecret); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		credentials = append(credentials, credential)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, credential := range credentials {
+		apiKey, keyChanged, err := s.secureStoredProviderCredential(credential.apiKey, credential.workspaceID, credential.provider, "api_key")
+		if err != nil {
+			return err
+		}
+		apiSecret, secretChanged, err := s.secureStoredProviderCredential(credential.apiSecret, credential.workspaceID, credential.provider, "api_secret")
+		if err != nil {
+			return err
+		}
+		if !keyChanged && !secretChanged {
+			continue
+		}
+		if _, err := tx.Exec(`
+			UPDATE workspace_provider_configs
+			SET api_key = ?, api_secret = ?
+			WHERE workspace_id = ? AND provider = ?`,
+			apiKey, apiSecret, credential.workspaceID, credential.provider,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) secureStoredProviderCredential(value, workspaceID, provider, field string) (string, bool, error) {
+	if value == "" {
+		return "", false, nil
+	}
+	if strings.HasPrefix(value, providerCredentialCiphertextPrefix) {
+		if _, err := s.providerCredentialCipher.decrypt(value, workspaceID, provider, field); err != nil {
+			return "", false, err
+		}
+		return value, false, nil
+	}
+	encrypted, err := s.providerCredentialCipher.encrypt(value, workspaceID, provider, field)
+	return encrypted, true, err
 }
 
 func (s *Store) DeleteWorkspaceProviderConfig(workspaceID, provider string) error {
