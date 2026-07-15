@@ -19,7 +19,7 @@ import (
 func newTestHandlerWithRoutes(t *testing.T) (*Handler, *Store, *http.ServeMux) {
 	t.Helper()
 	dir := t.TempDir()
-	s, err := NewStore(filepath.Join(dir, "auth_test.db"))
+	s, err := NewStoreWithProviderCredentialEncryption(filepath.Join(dir, "auth_test.db"), testProviderCredentialEncryptionKey)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}

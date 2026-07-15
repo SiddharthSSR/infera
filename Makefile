@@ -63,7 +63,7 @@ go-lint:
 
 # Run gateway (basic - mock only)
 run-gateway:
-	cd go && go run ./cmd/gateway -port $(GATEWAY_PORT)
+	cd go && INFERA_DEV_MODE=1 go run ./cmd/gateway -port $(GATEWAY_PORT)
 
 # Run gateway with RunPod
 run-gateway-runpod:
@@ -72,7 +72,8 @@ run-gateway-runpod:
 		echo "Usage: make run-gateway-runpod RUNPOD_API_KEY=your_key"; \
 		exit 1; \
 	fi
-	cd go && RUNPOD_API_KEY=$(RUNPOD_API_KEY) \
+	cd go && INFERA_DEV_MODE=1 \
+		RUNPOD_API_KEY=$(RUNPOD_API_KEY) \
 		INFERA_GATEWAY_ADDRESS=$(INFERA_GATEWAY_ADDRESS) \
 		HF_TOKEN=$(HF_TOKEN) \
 		INFERA_WORKER_IMAGE=$(INFERA_WORKER_IMAGE) \
