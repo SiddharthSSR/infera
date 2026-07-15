@@ -215,6 +215,28 @@ func main() {
 
 	authHandler := auth.NewHandler(authStore)
 	authHandler.SetSecure(os.Getenv("INFERA_DEV_MODE") != "1")
+	authHandler.SetProviderConfigValidator(func(ctx context.Context, config providers.ProviderConfig) error {
+		provider, err := providers.CreateProvider(config)
+		if err != nil {
+			return err
+		}
+		status, err := provider.GetStatus(ctx)
+		if err != nil {
+			return err
+		}
+		if status == nil || !status.Connected {
+			code := providers.ProviderErrorRequestFailed
+			if status != nil && status.ErrorCode != "" {
+				code = status.ErrorCode
+			}
+			return &providers.ProviderError{
+				Provider: config.Type,
+				Code:     code,
+				Message:  "provider did not confirm the supplied credentials",
+			}
+		}
+		return nil
+	})
 	gw.SetAuthHandler(authHandler)
 	instanceMgr.SetWorkspaceProviderConfigResolver(func(workspaceID string, providerType providers.ProviderType) (*providers.ProviderConfig, error) {
 		apiKey, apiSecret, endpoint, options, err := authStore.ResolveWorkspaceProviderConfig(workspaceID, string(providerType))
