@@ -20,13 +20,16 @@ const apiMocks = vi.hoisted(() => ({
   uploadAgentAttachment: vi.fn(),
 }));
 
-vi.mock('../hooks/useApi', () => ({
+vi.mock('../hooks/useRuntimeApi', () => ({
   useModels: hookMocks.useModels,
   useAgents: hookMocks.useAgents,
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/chatClient', () => ({
   streamChatCompletion: apiMocks.streamChatCompletion,
+}));
+
+vi.mock('../lib/agentsClient', () => ({
   createAgentRun: apiMocks.createAgentRun,
   fetchAgentRunDetail: apiMocks.fetchAgentRunDetail,
   cancelAgentRun: apiMocks.cancelAgentRun,

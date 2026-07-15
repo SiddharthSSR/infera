@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
-import { createApiKey, fetchApiKeys, revokeApiKey, type ApiKeyRecord } from '../lib/api';
+import { createApiKey, fetchApiKeys, revokeApiKey } from '../lib/authAccessClient';
 import { useAuthSession } from '../lib/auth-context';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { ActionGroup } from '../components/ActionGroup';
@@ -11,6 +11,7 @@ import { formatDate } from '../lib/formatting';
 import { principalLabel, roleLabel, roleDescription } from '../lib/labels';
 import { GridRow, Cell, LabelText, Badge, ActionButton, ControlInput, ControlSelect } from '../components/shared';
 import { ApiKeysSkeleton } from '../components/skeletons';
+import type { ApiKeyRecord } from '../types';
 
 /* ------------------------------------------------------------------ */
 /*  Custom brand radio                                                  */

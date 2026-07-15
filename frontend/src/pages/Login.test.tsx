@@ -7,11 +7,11 @@ import { MemoryRouter } from 'react-router-dom'
 import { Login } from './Login'
 
 // Mock the api module
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/authAccessClient', () => ({
   createSession: vi.fn(),
 }))
 
-import { createSession } from '../lib/api'
+import { createSession } from '../lib/authAccessClient'
 
 const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>
 const mockCreateSession = createSession as ReturnType<typeof vi.fn>

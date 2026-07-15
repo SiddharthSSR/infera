@@ -1,29 +1,16 @@
-import type { Instance, ProvisionRequest, Worker } from '../types';
+import type {
+  DeploymentAttemptRecord,
+  DeploymentInferenceVerification,
+  Instance,
+  ProvisionRequest,
+  Worker,
+} from '../types';
 import { getInstanceReadiness, type InstanceReadiness } from './instanceReadiness';
 
 const STORAGE_PREFIX = 'infera:deployment-attempts:';
 const MAX_ATTEMPTS = 10;
 
-export type DeploymentAttemptRecord = {
-  id: string;
-  created_at: string;
-  updated_at: string;
-  outcome: 'provisioned' | 'request_failed';
-  request: ProvisionRequest & { name?: string };
-  selected_model_name?: string;
-  instance_id?: string;
-  instance_name?: string;
-  failure_reason?: string;
-  auto_verification_requested_at?: string;
-  inference_verification?: {
-    status: 'passed' | 'failed';
-    verified_at: string;
-    latency_ms?: number;
-    model?: string;
-    response_preview?: string;
-    error?: string;
-  };
-};
+export type { DeploymentAttemptRecord, DeploymentInferenceVerification } from '../types';
 
 export type DeploymentAttemptSummary = {
   attempt: DeploymentAttemptRecord;
@@ -107,6 +94,7 @@ export function recordProvisionedAttempt(
   const attempts = normalizeAttempts([
     {
       id: newAttemptID(),
+      workspace_id: workspaceID,
       created_at: now,
       updated_at: now,
       outcome: 'provisioned',
@@ -133,6 +121,7 @@ export function recordFailedAttempt(
   const attempts = normalizeAttempts([
     {
       id: newAttemptID(),
+      workspace_id: workspaceID,
       created_at: now,
       updated_at: now,
       outcome: 'request_failed',
@@ -149,7 +138,7 @@ export function recordFailedAttempt(
 export function recordInferenceVerification(
   workspaceID: string | undefined,
   attemptID: string,
-  verification: NonNullable<DeploymentAttemptRecord['inference_verification']>,
+  verification: DeploymentInferenceVerification,
 ): DeploymentAttemptRecord[] {
   if (!workspaceID) return [];
 

@@ -3,27 +3,10 @@
 import React from 'react'
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Header } from './Header'
 import { StatsCards } from './StatsCards'
 import { CostDisplay } from './CostDisplay'
 import type { Stats, CostSummary } from '../types'
-
-// Helper to wrap components with QueryClient
-const createWrapper = () => {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-    },
-  })
-  return function Wrapper({ children }: { children: React.ReactNode }) {
-    return (
-      <QueryClientProvider client={queryClient}>
-        {children}
-      </QueryClientProvider>
-    )
-  }
-}
 
 describe('Header', () => {
   it('renders the logo and title', () => {

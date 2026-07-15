@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { SessionInfo, WorkspaceRecord } from './api';
+import type { SessionInfo, WorkspaceRecord } from '../types';
 
 export const AuthContext = createContext<{
   session: SessionInfo | null;

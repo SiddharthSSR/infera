@@ -1,38 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import {
-  fetchApiKeys,
-  createApiKey,
-  revokeApiKey,
-  fetchAuditUsage,
-  fetchProviders,
-  fetchWorkspaceQuota,
-  updateWorkspaceQuota,
-  fetchWorkspaceMembers,
-  updateWorkspaceMember,
-  removeWorkspaceMember,
-  fetchWorkspaceInvites,
-  fetchWorkspaceProviderConfigs,
-  createWorkspaceInvite,
-  upsertWorkspaceProviderConfig,
-  deleteWorkspaceProviderConfig,
-  revokeWorkspaceInvite,
-  type ApiKeyRecord,
-  type AuditUsageRow,
-  type WorkspaceQuotaRecord,
-  type WorkspaceMemberRecord,
-  type WorkspaceInvitationRecord,
-  type WorkspaceProviderConfigRecord,
-} from '../lib/api';
-import type { ProviderStatus } from '../types';
 import { useAuthSession } from '../lib/auth-context';
-import { GridRow, Cell, LabelText, Badge, ActionButton, ControlInput, ControlSelect, ProgressBar, StatusDot } from '../components/shared';
+import { WorkspaceMembershipSection } from '../components/workspace/WorkspaceMembershipSection';
+import { WorkspaceOperationsSection } from '../components/workspace/WorkspaceOperationsSection';
+import { GridRow, Cell, LabelText, Badge, ActionButton, ProgressBar, StatusDot } from '../components/shared';
 import { WorkspaceSkeleton } from '../components/skeletons';
+import { useWorkspaceAdminState } from '../hooks/useWorkspaceAdminState';
 import { MetadataList } from '../components/MetadataList';
-import { inviteStatusMeta, memberStatusMeta, normalizeInviteStatus } from '../lib/workspaceLifecycle';
+import { normalizeInviteStatus } from '../lib/workspaceLifecycle';
 import { buildWorkspaceActivityItems } from '../lib/workspaceActivity';
-import { formatDateTime, formatCount, formatPercent, clampPercent, usageRatio, parseNullableLimit, monthRange } from '../lib/formatting';
+import { formatDateTime, formatCount, formatPercent, clampPercent, usageRatio } from '../lib/formatting';
 import { capabilityLabels, providerLiveState } from '../lib/labels';
 
 const assignableInviteRoles = ['developer', 'operator', 'read_only', 'billing', 'admin'] as const;
@@ -123,15 +101,6 @@ export function WorkspaceAdmin() {
   const canViewQuota = canManageQuota || role === 'read_only';
   const canViewUsage = role === 'owner' || role === 'admin' || role === 'billing' || role === 'read_only';
 
-  const [loading, setLoading] = useState(true);
-  const [quota, setQuota] = useState<WorkspaceQuotaRecord | null>(null);
-  const [members, setMembers] = useState<WorkspaceMemberRecord[]>([]);
-  const [invites, setInvites] = useState<WorkspaceInvitationRecord[]>([]);
-  const [serviceAccounts, setServiceAccounts] = useState<ApiKeyRecord[]>([]);
-  const [providerConfigs, setProviderConfigs] = useState<WorkspaceProviderConfigRecord[]>([]);
-  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
-  const [usageRows, setUsageRows] = useState<AuditUsageRow[]>([]);
-
   const [requestLimit, setRequestLimit] = useState('');
   const [tokenLimit, setTokenLimit] = useState('');
   const [enforceHardLimits, setEnforceHardLimits] = useState(true);
@@ -145,19 +114,43 @@ export function WorkspaceAdmin() {
   const [providerAPISecret, setProviderAPISecret] = useState('');
   const [providerEndpoint, setProviderEndpoint] = useState('');
   const [providerOptions, setProviderOptions] = useState<Record<string, string>>(buildProviderOptionDefaults('runpod'));
-  const [memberRoles, setMemberRoles] = useState<Record<string, string>>({});
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [createdInviteToken, setCreatedInviteToken] = useState<string | null>(null);
-  const [savingQuota, setSavingQuota] = useState(false);
-  const [creatingInvite, setCreatingInvite] = useState(false);
-  const [creatingServiceAccount, setCreatingServiceAccount] = useState(false);
-  const [savingProviderConfig, setSavingProviderConfig] = useState(false);
-  const [updatingMemberId, setUpdatingMemberId] = useState<string | null>(null);
-  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
   const [settingsTab, setSettingsTab] = useState<'usage' | 'providers' | 'service' | 'members' | 'invites'>('usage');
   const createdInviteLink = createdInviteToken && typeof window !== 'undefined'
     ? `${window.location.origin}/accept-invite?token=${encodeURIComponent(createdInviteToken)}`
     : null;
+
+  const {
+    loading,
+    quota,
+    members,
+    invites,
+    serviceAccounts,
+    providerConfigs,
+    providerStatuses,
+    usageRows,
+    memberRoles,
+    savingQuota,
+    creatingInvite,
+    creatingServiceAccount,
+    savingProviderConfig,
+    updatingMemberId,
+    removingMemberId,
+    setMemberRoles,
+    handleSaveQuota,
+    handleCreateInvite,
+    handleRevokeInvite,
+    handleUpdateMemberRole,
+    handleRemoveMember,
+    handleCreateServiceAccount,
+    handleRevokeServiceAccount,
+    handleSaveProviderConfig,
+    handleDeleteProviderConfig,
+  } = useWorkspaceAdminState({
+    workspaceId,
+    role,
+  });
 
   const visibleInviteRoles = useMemo(() => {
     if (role === 'owner') return assignableInviteRoles;
@@ -244,6 +237,11 @@ export function WorkspaceAdmin() {
       ...(existing?.options || {}),
     });
   }, [providerConfigs, selectedProvider]);
+  useEffect(() => {
+    setRequestLimit(quota?.monthly_request_limit != null ? String(quota.monthly_request_limit) : '');
+    setTokenLimit(quota?.monthly_token_limit != null ? String(quota.monthly_token_limit) : '');
+    setEnforceHardLimits(quota?.enforce_hard_limits ?? true);
+  }, [quota]);
   const memberCounts = useMemo(() => ({
     total: members.length,
     admins: members.filter((record) => record.role === 'admin' || record.role === 'owner').length,
@@ -294,277 +292,70 @@ export function WorkspaceAdmin() {
     [workspaceActivity],
   );
 
-  const loadWorkspaceData = async () => {
-    if (!workspaceId) return;
-
-    const tasks: Promise<void>[] = [];
-
-    if (canViewQuota) {
-      tasks.push(
-        fetchWorkspaceQuota(workspaceId).then((nextQuota) => {
-          setQuota(nextQuota);
-          setRequestLimit(nextQuota.monthly_request_limit != null ? String(nextQuota.monthly_request_limit) : '');
-          setTokenLimit(nextQuota.monthly_token_limit != null ? String(nextQuota.monthly_token_limit) : '');
-          setEnforceHardLimits(nextQuota.enforce_hard_limits);
-        }).catch(() => setQuota(null)),
-      );
-    } else {
-      setQuota(null);
-    }
-
-    if (canViewUsage) {
-      const { start, end } = monthRange();
-      tasks.push(
-        fetchAuditUsage({ start, end, bucket: 'day', workspace_id: workspaceId })
-          .then((usage) => setUsageRows(usage.rows))
-          .catch(() => setUsageRows([])),
-      );
-    } else {
-      setUsageRows([]);
-    }
-
-    if (canManageMemberships) {
-      tasks.push(
-        fetchWorkspaceMembers(workspaceId).then((nextMembers) => {
-          setMembers(nextMembers);
-          setMemberRoles(
-            nextMembers.reduce<Record<string, string>>((acc, record) => {
-              acc[record.id] = record.role;
-              return acc;
-            }, {}),
-          );
-        }).catch(() => {
-          setMembers([]);
-          setMemberRoles({});
-        }),
-      );
-      tasks.push(
-        fetchWorkspaceInvites(workspaceId).then(setInvites).catch(() => setInvites([])),
-      );
-    } else {
-      setMembers([]);
-      setInvites([]);
-    }
-
-    if (canManageKeys) {
-      tasks.push(
-        fetchApiKeys().then((keys) => {
-          setServiceAccounts(keys.filter((key) => key.principal_type === 'service_account'));
-        }).catch(() => setServiceAccounts([])),
-      );
-    } else {
-      setServiceAccounts([]);
-    }
-
-    if (canManageProviderConfigs) {
-      tasks.push(
-        fetchWorkspaceProviderConfigs(workspaceId)
-          .then(setProviderConfigs)
-          .catch(() => setProviderConfigs([])),
-      );
-      tasks.push(
-        fetchProviders()
-          .then((statuses) => setProviderStatuses(statuses.filter((status) => status.provider !== 'mock' && status.provider !== 'lambda')))
-          .catch(() => setProviderStatuses([])),
-      );
-    } else {
-      setProviderConfigs([]);
-      setProviderStatuses([]);
-    }
-
-    await Promise.all(tasks);
-  };
-
-  useEffect(() => {
-    setLoading(true);
-    loadWorkspaceData().finally(() => setLoading(false));
-  }, [workspaceId, canManageMemberships, canManageKeys, canManageProviderConfigs, canViewQuota, canViewUsage]);
-
-  const handleSaveQuota = async () => {
-    const parsedRequestLimit = parseNullableLimit(requestLimit);
-    const parsedTokenLimit = parseNullableLimit(tokenLimit);
-    if (Number.isNaN(parsedRequestLimit) || Number.isNaN(parsedTokenLimit)) {
-      toast.error('Quota limits must be blank or non-negative numbers.');
-      return;
-    }
-
-    setSavingQuota(true);
-    try {
-      const nextQuota = await updateWorkspaceQuota(workspaceId, {
-        monthly_request_limit: parsedRequestLimit,
-        monthly_token_limit: parsedTokenLimit,
-        enforce_hard_limits: enforceHardLimits,
-      });
-      setQuota(nextQuota);
-      setRequestLimit(nextQuota.monthly_request_limit != null ? String(nextQuota.monthly_request_limit) : '');
-      setTokenLimit(nextQuota.monthly_token_limit != null ? String(nextQuota.monthly_token_limit) : '');
-      setEnforceHardLimits(nextQuota.enforce_hard_limits);
-      toast.success('Workspace quota updated.');
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update quota');
-    } finally {
-      setSavingQuota(false);
-    }
-  };
-
-  const handleCreateInvite = async () => {
-    if (!inviteEmail.trim()) {
-      toast.error('Invite email is required.');
-      return;
-    }
-    setCreatingInvite(true);
-    try {
-      const result = await createWorkspaceInvite(workspaceId, {
-        email: inviteEmail.trim(),
-        display_name: inviteDisplayName.trim() || undefined,
-        role: inviteRole,
-      });
-      setCreatedInviteToken(result.invitation_token);
-      setInviteEmail('');
-      setInviteDisplayName('');
-      setInviteRole(visibleInviteRoles[0]);
-      toast.success('Workspace invitation created.');
-      setInvites(await fetchWorkspaceInvites(workspaceId));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to create invitation');
-    } finally {
-      setCreatingInvite(false);
-    }
-  };
-
-  const handleRevokeInvite = async (inviteId: string) => {
-    if (!confirm('Revoke this invitation?')) return;
-    try {
-      await revokeWorkspaceInvite(workspaceId, inviteId);
-      toast.success('Invitation revoked.');
-      setInvites(await fetchWorkspaceInvites(workspaceId));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to revoke invitation');
-    }
-  };
-
   const roleOptionsForMember = (currentRole: string) => {
     const options = new Set<string>(visibleMemberRoles);
     options.add(currentRole);
     return Array.from(options);
   };
 
-  const handleUpdateMemberRole = async (memberId: string, currentRole: string) => {
-    const nextRole = memberRoles[memberId] || currentRole;
-    if (nextRole === currentRole) return;
-    setUpdatingMemberId(memberId);
-    try {
-      await updateWorkspaceMember(workspaceId, memberId, { role: nextRole });
-      toast.success('Member role updated.');
-      const nextMembers = await fetchWorkspaceMembers(workspaceId);
-      setMembers(nextMembers);
-      setMemberRoles(
-        nextMembers.reduce<Record<string, string>>((acc, record) => {
-          acc[record.id] = record.role;
-          return acc;
-        }, {}),
-      );
-    } catch (error) {
-      setMemberRoles((current) => ({ ...current, [memberId]: currentRole }));
-      toast.error(error instanceof Error ? error.message : 'Failed to update member role');
-    } finally {
-      setUpdatingMemberId(null);
-    }
+  const handleQuotaSave = async () => {
+    await handleSaveQuota({
+      requestLimit,
+      tokenLimit,
+      enforceHardLimits,
+    });
   };
 
-  const handleRemoveMember = async (memberId: string) => {
-    if (!confirm('Remove this member from the workspace? Their linked human keys will be revoked.')) return;
-    setRemovingMemberId(memberId);
-    try {
-      await removeWorkspaceMember(workspaceId, memberId);
-      toast.success('Member removed.');
-      const nextMembers = await fetchWorkspaceMembers(workspaceId);
-      setMembers(nextMembers);
-      setMemberRoles(
-        nextMembers.reduce<Record<string, string>>((acc, record) => {
-          acc[record.id] = record.role;
-          return acc;
-        }, {}),
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to remove member');
-    } finally {
-      setRemovingMemberId(null);
-    }
+  const handleInviteCreate = async () => {
+    const token = await handleCreateInvite({
+      email: inviteEmail,
+      displayName: inviteDisplayName,
+      inviteRole,
+    });
+    if (!token) return;
+    setCreatedInviteToken(token);
+    setInviteEmail('');
+    setInviteDisplayName('');
+    setInviteRole(visibleInviteRoles[0]);
   };
 
-  const handleCreateServiceAccount = async () => {
-    if (!newServiceAccountName.trim()) {
-      toast.error('Service account name is required.');
-      return;
-    }
-    setCreatingServiceAccount(true);
-    try {
-      const result = await createApiKey(newServiceAccountName.trim(), newServiceAccountRole, 'service_account');
-      setCreatedSecret(result.key);
-      setNewServiceAccountName('');
-      setNewServiceAccountRole('operator');
-      toast.success('Service account key created.');
-      const keys = await fetchApiKeys();
-      setServiceAccounts(keys.filter((key) => key.principal_type === 'service_account'));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to create service account');
-    } finally {
-      setCreatingServiceAccount(false);
-    }
+  const handleMemberRoleSave = async (memberId: string, currentRole: string) => {
+    await handleUpdateMemberRole({
+      memberId,
+      currentRole,
+      nextRole: memberRoles[memberId] || currentRole,
+    });
   };
 
-  const handleRevokeServiceAccount = async (keyId: string) => {
-    if (!confirm('Revoke this service account key?')) return;
-    try {
-      await revokeApiKey(keyId);
-      toast.success('Service account key revoked.');
-      const keys = await fetchApiKeys();
-      setServiceAccounts(keys.filter((key) => key.principal_type === 'service_account'));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to revoke service account');
-    }
+  const handleServiceAccountCreate = async () => {
+    const secret = await handleCreateServiceAccount({
+      name: newServiceAccountName,
+      accountRole: newServiceAccountRole,
+    });
+    if (!secret) return;
+    setCreatedSecret(secret);
+    setNewServiceAccountName('');
+    setNewServiceAccountRole('operator');
   };
 
-  const handleSaveProviderConfig = async () => {
-    const validationError = validateProviderConfigDraft(
-      selectedProviderMeta,
+  const handleProviderConfigSave = async () => {
+    const saved = await handleSaveProviderConfig({
+      selectedProvider,
+      providerLabel: selectedProviderMeta.name,
       providerAPIKey,
       providerAPISecret,
+      providerEndpoint,
       providerOptions,
-    );
-    if (validationError) {
-      toast.error(validationError);
-      return;
-    }
-    setSavingProviderConfig(true);
-    try {
-      await upsertWorkspaceProviderConfig(workspaceId, selectedProvider, {
-        api_key: providerAPIKey.trim(),
-        api_secret: providerAPISecret.trim() || undefined,
-        endpoint: providerEndpoint.trim() || undefined,
-        options: providerOptions,
-      });
-      setProviderAPIKey('');
-      setProviderAPISecret('');
-      setProviderConfigs(await fetchWorkspaceProviderConfigs(workspaceId));
-      toast.success(`${selectedProviderMeta.name} config saved.`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save provider config');
-    } finally {
-      setSavingProviderConfig(false);
-    }
-  };
-
-  const handleDeleteProviderConfig = async (provider: string) => {
-    if (!confirm(`Delete ${provider} provider config for this workspace?`)) return;
-    try {
-      await deleteWorkspaceProviderConfig(workspaceId, provider);
-      setProviderConfigs(await fetchWorkspaceProviderConfigs(workspaceId));
-      toast.success(`${provider} provider config deleted.`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to delete provider config');
-    }
+      validationError: validateProviderConfigDraft(
+        selectedProviderMeta,
+        providerAPIKey,
+        providerAPISecret,
+        providerOptions,
+      ),
+    });
+    if (!saved) return;
+    setProviderAPIKey('');
+    setProviderAPISecret('');
   };
 
   if (loading) return <WorkspaceSkeleton />;
@@ -773,462 +564,91 @@ export function WorkspaceAdmin() {
       )}
 
       {(settingsTab === 'providers' || settingsTab === 'service') && (
-      <GridRow className="workspace-ops-row">
-        <Cell span={2} className="workspace-provider-cell">
-          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>PROVIDER CONFIGS</LabelText>
-          {canManageProviderConfigs ? (
-            <>
-              <div className="responsive-scroll-x" style={{ marginBottom: '1.5rem' }}>
-                <table className="data-table responsive-scroll-x-content">
-                  <thead>
-                    <tr>
-                      <th scope="col">PROVIDER</th>
-                      <th scope="col">CONFIG</th>
-                      <th scope="col">LIVE STATE</th>
-                      <th scope="col">ENDPOINT</th>
-                      <th scope="col">ACTIVE</th>
-                      <th scope="col">UPDATED</th>
-                      <th scope="col" style={{ textAlign: 'right' }}>ACTION</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {providerHealthRows.map((provider) => (
-                      <tr key={provider.id}>
-                        <td>{provider.name}</td>
-                        <td><Badge>{provider.config?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}</Badge></td>
-                        <td>
-                          <Badge tone={provider.liveState.tone as 'warning' | 'error' | '' | undefined || undefined}>
-                            {provider.liveState.label}
-                          </Badge>
-                        </td>
-                        <td className="mono">{provider.config ? (provider.config.endpoint || 'default') : '—'}</td>
-                        <td>{provider.status?.active_instances ?? 0}</td>
-                        <td>{provider.config ? formatDate(provider.config.updated_at) : '—'}</td>
-                        <td style={{ textAlign: 'right' }}>
-                          {provider.config ? (
-                            <ActionButton variant="destructive" onClick={() => handleDeleteProviderConfig(provider.id)}>DELETE</ActionButton>
-                          ) : (
-                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>—</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="workspace-provider-health-grid" style={{ display: 'grid', gap: '1rem', marginBottom: '1.5rem' }}>
-                {providerHealthRows.map((provider) => (
-                  <div key={`${provider.id}-health`} className="workspace-provider-card">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                      <div>
-                        <LabelText as="div" style={{ marginBottom: '0.5rem' }}>{provider.name.toUpperCase()}</LabelText>
-                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                          <Badge>{provider.config?.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}</Badge>
-                          <Badge tone={provider.liveState.tone as 'warning' | 'error' | '' | undefined || undefined}>{provider.liveState.label}</Badge>
-                        </div>
-                      </div>
-                      <div className="mono" style={{ color: 'var(--text-secondary)' }}>
-                        {provider.status?.account_id || provider.config?.endpoint || (provider.config ? 'default endpoint' : 'not configured')}
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: 1.6 }}>
-                      {provider.liveState.detail}
-                    </div>
-
-                    <div className="workspace-provider-meta" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.9rem', marginTop: '1rem' }}>
-                      <div>
-                        <LabelText as="div">ACTIVE INSTANCES</LabelText>
-                        <div className="mono" style={{ marginTop: '0.4rem' }}>{provider.status?.active_instances ?? 0}</div>
-                      </div>
-                      <div>
-                        <LabelText as="div">REGIONS</LabelText>
-                        <div style={{ marginTop: '0.4rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-                          {provider.status?.capabilities?.known_regions?.length
-                            ? provider.status.capabilities.known_regions.join(', ')
-                            : 'Default'}
-                        </div>
-                      </div>
-                      <div>
-                        <LabelText as="div">BILLING SIGNAL</LabelText>
-                        <div className="mono" style={{ marginTop: '0.4rem' }}>
-                          {provider.status?.balance != null ? `$${provider.status.balance.toFixed(2)}` : '—'}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      {provider.capabilities.length > 0 ? (
-                        provider.capabilities.map((capability) => (
-                          <Badge key={`${provider.id}-${capability}`}>{capability}</Badge>
-                        ))
-                      ) : (
-                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Capabilities will appear when live provider status is available.</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div style={{ display: 'grid', gap: '1rem' }}>
-                <div>
-                  <LabelText as="div">PROVIDER</LabelText>
-                  <ControlSelect value={selectedProvider} onChange={(e) => setSelectedProvider(e.target.value as ConfigurableProvider['id'])}>
-                    {configurableProviders.map((provider) => (
-                      <option key={provider.id} value={provider.id}>{provider.name}</option>
-                    ))}
-                  </ControlSelect>
-                </div>
-                <div>
-                  <LabelText as="div">API KEY</LabelText>
-                  <ControlInput type="password" value={providerAPIKey} onChange={(e) => setProviderAPIKey(e.target.value)} placeholder="Write-only" />
-                </div>
-                <div>
-                  <LabelText as="div">{selectedProviderMeta.apiSecretLabel || 'API SECRET'}</LabelText>
-                  <ControlInput type="password" value={providerAPISecret} onChange={(e) => setProviderAPISecret(e.target.value)} placeholder={selectedProviderMeta.apiSecretPlaceholder || 'Optional write-only secret'} />
-                </div>
-                <div>
-                  <LabelText as="div">ENDPOINT</LabelText>
-                  <ControlInput value={providerEndpoint} onChange={(e) => setProviderEndpoint(e.target.value)} placeholder={selectedProviderMeta.endpointPlaceholder} />
-                </div>
-                {(selectedProviderMeta.optionFields || []).map((field) => (
-                  <div key={field.key}>
-                    <LabelText as="div">{field.label}</LabelText>
-                    <ControlInput
-                      value={providerOptions[field.key] || ''}
-                      onChange={(e) => setProviderOptions((current) => ({ ...current, [field.key]: e.target.value }))}
-                      placeholder={field.placeholder}
-                    />
-                  </div>
-                ))}
-                {selectedProvider === 'e2e' && (
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.6 }}>
-                    E2E requires an API key, auth token, and the target IAM/team/project identifiers. Leave endpoint blank to use the default TIR API base, and keep location set unless your project is pinned elsewhere.
-                  </div>
-                )}
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                  Stored secrets are never shown again after save. Update a provider by submitting a new key or token for the selected provider. Non-secret options reload when you revisit the provider.
-                </div>
-                <div>
-                  <ActionButton variant="primary" disabled={savingProviderConfig} onClick={handleSaveProviderConfig}>
-                    {savingProviderConfig ? 'SAVING...' : 'SAVE PROVIDER CONFIG'}
-                  </ActionButton>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-              Provider configuration is restricted to workspace owners and admins.
-            </div>
-          )}
-        </Cell>
-
-        <Cell span={2} className="workspace-quota-cell">
-          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>WORKSPACE QUOTA</LabelText>
-          {canViewQuota && quota ? (
-            <>
-              <div className="workspace-quota-inputs" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <div>
-                  <LabelText as="div">MONTHLY REQUEST LIMIT</LabelText>
-                  <ControlInput value={requestLimit} disabled={!canManageQuota} onChange={(e) => setRequestLimit(e.target.value)} placeholder="Unlimited" />
-                </div>
-                <div>
-                  <LabelText as="div">MONTHLY TOKEN LIMIT</LabelText>
-                  <ControlInput value={tokenLimit} disabled={!canManageQuota} onChange={(e) => setTokenLimit(e.target.value)} placeholder="Unlimited" />
-                </div>
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '1.25rem', fontSize: '0.9rem' }}>
-                <input type="checkbox" checked={enforceHardLimits} disabled={!canManageQuota} onChange={(e) => setEnforceHardLimits(e.target.checked)} />
-                Enforce hard limits before routing inference traffic
-              </label>
-              <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Last updated {formatDate(quota.updated_at)}
-              </div>
-              {canManageQuota && (
-                <ActionButton variant="primary" style={{ marginTop: '1.25rem' }} disabled={savingQuota} onClick={handleSaveQuota}>
-                  {savingQuota ? 'SAVING...' : 'SAVE QUOTA'}
-                </ActionButton>
-              )}
-            </>
-          ) : (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-              You do not have permission to view quota settings for this workspace.
-            </div>
-          )}
-        </Cell>
-
-        <Cell span={2} className="workspace-service-cell">
-          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>SERVICE ACCOUNTS</LabelText>
-          {canManageKeys ? (
-            <>
-              <div className="responsive-scroll-x" style={{ marginBottom: '1.5rem' }}>
-                <table className="data-table responsive-scroll-x-content">
-                  <thead>
-                    <tr>
-                      <th scope="col">NAME</th>
-                      <th scope="col">ROLE</th>
-                      <th scope="col">PREFIX</th>
-                      <th scope="col">LAST USED</th>
-                      <th scope="col" style={{ textAlign: 'right' }}>ACTION</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {serviceAccounts.map((key) => (
-                      <tr key={key.id}>
-                        <td>{key.name}</td>
-                        <td><Badge>{key.role.toUpperCase()}</Badge></td>
-                        <td className="mono">{key.key_prefix}</td>
-                        <td>{formatDate(key.last_used)}</td>
-                        <td style={{ textAlign: 'right' }}>
-                          <ActionButton variant="destructive" onClick={() => handleRevokeServiceAccount(key.id)}>REVOKE</ActionButton>
-                        </td>
-                      </tr>
-                    ))}
-                    {serviceAccounts.length === 0 && (
-                      <tr>
-                        <td colSpan={5} style={{ color: 'var(--text-secondary)', padding: '1.5rem 0' }}>
-                          No service accounts yet.
-                          <div className="help-actions" style={{ justifyContent: 'center' }}>
-                            <ActionButton onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="ci-bot"]')?.focus()}>CREATE ONE</ActionButton>
-                            <ActionButton onClick={() => navigate('/api-keys')}>OPEN API KEYS</ActionButton>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="workspace-service-create-row" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr auto', gap: '1rem', alignItems: 'end' }}>
-                <div>
-                  <LabelText as="div">NAME</LabelText>
-                  <ControlInput value={newServiceAccountName} onChange={(e) => setNewServiceAccountName(e.target.value)} placeholder="ci-bot" />
-                </div>
-                <div>
-                  <LabelText as="div">ROLE</LabelText>
-                  <ControlSelect value={newServiceAccountRole} onChange={(e) => setNewServiceAccountRole(e.target.value as typeof serviceAccountRoles[number])}>
-                    {serviceAccountRoles.map((candidate) => (
-                      <option key={candidate} value={candidate}>{candidate}</option>
-                    ))}
-                  </ControlSelect>
-                </div>
-                <ActionButton variant="primary" disabled={creatingServiceAccount} onClick={handleCreateServiceAccount}>
-                  {creatingServiceAccount ? 'CREATING...' : 'CREATE'}
-                </ActionButton>
-              </div>
-            </>
-          ) : (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-              Service account management is restricted to workspace owners and admins.
-            </div>
-          )}
-        </Cell>
-      </GridRow>
+        <WorkspaceOperationsSection
+          canManageProviderConfigs={canManageProviderConfigs}
+          providerHealthRows={providerHealthRows}
+          formatDate={formatDate}
+          onDeleteProviderConfig={(provider) => {
+            if (!confirm(`Delete ${provider} provider config for this workspace?`)) return;
+            void handleDeleteProviderConfig(provider);
+          }}
+          configurableProviders={configurableProviders}
+          selectedProvider={selectedProvider}
+          onSelectedProviderChange={setSelectedProvider}
+          providerAPIKey={providerAPIKey}
+          onProviderAPIKeyChange={setProviderAPIKey}
+          providerAPISecret={providerAPISecret}
+          onProviderAPISecretChange={setProviderAPISecret}
+          providerEndpoint={providerEndpoint}
+          onProviderEndpointChange={setProviderEndpoint}
+          selectedProviderMeta={selectedProviderMeta}
+          providerOptions={providerOptions}
+          onProviderOptionChange={(key, value) => setProviderOptions((current) => ({ ...current, [key]: value }))}
+          savingProviderConfig={savingProviderConfig}
+          onSaveProviderConfig={handleProviderConfigSave}
+          canViewQuota={canViewQuota}
+          quota={quota}
+          canManageQuota={canManageQuota}
+          requestLimit={requestLimit}
+          onRequestLimitChange={setRequestLimit}
+          tokenLimit={tokenLimit}
+          onTokenLimitChange={setTokenLimit}
+          enforceHardLimits={enforceHardLimits}
+          onEnforceHardLimitsChange={setEnforceHardLimits}
+          savingQuota={savingQuota}
+          onSaveQuota={handleQuotaSave}
+          canManageKeys={canManageKeys}
+          serviceAccounts={serviceAccounts}
+          onRevokeServiceAccount={(keyId) => {
+            if (!confirm('Revoke this service account key?')) return;
+            void handleRevokeServiceAccount(keyId);
+          }}
+          onOpenApiKeys={() => navigate('/api-keys')}
+          newServiceAccountName={newServiceAccountName}
+          onNewServiceAccountNameChange={setNewServiceAccountName}
+          newServiceAccountRole={newServiceAccountRole}
+          onNewServiceAccountRoleChange={(value) => setNewServiceAccountRole(value as typeof serviceAccountRoles[number])}
+          serviceAccountRoles={serviceAccountRoles}
+          creatingServiceAccount={creatingServiceAccount}
+          onCreateServiceAccount={handleServiceAccountCreate}
+        />
       )}
 
       {(settingsTab === 'members' || settingsTab === 'invites') && (
-      <div className="grid-row workspace-members-row" style={{ alignItems: 'start' }}>
-        <div className="cell workspace-members-cell" style={{ gridColumn: 'span 2' }}>
-          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>MEMBERS</LabelText>
-          <div className="workspace-lifecycle-summary">
-            <Badge>TOTAL {memberCounts.total}</Badge>
-            <Badge>ADMINS {memberCounts.admins}</Badge>
-            <Badge>OPERATORS {memberCounts.operators}</Badge>
-          </div>
-          {canManageMemberships ? (
-            members.length > 0 ? (
-              <div className="mobile-data-list">
-                {members.map((memberRecord) => {
-                  const status = memberStatusMeta(memberRecord, member?.id);
-                  return (
-                    <div key={memberRecord.id} className="mobile-data-card">
-                      <div className="mobile-data-card-header">
-                        <div>
-                          <div className="mobile-data-title">{memberRecord.display_name}</div>
-                          <div className="mobile-data-subtitle">{memberRecord.email}</div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          <Badge>{(memberRoles[memberRecord.id] || memberRecord.role).toUpperCase()}</Badge>
-                          <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
-                        </div>
-                      </div>
-                      <div className="mobile-data-meta">
-                        <div><LabelText>ACCESS</LabelText> <span>{status.detail}</span></div>
-                        <div><LabelText>JOINED</LabelText> <span>{formatDate(memberRecord.created_at)}</span></div>
-                      </div>
-                      <div style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
-                        <div>
-                          <LabelText as="div">ROLE</LabelText>
-                          <ControlSelect
-                            value={memberRoles[memberRecord.id] || memberRecord.role}
-                            disabled={member?.id === memberRecord.id}
-                            onChange={(e) => setMemberRoles((current) => ({ ...current, [memberRecord.id]: e.target.value }))}
-                          >
-                            {roleOptionsForMember(memberRecord.role).map((candidate) => (
-                              <option key={candidate} value={candidate}>{candidate}</option>
-                            ))}
-                          </ControlSelect>
-                        </div>
-                        <div className="mobile-data-actions">
-                          <ActionButton
-                            disabled={updatingMemberId === memberRecord.id || member?.id === memberRecord.id || (memberRoles[memberRecord.id] || memberRecord.role) === memberRecord.role}
-                            onClick={() => handleUpdateMemberRole(memberRecord.id, memberRecord.role)}
-                          >
-                            {updatingMemberId === memberRecord.id ? 'SAVING...' : 'SAVE ROLE'}
-                          </ActionButton>
-                          <ActionButton
-                            variant="destructive"
-                            disabled={removingMemberId === memberRecord.id || member?.id === memberRecord.id}
-                            onClick={() => handleRemoveMember(memberRecord.id)}
-                          >
-                            {removingMemberId === memberRecord.id ? 'REMOVING...' : 'REMOVE'}
-                          </ActionButton>
-                        </div>
-                        {member?.id === memberRecord.id && (
-                          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                            You cannot change or remove your own membership from this screen.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                No members yet.
-                <div className="help-actions">
-                  <ActionButton onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE INVITE</ActionButton>
-                  <ActionButton onClick={() => navigate('/docs')}>READ TEAM ACCESS DOCS</ActionButton>
-                </div>
-              </div>
-            )
-          ) : (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-              Membership administration is restricted to workspace owners and admins.
-            </div>
-          )}
-        </div>
-
-        <div className="cell workspace-invites-cell" style={{ gridColumn: 'span 2', backgroundColor: 'var(--bg-accent)' }}>
-          <LabelText as="div" style={{ marginBottom: '1.5rem' }}>INVITATIONS</LabelText>
-          <div className="workspace-lifecycle-summary">
-            <Badge>PENDING {inviteCounts.pending}</Badge>
-            <Badge>ACCEPTED {inviteCounts.accepted}</Badge>
-            <Badge>EXPIRED {inviteCounts.expired}</Badge>
-            <Badge>REVOKED {inviteCounts.revoked}</Badge>
-          </div>
-          {canManageMemberships ? (
-            <>
-              <div style={{ display: 'grid', gap: '1rem' }}>
-                <div>
-                  <LabelText as="div">EMAIL</LabelText>
-                  <ControlInput value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="teammate@example.com" />
-                </div>
-                <div>
-                  <LabelText as="div">DISPLAY NAME</LabelText>
-                  <ControlInput value={inviteDisplayName} onChange={(e) => setInviteDisplayName(e.target.value)} placeholder="Optional" />
-                </div>
-                <div>
-                  <LabelText as="div">ROLE</LabelText>
-                  <ControlSelect value={inviteRole} onChange={(e) => setInviteRole(e.target.value as typeof assignableInviteRoles[number])}>
-                    {visibleInviteRoles.map((candidate) => (
-                      <option key={candidate} value={candidate}>{candidate}</option>
-                    ))}
-                  </ControlSelect>
-                </div>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.5 }}>
-                  Entering an email here does not send mail automatically. It creates an invite token for manual sharing.
-                </div>
-                <ActionButton variant="primary" disabled={creatingInvite} onClick={handleCreateInvite}>
-                  {creatingInvite ? 'CREATING...' : 'CREATE INVITE'}
-                </ActionButton>
-              </div>
-
-              <div style={{ marginTop: '2rem' }}>
-                {pendingInvites.length > 0 ? (
-                  <div className="mobile-data-list">
-                    {pendingInvites.map((invite) => {
-                      const status = inviteStatusMeta(invite);
-                      return (
-                      <div key={invite.id} className="mobile-data-card">
-                        <div className="mobile-data-card-header">
-                          <div>
-                            <div className="mobile-data-title">{invite.display_name || invite.email}</div>
-                            <div className="mobile-data-subtitle">{invite.email}</div>
-                          </div>
-                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                            <Badge>{invite.role.toUpperCase()}</Badge>
-                            <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
-                          </div>
-                        </div>
-                        <div className="mobile-data-meta">
-                          <div><LabelText>EXPIRES</LabelText> <span>{formatDate(invite.expires_at)}</span></div>
-                          <div><LabelText>STATE</LabelText> <span>{status.detail}</span></div>
-                        </div>
-                        <div className="mobile-data-actions">
-                          <ActionButton variant="destructive" onClick={() => handleRevokeInvite(invite.id)}>REVOKE</ActionButton>
-                        </div>
-                      </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                    No pending invitations. Accepted, expired, and revoked invites appear in history below.
-                    <div className="help-actions">
-                      <ActionButton onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE INVITE</ActionButton>
-                      <ActionButton onClick={() => navigate('/docs')}>READ INVITE FLOW</ActionButton>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ marginTop: '2rem' }}>
-                <LabelText as="div" style={{ marginBottom: '1rem' }}>INVITE HISTORY</LabelText>
-                {inviteHistory.length > 0 ? (
-                  <div className="mobile-data-list">
-                    {inviteHistory.map((invite) => {
-                      const status = inviteStatusMeta(invite);
-                      return (
-                        <div key={invite.id} className="mobile-data-card">
-                          <div className="mobile-data-card-header">
-                            <div>
-                              <div className="mobile-data-title">{invite.display_name || invite.email}</div>
-                              <div className="mobile-data-subtitle">{invite.email}</div>
-                            </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                              <Badge>{invite.role.toUpperCase()}</Badge>
-                              <span className={`badge ${status.tone ? `status-${status.tone}` : ''}`.trim()}>{status.label}</span>
-                            </div>
-                          </div>
-                          <div className="mobile-data-meta">
-                            <div><LabelText>CREATED</LabelText> <span>{formatDate(invite.created_at)}</span></div>
-                            <div><LabelText>FINAL STATE</LabelText> <span>{status.detail}</span></div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-            ) : (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                Invite history will appear once invites are accepted, revoked, or expire.
-                <div className="help-actions">
-                  <ActionButton onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="teammate@example.com"]')?.focus()}>CREATE FIRST INVITE</ActionButton>
-                  <ActionButton onClick={() => navigate('/docs')}>READ INVITE FLOW</ActionButton>
-                </div>
-              </div>
-            )}
-              </div>
-            </>
-          ) : (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-              Invitation management is restricted to workspace owners and admins.
-            </div>
-          )}
-        </div>
-      </div>
+        <WorkspaceMembershipSection
+          canManageMemberships={canManageMemberships}
+          memberCounts={memberCounts}
+          members={members}
+          memberId={member?.id}
+          memberRoles={memberRoles}
+          setMemberRoles={setMemberRoles}
+          roleOptionsForMember={roleOptionsForMember}
+          updatingMemberId={updatingMemberId}
+          removingMemberId={removingMemberId}
+          onSaveMemberRole={handleMemberRoleSave}
+          onRemoveMember={(memberId) => {
+            if (!confirm('Remove this member from the workspace? Their linked human keys will be revoked.')) return;
+            void handleRemoveMember(memberId);
+          }}
+          formatDate={formatDate}
+          inviteCounts={inviteCounts}
+          inviteEmail={inviteEmail}
+          onInviteEmailChange={setInviteEmail}
+          inviteDisplayName={inviteDisplayName}
+          onInviteDisplayNameChange={setInviteDisplayName}
+          inviteRole={inviteRole}
+          onInviteRoleChange={(value) => setInviteRole(value as typeof assignableInviteRoles[number])}
+          visibleInviteRoles={visibleInviteRoles}
+          creatingInvite={creatingInvite}
+          onCreateInvite={handleInviteCreate}
+          pendingInvites={pendingInvites}
+          inviteHistory={inviteHistory}
+          onRevokeInvite={(inviteId) => {
+            if (!confirm('Revoke this invitation?')) return;
+            void handleRevokeInvite(inviteId);
+          }}
+          onOpenDocs={() => navigate('/docs')}
+        />
       )}
 
       {(settingsTab === 'members' || settingsTab === 'invites' || settingsTab === 'providers' || settingsTab === 'service') && (

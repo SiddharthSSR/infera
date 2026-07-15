@@ -56,7 +56,18 @@ describe('API Functions', () => {
     it('createSession should create server-side session', async () => {
       const payload = {
         session: { id: 'sess-1', expires_at: '2099-01-01T00:00:00Z' },
-        key: { id: 'k1', key_prefix: 'inf_abcd', name: 'admin', role: 'admin' },
+        key: {
+          id: 'k1',
+          key_prefix: 'inf_abcd',
+          name: 'admin',
+          role: 'admin',
+          principal_type: 'human',
+          workspace_id: 'ws_default',
+          workspace_slug: 'default',
+          workspace_name: 'Default Workspace',
+        },
+        workspace: { id: 'ws_default', slug: 'default', name: 'Default Workspace' },
+        member: null,
       }
 
       mockFetch.mockResolvedValueOnce({
@@ -101,8 +112,18 @@ describe('API Functions', () => {
     it('switchSessionWorkspace should update session workspace', async () => {
       const payload = {
         session: { id: 'sess-1', expires_at: '2099-01-01T00:00:00Z' },
-        key: { id: 'k2', key_prefix: 'inf_qwer', name: 'member', role: 'operator', workspace_id: 'ws_2' },
+        key: {
+          id: 'k2',
+          key_prefix: 'inf_qwer',
+          name: 'member',
+          role: 'operator',
+          principal_type: 'human',
+          workspace_id: 'ws_2',
+          workspace_slug: 'beta-team',
+          workspace_name: 'Beta Team',
+        },
         workspace: { id: 'ws_2', slug: 'beta-team', name: 'Beta Team' },
+        member: { id: 'm1', email: 'member@example.com', display_name: 'Member' },
       }
 
       mockFetch.mockResolvedValueOnce({
@@ -157,10 +178,66 @@ describe('API Functions', () => {
       mockFetch
         .mockResolvedValueOnce({ ok: true, json: async () => ({ data: [{ id: 'llama-3-8b', object: 'model' }] }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ workers: { total: 1, healthy: 1 } }) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ instances: [{ id: 'i1', status: 'running' }] }) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ offerings: [{ gpu_type: 'RTX_4090' }] }) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ providers: [{ provider: 'runpod', connected: true }] }) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ current_hourly: 1.5 }) })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            instances: [{
+              id: 'i1',
+              provider_id: 'provider-i1',
+              provider: 'mock',
+              name: 'worker-1',
+              status: 'running',
+              gpu_type: 'RTX_4090',
+              gpu_count: 1,
+              vcpu: 8,
+              memory_gb: 32,
+              storage_gb: 100,
+              cost_per_hour: 0.5,
+              spot_instance: false,
+              created_at: '2026-04-10T00:00:00Z',
+              error: '',
+            }],
+            total: 1,
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            offerings: [{
+              provider: 'mock',
+              gpu_type: 'RTX_4090',
+              gpu_count: 1,
+              vcpu: 8,
+              memory_gb: 32,
+              storage_gb: 100,
+              cost_per_hour: 0.5,
+              region: 'test',
+              available: 1,
+            }],
+            total: 1,
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            providers: [{
+              provider: 'runpod',
+              connected: true,
+              active_instances: 1,
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            current_hourly: 1.5,
+            today_total: 0,
+            month_total: 0,
+            projected_month: 0,
+            by_provider: {},
+            by_gpu: {},
+          }),
+        })
 
       await expect(fetchModels()).resolves.toHaveLength(1)
       await expect(fetchStats()).resolves.toEqual(expect.objectContaining({ workers: { total: 1, healthy: 1 } }))
@@ -218,6 +295,7 @@ describe('API Functions', () => {
                 updated_at: '2026-03-16T00:00:00Z',
               },
             ],
+            total: 1,
           }),
         })
         .mockResolvedValueOnce({
@@ -481,6 +559,7 @@ describe('API Functions', () => {
             { id: 'ws_1', slug: 'alpha', name: 'Alpha', created_at: '2026-03-15T00:00:00Z', status: 'active' },
             { id: 'ws_2', slug: 'beta', name: 'Beta', created_at: '2026-03-15T00:00:00Z', status: 'active' },
           ],
+          total: 2,
         }),
       })
 
@@ -495,9 +574,50 @@ describe('API Functions', () => {
 
     it('fetchWorkspaceQuota/fetchWorkspaceMembers/fetchWorkspaceInvites parse payloads', async () => {
       mockFetch
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ quota: { workspace_id: 'ws_1', enforce_hard_limits: true } }) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ members: [{ id: 'm1', email: 'member@example.com' }] }) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ invitations: [{ id: 'inv_1', email: 'invite@example.com' }] }) })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            quota: {
+              workspace_id: 'ws_1',
+              monthly_request_limit: 100,
+              monthly_token_limit: 1000,
+              enforce_hard_limits: true,
+              updated_at: '2026-03-15T00:00:00Z',
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            members: [{
+              id: 'm1',
+              workspace_id: 'ws_1',
+              email: 'member@example.com',
+              display_name: 'Member Example',
+              role: 'developer',
+              status: 'active',
+              created_at: '2026-03-14T00:00:00Z',
+            }],
+            total: 1,
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            invitations: [{
+              id: 'inv_1',
+              workspace_id: 'ws_1',
+              email: 'invite@example.com',
+              display_name: 'Invite Example',
+              role: 'developer',
+              invited_by_key_id: 'k_admin',
+              created_at: '2026-03-14T00:00:00Z',
+              expires_at: '2026-03-20T00:00:00Z',
+              status: 'pending',
+            }],
+            total: 1,
+          }),
+        })
 
       await expect(fetchWorkspaceQuota('ws_1')).resolves.toEqual(expect.objectContaining({ workspace_id: 'ws_1' }))
       await expect(fetchWorkspaceMembers('ws_1')).resolves.toHaveLength(1)
@@ -526,7 +646,21 @@ describe('API Functions', () => {
           json: async () => ({
             membership: { id: 'm1', workspace_id: 'ws_1', email: 'invite@example.com', display_name: 'Invite User', role: 'developer', status: 'active', created_at: '2026-03-14T00:00:00Z' },
             key: 'inf_secret',
-            record: { id: 'k1', key_prefix: 'inf_abcd...', name: 'Invite User', role: 'developer', created_at: '2026-03-14T00:00:00Z', status: 'active' },
+            record: {
+              id: 'k1',
+              workspace_id: 'ws_1',
+              workspace_slug: 'workspace',
+              workspace_name: 'Workspace',
+              key_prefix: 'inf_abcd...',
+              name: 'Invite User',
+              role: 'developer',
+              principal_type: 'human',
+              membership_id: 'm1',
+              member_email: 'invite@example.com',
+              member_name: 'Invite User',
+              created_at: '2026-03-14T00:00:00Z',
+              status: 'active',
+            },
           }),
         })
 
@@ -547,7 +681,20 @@ describe('API Functions', () => {
 
     it('updateWorkspaceMember/removeWorkspaceMember hit expected methods', async () => {
       mockFetch
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ member: { id: 'm1', role: 'operator' } }) })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            member: {
+              id: 'm1',
+              workspace_id: 'ws_1',
+              email: 'member@example.com',
+              display_name: 'Member Example',
+              role: 'operator',
+              status: 'active',
+              created_at: '2026-03-14T00:00:00Z',
+            },
+          }),
+        })
         .mockResolvedValueOnce({ ok: true })
 
       await updateWorkspaceMember('ws_1', 'm1', { role: 'operator' })
@@ -569,7 +716,16 @@ describe('API Functions', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          providers: [{ workspace_id: 'ws_1', provider: 'runpod', configured: true, endpoint: 'https://api.runpod.io/graphql', options: { location: 'us-east-1' } }],
+          providers: [{
+            workspace_id: 'ws_1',
+            provider: 'runpod',
+            configured: true,
+            endpoint: 'https://api.runpod.io/graphql',
+            options: { location: 'us-east-1' },
+            created_at: '2026-03-15T00:00:00Z',
+            updated_at: '2026-03-15T00:00:00Z',
+          }],
+          total: 1,
         }),
       })
 
@@ -580,8 +736,35 @@ describe('API Functions', () => {
 
     it('updateWorkspaceQuota/createWorkspaceInvite/revokeWorkspaceInvite hit expected methods', async () => {
       mockFetch
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ quota: { workspace_id: 'ws_1', enforce_hard_limits: false } }) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ invitation_token: 'invite_token', invitation: { id: 'inv_1' } }) })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            quota: {
+              workspace_id: 'ws_1',
+              monthly_request_limit: 100,
+              monthly_token_limit: 1000,
+              enforce_hard_limits: false,
+              updated_at: '2026-03-15T00:00:00Z',
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            invitation_token: 'invite_token',
+            invitation: {
+              id: 'inv_1',
+              workspace_id: 'ws_1',
+              email: 'new@example.com',
+              display_name: 'New Example',
+              role: 'developer',
+              invited_by_key_id: 'k_admin',
+              created_at: '2026-03-15T00:00:00Z',
+              expires_at: '2026-03-22T00:00:00Z',
+              status: 'pending',
+            },
+          }),
+        })
         .mockResolvedValueOnce({ ok: true })
 
       await updateWorkspaceQuota('ws_1', { monthly_request_limit: 100, monthly_token_limit: 1000, enforce_hard_limits: false })
@@ -609,7 +792,17 @@ describe('API Functions', () => {
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ provider: { workspace_id: 'ws_1', provider: 'runpod', configured: true } }),
+          json: async () => ({
+            provider: {
+              workspace_id: 'ws_1',
+              provider: 'runpod',
+              configured: true,
+              endpoint: 'https://api.runpod.io/graphql',
+              options: { location: 'us-east-1' },
+              created_at: '2026-03-15T00:00:00Z',
+              updated_at: '2026-03-15T00:00:00Z',
+            },
+          }),
         })
         .mockResolvedValueOnce({ ok: true })
 

@@ -4,7 +4,7 @@ import {
   Cpu, Clock, AlertCircle, CheckCircle2, Loader2 
 } from 'lucide-react';
 import type { Instance } from '../types';
-import { useTerminateInstance, useStartInstance, useStopInstance } from '../hooks/useApi';
+import { useTerminateInstance, useStartInstance, useStopInstance } from '../hooks/useInfrastructureApi';
 
 interface InstancesListProps {
   instances: Instance[] | undefined;

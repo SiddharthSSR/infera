@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, Cpu, DollarSign, Loader2, Box } from 'lucide-react';
 import type { GPUOffering, ProvisionRequest, ProviderType, GPUType, KnownGPUType } from '../types';
-import { useProvisionInstance } from '../hooks/useApi';
+import { useProvisionInstance } from '../hooks/useInfrastructureApi';
 
 interface ProvisionModalProps {
   isOpen: boolean;
