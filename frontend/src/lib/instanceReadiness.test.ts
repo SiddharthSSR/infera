@@ -99,6 +99,53 @@ describe('getInstanceReadiness', () => {
     expect(readiness.verified).toBe(false);
   });
 
+  it('shows an unregistered worker as pending before the registration deadline', () => {
+    const readiness = getInstanceReadiness(
+      {
+        ...baseInstance,
+        worker_id: undefined,
+        worker_registration_status: 'pending',
+        provider_network_ready: true,
+      },
+      [],
+      new Date('2026-03-14T10:02:00.000Z'),
+    );
+
+    expect(readiness.label).toBe('WAITING FOR WORKER');
+    expect(readiness.tone).toBe('warning');
+    expect(readiness.serving).toBe(false);
+  });
+
+  it('uses registered-unhealthy lifecycle state even when worker data looks healthy', () => {
+    const readiness = getInstanceReadiness(
+      {
+        ...baseInstance,
+        worker_registration_status: 'registered_unhealthy',
+        last_worker_registration_error: 'Gateway registry reports the linked worker as unhealthy',
+      },
+      [healthyWorker],
+      new Date('2026-03-14T10:12:00.000Z'),
+    );
+
+    expect(readiness.label).toBe('WORKER UNHEALTHY');
+    expect(readiness.tone).toBe('warning');
+    expect(readiness.detail).toContain('registry reports');
+    expect(readiness.verified).toBe(false);
+  });
+
+  it('maps lifecycle ready to serving verified when model and heartbeat are current', () => {
+    const readiness = getInstanceReadiness(
+      { ...baseInstance, worker_registration_status: 'ready' },
+      [healthyWorker],
+      new Date('2026-03-14T10:12:00.000Z'),
+    );
+
+    expect(readiness.label).toBe('SERVING VERIFIED');
+    expect(readiness.tone).toBe('');
+    expect(readiness.serving).toBe(true);
+    expect(readiness.verified).toBe(true);
+  });
+
   it('marks serving as unverified when the worker heartbeat is stale', () => {
     const readiness = getInstanceReadiness(
       baseInstance,

@@ -138,6 +138,9 @@ func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gatew
 			gw.metrics.RecordBatch(batch.ModelID, batch.Size(), wait)
 		})
 		r.OnWorkerHealthTransition(func(transition router.WorkerHealthTransition) {
+			if gw.instanceManager != nil && (transition.ToStatus == types.WorkerStatusUnhealthy || transition.ToStatus == types.WorkerStatusOffline) {
+				gw.instanceManager.RecordWorkerUnhealthy(transition.WorkerID, time.Now())
+			}
 			if gw.metrics == nil {
 				return
 			}
