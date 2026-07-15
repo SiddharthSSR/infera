@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -793,11 +794,16 @@ func (p *Provider) GetStatus(ctx context.Context) (*providers.ProviderStatus, er
 
 	resp, err := p.graphQL(ctx, query, nil)
 	if err != nil {
-		return &providers.ProviderStatus{
+		status := &providers.ProviderStatus{
 			Provider:     providers.ProviderRunPod,
 			Connected:    false,
 			ErrorMessage: err.Error(),
-		}, nil
+		}
+		var providerErr *providers.ProviderError
+		if errors.As(err, &providerErr) {
+			status.ErrorCode = providerErr.Code
+		}
+		return status, nil
 	}
 
 	var result struct {
@@ -918,6 +924,15 @@ func (p *Provider) graphQL(ctx context.Context, query string, variables map[stri
 			Message:    "rate limited",
 			StatusCode: 429,
 			RetryAfter: 60,
+		}
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, &providers.ProviderError{
+			Provider:   providers.ProviderRunPod,
+			Code:       providers.ProviderErrorAuthFailed,
+			Message:    "RunPod rejected the supplied API key",
+			StatusCode: resp.StatusCode,
 		}
 	}
 

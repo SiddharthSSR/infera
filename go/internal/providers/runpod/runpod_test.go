@@ -54,6 +54,53 @@ func TestGraphQLMapsRateLimitToRetryableProviderError(t *testing.T) {
 	}
 }
 
+func TestGraphQLMapsUnauthorizedToAuthFailed(t *testing.T) {
+	provider, err := New(Config{APIKey: "invalid-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusUnauthorized, `{"error":"sensitive upstream response"}`), nil
+	})
+
+	_, err = provider.graphQL(context.Background(), "query { myself { id } }", nil)
+	if err == nil {
+		t.Fatal("expected auth_failed error")
+	}
+
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != providers.ProviderErrorAuthFailed {
+		t.Fatalf("expected auth_failed, got %q", providerErr.Code)
+	}
+	if strings.Contains(providerErr.Message, "sensitive upstream response") {
+		t.Fatalf("upstream response leaked through provider error: %q", providerErr.Message)
+	}
+}
+
+func TestGetStatusPreservesProviderErrorCode(t *testing.T) {
+	provider, err := New(Config{APIKey: "invalid-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusUnauthorized, `{}`), nil
+	})
+
+	status, err := provider.GetStatus(context.Background())
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if status.Connected {
+		t.Fatal("expected disconnected status")
+	}
+	if status.ErrorCode != providers.ProviderErrorAuthFailed {
+		t.Fatalf("expected auth_failed status, got %q", status.ErrorCode)
+	}
+}
+
 func TestGetInstanceReturnsNotFoundWhenPodMissing(t *testing.T) {
 	provider, err := New(Config{APIKey: "test-key"})
 	if err != nil {
