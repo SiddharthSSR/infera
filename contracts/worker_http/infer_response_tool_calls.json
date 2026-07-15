@@ -1,0 +1,35 @@
+{
+  "request_id": "req-tool-nonstream",
+  "model_id": "model-1",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "call_2",
+            "type": "function",
+            "function": {
+              "name": "web_search",
+              "arguments": "{\"query\":\"Rust async runtimes\"}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 5,
+    "completion_tokens": 1,
+    "total_tokens": 6
+  },
+  "latency": {
+    "queue_ms": 1,
+    "inference_ms": 2,
+    "total_ms": 3,
+    "time_to_first_token_ms": 1
+  }
+}

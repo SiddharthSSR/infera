@@ -1,0 +1,12 @@
+{
+  "invitation": {
+    "workspace_id": "ws_alpha",
+    "workspace_slug": "fixture-team",
+    "workspace_name": "Fixture Team",
+    "email": "invitee@example.com",
+    "display_name": "Invitee Example",
+    "role": "developer",
+    "expires_at": "2026-04-17T00:00:00Z",
+    "status": "pending"
+  }
+}

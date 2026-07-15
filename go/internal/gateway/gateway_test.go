@@ -13,10 +13,88 @@ import (
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/providers"
-	mockprovider "github.com/infera/infera/go/internal/providers/mock"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/pkg/types"
 )
+
+type runPodLinkTestProvider struct {
+	instances map[string]*providers.Instance
+}
+
+func newRunPodLinkTestProvider() *runPodLinkTestProvider {
+	return &runPodLinkTestProvider{
+		instances: make(map[string]*providers.Instance),
+	}
+}
+
+func (p *runPodLinkTestProvider) Name() providers.ProviderType {
+	return providers.ProviderRunPod
+}
+
+func (p *runPodLinkTestProvider) Provision(ctx context.Context, req *providers.ProvisionRequest) (*providers.Instance, error) {
+	instance := &providers.Instance{
+		ID:         "inst-runpod-link",
+		ProviderID: "uxh9he0pyoqpho",
+		Provider:   providers.ProviderRunPod,
+		Name:       req.Name,
+		Status:     providers.InstanceStatusRunning,
+		GPUType:    req.GPUType,
+		GPUCount:   req.GPUCount,
+		Models:     append([]string(nil), req.Models...),
+		Engine:     req.Engine,
+		CreatedAt:  time.Now().UTC(),
+	}
+	p.instances[instance.ID] = instance
+	return instance, nil
+}
+
+func (p *runPodLinkTestProvider) Terminate(ctx context.Context, instanceID string) error {
+	return nil
+}
+
+func (p *runPodLinkTestProvider) Start(ctx context.Context, instanceID string) error {
+	return nil
+}
+
+func (p *runPodLinkTestProvider) Stop(ctx context.Context, instanceID string) error {
+	return nil
+}
+
+func (p *runPodLinkTestProvider) GetInstance(ctx context.Context, instanceID string) (*providers.Instance, error) {
+	for _, instance := range p.instances {
+		if instance.ID == instanceID || instance.ProviderID == instanceID {
+			return instance, nil
+		}
+	}
+	return nil, &providers.ProviderError{
+		Provider: providers.ProviderRunPod,
+		Code:     providers.ProviderErrorNotFound,
+		Message:  "instance not found",
+	}
+}
+
+func (p *runPodLinkTestProvider) ListInstances(ctx context.Context) ([]*providers.Instance, error) {
+	instances := make([]*providers.Instance, 0, len(p.instances))
+	for _, instance := range p.instances {
+		instances = append(instances, instance)
+	}
+	return instances, nil
+}
+
+func (p *runPodLinkTestProvider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering, error) {
+	return nil, nil
+}
+
+func (p *runPodLinkTestProvider) GetStatus(ctx context.Context) (*providers.ProviderStatus, error) {
+	return &providers.ProviderStatus{
+		Provider:  providers.ProviderRunPod,
+		Connected: true,
+	}, nil
+}
+
+func (p *runPodLinkTestProvider) WaitForReady(ctx context.Context, instanceID string) error {
+	return nil
+}
 
 func TestHandleCORSAllowedOrigin(t *testing.T) {
 	g := New(Config{
@@ -121,18 +199,19 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 
 	manager, err := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider: providers.ProviderMock,
+		WorkerImage:     "ghcr.io/infera/infera-worker:v1.0.0",
 	})
 	if err != nil {
 		t.Fatalf("providers.NewManager: %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 
-	runpod := mockprovider.New()
+	runpod := newRunPodLinkTestProvider()
 	manager.RegisterProvider(runpod)
 
 	instance, err := manager.Provision(context.Background(), &providers.ProvisionRequest{
 		Name:     "runpod-like-instance",
-		Provider: providers.ProviderMock,
+		Provider: providers.ProviderRunPod,
 		GPUType:  providers.GPUL40S,
 		GPUCount: 1,
 		Models:   []string{"Qwen/Qwen2.5-7B-Instruct"},
@@ -140,10 +219,6 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manager.Provision: %v", err)
 	}
-
-	// Re-shape the mock instance so it looks like a RunPod-managed pod.
-	instance.Provider = providers.ProviderRunPod
-	instance.ProviderID = "uxh9he0pyoqpho"
 
 	g := New(Config{WorkerSharedToken: "secret-token"}, r, manager)
 	handler := g.requireWorkerToken(g.handleRegisterWorker)
@@ -173,18 +248,19 @@ func TestHandleWorkerHeartbeatRepairsMissingInstanceLink(t *testing.T) {
 
 	manager, err := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider: providers.ProviderMock,
+		WorkerImage:     "ghcr.io/infera/infera-worker:v1.0.0",
 	})
 	if err != nil {
 		t.Fatalf("providers.NewManager: %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 
-	runpod := mockprovider.New()
+	runpod := newRunPodLinkTestProvider()
 	manager.RegisterProvider(runpod)
 
 	instance, err := manager.Provision(context.Background(), &providers.ProvisionRequest{
 		Name:     "heartbeat-link-instance",
-		Provider: providers.ProviderMock,
+		Provider: providers.ProviderRunPod,
 		GPUType:  providers.GPUL40S,
 		GPUCount: 1,
 		Models:   []string{"Qwen/Qwen2.5-7B-Instruct"},
@@ -192,10 +268,6 @@ func TestHandleWorkerHeartbeatRepairsMissingInstanceLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manager.Provision: %v", err)
 	}
-
-	instance.Provider = providers.ProviderRunPod
-	instance.ProviderID = "uxh9he0pyoqpho"
-	instance.WorkerID = ""
 
 	if err := r.RegisterWorker(&types.WorkerInfo{
 		WorkerID: "w1",

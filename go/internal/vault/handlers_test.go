@@ -49,7 +49,9 @@ func TestHandleCreateModel(t *testing.T) {
 		}
 
 		var resp Model
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 		if resp.Name != "Test Model" {
 			t.Errorf("expected name Test Model, got %s", resp.Name)
 		}
@@ -97,8 +99,12 @@ func TestHandleCreateModel(t *testing.T) {
 func TestHandleListModels(t *testing.T) {
 	h := newTestHandler(t)
 
-	h.store.Create(&Model{Name: "A", SourceURI: "a", Family: "llama", Status: "available"})
-	h.store.Create(&Model{Name: "B", SourceURI: "b", Family: "mistral", Status: "available"})
+	if err := h.store.Create(&Model{Name: "A", SourceURI: "a", Family: "llama", Status: "available"}); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	if err := h.store.Create(&Model{Name: "B", SourceURI: "b", Family: "mistral", Status: "available"}); err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
 
 	t.Run("lists all models", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/vault/models", nil)
@@ -111,7 +117,9 @@ func TestHandleListModels(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 		models := resp["models"].([]interface{})
 		if len(models) != 2 {
 			t.Errorf("expected 2 models, got %d", len(models))
@@ -128,7 +136,9 @@ func TestHandleListModels(t *testing.T) {
 		h.listModels(w, req)
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 		models := resp["models"].([]interface{})
 		if len(models) != 1 {
 			t.Errorf("expected 1 model, got %d", len(models))
@@ -140,7 +150,9 @@ func TestHandleModelByID(t *testing.T) {
 	h := newTestHandler(t)
 
 	m := &Model{Name: "Target", SourceURI: "target/model", Family: "test"}
-	h.store.Create(m)
+	if err := h.store.Create(m); err != nil {
+		t.Fatalf("Create target model: %v", err)
+	}
 
 	t.Run("GET model by ID", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/vault/models/"+m.ID, nil)
@@ -153,7 +165,9 @@ func TestHandleModelByID(t *testing.T) {
 		}
 
 		var resp Model
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 		if resp.Name != "Target" {
 			t.Errorf("expected name Target, got %s", resp.Name)
 		}
@@ -186,7 +200,9 @@ func TestHandleModelByID(t *testing.T) {
 		}
 
 		var resp Model
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 		if resp.Name != "Updated Target" {
 			t.Errorf("expected Updated Target, got %s", resp.Name)
 		}
@@ -194,7 +210,9 @@ func TestHandleModelByID(t *testing.T) {
 
 	t.Run("DELETE model", func(t *testing.T) {
 		dm := &Model{Name: "Delete", SourceURI: "delete/me"}
-		h.store.Create(dm)
+		if err := h.store.Create(dm); err != nil {
+			t.Fatalf("Create delete model: %v", err)
+		}
 
 		req := authedVaultRequest(httptest.NewRequest(http.MethodDelete, "/api/vault/models/"+dm.ID, nil))
 		w := httptest.NewRecorder()
@@ -232,8 +250,12 @@ func TestHandleModelByID(t *testing.T) {
 func TestHandleFamilies(t *testing.T) {
 	h := newTestHandler(t)
 
-	h.store.Create(&Model{Name: "A", SourceURI: "a", Family: "llama"})
-	h.store.Create(&Model{Name: "B", SourceURI: "b", Family: "mistral"})
+	if err := h.store.Create(&Model{Name: "A", SourceURI: "a", Family: "llama"}); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	if err := h.store.Create(&Model{Name: "B", SourceURI: "b", Family: "mistral"}); err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
 
 	t.Run("returns families", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/vault/models/families", nil)
@@ -246,7 +268,9 @@ func TestHandleFamilies(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 		families := resp["families"].([]interface{})
 		if len(families) != 2 {
 			t.Errorf("expected 2 families, got %d", len(families))
@@ -268,8 +292,12 @@ func TestHandleFamilies(t *testing.T) {
 func TestHandleStats(t *testing.T) {
 	h := newTestHandler(t)
 
-	h.store.Create(&Model{Name: "A", SourceURI: "a", Family: "llama", Status: "available"})
-	h.store.Create(&Model{Name: "B", SourceURI: "b", Family: "mistral", Status: "deprecated"})
+	if err := h.store.Create(&Model{Name: "A", SourceURI: "a", Family: "llama", Status: "available"}); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	if err := h.store.Create(&Model{Name: "B", SourceURI: "b", Family: "mistral", Status: "deprecated"}); err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/vault/stats", nil)
 	w := httptest.NewRecorder()
@@ -281,7 +309,9 @@ func TestHandleStats(t *testing.T) {
 	}
 
 	var resp Stats
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
 	if resp.TotalModels != 2 {
 		t.Errorf("expected 2 total, got %d", resp.TotalModels)
 	}

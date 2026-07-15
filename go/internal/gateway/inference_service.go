@@ -268,7 +268,7 @@ func (g *Gateway) enforceWorkspaceQuotaForKey(key *auth.KeyRecord, req *types.In
 		return nil
 	}
 
-	quota, err := g.authHandler.Store().GetWorkspaceQuota(key.WorkspaceID)
+	quota, err := g.quotaCache.getWorkspaceQuota(key.WorkspaceID, g.authHandler.Store().GetWorkspaceQuota)
 	if err != nil {
 		g.log.Warn("workspace.quota_lookup_failed",
 			slog.String("workspace_id", key.WorkspaceID),
@@ -282,11 +282,7 @@ func (g *Gateway) enforceWorkspaceQuotaForKey(key *auth.KeyRecord, req *types.In
 
 	now := time.Now().UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	usage, err := g.auditStore.UsageSummary(audit.UsageSummaryQuery{
-		Start:       monthStart,
-		End:         now,
-		WorkspaceID: key.WorkspaceID,
-	})
+	usage, err := g.quotaCache.getWorkspaceUsageSummary(key.WorkspaceID, monthStart, g.auditStore.UsageSummary)
 	if err != nil {
 		g.log.Warn("workspace.quota_usage_failed",
 			slog.String("workspace_id", key.WorkspaceID),

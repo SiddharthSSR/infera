@@ -1,0 +1,22 @@
+{
+  "request_id": "req-tool-stream",
+  "index": 0,
+  "delta": "",
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 5,
+    "completion_tokens": 1,
+    "total_tokens": 6
+  },
+  "tool_calls": [
+    {
+      "index": 0,
+      "id": "call_1",
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "arguments": "{\"query\":\"Go async runtimes\"}"
+      }
+    }
+  ]
+}

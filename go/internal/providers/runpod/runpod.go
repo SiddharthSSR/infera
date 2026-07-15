@@ -1002,18 +1002,6 @@ func (p *Provider) convertPod(pod *runpodPod) *providers.Instance {
 	return instance
 }
 
-func usesFloatingImageRef(image string) bool {
-	if strings.Contains(image, "@sha256:") {
-		return false
-	}
-	lastSlash := strings.LastIndex(image, "/")
-	lastColon := strings.LastIndex(image, ":")
-	if lastColon <= lastSlash {
-		return true
-	}
-	return strings.EqualFold(image[lastColon+1:], "latest")
-}
-
 func mapStatus(status string) providers.InstanceStatus {
 	switch status {
 	case "RUNNING":

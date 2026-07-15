@@ -1,0 +1,6 @@
+{
+  "error": {
+    "type": "invalid_request",
+    "message": "Invalid JSON: stop must be a string or array of strings"
+  }
+}

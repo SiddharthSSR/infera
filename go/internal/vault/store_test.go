@@ -106,7 +106,9 @@ func TestGet(t *testing.T) {
 
 	t.Run("returns model by ID", func(t *testing.T) {
 		m := &Model{Name: "Get Test", SourceURI: "test/get"}
-		s.Create(m)
+		if err := s.Create(m); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
 
 		got, err := s.Get(m.ID)
 		if err != nil {
@@ -130,7 +132,9 @@ func TestUpdate(t *testing.T) {
 
 	t.Run("updates existing model", func(t *testing.T) {
 		m := &Model{Name: "Original", SourceURI: "test/update", Family: "test"}
-		s.Create(m)
+		if err := s.Create(m); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
 
 		m.Name = "Updated"
 		m.Family = "updated-family"
@@ -166,7 +170,9 @@ func TestDelete(t *testing.T) {
 
 	t.Run("deletes existing model", func(t *testing.T) {
 		m := &Model{Name: "Delete Me", SourceURI: "test/delete"}
-		s.Create(m)
+		if err := s.Create(m); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
 
 		if err := s.Delete(m.ID); err != nil {
 			t.Fatalf("Delete failed: %v", err)
@@ -190,9 +196,15 @@ func TestList(t *testing.T) {
 	s := newTestStore(t)
 
 	// Seed some models
-	s.Create(&Model{Name: "Llama 8B", SourceURI: "meta-llama/llama-8b", Family: "llama", Quantization: "none", VRAMRequired: 16384, Tags: []string{"chat"}, Status: "available"})
-	s.Create(&Model{Name: "Mistral 7B AWQ", SourceURI: "mistral/7b-awq", Family: "mistral", Quantization: "awq", VRAMRequired: 6144, Tags: []string{"chat", "quantized"}, Status: "available"})
-	s.Create(&Model{Name: "Old Model", SourceURI: "old/model", Family: "llama", VRAMRequired: 9000, Status: "deprecated"})
+	if err := s.Create(&Model{Name: "Llama 8B", SourceURI: "meta-llama/llama-8b", Family: "llama", Quantization: "none", VRAMRequired: 16384, Tags: []string{"chat"}, Status: "available"}); err != nil {
+		t.Fatalf("Create llama: %v", err)
+	}
+	if err := s.Create(&Model{Name: "Mistral 7B AWQ", SourceURI: "mistral/7b-awq", Family: "mistral", Quantization: "awq", VRAMRequired: 6144, Tags: []string{"chat", "quantized"}, Status: "available"}); err != nil {
+		t.Fatalf("Create mistral: %v", err)
+	}
+	if err := s.Create(&Model{Name: "Old Model", SourceURI: "old/model", Family: "llama", VRAMRequired: 9000, Status: "deprecated"}); err != nil {
+		t.Fatalf("Create old model: %v", err)
+	}
 
 	t.Run("list all", func(t *testing.T) {
 		models, err := s.List(nil)
@@ -274,10 +286,18 @@ func TestList(t *testing.T) {
 func TestListFamilies(t *testing.T) {
 	s := newTestStore(t)
 
-	s.Create(&Model{Name: "A", SourceURI: "a", Family: "llama"})
-	s.Create(&Model{Name: "B", SourceURI: "b", Family: "mistral"})
-	s.Create(&Model{Name: "C", SourceURI: "c", Family: "llama"})
-	s.Create(&Model{Name: "D", SourceURI: "d", Family: ""}) // no family
+	if err := s.Create(&Model{Name: "A", SourceURI: "a", Family: "llama"}); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	if err := s.Create(&Model{Name: "B", SourceURI: "b", Family: "mistral"}); err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+	if err := s.Create(&Model{Name: "C", SourceURI: "c", Family: "llama"}); err != nil {
+		t.Fatalf("Create C: %v", err)
+	}
+	if err := s.Create(&Model{Name: "D", SourceURI: "d", Family: ""}); err != nil { // no family
+		t.Fatalf("Create D: %v", err)
+	}
 
 	families, err := s.ListFamilies()
 	if err != nil {
@@ -291,9 +311,15 @@ func TestListFamilies(t *testing.T) {
 func TestStats(t *testing.T) {
 	s := newTestStore(t)
 
-	s.Create(&Model{Name: "A", SourceURI: "a", Family: "llama", Status: "available"})
-	s.Create(&Model{Name: "B", SourceURI: "b", Family: "mistral", Status: "available"})
-	s.Create(&Model{Name: "C", SourceURI: "c", Family: "llama", Status: "deprecated"})
+	if err := s.Create(&Model{Name: "A", SourceURI: "a", Family: "llama", Status: "available"}); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	if err := s.Create(&Model{Name: "B", SourceURI: "b", Family: "mistral", Status: "available"}); err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+	if err := s.Create(&Model{Name: "C", SourceURI: "c", Family: "llama", Status: "deprecated"}); err != nil {
+		t.Fatalf("Create C: %v", err)
+	}
 
 	stats, err := s.Stats()
 	if err != nil {
@@ -321,8 +347,12 @@ func TestCount(t *testing.T) {
 		t.Errorf("expected 0, got %d", count)
 	}
 
-	s.Create(&Model{Name: "A", SourceURI: "a"})
-	s.Create(&Model{Name: "B", SourceURI: "b"})
+	if err := s.Create(&Model{Name: "A", SourceURI: "a"}); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	if err := s.Create(&Model{Name: "B", SourceURI: "b"}); err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
 
 	count, _ = s.Count()
 	if count != 2 {

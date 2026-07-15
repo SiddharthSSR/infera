@@ -1,0 +1,5 @@
+{
+  "monthly_request_limit": 250,
+  "monthly_token_limit": 5000,
+  "enforce_hard_limits": false
+}

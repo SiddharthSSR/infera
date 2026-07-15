@@ -1,0 +1,7 @@
+{
+  "status": "passed",
+  "verified_at": "2026-04-10T00:01:00Z",
+  "latency_ms": 321,
+  "model": "org/model-a",
+  "response_preview": "READY"
+}

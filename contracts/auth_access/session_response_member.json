@@ -1,0 +1,26 @@
+{
+  "session": {
+    "id": "sess_fixture_member",
+    "expires_at": "2026-04-12T00:00:00Z"
+  },
+  "key": {
+    "id": "key_fixture_member",
+    "key_prefix": "inf_fixture_member...",
+    "name": "Joined Member",
+    "role": "operator",
+    "principal_type": "human",
+    "workspace_id": "ws_alpha",
+    "workspace_slug": "fixture-team",
+    "workspace_name": "Fixture Team"
+  },
+  "workspace": {
+    "id": "ws_alpha",
+    "slug": "fixture-team",
+    "name": "Fixture Team"
+  },
+  "member": {
+    "id": "mbr_fixture_member",
+    "email": "member@example.com",
+    "display_name": "Joined Member"
+  }
+}

@@ -41,7 +41,7 @@ func DefaultConfig() Config {
 // Router is the main routing service.
 type Router struct {
 	config          Config
-	registry        *registry.WorkerRegistry
+	registry        workerRegistry
 	strategyEngine  *strategy.Engine
 	batchManager    *batcher.Manager
 	onBatchDispatch func(batch *types.BatchContext)
@@ -53,6 +53,24 @@ type Router struct {
 	affinityMu      sync.RWMutex
 	ctx             context.Context
 	cancel          context.CancelFunc
+}
+
+// workerRegistry defines the worker-state surface the router needs.
+// The default implementation remains the in-memory registry, but this
+// interface lets future shared-state implementations plug in without
+// changing routing logic.
+type workerRegistry interface {
+	Register(worker *types.WorkerInfo) error
+	Deregister(workerID string) error
+	UpdateWorkerStats(workerID string, stats types.WorkerStats) error
+	UpdateWorkerModels(workerID string, models []types.LoadedModel) error
+	Get(workerID string) (*types.WorkerInfo, bool)
+	GetWorkersForModel(modelID string) []*types.WorkerInfo
+	GetHealthyWorkersForModel(modelID string) []*types.WorkerInfo
+	GetAllWorkers() []*types.WorkerInfo
+	GetHealthyWorkers() []*types.WorkerInfo
+	Count() int
+	StartHealthChecker(ctx context.Context)
 }
 
 type batchRouteResult struct {
@@ -67,11 +85,19 @@ type affinityBinding struct {
 
 // New creates a new router.
 func New(config Config) *Router {
+	return NewWithRegistry(config, registry.NewWorkerRegistry(registry.DefaultRegistryConfig()))
+}
+
+// NewWithRegistry creates a router with an explicit worker registry.
+func NewWithRegistry(config Config, workerState workerRegistry) *Router {
 	ctx, cancel := context.WithCancel(context.Background())
+	if workerState == nil {
+		workerState = registry.NewWorkerRegistry(registry.DefaultRegistryConfig())
+	}
 
 	r := &Router{
 		config:         config,
-		registry:       registry.NewWorkerRegistry(registry.DefaultRegistryConfig()),
+		registry:       workerState,
 		strategyEngine: strategy.NewEngine(config.DefaultStrategy),
 		batchManager: batcher.NewManager(batcher.Config{
 			MaxBatchSize:      config.MaxBatchSize,

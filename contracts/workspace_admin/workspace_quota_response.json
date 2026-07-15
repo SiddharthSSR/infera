@@ -1,0 +1,9 @@
+{
+  "quota": {
+    "workspace_id": "ws_alpha",
+    "monthly_request_limit": 250,
+    "monthly_token_limit": 5000,
+    "enforce_hard_limits": false,
+    "updated_at": "2026-04-10T00:00:00Z"
+  }
+}

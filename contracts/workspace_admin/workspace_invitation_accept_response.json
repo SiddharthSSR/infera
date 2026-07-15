@@ -1,0 +1,27 @@
+{
+  "membership": {
+    "id": "mbr_fixture_accepted",
+    "workspace_id": "ws_alpha",
+    "email": "invitee@example.com",
+    "display_name": "Joined Example",
+    "role": "developer",
+    "status": "active",
+    "created_at": "2026-04-10T00:00:00Z"
+  },
+  "key": "inf_fixture_secret",
+  "record": {
+    "id": "key_fixture_accepted",
+    "workspace_id": "ws_alpha",
+    "workspace_slug": "fixture-team",
+    "workspace_name": "Fixture Team",
+    "key_prefix": "inf_fixture...",
+    "name": "Joined Example",
+    "role": "developer",
+    "principal_type": "human",
+    "membership_id": "mbr_fixture_accepted",
+    "member_email": "invitee@example.com",
+    "member_name": "Joined Example",
+    "created_at": "2026-04-10T00:00:00Z",
+    "status": "active"
+  }
+}

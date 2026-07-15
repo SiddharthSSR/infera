@@ -740,9 +740,6 @@ func normalizeOptions(options map[string]string) map[string]string {
 		}
 		out[trimmedKey] = trimmedValue
 	}
-	if out == nil {
-		return map[string]string{}
-	}
 	return out
 }
 

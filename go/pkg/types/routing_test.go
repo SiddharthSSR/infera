@@ -230,7 +230,7 @@ func TestInferaError(t *testing.T) {
 		t.Errorf("unexpected error message: %s", err.Error())
 	}
 
-	err.WithRequestID("req-123")
+	err = err.WithRequestID("req-123")
 	if err.RequestID != "req-123" {
 		t.Errorf("expected req-123, got %s", err.RequestID)
 	}
