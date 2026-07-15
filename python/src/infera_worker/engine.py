@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
-import importlib
 from typing import Any
 
 from .config import ModelConfig, WorkerConfig, normalize_engine_name
+from .types import InferenceRequest, InferenceResponse, LoadedModel, TokenChunk
 
 
 class InferenceEngine(ABC):
@@ -142,6 +143,3 @@ def create_engine(config: WorkerConfig) -> InferenceEngine:
     """Create an inference engine instance from normalized worker config."""
     definition = get_engine_definition(config.engine)
     return definition.create(config)
-
-
-from .engines.mock_engine import MockEngine  # noqa: E402

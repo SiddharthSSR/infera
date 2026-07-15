@@ -1,21 +1,20 @@
 """Tests for infera_worker types."""
 
-import pytest
 from datetime import datetime
 
 from infera_worker.types import (
-    Message,
-    Role,
+    Choice,
+    FinishReason,
     InferenceRequest,
     InferenceResponse,
-    TokenChunk,
-    Choice,
-    UsageStats,
     LatencyStats,
     LoadedModel,
-    WorkerStats,
+    Message,
+    Role,
+    TokenChunk,
+    UsageStats,
     WorkerState,
-    FinishReason,
+    WorkerStats,
 )
 
 
@@ -57,9 +56,7 @@ class TestFinishReason:
 
 class TestInferenceRequest:
     def test_create_request(self):
-        messages = [
-            Message(role=Role.USER, content="Hello")
-        ]
+        messages = [Message(role=Role.USER, content="Hello")]
         req = InferenceRequest(
             request_id="test-123",
             model_id="llama-3-8b",
@@ -71,6 +68,7 @@ class TestInferenceRequest:
 
     def test_request_with_parameters(self):
         from infera_worker.types import InferenceParameters
+
         params = InferenceParameters(temperature=0.7, max_tokens=100, top_p=0.9)
         req = InferenceRequest(
             request_id="test-456",
@@ -86,9 +84,7 @@ class TestInferenceRequest:
         req = InferenceRequest(
             request_id="test",
             model_id="test",
-            messages=[
-                Message(role=Role.USER, content="Hello world this is a test message")
-            ],
+            messages=[Message(role=Role.USER, content="Hello world this is a test message")],
         )
         # Rough estimate: ~4 chars per token
         estimate = req.token_estimate()

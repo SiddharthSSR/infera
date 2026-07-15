@@ -40,8 +40,14 @@ def hermes_catalog(hermes_config: HermesTestConfig) -> ScenarioCatalog:
 
 
 @pytest.fixture(scope="session")
-def hermes_client(hermes_config: HermesTestConfig, hermes_catalog: ScenarioCatalog) -> HermesAPIClient:
-    transport = None if hermes_config.is_live else MockHermesTransport(hermes_catalog, hermes_config.default_model)
+def hermes_client(
+    hermes_config: HermesTestConfig, hermes_catalog: ScenarioCatalog
+) -> HermesAPIClient:
+    transport = (
+        None
+        if hermes_config.is_live
+        else MockHermesTransport(hermes_catalog, hermes_config.default_model)
+    )
     client = HermesAPIClient(hermes_config, transport=transport)
     yield client
     client.close()
@@ -100,4 +106,3 @@ def require_live_mode(hermes_config: HermesTestConfig) -> None:
 def require_live_token(hermes_config: HermesTestConfig) -> None:
     if not hermes_config.auth_token:
         pytest.skip("live smoke tests require HERMES_API_TOKEN")
-

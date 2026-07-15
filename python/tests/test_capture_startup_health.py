@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import sys
-import pytest
+from pathlib import Path
 
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "capture-startup-health.py"
@@ -241,12 +241,12 @@ def test_wait_for_health_ready_raises_on_fatal_startup_payload(monkeypatch):
 def test_summarize_health_poll_error_classifies_bootstrap_failures():
     module = load_module()
 
-    assert module.summarize_health_poll_error(RuntimeError("GET /health failed with HTTP 404:")) == (
-        "bootstrap in progress: worker health route not published yet (HTTP 404)"
-    )
-    assert module.summarize_health_poll_error(RuntimeError("GET /health failed with HTTP 502: bad gateway")) == (
-        "bootstrap in progress: proxy upstream not ready yet (HTTP 502)"
-    )
+    assert module.summarize_health_poll_error(
+        RuntimeError("GET /health failed with HTTP 404:")
+    ) == ("bootstrap in progress: worker health route not published yet (HTTP 404)")
+    assert module.summarize_health_poll_error(
+        RuntimeError("GET /health failed with HTTP 502: bad gateway")
+    ) == ("bootstrap in progress: proxy upstream not ready yet (HTTP 502)")
     assert module.summarize_health_poll_error(RuntimeError("The read operation timed out")) == (
         "bootstrap in progress: worker health endpoint not responding yet (timeout)"
     )

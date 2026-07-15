@@ -66,16 +66,22 @@ def _select_provider(
     else:
         selectors.sort(key=lambda selector: (selector.provider == "mock", selector.provider))
     if not selectors:
-        return None, None, None, [], [
-            CompatibilityIssue(
-                status="blocked",
-                field="provider_selectors",
-                message=(
-                    f"hardware {hardware.hardware_id} has no provider selector for "
-                    f"{preferred_provider or 'the requested benchmark profile'}"
-                ),
-            )
-        ]
+        return (
+            None,
+            None,
+            None,
+            [],
+            [
+                CompatibilityIssue(
+                    status="blocked",
+                    field="provider_selectors",
+                    message=(
+                        f"hardware {hardware.hardware_id} has no provider selector for "
+                        f"{preferred_provider or 'the requested benchmark profile'}"
+                    ),
+                )
+            ],
+        )
     selector = selectors[0]
     return (
         selector.provider,
@@ -98,7 +104,15 @@ def expand_suite(
     include_filters = [filter_item.model_dump() for filter_item in suite.include]
     exclude_filters = [filter_item.model_dump() for filter_item in suite.exclude]
 
-    for engine_id, hardware_id, gpu_count, model_id, workload_id, benchmark_profile_id, runtime_preset_id in product(
+    for (
+        engine_id,
+        hardware_id,
+        gpu_count,
+        model_id,
+        workload_id,
+        benchmark_profile_id,
+        runtime_preset_id,
+    ) in product(
         suite.matrix.engines,
         suite.matrix.hardware,
         suite.matrix.gpu_counts,
@@ -152,7 +166,9 @@ def expand_suite(
         try:
             benchmark_profile = catalog.resolve_benchmark_profile(benchmark_profile_id)
         except KeyError as exc:
-            issues.append(CompatibilityIssue(status="invalid", field="benchmark_profile", message=str(exc)))
+            issues.append(
+                CompatibilityIssue(status="invalid", field="benchmark_profile", message=str(exc))
+            )
             benchmark_profile = None
 
         preset = presets.get(runtime_preset_id)
@@ -175,14 +191,24 @@ def expand_suite(
             )
 
         if benchmark_profile and hardware:
-            provider, provider_gpu_type, provider_gpu_type_id, allowed_cuda_versions, provider_issues = _select_provider(
+            (
+                provider,
+                provider_gpu_type,
+                provider_gpu_type_id,
+                allowed_cuda_versions,
+                provider_issues,
+            ) = _select_provider(
                 benchmark_profile=benchmark_profile,
                 hardware=hardware,
                 preferred_provider=suite.default_provider,
             )
             issues.extend(provider_issues)
 
-        if benchmark_profile and benchmark_profile.execution_mode == "attach" and suite.attach_target is None:
+        if (
+            benchmark_profile
+            and benchmark_profile.execution_mode == "attach"
+            and suite.attach_target is None
+        ):
             issues.append(
                 CompatibilityIssue(
                     status="invalid",
@@ -221,7 +247,13 @@ def expand_suite(
                 runtime_preset_id,
             ]
         )
-        output_dir = output_root / slugify(suite.suite_id) / slugify(engine_id) / slugify(runtime_preset_id) / run_id
+        output_dir = (
+            output_root
+            / slugify(suite.suite_id)
+            / slugify(engine_id)
+            / slugify(runtime_preset_id)
+            / run_id
+        )
         results.append(
             ResolvedRunSpec(
                 suite_id=suite.suite_id,
@@ -237,14 +269,18 @@ def expand_suite(
                 provider_gpu_type=provider_gpu_type,
                 provider_gpu_type_id=provider_gpu_type_id,
                 allowed_cuda_versions=allowed_cuda_versions,
-                execution_mode=benchmark_profile.execution_mode if benchmark_profile else "provision",
+                execution_mode=benchmark_profile.execution_mode
+                if benchmark_profile
+                else "provision",
                 compatibility_status=status,
                 compatibility_issues=issues,
                 generic_parameters=generic_parameters,
                 runtime_options=runtime_options,
                 output_dir=str(output_dir),
-                benchmark_headers=dict((benchmark_profile.benchmark_headers if benchmark_profile else {})),
-                workload_headers=dict((workload.headers if workload else {})),
+                benchmark_headers=dict(
+                    benchmark_profile.benchmark_headers if benchmark_profile else {}
+                ),
+                workload_headers=dict(workload.headers if workload else {}),
                 attach_target=_clone_attach_target(suite.attach_target),
                 tags=_build_tags(engine_id, hardware_id, model_id, workload_id, runtime_preset_id),
             )

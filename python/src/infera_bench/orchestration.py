@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from .adapters import build_adapter_registry
 from .catalog import BenchmarkCatalogBundle
@@ -82,8 +82,7 @@ def execute_suite(
             except Exception as exc:
                 execution.status = "blocked"
                 execution.notes.append(
-                    "Post-run gateway drain failed before the next suite run could start: "
-                    f"{exc}"
+                    f"Post-run gateway drain failed before the next suite run could start: {exc}"
                 )
                 write_json_output(Path(execution.manifest_path), execution.model_dump())
                 break

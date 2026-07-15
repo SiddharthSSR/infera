@@ -8,9 +8,14 @@ from types import SimpleNamespace
 import pytest
 
 from infera_worker.config import ModelConfig, WorkerConfig
-from infera_worker.engine import MockEngine, create_engine, get_engine_definition, list_engine_definitions
+from infera_worker.engine import (
+    create_engine,
+    get_engine_definition,
+    list_engine_definitions,
+)
 from infera_worker.engines import sglang_engine as sglang_module
 from infera_worker.engines import tensorrt_llm_engine as tensorrt_module
+from infera_worker.engines.mock_engine import MockEngine
 from infera_worker.types import FinishReason, InferenceRequest, Message, Role, ToolDefinition
 
 
@@ -123,7 +128,12 @@ class TestSGLangEngine:
                 assert sampling_params["temperature"] == 1.0
                 assert sampling_params["max_new_tokens"] == 256
                 assert "max_tokens" not in sampling_params
-                return [{"text": "SGLang response", "meta_info": {"prompt_tokens": 5, "completion_tokens": 3}}]
+                return [
+                    {
+                        "text": "SGLang response",
+                        "meta_info": {"prompt_tokens": 5, "completion_tokens": 3},
+                    }
+                ]
 
             def shutdown(self):
                 return None
@@ -140,6 +150,7 @@ class TestSGLangEngine:
         monkeypatch.setattr(sglang_module, "SGLANG_AVAILABLE", True)
         monkeypatch.setattr(sglang_module, "sgl", SimpleNamespace(Engine=FakeSGLangEngine))
         monkeypatch.setattr(sglang_module, "async_stream_and_merge", fake_async_stream_and_merge)
+
         async def fail_to_thread(*args, **kwargs):
             raise AssertionError("SGLang Engine should not be initialized via asyncio.to_thread")
 
@@ -158,7 +169,11 @@ class TestSGLangEngine:
                     return [1, 2, 3]
                 return [1]
 
-        monkeypatch.setattr(sglang_module.TokenizerPromptEngine, "_get_tokenizer", lambda _self, _model_id: FakeTokenizer())
+        monkeypatch.setattr(
+            sglang_module.TokenizerPromptEngine,
+            "_get_tokenizer",
+            lambda _self, _model_id: FakeTokenizer(),
+        )
 
         engine = sglang_module.SGLangEngine(
             WorkerConfig(
@@ -206,7 +221,12 @@ class TestSGLangEngine:
             async def async_generate(self, prompts, sampling_params):
                 del sampling_params
                 assert prompts == ["templated-with-tools"]
-                return [{"text": "tool response", "meta_info": {"prompt_tokens": 4, "completion_tokens": 2}}]
+                return [
+                    {
+                        "text": "tool response",
+                        "meta_info": {"prompt_tokens": 4, "completion_tokens": 2},
+                    }
+                ]
 
             def shutdown(self):
                 return None
@@ -218,7 +238,9 @@ class TestSGLangEngine:
         observed: dict[str, object] = {}
 
         class FakeTokenizer:
-            def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, tools=None, tool_choice=None):
+            def apply_chat_template(
+                self, messages, *, tokenize, add_generation_prompt, tools=None, tool_choice=None
+            ):
                 observed["messages"] = messages
                 observed["tools"] = tools
                 observed["tool_choice"] = tool_choice
@@ -236,7 +258,9 @@ class TestSGLangEngine:
             lambda _self, _model_id: FakeTokenizer(),
         )
 
-        engine = sglang_module.SGLangEngine(WorkerConfig(engine="sglang", tool_call_parser="hermes"))
+        engine = sglang_module.SGLangEngine(
+            WorkerConfig(engine="sglang", tool_call_parser="hermes")
+        )
         await engine.load_model(ModelConfig(model_id="test-model"))
 
         response = await engine.infer(
@@ -256,7 +280,10 @@ class TestSGLangEngine:
 
         assert observed["messages"] == [{"role": "user", "content": "Check weather"}]
         assert observed["tools"] == [
-            {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {"type": "object"}},
+            }
         ]
         assert observed["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
         assert response.choices[0].message.content == "tool response"
@@ -282,7 +309,11 @@ class TestTensorRTLLMEngine:
         class FakeOutput:
             def __init__(self, text, token_ids=None, finish_reason="stop", finished=False):
                 self.prompt_tokens = 7
-                self.outputs = [SimpleNamespace(text=text, token_ids=token_ids or [1, 2, 3], finish_reason=finish_reason)]
+                self.outputs = [
+                    SimpleNamespace(
+                        text=text, token_ids=token_ids or [1, 2, 3], finish_reason=finish_reason
+                    )
+                ]
                 self.finished = finished
 
         class FakeLLM:
@@ -301,7 +332,9 @@ class TestTensorRTLLMEngine:
                 await asyncio.sleep(0.01)
                 yield FakeOutput("Tensor", [1], finish_reason=None, finished=False)
                 yield FakeOutput("TensorRT", [1, 2], finish_reason=None, finished=False)
-                yield FakeOutput("TensorRT response", [1, 2, 3], finish_reason="stop", finished=True)
+                yield FakeOutput(
+                    "TensorRT response", [1, 2, 3], finish_reason="stop", finished=True
+                )
 
             def shutdown(self):
                 return None
@@ -316,7 +349,11 @@ class TestTensorRTLLMEngine:
             def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
                 return f"templated:{messages[-1]['content']}"
 
-        monkeypatch.setattr(tensorrt_module.TokenizerPromptEngine, "_get_tokenizer", lambda _self, _model_id: FakeTokenizer())
+        monkeypatch.setattr(
+            tensorrt_module.TokenizerPromptEngine,
+            "_get_tokenizer",
+            lambda _self, _model_id: FakeTokenizer(),
+        )
 
         engine = tensorrt_module.TensorRTLLMEngine(
             WorkerConfig(
@@ -375,7 +412,11 @@ class TestTensorRTLLMEngine:
 
     def test_tensorrt_engine_raises_when_dependency_missing(self, monkeypatch):
         monkeypatch.setattr(tensorrt_module, "TENSORRT_LLM_AVAILABLE", False)
-        monkeypatch.setattr(tensorrt_module, "TENSORRT_LLM_IMPORT_ERROR", ImportError("libcuda.so.1: cannot open shared object file"))
+        monkeypatch.setattr(
+            tensorrt_module,
+            "TENSORRT_LLM_IMPORT_ERROR",
+            ImportError("libcuda.so.1: cannot open shared object file"),
+        )
         with pytest.raises(ImportError, match="TensorRT-LLM import failed"):
             tensorrt_module.TensorRTLLMEngine(WorkerConfig(engine="tensorrt_llm"))
 

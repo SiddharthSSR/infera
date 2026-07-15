@@ -62,4 +62,3 @@ def load_test_config() -> HermesTestConfig:
         report_path=_optional_path(os.getenv("HERMES_API_REPORT_PATH", "")),
         regression_dataset=_optional_path(os.getenv("HERMES_REGRESSION_DATASET", "")),
     )
-

@@ -48,7 +48,9 @@ CURRENT_HERMES_TOOL_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-def build_tool_result(tool_name: str, arguments: dict[str, Any], attachment: Attachment | None) -> Any:
+def build_tool_result(
+    tool_name: str, arguments: dict[str, Any], attachment: Attachment | None
+) -> Any:
     """Return stable mock tool output for a given Hermes tool."""
 
     if tool_name == "list_models":
@@ -108,8 +110,20 @@ def build_tool_result(tool_name: str, arguments: dict[str, Any], attachment: Att
         return {
             "current_month": {"requests": 128, "tokens": 48000, "successes": 122, "errors": 6},
             "last_7_days": [
-                {"date": "2026-04-02", "requests": 14, "tokens": 5000, "successes": 14, "errors": 0},
-                {"date": "2026-04-03", "requests": 18, "tokens": 6200, "successes": 17, "errors": 1},
+                {
+                    "date": "2026-04-02",
+                    "requests": 14,
+                    "tokens": 5000,
+                    "successes": 14,
+                    "errors": 0,
+                },
+                {
+                    "date": "2026-04-03",
+                    "requests": 18,
+                    "tokens": 6200,
+                    "successes": 17,
+                    "errors": 1,
+                },
             ],
         }
     if tool_name == "get_quota_status":
@@ -153,4 +167,3 @@ def build_tool_result(tool_name: str, arguments: dict[str, Any], attachment: Att
             "summary": "The screenshot looks like a healthy runtime dashboard with no obvious errors.",
         }
     raise KeyError(f"Unsupported mock tool: {tool_name}")
-

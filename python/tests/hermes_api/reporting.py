@@ -21,7 +21,9 @@ class ScenarioObservation:
     actual_tools: list[str] = field(default_factory=list)
     reason: str = ""
 
-    def set_case(self, scenario_id: str, category: str, prompt: str, expected_tools: list[str]) -> None:
+    def set_case(
+        self, scenario_id: str, category: str, prompt: str, expected_tools: list[str]
+    ) -> None:
         self.scenario_id = scenario_id
         self.category = category
         self.prompt = prompt
@@ -37,7 +39,9 @@ class HermesReportRecorder:
     def __init__(self) -> None:
         self.records: list[ScenarioReportRecord] = []
 
-    def record(self, test_name: str, observation: ScenarioObservation, passed: bool, reason: str) -> None:
+    def record(
+        self, test_name: str, observation: ScenarioObservation, passed: bool, reason: str
+    ) -> None:
         if not observation.scenario_id:
             return
         self.records.append(
@@ -78,4 +82,3 @@ class HermesReportRecorder:
             },
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-

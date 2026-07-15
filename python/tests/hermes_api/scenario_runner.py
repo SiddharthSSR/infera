@@ -31,7 +31,9 @@ def upload_attachment_ids(
         return []
     upload = client.upload_attachment("console.png", sample_png_bytes, "image/png")
     if upload.status_code != 201 or upload.data is None:  # pragma: no cover - guarded by callers
-        raise AssertionError(f"attachment upload failed unexpectedly: HTTP {upload.status_code} {upload.text}")
+        raise AssertionError(
+            f"attachment upload failed unexpectedly: HTTP {upload.status_code} {upload.text}"
+        )
     return [upload.data.attachment.id]
 
 
@@ -85,7 +87,9 @@ def run_scenario_case(
         )
     )
     if create.status_code != 201 or create.data is None:  # pragma: no cover - guarded by callers
-        raise AssertionError(f"run creation failed unexpectedly: HTTP {create.status_code} {create.text}")
+        raise AssertionError(
+            f"run creation failed unexpectedly: HTTP {create.status_code} {create.text}"
+        )
     return client.wait_for_run(create.data.run.id)
 
 

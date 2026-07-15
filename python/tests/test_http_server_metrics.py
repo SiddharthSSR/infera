@@ -1,9 +1,9 @@
 """Tests for worker HTTP server metrics."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-import asyncio
 
 import pytest
 from aiohttp.test_utils import make_mocked_request
@@ -90,7 +90,9 @@ def test_gateway_metrics_and_worker_info_are_exposed(mock_worker_config):
     assert 'version="dev"' in metrics
 
 
-def test_explicit_worker_address_overrides_provider_derived_address(mock_worker_config, monkeypatch):
+def test_explicit_worker_address_overrides_provider_derived_address(
+    mock_worker_config, monkeypatch
+):
     worker = Worker(mock_worker_config)
     server = HTTPServer(worker, mock_worker_config)
 
@@ -176,7 +178,9 @@ async def test_health_endpoint_reports_live_but_not_ready_while_initializing(moc
 
 
 @pytest.mark.asyncio
-async def test_activate_gateway_reporting_registers_once_worker_is_ready(mock_worker_config, monkeypatch):
+async def test_activate_gateway_reporting_registers_once_worker_is_ready(
+    mock_worker_config, monkeypatch
+):
     worker = Worker(mock_worker_config)
     server = HTTPServer(worker, mock_worker_config)
     await worker.start()

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -48,7 +49,9 @@ class BaseInferenceEngine(InferenceEngine):
         if self._startup_metadata_recorder is not None:
             self._startup_metadata_recorder(key, payload)
 
-    def _record_model_cache_probe(self, model_config: ModelConfig, model_path: str) -> dict[str, Any]:
+    def _record_model_cache_probe(
+        self, model_config: ModelConfig, model_path: str
+    ) -> dict[str, Any]:
         probe = self._collect_model_cache_probe(model_config.model_id, model_path)
         self._record_metadata("model_loads", {model_config.model_id: probe})
         logger.info(
@@ -71,7 +74,9 @@ class BaseInferenceEngine(InferenceEngine):
             (resolved_model_path / "config.json").exists() if local_model_path_is_dir else False
         )
         local_tokenizer_config_exists = (
-            (resolved_model_path / "tokenizer_config.json").exists() if local_model_path_is_dir else False
+            (resolved_model_path / "tokenizer_config.json").exists()
+            if local_model_path_is_dir
+            else False
         )
 
         huggingface_hub_cache = (
@@ -79,8 +84,12 @@ class BaseInferenceEngine(InferenceEngine):
             or os.getenv("TRANSFORMERS_CACHE")
             or self._default_huggingface_hub_cache()
         )
-        inferred_repo_cache_dir = self._infer_huggingface_repo_cache_dir(model_path, huggingface_hub_cache)
-        inferred_repo_cache_exists = inferred_repo_cache_dir.exists() if inferred_repo_cache_dir is not None else False
+        inferred_repo_cache_dir = self._infer_huggingface_repo_cache_dir(
+            model_path, huggingface_hub_cache
+        )
+        inferred_repo_cache_exists = (
+            inferred_repo_cache_dir.exists() if inferred_repo_cache_dir is not None else False
+        )
         inferred_snapshot_dir = self._latest_snapshot_dir(inferred_repo_cache_dir)
         inferred_snapshot_count = self._snapshot_count(inferred_repo_cache_dir)
 
@@ -99,12 +108,18 @@ class BaseInferenceEngine(InferenceEngine):
                 "transformers": os.getenv("TRANSFORMERS_CACHE", ""),
                 "torch": os.getenv("TORCH_HOME", ""),
             },
-            "inferred_hf_repo_cache_dir": str(inferred_repo_cache_dir) if inferred_repo_cache_dir is not None else None,
+            "inferred_hf_repo_cache_dir": str(inferred_repo_cache_dir)
+            if inferred_repo_cache_dir is not None
+            else None,
             "inferred_hf_repo_cache_exists": inferred_repo_cache_exists,
             "inferred_hf_snapshot_count": inferred_snapshot_count,
-            "inferred_latest_snapshot_dir": str(inferred_snapshot_dir) if inferred_snapshot_dir is not None else None,
+            "inferred_latest_snapshot_dir": str(inferred_snapshot_dir)
+            if inferred_snapshot_dir is not None
+            else None,
             "inferred_latest_snapshot_has_config_json": (
-                (inferred_snapshot_dir / "config.json").exists() if inferred_snapshot_dir is not None else False
+                (inferred_snapshot_dir / "config.json").exists()
+                if inferred_snapshot_dir is not None
+                else False
             ),
             "inferred_latest_snapshot_has_tokenizer_config_json": (
                 (inferred_snapshot_dir / "tokenizer_config.json").exists()
@@ -131,7 +146,9 @@ class BaseInferenceEngine(InferenceEngine):
         snapshots_dir = repo_cache_dir / "snapshots"
         if not snapshots_dir.exists() or not snapshots_dir.is_dir():
             return None
-        snapshot_dirs = sorted((path for path in snapshots_dir.iterdir() if path.is_dir()), key=lambda path: path.name)
+        snapshot_dirs = sorted(
+            (path for path in snapshots_dir.iterdir() if path.is_dir()), key=lambda path: path.name
+        )
         if not snapshot_dirs:
             return None
         return snapshot_dirs[-1]
@@ -266,7 +283,9 @@ class TokenizerPromptEngine(BaseInferenceEngine):
         except Exception:
             return None
 
-    def _count_prompt_tokens_from_prompt(self, model_id: str, prompt: str, request: InferenceRequest) -> int:
+    def _count_prompt_tokens_from_prompt(
+        self, model_id: str, prompt: str, request: InferenceRequest
+    ) -> int:
         count = self._count_tokens_from_text(model_id, prompt)
         if count is not None:
             return count
@@ -329,9 +348,13 @@ class TokenizerPromptEngine(BaseInferenceEngine):
             return tokenizer.apply_chat_template(messages, **kwargs)
         except TypeError as exc:
             message = str(exc)
-            unsupported_tools = "tools" in kwargs and "tools" in message and "unexpected keyword" in message
+            unsupported_tools = (
+                "tools" in kwargs and "tools" in message and "unexpected keyword" in message
+            )
             unsupported_choice = (
-                "tool_choice" in kwargs and "tool_choice" in message and "unexpected keyword" in message
+                "tool_choice" in kwargs
+                and "tool_choice" in message
+                and "unexpected keyword" in message
             )
             if not unsupported_tools and not unsupported_choice:
                 raise
@@ -387,8 +410,7 @@ class TokenizerPromptEngine(BaseInferenceEngine):
         tokenizer = self._get_tokenizer(request.model_id)
         if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
             tools_schema = [
-                {"type": tool.type, "function": tool.function}
-                for tool in request.tools
+                {"type": tool.type, "function": tool.function} for tool in request.tools
             ]
             try:
                 return self._apply_chat_template(

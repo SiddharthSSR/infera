@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from infera_bench.catalog import default_catalog_root, load_catalog_bundle, load_suite
 
 
