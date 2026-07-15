@@ -39,13 +39,14 @@ func newTestDeploymentStore(t *testing.T) *deployments.Store {
 }
 
 type failingProvider struct {
-	provisionErr error
-	lastReq      *providers.ProvisionRequest
-	startErr     error
-	stopErr      error
-	terminateErr error
-	status       *providers.ProviderStatus
-	instances    map[string]*providers.Instance
+	provisionErr      error
+	provisionInstance *providers.Instance
+	lastReq           *providers.ProvisionRequest
+	startErr          error
+	stopErr           error
+	terminateErr      error
+	status            *providers.ProviderStatus
+	instances         map[string]*providers.Instance
 }
 
 func (p *failingProvider) Name() providers.ProviderType { return providers.ProviderMock }
@@ -54,6 +55,19 @@ func (p *failingProvider) Provision(ctx context.Context, req *providers.Provisio
 		return nil, p.provisionErr
 	}
 	p.lastReq = req
+	if p.provisionInstance != nil {
+		inst := *p.provisionInstance
+		inst.Models = append([]string(nil), p.provisionInstance.Models...)
+		inst.Metadata = make(map[string]string, len(p.provisionInstance.Metadata))
+		for key, value := range p.provisionInstance.Metadata {
+			inst.Metadata[key] = value
+		}
+		if p.instances == nil {
+			p.instances = map[string]*providers.Instance{}
+		}
+		p.instances[inst.ID] = &inst
+		return &inst, nil
+	}
 	if p.instances == nil {
 		p.instances = map[string]*providers.Instance{}
 	}

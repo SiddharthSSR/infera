@@ -161,6 +161,44 @@ These checks must not print API keys, worker shared tokens, provider credentials
      https://inferai.co.in/v1/models
    ```
 
+## Deterministic lifecycle verification
+
+INF-35 lifecycle behavior has deterministic coverage that uses the existing provider manager, gateway instance handlers, mock provider seam, worker link/heartbeat methods, and frontend readiness helper. It does not contact RunPod or create paid infrastructure.
+
+The focused scenarios cover:
+
+- provider running without public/proxy network metadata (`provider_running_no_network`);
+- provider running with network metadata while registration remains pending;
+- registration deadline expiry (`provider_running_worker_unregistered` with a safe timeout error);
+- a registered worker whose registry health becomes unhealthy;
+- a linked worker whose heartbeat becomes stale and recovers after a fresh heartbeat;
+- the ready path with a known worker, model, and recent heartbeat;
+- provisioning rejected before instance creation, including safe failure history and no managed orphan.
+
+The gateway lifecycle scenarios also validate the safe `/api/instances` representation: provider status, registration state, network readiness, registration error, worker ID, model, GPU type, hourly cost, and heartbeat where applicable. Test-only provider metadata includes sentinel credential/token values so the response test fails if private provider metadata is ever serialized.
+
+Run the focused verification with:
+
+```bash
+cd go
+CGO_ENABLED=0 GOCACHE=/private/tmp/infera-go-cache go test ./internal/providers ./pkg/types
+GOCACHE=/private/tmp/infera-go-cache go test ./internal/gateway
+
+cd ../frontend
+npm run test:run -- src/lib/instanceReadiness.test.ts
+npm run build
+```
+
+Primary test files:
+
+- `go/internal/gateway/instance_lifecycle_test.go`
+- `go/internal/providers/manager_test.go`
+- `frontend/src/lib/instanceReadiness.test.ts`
+
+The existing CI workflow already runs `go test ./...`, the complete frontend test suite, frontend lint, and the frontend production build, so no lifecycle-specific workflow is required.
+
+Deterministic coverage proves state computation, timing, API safety, and frontend mapping, but it cannot prove that a real RunPod pod receives network/proxy metadata, boots the pinned worker image, downloads and loads the model, reaches the production gateway, or maintains heartbeats across the provider network. Once account funding is available, one controlled live RunPod smoke is still required before INF-35 can be considered fully production-verified.
+
 ## Implementation Roadmap
 
 ### P0

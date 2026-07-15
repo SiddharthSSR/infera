@@ -217,6 +217,52 @@ func TestManagerLinkWorkerMarksInstanceReady(t *testing.T) {
 	}
 }
 
+func TestManagerMarksStaleWorkerHeartbeatUnhealthy(t *testing.T) {
+	now := time.Date(2026, time.July, 15, 12, 0, 0, 0, time.UTC)
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{
+		DefaultProvider:        ProviderMock,
+		WorkerHeartbeatTimeout: time.Minute,
+		Now:                    func() time.Time { return now },
+	})
+	mgr.RegisterProvider(provider)
+
+	inst, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name:    "stale-heartbeat",
+		GPUType: GPUA100_80,
+		Models:  []string{"Qwen/Qwen2.5-7B-Instruct"},
+	})
+	if err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+	if err := mgr.LinkWorker(inst.ID, "worker-stale"); err != nil {
+		t.Fatalf("LinkWorker failed: %v", err)
+	}
+	if !mgr.RecordWorkerHeartbeat("worker-stale", now) {
+		t.Fatal("expected heartbeat to be recorded")
+	}
+
+	now = now.Add(2 * time.Minute)
+	got, ok := mgr.GetInstance(inst.ID)
+	if !ok {
+		t.Fatalf("expected instance %s", inst.ID)
+	}
+	if got.WorkerRegistrationStatus != WorkerRegistrationRegisteredUnhealthy {
+		t.Fatalf("expected registered_unhealthy, got %q", got.WorkerRegistrationStatus)
+	}
+	if got.LastWorkerRegistrationError == "" || got.WorkerLastHeartbeatAt == nil {
+		t.Fatalf("expected stale heartbeat diagnostics, error=%q heartbeat=%v", got.LastWorkerRegistrationError, got.WorkerLastHeartbeatAt)
+	}
+
+	if !mgr.RecordWorkerHeartbeat("worker-stale", now) {
+		t.Fatal("expected fresh heartbeat to be recorded")
+	}
+	got, _ = mgr.GetInstance(inst.ID)
+	if got.WorkerRegistrationStatus != WorkerRegistrationReady {
+		t.Fatalf("expected fresh heartbeat to restore ready, got %q", got.WorkerRegistrationStatus)
+	}
+}
+
 func (p *mockTestProvider) Terminate(ctx context.Context, instanceID string) error {
 	return nil
 }
