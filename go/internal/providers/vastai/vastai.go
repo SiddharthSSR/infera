@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/infera/infera/go/internal/egress"
 	"github.com/infera/infera/go/internal/providers"
 )
 
@@ -30,6 +32,7 @@ type Provider struct {
 	apiKey     string
 	endpoint   string
 	httpClient *http.Client
+	hfToken    string
 }
 
 // Config for Vast.ai provider.
@@ -37,6 +40,7 @@ type Config struct {
 	APIKey     string
 	Endpoint   string
 	HTTPClient *http.Client
+	HFToken    string
 }
 
 // New creates a new Vast.ai provider.
@@ -53,16 +57,21 @@ func New(config Config) (*Provider, error) {
 	if endpoint == "" {
 		endpoint = defaultEndpoint
 	}
+	parsedEndpoint, err := url.ParseRequestURI(endpoint)
+	if err != nil || egress.ValidateURL(parsedEndpoint, []string{"https"}) != nil {
+		return nil, &providers.ProviderError{Provider: providers.ProviderVastAI, Code: providers.ProviderErrorInvalidConfig, Message: "Vast.ai endpoint must be a public HTTPS URL"}
+	}
 
 	httpClient := config.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
+		httpClient = egress.NewPublicClient(egress.ClientOptions{Timeout: 30 * time.Second, AllowedSchemes: []string{"https"}})
 	}
 
 	return &Provider{
 		apiKey:     strings.TrimSpace(config.APIKey),
 		endpoint:   endpoint,
 		httpClient: httpClient,
+		hfToken:    strings.TrimSpace(config.HFToken),
 	}, nil
 }
 
@@ -71,6 +80,7 @@ func Factory(config providers.ProviderConfig) (providers.Provider, error) {
 	return New(Config{
 		APIKey:   config.APIKey,
 		Endpoint: config.Endpoint,
+		HFToken:  config.APISecret,
 	})
 }
 
@@ -380,7 +390,7 @@ func (p *Provider) buildEnv(req *providers.ProvisionRequest) map[string]string {
 		}
 	}
 
-	if hfToken := strings.TrimSpace(os.Getenv("HF_TOKEN")); hfToken != "" {
+	if hfToken := p.hfToken; hfToken != "" {
 		env["HF_TOKEN"] = hfToken
 		env["HUGGING_FACE_HUB_TOKEN"] = hfToken
 	}
@@ -422,7 +432,7 @@ func (p *Provider) doJSON(ctx context.Context, method, path string, body any, ou
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := providers.ReadResponseBody(providers.ProviderVastAI, resp.Body)
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
 	}

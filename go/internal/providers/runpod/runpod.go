@@ -7,14 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/infera/infera/go/internal/egress"
 	"github.com/infera/infera/go/internal/providers"
 )
 
@@ -31,12 +32,14 @@ type Provider struct {
 	apiKey     string
 	endpoint   string
 	httpClient *http.Client
+	hfToken    string
 }
 
 // Config for RunPod provider.
 type Config struct {
 	APIKey   string
 	Endpoint string
+	HFToken  string
 }
 
 // New creates a new RunPod provider.
@@ -49,17 +52,20 @@ func New(config Config) (*Provider, error) {
 		}
 	}
 
-	endpoint := config.Endpoint
+	endpoint := strings.TrimSpace(config.Endpoint)
 	if endpoint == "" {
 		endpoint = defaultEndpoint
 	}
+	parsedEndpoint, err := url.ParseRequestURI(endpoint)
+	if err != nil || egress.ValidateURL(parsedEndpoint, []string{"https"}) != nil {
+		return nil, &providers.ProviderError{Provider: providers.ProviderRunPod, Code: providers.ProviderErrorInvalidConfig, Message: "RunPod endpoint must be a public HTTPS URL"}
+	}
 
 	return &Provider{
-		apiKey:   config.APIKey,
-		endpoint: endpoint,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		apiKey:     config.APIKey,
+		endpoint:   endpoint,
+		httpClient: egress.NewPublicClient(egress.ClientOptions{Timeout: 30 * time.Second, AllowedSchemes: []string{"https"}}),
+		hfToken:    strings.TrimSpace(config.HFToken),
 	}, nil
 }
 
@@ -68,6 +74,7 @@ func Factory(config providers.ProviderConfig) (providers.Provider, error) {
 	return New(Config{
 		APIKey:   config.APIKey,
 		Endpoint: config.Endpoint,
+		HFToken:  config.APISecret,
 	})
 }
 
@@ -171,16 +178,8 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		})
 	}
 
-	// Add HuggingFace token if available (needed for gated models like Llama)
-	if hfToken := os.Getenv("HF_TOKEN"); hfToken != "" {
-		env = append(env, map[string]string{
-			"key": "HF_TOKEN", "value": hfToken,
-		})
-		// Also set as HUGGING_FACE_HUB_TOKEN for compatibility
-		env = append(env, map[string]string{
-			"key": "HUGGING_FACE_HUB_TOKEN", "value": hfToken,
-		})
-	}
+	// A workspace-owned provider secret may be delegated for gated models.
+	env = appendHuggingFaceEnv(env, p.hfToken)
 
 	for key, value := range providers.WorkerRuntimeEnv(req) {
 		env = append(env, map[string]string{
@@ -308,6 +307,17 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		CreatedAt:    time.Now(),
 		Metadata:     metadata,
 	}, nil
+}
+
+func appendHuggingFaceEnv(env []map[string]string, token string) []map[string]string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return env
+	}
+	return append(env,
+		map[string]string{"key": "HF_TOKEN", "value": token},
+		map[string]string{"key": "HUGGING_FACE_HUB_TOKEN", "value": token},
+	)
 }
 
 func sanitizeAllowedCudaVersions(values []string) []string {
@@ -918,7 +928,7 @@ func (p *Provider) graphQL(ctx context.Context, query string, variables map[stri
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := providers.ReadResponseBody(providers.ProviderRunPod, resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}

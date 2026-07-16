@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/infera/infera/go/internal/egress"
 	"github.com/infera/infera/go/internal/providers"
 )
 
@@ -83,9 +84,13 @@ func New(config Config) (*Provider, error) {
 	if endpoint == "" {
 		endpoint = defaultEndpoint
 	}
+	parsedEndpoint, err := url.ParseRequestURI(endpoint)
+	if err != nil || egress.ValidateURL(parsedEndpoint, []string{"https"}) != nil {
+		return nil, &providers.ProviderError{Provider: providers.ProviderE2E, Code: providers.ProviderErrorInvalidConfig, Message: "E2E endpoint must be a public HTTPS URL"}
+	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
+		httpClient = egress.NewPublicClient(egress.ClientOptions{Timeout: 30 * time.Second, AllowedSchemes: []string{"https"}})
 	}
 	return &Provider{
 		apiKey:     strings.TrimSpace(config.APIKey),
@@ -474,13 +479,9 @@ func (p *Provider) doJSON(ctx context.Context, method, path string, query map[st
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := providers.ReadResponseBody(providers.ProviderE2E, resp.Body)
 	if err != nil {
-		return &providers.ProviderError{
-			Provider: providers.ProviderE2E,
-			Code:     providers.ProviderErrorRequestFailed,
-			Message:  err.Error(),
-		}
+		return err
 	}
 	if resp.StatusCode >= 400 {
 		return buildProviderError(resp.StatusCode, bodyBytes)
