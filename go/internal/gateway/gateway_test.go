@@ -541,13 +541,13 @@ func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *
 	rec := httptest.NewRecorder()
 	httpReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(context.Background())
 
-	tokenCount, status := g.handleStreamingInference(rec, httpReq, client, req, "model-1")
+	result := g.handleStreamingInference(rec, httpReq, client, req, "model-1")
 
-	if status != "success" {
-		t.Fatalf("expected success status, got %q", status)
+	if result.Status != "success" {
+		t.Fatalf("expected success status, got %q", result.Status)
 	}
-	if tokenCount != 7 {
-		t.Fatalf("expected recomputed token count 7, got %d", tokenCount)
+	if result.Usage.TotalTokens != 7 {
+		t.Fatalf("expected recomputed token count 7, got %d", result.Usage.TotalTokens)
 	}
 }
 

@@ -142,6 +142,7 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 	promptHash := hashMessages(req.Messages)
 	auditStatus := "unknown_error"
 	auditTokenCount := 0
+	auditUsage := usageMeasurement{TokenSource: audit.TokenSourceUnknown}
 	auditWorkerID := ""
 	auditErrorCode := ""
 	defer func() {
@@ -154,6 +155,7 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 			slog.Bool("stream", false),
 			slog.Int("message_count", len(req.Messages)),
 			slog.Int("token_count", auditTokenCount),
+			slog.String("token_source", auditUsage.TokenSource),
 			slog.String("prompt_hash", promptHash),
 			slog.String("status", auditStatus),
 			slog.Int64("latency_ms", latencyMS),
@@ -165,24 +167,25 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 
 		if g.auditCh != nil {
 			rec := audit.InferenceAuditRecord{
-				Timestamp:    requestStart.UTC(),
-				RequestID:    requestID,
-				KeyID:        keyID,
-				WorkspaceID:  workspaceID,
-				Model:        req.ModelID,
-				WorkerID:     auditWorkerID,
-				Stream:       false,
-				MessageCount: len(req.Messages),
-				TokenCount:   auditTokenCount,
-				PromptHash:   promptHash,
-				Status:       auditStatus,
-				ErrorCode:    auditErrorCode,
-				LatencyMS:    latencyMS,
+				Timestamp:        requestStart.UTC(),
+				RequestID:        requestID,
+				KeyID:            keyID,
+				WorkspaceID:      workspaceID,
+				Model:            req.ModelID,
+				WorkerID:         auditWorkerID,
+				Stream:           false,
+				MessageCount:     len(req.Messages),
+				PromptTokens:     auditUsage.PromptTokens,
+				CompletionTokens: auditUsage.CompletionTokens,
+				TokenCount:       auditTokenCount,
+				TokenSource:      auditUsage.TokenSource,
+				PromptHash:       promptHash,
+				Status:           auditStatus,
+				ErrorCode:        auditErrorCode,
+				LatencyMS:        latencyMS,
 			}
-			select {
-			case g.auditCh <- rec:
-			default:
-				g.log.Warn("inference.audit_dropped", slog.String("request_id", requestID))
+			if err := g.enqueueAuditRecord(rec); err != nil {
+				g.log.Error("inference.audit_persist_failed", slog.String("request_id", requestID), slog.String("error", err.Error()))
 			}
 		}
 
@@ -249,19 +252,18 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 		}
 	}
 
-	promptTokens := resp.Usage.PromptTokens
-	if promptTokens == 0 {
-		promptTokens = req.TokenEstimate()
-	}
-	completionTokens := resp.Usage.CompletionTokens
-	if completionTokens == 0 {
-		completionTokens = estimateCompletionTokens(resp)
-	}
+	auditUsage = resolveUsageMeasurement(
+		resp.Usage.PromptTokens,
+		resp.Usage.CompletionTokens,
+		resp.Usage.TotalTokens,
+		req.TokenEstimate(),
+		estimateCompletionTokens(resp),
+	)
 	if g.metrics != nil {
-		g.recordNonStreamingLatencyMetrics(req.ModelID, resp, completionTokens)
+		g.recordNonStreamingLatencyMetrics(req.ModelID, resp, auditUsage.CompletionTokens)
 	}
 
-	auditTokenCount = usageTotalTokens(promptTokens, completionTokens, resp.Usage.TotalTokens)
+	auditTokenCount = auditUsage.TotalTokens
 	auditStatus = "success"
 
 	return &inferenceExecutionResult{

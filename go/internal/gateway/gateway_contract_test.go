@@ -14,9 +14,60 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/pkg/types"
 )
+
+func TestHandleChatCompletionsPersistsExactUsageProvenance(t *testing.T) {
+	const modelID = "model-usage"
+	g := newGatewayWithTestWorker(t, modelID, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		resp := WorkerInferResponse{RequestID: "req-worker", ModelID: modelID}
+		resp.Choices = append(resp.Choices, struct {
+			Index   int `json:"index"`
+			Message struct {
+				Role      string           `json:"role"`
+				Content   string           `json:"content"`
+				ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		}{})
+		resp.Choices[0].Message.Role = "assistant"
+		resp.Choices[0].Message.Content = "measured response"
+		resp.Choices[0].FinishReason = "stop"
+		resp.Usage.PromptTokens = 12
+		resp.Usage.CompletionTokens = 4
+		resp.Usage.TotalTokens = 16
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatalf("marshal response: %v", err)
+		}
+		return jsonHTTPResponse(http.StatusOK, string(data)), nil
+	}))
+	store := &stubAuditUsageStore{}
+	g.SetAuditStore(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"model-usage","messages":[{"role":"user","content":"measure this"}]}`))
+	req.Header.Set(HeaderRequestID, "req-usage-exact")
+	rec := httptest.NewRecorder()
+	g.handleChatCompletions(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	close(g.auditCh)
+	g.auditWg.Wait()
+	g.auditCh = nil
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.appended) != 1 {
+		t.Fatalf("expected one usage record, got %d", len(store.appended))
+	}
+	got := store.appended[0]
+	if got.RequestID != "req-usage-exact" || got.PromptTokens != 12 || got.CompletionTokens != 4 || got.TokenCount != 16 || got.TokenSource != audit.TokenSourceExact {
+		t.Fatalf("unexpected usage record: %+v", got)
+	}
+}
 
 func TestHandleChatCompletionsReturnsOpenAICompatibleResponse(t *testing.T) {
 	t.Parallel()

@@ -226,16 +226,26 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 	}
 
 	type usageBucket struct {
-		Requests  int64
-		Tokens    int64
-		Successes int64
-		Errors    int64
+		Attempts          int64
+		Requests          int64
+		Tokens            int64
+		ExactRequests     int64
+		EstimatedRequests int64
+		ExactTokens       int64
+		EstimatedTokens   int64
+		Successes         int64
+		Errors            int64
 	}
 	aggregate := make(map[int64]usageBucket, len(rows))
 	for _, row := range rows {
 		current := aggregate[row.BucketStartMS]
+		current.Attempts += row.AttemptCount
 		current.Requests += row.RequestCount
 		current.Tokens += row.TokenCount
+		current.ExactRequests += row.ExactRequestCount
+		current.EstimatedRequests += row.EstimatedRequestCount
+		current.ExactTokens += row.ExactTokenCount
+		current.EstimatedTokens += row.EstimatedTokenCount
 		current.Successes += row.SuccessCount
 		current.Errors += row.ErrorCount
 		aggregate[row.BucketStartMS] = current
@@ -245,16 +255,22 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 	for bucket := trendStart; bucket.Before(trendEnd); bucket = bucket.Add(24 * time.Hour) {
 		snapshot := aggregate[bucket.UnixMilli()]
 		trend = append(trend, map[string]any{
-			"bucket_start": bucket.Format(time.RFC3339),
-			"requests":     snapshot.Requests,
-			"tokens":       snapshot.Tokens,
-			"successes":    snapshot.Successes,
-			"errors":       snapshot.Errors,
+			"bucket_start":       bucket.Format(time.RFC3339),
+			"attempts":           snapshot.Attempts,
+			"requests":           snapshot.Requests,
+			"tokens":             snapshot.Tokens,
+			"exact_requests":     snapshot.ExactRequests,
+			"estimated_requests": snapshot.EstimatedRequests,
+			"exact_tokens":       snapshot.ExactTokens,
+			"estimated_tokens":   snapshot.EstimatedTokens,
+			"successes":          snapshot.Successes,
+			"errors":             snapshot.Errors,
 		})
 	}
 
 	return map[string]any{
-		"workspace_id": workspaceID,
+		"workspace_id":   workspaceID,
+		"reconciliation": reconcileUsageSummary(totals),
 		"period": map[string]any{
 			"current_month_start": monthStart.Format(time.RFC3339),
 			"current_period_end":  now.Format(time.RFC3339),
@@ -263,10 +279,15 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 			"trend_bucket":        "day",
 		},
 		"totals": map[string]any{
-			"requests":  totals.RequestCount,
-			"tokens":    totals.TokenCount,
-			"successes": totals.SuccessCount,
-			"errors":    totals.ErrorCount,
+			"attempts":           totals.AttemptCount,
+			"requests":           totals.RequestCount,
+			"tokens":             totals.TokenCount,
+			"exact_requests":     totals.ExactRequestCount,
+			"estimated_requests": totals.EstimatedRequestCount,
+			"exact_tokens":       totals.ExactTokenCount,
+			"estimated_tokens":   totals.EstimatedTokenCount,
+			"successes":          totals.SuccessCount,
+			"errors":             totals.ErrorCount,
 		},
 		"daily_trend": trend,
 	}, nil

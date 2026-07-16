@@ -4,8 +4,13 @@ export interface AuditUsageRow {
   bucket_start: string;
   workspace_id: string;
   key_id: string;
+  attempts?: number;
   requests: number;
   tokens: number;
+  exact_requests?: number;
+  estimated_requests?: number;
+  exact_tokens?: number;
+  estimated_tokens?: number;
   successes: number;
   errors: number;
 }
@@ -15,6 +20,10 @@ export interface AuditUsageResponse {
   start: string;
   end: string;
   rows: AuditUsageRow[];
+  reconciliation?: {
+    status: 'ok' | 'mismatch';
+    discrepancies: string[];
+  };
 }
 
 export async function readResponseError(response: Response, fallbackMessage: string): Promise<string> {

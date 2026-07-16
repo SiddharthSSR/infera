@@ -6,8 +6,21 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/pkg/types"
 )
+
+type usageMeasurement struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	TokenSource      string
+}
+
+type streamingInferenceResult struct {
+	Usage  usageMeasurement
+	Status string
+}
 
 func (g *Gateway) writeChatCompletionResponse(w http.ResponseWriter, requestID, model string, req *types.InferenceRequest, resp *types.InferenceResponse) {
 	openAIResp, _ := buildChatCompletionResponse(requestID, model, req, resp)
@@ -95,11 +108,11 @@ func buildStreamingChatCompletionChunk(requestID string, created int64, model st
 	return openAIChunk
 }
 
-func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) (int, string) {
+func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) streamingInferenceResult {
 	chunks, err := client.InferStream(r.Context(), req)
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, OpenAIChatErrorTypeInferenceError, err.Error())
-		return 0, OpenAIChatErrorTypeInferenceError
+		return streamingInferenceResult{Status: OpenAIChatErrorTypeInferenceError}
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -110,7 +123,7 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		g.writeError(w, http.StatusInternalServerError, "streaming_not_supported", "Streaming not supported")
-		return 0, "streaming_not_supported"
+		return streamingInferenceResult{Status: "streaming_not_supported"}
 	}
 
 	requestID := "chatcmpl-" + req.RequestID
@@ -122,7 +135,6 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
 
-	tokenCount := 0
 	generatedChars := 0
 	bestPromptTokens := 0
 	bestCompletionTokens := 0
@@ -171,19 +183,15 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
-	if bestPromptTokens == 0 {
-		bestPromptTokens = req.TokenEstimate()
-	}
-	if bestCompletionTokens == 0 {
-		bestCompletionTokens = estimateCompletionChars(generatedChars)
-	}
-	tokenCount = maxInt(tokenCount, usageTotalTokens(
+	usage := resolveUsageMeasurement(
 		bestPromptTokens,
 		bestCompletionTokens,
 		bestTotalTokens,
-	))
+		req.TokenEstimate(),
+		estimateCompletionChars(generatedChars),
+	)
 
-	return tokenCount, "success"
+	return streamingInferenceResult{Usage: usage, Status: "success"}
 }
 
 func (g *Gateway) recordNonStreamingLatencyMetrics(model string, resp *types.InferenceResponse, completionTokens int) {
@@ -211,6 +219,36 @@ func usageTotalTokens(promptTokens, completionTokens, totalTokens int) int {
 		return sum
 	}
 	return 0
+}
+
+func resolveUsageMeasurement(actualPrompt, actualCompletion, actualTotal, estimatedPrompt, estimatedCompletion int) usageMeasurement {
+	promptExact := actualPrompt > 0
+	completionExact := actualCompletion > 0
+	totalExact := actualTotal > 0
+
+	promptTokens := actualPrompt
+	if !promptExact {
+		promptTokens = maxInt(estimatedPrompt, 0)
+	}
+	completionTokens := actualCompletion
+	if !completionExact {
+		completionTokens = maxInt(estimatedCompletion, 0)
+	}
+
+	tokenSource := audit.TokenSourceMixed
+	switch {
+	case promptExact && completionExact:
+		tokenSource = audit.TokenSourceExact
+	case !promptExact && !completionExact && !totalExact:
+		tokenSource = audit.TokenSourceEstimated
+	}
+
+	return usageMeasurement{
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      usageTotalTokens(promptTokens, completionTokens, actualTotal),
+		TokenSource:      tokenSource,
+	}
 }
 
 func estimateCompletionTokens(resp *types.InferenceResponse) int {

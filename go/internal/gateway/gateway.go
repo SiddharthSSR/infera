@@ -44,7 +44,7 @@ type Gateway struct {
 
 	// Audit (inference usage tracking)
 	auditStore auditUsageStore
-	auditCh    chan audit.InferenceAuditRecord
+	auditCh    chan auditWriteRequest
 	auditWg    sync.WaitGroup
 
 	// Deployments (shared deployment history)
@@ -172,22 +172,21 @@ func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 	g.vaultHandler = h
 }
 
-// SetAuditStore sets the inference audit store and starts the async writer.
+// SetAuditStore sets the inference audit store and starts the serialized writer.
 func (g *Gateway) SetAuditStore(s auditUsageStore) {
 	g.auditStore = s
-	g.auditCh = make(chan audit.InferenceAuditRecord, 1024)
+	g.auditCh = make(chan auditWriteRequest, 1024)
 	g.auditWg.Add(1)
 	go g.runAuditWriter()
 }
 
-// runAuditWriter drains auditCh in the background, keeping audit writes off
-// the inference hot path.
+// runAuditWriter serializes audit writes and acknowledges durable persistence.
 func (g *Gateway) runAuditWriter() {
 	defer g.auditWg.Done()
-	for rec := range g.auditCh {
-		if err := g.auditStore.AppendInference(rec); err != nil {
-			g.log.Warn("inference.audit_persist_failed", slog.String("error", err.Error()))
-		}
+	for write := range g.auditCh {
+		err := g.appendAuditRecordWithRetry(write.record)
+		write.done <- err
+		close(write.done)
 	}
 }
 
@@ -548,6 +547,7 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 	promptHash := hashPrompt(req.Messages)
 	auditStatus := "unknown_error"
 	auditTokenCount := 0
+	auditUsage := usageMeasurement{TokenSource: audit.TokenSourceUnknown}
 	auditWorkerID := ""
 	auditErrorCode := ""
 	defer func() {
@@ -560,6 +560,7 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 			slog.Bool("stream", true),
 			slog.Int("message_count", len(req.Messages)),
 			slog.Int("token_count", auditTokenCount),
+			slog.String("token_source", auditUsage.TokenSource),
 			slog.String("prompt_hash", promptHash),
 			slog.String("status", auditStatus),
 			slog.Int64("latency_ms", latencyMS),
@@ -571,24 +572,25 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 
 		if g.auditCh != nil {
 			rec := audit.InferenceAuditRecord{
-				Timestamp:    requestStart.UTC(),
-				RequestID:    requestID,
-				KeyID:        keyID,
-				WorkspaceID:  workspaceID,
-				Model:        req.Model,
-				WorkerID:     auditWorkerID,
-				Stream:       true,
-				MessageCount: len(req.Messages),
-				TokenCount:   auditTokenCount,
-				PromptHash:   promptHash,
-				Status:       auditStatus,
-				ErrorCode:    auditErrorCode,
-				LatencyMS:    latencyMS,
+				Timestamp:        requestStart.UTC(),
+				RequestID:        requestID,
+				KeyID:            keyID,
+				WorkspaceID:      workspaceID,
+				Model:            req.Model,
+				WorkerID:         auditWorkerID,
+				Stream:           true,
+				MessageCount:     len(req.Messages),
+				PromptTokens:     auditUsage.PromptTokens,
+				CompletionTokens: auditUsage.CompletionTokens,
+				TokenCount:       auditTokenCount,
+				TokenSource:      auditUsage.TokenSource,
+				PromptHash:       promptHash,
+				Status:           auditStatus,
+				ErrorCode:        auditErrorCode,
+				LatencyMS:        latencyMS,
 			}
-			select {
-			case g.auditCh <- rec:
-			default:
-				g.log.Warn("inference.audit_dropped", slog.String("request_id", requestID))
+			if err := g.enqueueAuditRecord(rec); err != nil {
+				g.log.Error("inference.audit_persist_failed", slog.String("request_id", requestID), slog.String("error", err.Error()))
 			}
 		}
 		if g.metrics != nil {
@@ -603,6 +605,7 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 	if requestID != "" {
 		inferenceReq.RequestID = requestID
 	}
+	requestID = inferenceReq.RequestID
 	if err := g.enforceWorkspaceQuotaForKey(auth.KeyFromContext(r.Context()), inferenceReq); err != nil {
 		auditStatus = "failed"
 		auditErrorCode = string(err.Code)
@@ -656,7 +659,10 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	auditTokenCount, auditStatus = g.handleStreamingInference(w, r.WithContext(ctx), client, inferenceReq, req.Model)
+	streamResult := g.handleStreamingInference(w, r.WithContext(ctx), client, inferenceReq, req.Model)
+	auditUsage = streamResult.Usage
+	auditTokenCount = auditUsage.TotalTokens
+	auditStatus = streamResult.Status
 	if auditStatus != "success" {
 		auditErrorCode = auditStatus
 	}
@@ -1129,33 +1135,44 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type usageRow struct {
-		BucketStart string `json:"bucket_start"`
-		WorkspaceID string `json:"workspace_id"`
-		KeyID       string `json:"key_id"`
-		Requests    int64  `json:"requests"`
-		Tokens      int64  `json:"tokens"`
-		Successes   int64  `json:"successes"`
-		Errors      int64  `json:"errors"`
+		BucketStart       string `json:"bucket_start"`
+		WorkspaceID       string `json:"workspace_id"`
+		KeyID             string `json:"key_id"`
+		Attempts          int64  `json:"attempts"`
+		Requests          int64  `json:"requests"`
+		Tokens            int64  `json:"tokens"`
+		ExactRequests     int64  `json:"exact_requests"`
+		EstimatedRequests int64  `json:"estimated_requests"`
+		ExactTokens       int64  `json:"exact_tokens"`
+		EstimatedTokens   int64  `json:"estimated_tokens"`
+		Successes         int64  `json:"successes"`
+		Errors            int64  `json:"errors"`
 	}
 
 	out := make([]usageRow, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, usageRow{
-			BucketStart: time.UnixMilli(row.BucketStartMS).UTC().Format(time.RFC3339),
-			WorkspaceID: row.WorkspaceID,
-			KeyID:       row.KeyID,
-			Requests:    row.RequestCount,
-			Tokens:      row.TokenCount,
-			Successes:   row.SuccessCount,
-			Errors:      row.ErrorCount,
+			BucketStart:       time.UnixMilli(row.BucketStartMS).UTC().Format(time.RFC3339),
+			WorkspaceID:       row.WorkspaceID,
+			KeyID:             row.KeyID,
+			Attempts:          row.AttemptCount,
+			Requests:          row.RequestCount,
+			Tokens:            row.TokenCount,
+			ExactRequests:     row.ExactRequestCount,
+			EstimatedRequests: row.EstimatedRequestCount,
+			ExactTokens:       row.ExactTokenCount,
+			EstimatedTokens:   row.EstimatedTokenCount,
+			Successes:         row.SuccessCount,
+			Errors:            row.ErrorCount,
 		})
 	}
 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"bucket": bucket,
-		"start":  start.Format(time.RFC3339),
-		"end":    end.Format(time.RFC3339),
-		"rows":   out,
+		"bucket":         bucket,
+		"start":          start.Format(time.RFC3339),
+		"end":            end.Format(time.RFC3339),
+		"rows":           out,
+		"reconciliation": reconcileUsageRows(rows),
 	})
 }
 

@@ -28,6 +28,7 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 		Model:       "m1",
 		Status:      "success",
 		TokenCount:  120,
+		TokenSource: audit.TokenSourceExact,
 	}); err != nil {
 		t.Fatalf("AppendInference req-1: %v", err)
 	}
@@ -64,13 +65,19 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 
 	var payload struct {
 		Rows []struct {
-			WorkspaceID string `json:"workspace_id"`
-			KeyID       string `json:"key_id"`
-			Requests    int64  `json:"requests"`
-			Tokens      int64  `json:"tokens"`
-			Successes   int64  `json:"successes"`
-			Errors      int64  `json:"errors"`
+			WorkspaceID       string `json:"workspace_id"`
+			KeyID             string `json:"key_id"`
+			Attempts          int64  `json:"attempts"`
+			Requests          int64  `json:"requests"`
+			Tokens            int64  `json:"tokens"`
+			ExactRequests     int64  `json:"exact_requests"`
+			EstimatedRequests int64  `json:"estimated_requests"`
+			ExactTokens       int64  `json:"exact_tokens"`
+			EstimatedTokens   int64  `json:"estimated_tokens"`
+			Successes         int64  `json:"successes"`
+			Errors            int64  `json:"errors"`
 		} `json:"rows"`
+		Reconciliation usageReconciliation `json:"reconciliation"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
@@ -86,8 +93,14 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 	if row.KeyID != "inf_key_a" {
 		t.Fatalf("expected key inf_key_a, got %q", row.KeyID)
 	}
-	if row.Requests != 2 || row.Tokens != 120 || row.Successes != 1 || row.Errors != 1 {
+	if row.Attempts != 2 || row.Requests != 1 || row.Tokens != 120 || row.Successes != 1 || row.Errors != 1 {
 		t.Fatalf("unexpected row values: %+v", row)
+	}
+	if row.ExactRequests != 1 || row.EstimatedRequests != 0 || row.ExactTokens != 120 || row.EstimatedTokens != 0 {
+		t.Fatalf("unexpected accuracy values: %+v", row)
+	}
+	if payload.Reconciliation.Status != "ok" || len(payload.Reconciliation.Discrepancies) != 0 {
+		t.Fatalf("unexpected reconciliation: %+v", payload.Reconciliation)
 	}
 }
 

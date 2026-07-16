@@ -10,6 +10,13 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+const (
+	TokenSourceExact     = "exact"
+	TokenSourceEstimated = "estimated"
+	TokenSourceMixed     = "mixed"
+	TokenSourceUnknown   = "unknown"
+)
+
 var auditMigrations = []migrate.Migration{
 	{
 		Version:     1,
@@ -43,6 +50,32 @@ var auditMigrations = []migrate.Migration{
 		UPDATE inference_audit SET workspace_id = 'ws_default' WHERE workspace_id IS NULL OR workspace_id = '';
 		CREATE INDEX IF NOT EXISTS idx_inference_audit_workspace_ts ON inference_audit(workspace_id, ts_unix_ms);`,
 	},
+	{
+		Version:     3,
+		Description: "add trustworthy usage attribution and idempotency",
+		SQL: `
+		ALTER TABLE inference_audit ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE inference_audit ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE inference_audit ADD COLUMN token_source TEXT NOT NULL DEFAULT 'unknown';
+		ALTER TABLE inference_audit ADD COLUMN billable INTEGER NOT NULL DEFAULT 0;
+		UPDATE inference_audit SET billable = CASE WHEN status = 'success' THEN 1 ELSE 0 END;
+		-- v2 assigned every legacy row to ws_default. Preserve colliding legacy
+		-- events by giving later rows a stable synthetic request ID.
+		UPDATE inference_audit
+		SET request_id = request_id || '#legacy-row-' || id
+		WHERE workspace_id = 'ws_default'
+		  AND id NOT IN (
+			SELECT MIN(id) FROM inference_audit
+			WHERE workspace_id = 'ws_default'
+			GROUP BY workspace_id, request_id
+		  );
+		DELETE FROM inference_audit
+		WHERE id NOT IN (
+			SELECT MIN(id) FROM inference_audit GROUP BY workspace_id, request_id
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_inference_audit_workspace_request
+			ON inference_audit(workspace_id, request_id);`,
+	},
 }
 
 type Store struct {
@@ -50,19 +83,23 @@ type Store struct {
 }
 
 type InferenceAuditRecord struct {
-	Timestamp    time.Time
-	RequestID    string
-	KeyID        string
-	WorkspaceID  string
-	Model        string
-	WorkerID     string
-	Stream       bool
-	MessageCount int
-	TokenCount   int
-	PromptHash   string
-	Status       string
-	ErrorCode    string
-	LatencyMS    int64
+	Timestamp        time.Time
+	RequestID        string
+	KeyID            string
+	WorkspaceID      string
+	Model            string
+	WorkerID         string
+	Stream           bool
+	MessageCount     int
+	PromptTokens     int
+	CompletionTokens int
+	TokenCount       int
+	TokenSource      string
+	Billable         bool
+	PromptHash       string
+	Status           string
+	ErrorCode        string
+	LatencyMS        int64
 }
 
 type UsageQuery struct {
@@ -75,13 +112,18 @@ type UsageQuery struct {
 }
 
 type UsageRow struct {
-	BucketStartMS int64
-	WorkspaceID   string
-	KeyID         string
-	RequestCount  int64
-	TokenCount    int64
-	SuccessCount  int64
-	ErrorCount    int64
+	BucketStartMS         int64
+	WorkspaceID           string
+	KeyID                 string
+	AttemptCount          int64
+	RequestCount          int64
+	TokenCount            int64
+	ExactRequestCount     int64
+	EstimatedRequestCount int64
+	ExactTokenCount       int64
+	EstimatedTokenCount   int64
+	SuccessCount          int64
+	ErrorCount            int64
 }
 
 type UsageSummaryQuery struct {
@@ -91,10 +133,15 @@ type UsageSummaryQuery struct {
 }
 
 type UsageSummary struct {
-	RequestCount int64 `json:"request_count"`
-	TokenCount   int64 `json:"token_count"`
-	SuccessCount int64 `json:"success_count"`
-	ErrorCount   int64 `json:"error_count"`
+	AttemptCount          int64 `json:"attempt_count"`
+	RequestCount          int64 `json:"request_count"`
+	TokenCount            int64 `json:"token_count"`
+	ExactRequestCount     int64 `json:"exact_request_count"`
+	EstimatedRequestCount int64 `json:"estimated_request_count"`
+	ExactTokenCount       int64 `json:"exact_token_count"`
+	EstimatedTokenCount   int64 `json:"estimated_token_count"`
+	SuccessCount          int64 `json:"success_count"`
+	ErrorCount            int64 `json:"error_count"`
 }
 
 func NewStore(dbPath string) (*Store, error) {
@@ -149,11 +196,31 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 	if rec.Stream {
 		stream = 1
 	}
+	if rec.PromptTokens < 0 || rec.CompletionTokens < 0 || rec.TokenCount < 0 {
+		return fmt.Errorf("token counts cannot be negative")
+	}
+	if rec.TokenCount == 0 {
+		rec.TokenCount = rec.PromptTokens + rec.CompletionTokens
+	}
+	tokenSource := strings.ToLower(strings.TrimSpace(rec.TokenSource))
+	if tokenSource == "" {
+		tokenSource = "unknown"
+	}
+	switch tokenSource {
+	case TokenSourceExact, TokenSourceEstimated, TokenSourceMixed, TokenSourceUnknown:
+	default:
+		return fmt.Errorf("invalid token_source %q", rec.TokenSource)
+	}
+	billable := 0
+	if rec.Billable || rec.Status == "success" {
+		billable = 1
+	}
 
 	_, err := s.db.Exec(
 		`INSERT INTO inference_audit
-		 (ts_unix_ms, request_id, key_id, workspace_id, model, worker_id, stream, message_count, token_count, prompt_hash, status, error_code, latency_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (ts_unix_ms, request_id, key_id, workspace_id, model, worker_id, stream, message_count, prompt_tokens, completion_tokens, token_count, token_source, billable, prompt_hash, status, error_code, latency_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(workspace_id, request_id) DO NOTHING`,
 		ts.UnixMilli(),
 		rec.RequestID,
 		keyID,
@@ -162,7 +229,11 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 		rec.WorkerID,
 		stream,
 		rec.MessageCount,
+		rec.PromptTokens,
+		rec.CompletionTokens,
 		rec.TokenCount,
+		tokenSource,
+		billable,
 		rec.PromptHash,
 		rec.Status,
 		rec.ErrorCode,
@@ -204,8 +275,13 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 		(ts_unix_ms / ?) * ? AS bucket_start_ms,
 		workspace_id,
 		key_id,
-		COUNT(*) AS request_count,
-		COALESCE(SUM(token_count), 0) AS token_count,
+		COUNT(*) AS attempt_count,
+		COALESCE(SUM(CASE WHEN billable = 1 THEN 1 ELSE 0 END), 0) AS request_count,
+		COALESCE(SUM(CASE WHEN billable = 1 THEN token_count ELSE 0 END), 0) AS token_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source = 'exact' THEN 1 ELSE 0 END), 0) AS exact_request_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source <> 'exact' THEN 1 ELSE 0 END), 0) AS estimated_request_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source = 'exact' THEN token_count ELSE 0 END), 0) AS exact_token_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source <> 'exact' THEN token_count ELSE 0 END), 0) AS estimated_token_count,
 		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
 		COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS error_count
 	FROM inference_audit
@@ -240,8 +316,13 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 			&row.BucketStartMS,
 			&row.WorkspaceID,
 			&row.KeyID,
+			&row.AttemptCount,
 			&row.RequestCount,
 			&row.TokenCount,
+			&row.ExactRequestCount,
+			&row.EstimatedRequestCount,
+			&row.ExactTokenCount,
+			&row.EstimatedTokenCount,
 			&row.SuccessCount,
 			&row.ErrorCount,
 		); err != nil {
@@ -268,8 +349,13 @@ func (s *Store) UsageSummary(q UsageSummaryQuery) (*UsageSummary, error) {
 
 	query := `
 	SELECT
-		COUNT(*) AS request_count,
-		COALESCE(SUM(token_count), 0) AS token_count,
+		COUNT(*) AS attempt_count,
+		COALESCE(SUM(CASE WHEN billable = 1 THEN 1 ELSE 0 END), 0) AS request_count,
+		COALESCE(SUM(CASE WHEN billable = 1 THEN token_count ELSE 0 END), 0) AS token_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source = 'exact' THEN 1 ELSE 0 END), 0) AS exact_request_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source <> 'exact' THEN 1 ELSE 0 END), 0) AS estimated_request_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source = 'exact' THEN token_count ELSE 0 END), 0) AS exact_token_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source <> 'exact' THEN token_count ELSE 0 END), 0) AS estimated_token_count,
 		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
 		COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS error_count
 	FROM inference_audit
@@ -282,8 +368,13 @@ func (s *Store) UsageSummary(q UsageSummaryQuery) (*UsageSummary, error) {
 
 	summary := &UsageSummary{}
 	if err := s.db.QueryRow(query, args...).Scan(
+		&summary.AttemptCount,
 		&summary.RequestCount,
 		&summary.TokenCount,
+		&summary.ExactRequestCount,
+		&summary.EstimatedRequestCount,
+		&summary.ExactTokenCount,
+		&summary.EstimatedTokenCount,
 		&summary.SuccessCount,
 		&summary.ErrorCount,
 	); err != nil {
