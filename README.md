@@ -117,8 +117,13 @@ INFERA_ADMIN_KEY=...
 INFERA_GATEWAY_ADDRESS=https://inferai.co.in
 INFERA_ALLOWED_ORIGINS=https://inferai.co.in
 INFERA_WORKER_SHARED_TOKEN=<long-random-token>
+INFERA_RELEASE_ID=v1.3.0
+INFERA_WORKER_PROTOCOL_VERSION=1
+INFERA_GATEWAY_IMAGE=<registry>/infera-gateway:<pinned-tag>
 INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY=<base64-encoded-32-byte-key>
 INFERA_WORKER_IMAGE=<registry>/infera-worker:<pinned-tag>
+INFERA_GATEWAY_REPLICAS=1
+INFERA_AUDIT_LEDGER_BACKEND=sqlite
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD=<strong-password>
 ALERT_EMAIL_TO=alerts@your-domain.com
@@ -133,6 +138,9 @@ Notes:
 
 - Keep `INFERA_WORKER_SHARED_TOKEN` identical on gateway and workers. It now authenticates
   traffic in both directions; workers deny every endpoint except `/health` when it is absent.
+- Deploy the gateway and workers as one release set. `INFERA_RELEASE_ID` and
+  `INFERA_WORKER_PROTOCOL_VERSION` are injected into managed workers, and production gateways
+  reject registration from mismatched releases or protocols.
 - Worker model-load requests accept only an approved `model_id`. Provider-provisioned workers
   bind `INFERA_ALLOWED_MODELS` to the deployment's requested models; custom worker deployments
   default to `INFERA_PRELOAD_MODELS` and may set a different comma-separated or JSON allowlist.
@@ -140,8 +148,11 @@ Notes:
   opt-in for reviewed models and should not be combined with an unpinned model revision.
 - `INFERA_MODEL_CACHE_SIZE` defaults to `2` and is enforced for both startup and runtime loads.
 - Generate `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` with `openssl rand -base64 32`, store it in your secret manager, and back it up separately from the database. Losing it makes saved provider credentials unrecoverable.
-- Use a non-`latest` worker image tag or a full `@sha256:<64-hex-digest>` pin in production.
-- Validate required production env and the worker image pin before deploy:
+- Use non-`latest` gateway and worker image tags or full digests in production.
+- SQLite audit/quota accounting is single-replica only. Keep `INFERA_GATEWAY_REPLICAS=1`
+  until the shared transactional ledger tracked by INF-42 is deployed; startup fails closed
+  for unsafe multi-replica settings.
+- Validate required production env and both image pins before deploy:
 
 ```bash
 ./scripts/validate-prod-env.sh
@@ -359,6 +370,11 @@ Compatibility notes:
 | `INFERA_GATEWAY_ADDRESS` | — | Public gateway URL workers use for registration/heartbeat |
 | `INFERA_ALLOWED_ORIGINS` | `*` | CORS allowlist (comma-separated) |
 | `INFERA_WORKER_SHARED_TOKEN` | — | Shared secret required for worker register/heartbeat |
+| `INFERA_RELEASE_ID` | — | Required production release identity shared by the gateway and managed workers |
+| `INFERA_WORKER_PROTOCOL_VERSION` | — | Required production gateway/worker control-plane protocol version |
+| `INFERA_GATEWAY_IMAGE` | — | Pinned production gateway image tag or digest |
+| `INFERA_GATEWAY_REPLICAS` | `1` | Gateway replica count; values above one are rejected until INF-42 lands |
+| `INFERA_AUDIT_LEDGER_BACKEND` | `sqlite` | Audit/quota ledger backend; this release supports single-replica SQLite only |
 | `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` | — | Base64-encoded 32-byte key used to encrypt workspace provider credentials; required outside development mode |
 | `INFERA_WORKER_IMAGE` | — | Custom worker Docker image pinned to a non-`latest` tag or full digest |
 | `INFERA_DEFAULT_MODEL` | `mistralai/Mistral-7B-Instruct-v0.2` | Default model to load |
@@ -372,6 +388,8 @@ Compatibility notes:
 | `INFERA_ENGINE` | `vllm` | Engine type: `mock`, `vllm` |
 | `INFERA_HTTP_PORT` | `8081` | Worker HTTP port |
 | `INFERA_ROUTER_ADDRESS` | — | Gateway address for registration |
+| `INFERA_RELEASE_ID` | `dev` | Release identity returned during gateway registration and health checks |
+| `INFERA_WORKER_PROTOCOL_VERSION` | `1` | Worker control-plane protocol version |
 | `INFERA_PRELOAD_MODELS` | — | Models to load on startup |
 | `INFERA_ALLOWED_MODELS` | `INFERA_PRELOAD_MODELS` | Model IDs approved for authenticated `/models/load` requests |
 | `INFERA_MODEL_CACHE_SIZE` | `2` | Maximum concurrently loaded models; new loads fail at capacity |

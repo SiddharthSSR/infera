@@ -10,6 +10,9 @@ required_vars=(
   INFERA_ALLOWED_ORIGINS
   INFERA_GATEWAY_ADDRESS
   INFERA_WORKER_SHARED_TOKEN
+  INFERA_RELEASE_ID
+  INFERA_WORKER_PROTOCOL_VERSION
+  INFERA_GATEWAY_IMAGE
   INFERA_WORKER_IMAGE
   GRAFANA_ADMIN_USER
   GRAFANA_ADMIN_PASSWORD
@@ -83,5 +86,22 @@ fi
 
 worker_image="$(lookup_env INFERA_WORKER_IMAGE)"
 bash "$(dirname "$0")/validate-worker-image-pin.sh" "${worker_image}"
+gateway_image="$(lookup_env INFERA_GATEWAY_IMAGE)"
+bash "$(dirname "$0")/validate-worker-image-pin.sh" "${gateway_image}" "INFERA_GATEWAY_IMAGE"
+
+gateway_replicas="$(lookup_env INFERA_GATEWAY_REPLICAS 2>/dev/null || printf '1')"
+audit_backend="$(lookup_env INFERA_AUDIT_LEDGER_BACKEND 2>/dev/null || printf 'sqlite')"
+if [[ ! "${gateway_replicas}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: INFERA_GATEWAY_REPLICAS must be a positive integer." >&2
+  exit 1
+fi
+if [[ "${audit_backend}" != "sqlite" ]]; then
+  echo "ERROR: INFERA_AUDIT_LEDGER_BACKEND=${audit_backend} is not supported by this release." >&2
+  exit 1
+fi
+if (( gateway_replicas > 1 )); then
+  echo "ERROR: multiple gateway replicas require the shared ledger tracked by INF-42; sqlite is single-replica only." >&2
+  exit 1
+fi
 
 echo "Production env validation passed (${#required_vars[@]} required vars present; values hidden)."

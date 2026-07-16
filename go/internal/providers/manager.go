@@ -31,6 +31,8 @@ type Manager struct {
 	workerImage               string
 	workerImages              map[InferenceEngine]string
 	gatewayAddress            string
+	releaseID                 string
+	workerProtocolVersion     string
 	workerRegistrationTimeout time.Duration
 	workerHeartbeatTimeout    time.Duration
 	now                       func() time.Time
@@ -58,6 +60,8 @@ type ManagerConfig struct {
 	WorkerImage               string                     // Default Docker image for workers
 	WorkerImages              map[InferenceEngine]string // Engine-specific worker images
 	GatewayAddress            string                     // Gateway address for workers to connect
+	ReleaseID                 string                     // Release identity injected into managed workers
+	WorkerProtocolVersion     string                     // Gateway/worker control-plane protocol version
 	CostDBPath                string                     // Path to SQLite DB for persistent cost tracking (empty = in-memory)
 	WorkerRegistrationTimeout time.Duration              // Max time a running provider instance may remain unregistered
 	WorkerHeartbeatTimeout    time.Duration              // Max age of a linked worker heartbeat before lifecycle becomes unhealthy
@@ -105,6 +109,8 @@ func NewManagerWithStore(config ManagerConfig, store instanceStore) (*Manager, e
 		workerImage:               config.WorkerImage,
 		workerImages:              cloneWorkerImages(config.WorkerImages),
 		gatewayAddress:            config.GatewayAddress,
+		releaseID:                 strings.TrimSpace(config.ReleaseID),
+		workerProtocolVersion:     strings.TrimSpace(config.WorkerProtocolVersion),
 		workerRegistrationTimeout: timeout,
 		workerHeartbeatTimeout:    heartbeatTimeout,
 		now:                       now,
@@ -215,6 +221,8 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	// The credential-bearing callback destination is platform configuration,
 	// never a caller-controlled provisioning option.
 	req.GatewayAddress = strings.TrimSpace(m.gatewayAddress)
+	req.ReleaseID = strings.TrimSpace(m.releaseID)
+	req.ProtocolVersion = strings.TrimSpace(m.workerProtocolVersion)
 	credential := make([]byte, 32)
 	if _, err := rand.Read(credential); err != nil {
 		return nil, fmt.Errorf("generate worker credential: %w", err)

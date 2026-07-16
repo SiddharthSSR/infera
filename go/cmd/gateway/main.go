@@ -40,6 +40,16 @@ func main() {
 	flag.Parse()
 
 	log.Info("Starting Infera Gateway...")
+	devMode := os.Getenv("INFERA_DEV_MODE") == "1"
+	releaseID, workerProtocolVersion, err := rolloutIdentityFromEnv(devMode)
+	if err != nil {
+		log.Error("invalid coordinated rollout configuration", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	if err := validateAuditLedgerTopology(os.Getenv("INFERA_GATEWAY_REPLICAS"), os.Getenv("INFERA_AUDIT_LEDGER_BACKEND")); err != nil {
+		log.Error("invalid audit ledger topology", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 
 	// Create router — batcher tuning via env vars for zero-rebuild tuning in production.
 	routerConfig := router.DefaultConfig()
@@ -94,6 +104,8 @@ func main() {
 		WorkerImage:               workerImage,
 		WorkerImages:              workerImages,
 		GatewayAddress:            gatewayAddress,
+		ReleaseID:                 releaseID,
+		WorkerProtocolVersion:     workerProtocolVersion,
 		CostDBPath:                "data/costs.db",
 		WorkerRegistrationTimeout: parseDurationEnv("INFERA_WORKER_REGISTRATION_TIMEOUT", 10*time.Minute),
 	})
@@ -144,6 +156,9 @@ func main() {
 	gatewayConfig := gateway.DefaultConfig()
 	gatewayConfig.HTTPPort = *httpPort
 	gatewayConfig.WorkerSharedToken = strings.TrimSpace(os.Getenv("INFERA_WORKER_SHARED_TOKEN"))
+	gatewayConfig.ReleaseID = releaseID
+	gatewayConfig.WorkerProtocolVersion = workerProtocolVersion
+	gatewayConfig.RequireMatchingWorkerRelease = !devMode
 	gatewayConfig.RateLimiter = parseRateLimiterConfigFromEnv()
 	if v := strings.TrimSpace(os.Getenv("INFERA_MAX_IN_FLIGHT_REQUESTS")); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
@@ -268,9 +283,14 @@ func main() {
 		}, nil
 	})
 
-	// Initialize inference audit store (best-effort, non-fatal)
+	// Quota admission and usage reconciliation depend on this ledger. Production
+	// must not start in a superficially healthy state without it.
 	auditStore, err := audit.NewStore("data/audit.db")
 	if err != nil {
+		if !devMode {
+			log.Error("failed to initialize required audit and quota ledger", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
 		log.Warn("failed to initialize audit store", slog.String("error", err.Error()))
 	} else {
 		defer auditStore.Close()
@@ -361,6 +381,49 @@ func parseAllowedOrigins(raw string) []string {
 		}
 	}
 	return out
+}
+
+func rolloutIdentityFromEnv(devMode bool) (string, string, error) {
+	releaseID := strings.TrimSpace(os.Getenv("INFERA_RELEASE_ID"))
+	protocolVersion := strings.TrimSpace(os.Getenv("INFERA_WORKER_PROTOCOL_VERSION"))
+	if devMode {
+		if releaseID == "" {
+			releaseID = "dev"
+		}
+		if protocolVersion == "" {
+			protocolVersion = "1"
+		}
+		return releaseID, protocolVersion, nil
+	}
+	if releaseID == "" {
+		return "", "", errors.New("INFERA_RELEASE_ID is required outside development mode")
+	}
+	if protocolVersion == "" {
+		return "", "", errors.New("INFERA_WORKER_PROTOCOL_VERSION is required outside development mode")
+	}
+	return releaseID, protocolVersion, nil
+}
+
+func validateAuditLedgerTopology(rawReplicas, rawBackend string) error {
+	replicas := 1
+	if value := strings.TrimSpace(rawReplicas); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			return errors.New("INFERA_GATEWAY_REPLICAS must be a positive integer")
+		}
+		replicas = parsed
+	}
+	backend := strings.ToLower(strings.TrimSpace(rawBackend))
+	if backend == "" {
+		backend = "sqlite"
+	}
+	if backend != "sqlite" {
+		return fmt.Errorf("INFERA_AUDIT_LEDGER_BACKEND %q is not supported by this release", backend)
+	}
+	if replicas > 1 {
+		return errors.New("multiple gateway replicas require a shared transactional audit ledger; this release supports only single-replica sqlite")
+	}
+	return nil
 }
 
 func allWorkerImagesEmpty(images map[providers.InferenceEngine]string) bool {

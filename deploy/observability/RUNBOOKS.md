@@ -68,3 +68,26 @@
 2. Verify worker env was applied to running workers (reprovision if needed).
 3. Check gateway logs for `Invalid worker token`.
 4. Update secret and restart gateway/workers in coordinated rollout.
+
+## Coordinated gateway and worker rollout
+
+1. Build and publish pinned gateway and worker images from the same reviewed commit.
+2. Set one `INFERA_RELEASE_ID` and `INFERA_WORKER_PROTOCOL_VERSION` for the release, then run
+   `./scripts/validate-prod-env.sh` before changing the running stack.
+3. Drain or stop existing provider workers before replacing the gateway. Old workers cannot be
+   assumed compatible with a changed authentication or registration contract.
+4. Deploy the gateway, reprovision workers from the pinned worker image, and confirm `/health`
+   reports the expected release and protocol identity.
+5. Run `INFERA_RELEASE_ID=... INFERA_WORKER_PROTOCOL_VERSION=... ./scripts/release-verify.sh`
+   and verify worker registration, authenticated inference, and streaming inference.
+6. Roll back gateway and worker images together. Do not combine a rolled-back gateway with
+   workers from the failed release unless the protocol contract was explicitly proven compatible.
+
+## Multiple gateway replicas rejected
+
+1. Check `INFERA_GATEWAY_REPLICAS` and `INFERA_AUDIT_LEDGER_BACKEND` in the deployment secret set.
+2. This release supports the SQLite audit/quota ledger only and therefore requires exactly one
+   gateway replica. Do not place SQLite on a shared network filesystem as an HA workaround.
+3. Restore `INFERA_GATEWAY_REPLICAS=1` to recover service safely.
+4. Use INF-42 to track the shared transactional ledger, cross-replica quota tests, migration,
+   backup, restore, and rollback work required before enabling active-active gateways.

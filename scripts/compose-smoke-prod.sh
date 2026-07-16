@@ -29,6 +29,11 @@ trap cleanup EXIT
 : "${INFERA_ALLOWED_ORIGINS:=https://example.com}"
 : "${INFERA_GATEWAY_ADDRESS:=https://example.com}"
 : "${INFERA_WORKER_SHARED_TOKEN:=test-worker-token}"
+: "${INFERA_RELEASE_ID:=smoke-release}"
+: "${INFERA_WORKER_PROTOCOL_VERSION:=1}"
+: "${INFERA_GATEWAY_IMAGE:=ghcr.io/example/infera-gateway:test}"
+: "${INFERA_GATEWAY_REPLICAS:=1}"
+: "${INFERA_AUDIT_LEDGER_BACKEND:=sqlite}"
 : "${INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY:=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
 : "${INFERA_WORKER_IMAGE:=ghcr.io/example/infera-worker:test}"
 : "${GRAFANA_ADMIN_USER:=admin}"
@@ -46,6 +51,11 @@ export INFERA_ADMIN_KEY
 export INFERA_ALLOWED_ORIGINS
 export INFERA_GATEWAY_ADDRESS
 export INFERA_WORKER_SHARED_TOKEN
+export INFERA_RELEASE_ID
+export INFERA_WORKER_PROTOCOL_VERSION
+export INFERA_GATEWAY_IMAGE
+export INFERA_GATEWAY_REPLICAS
+export INFERA_AUDIT_LEDGER_BACKEND
 export INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY
 export INFERA_WORKER_IMAGE
 export GRAFANA_ADMIN_USER
@@ -194,11 +204,16 @@ HEALTH_FILE="${TMP_DIR}/health.txt"
 fetch_ingress "ingress /health" "${INGRESS_URL}/health" "${HEALTH_FILE}"
 HEALTH_BODY="$(cat "${HEALTH_FILE}")"
 HEALTH_BODY="${HEALTH_BODY}" python3 - <<'PY'
+import json
 import os
 
-body = os.environ["HEALTH_BODY"]
-if "healthy" not in body and "ok" not in body:
-    raise SystemExit(f"/health did not report healthy state: {body}")
+payload = json.loads(os.environ["HEALTH_BODY"])
+if payload.get("status") not in {"healthy", "degraded"}:
+    raise SystemExit(f"/health did not report a live gateway state: {payload}")
+if payload.get("release_id") != os.environ["INFERA_RELEASE_ID"]:
+    raise SystemExit("/health release identity does not match the smoke release")
+if payload.get("worker_protocol_version") != os.environ["INFERA_WORKER_PROTOCOL_VERSION"]:
+    raise SystemExit("/health worker protocol does not match the smoke protocol")
 PY
 
 echo "Checking authenticated ingress /v1/models"

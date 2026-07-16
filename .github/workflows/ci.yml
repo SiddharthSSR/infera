@@ -124,6 +124,9 @@ jobs:
           INFERA_GATEWAY_ADDRESS: https://example.com
           INFERA_WORKER_SHARED_TOKEN: test-worker-token
           INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          INFERA_RELEASE_ID: ci-test
+          INFERA_WORKER_PROTOCOL_VERSION: "1"
+          INFERA_GATEWAY_IMAGE: ghcr.io/example/infera-gateway:test
           INFERA_WORKER_IMAGE: ghcr.io/example/infera-worker:test
           GRAFANA_ADMIN_USER: admin
           GRAFANA_ADMIN_PASSWORD: test-grafana-password
@@ -152,6 +155,9 @@ jobs:
           INFERA_GATEWAY_ADDRESS: https://example.com
           INFERA_WORKER_SHARED_TOKEN: test-worker-token
           INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          INFERA_RELEASE_ID: ci-test
+          INFERA_WORKER_PROTOCOL_VERSION: "1"
+          INFERA_GATEWAY_IMAGE: ghcr.io/example/infera-gateway:test
           INFERA_WORKER_IMAGE: ghcr.io/example/infera-worker:test
           GRAFANA_ADMIN_USER: admin
           GRAFANA_ADMIN_PASSWORD: test-grafana-password

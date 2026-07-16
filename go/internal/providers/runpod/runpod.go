@@ -148,6 +148,13 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 			"key": "INFERA_WORKER_SHARED_TOKEN", "value": workerToken,
 		})
 	}
+	if releaseID := strings.TrimSpace(req.ReleaseID); releaseID != "" {
+		env = append(env, map[string]string{"key": "INFERA_RELEASE_ID", "value": releaseID})
+		env = append(env, map[string]string{"key": "INFERA_VERSION", "value": releaseID})
+	}
+	if protocolVersion := strings.TrimSpace(req.ProtocolVersion); protocolVersion != "" {
+		env = append(env, map[string]string{"key": "INFERA_WORKER_PROTOCOL_VERSION", "value": protocolVersion})
+	}
 
 	// Add models to preload
 	if len(req.Models) > 0 {

@@ -84,9 +84,11 @@ func (p *mockTestProvider) Provision(ctx context.Context, req *ProvisionRequest)
 func TestManagerProvisionSetsDefaultGatewayAddress(t *testing.T) {
 	provider := newMockTestProvider()
 	mgr := newTestManager(t, ManagerConfig{
-		DefaultProvider: ProviderMock,
-		WorkerImage:     "worker:latest",
-		GatewayAddress:  "https://inferai.co.in",
+		DefaultProvider:       ProviderMock,
+		WorkerImage:           "worker:latest",
+		GatewayAddress:        "https://inferai.co.in",
+		ReleaseID:             "release-1",
+		WorkerProtocolVersion: "1",
 	})
 	mgr.RegisterProvider(provider)
 
@@ -105,6 +107,9 @@ func TestManagerProvisionSetsDefaultGatewayAddress(t *testing.T) {
 	}
 	if provider.lastReq.GatewayAddress != "https://inferai.co.in" {
 		t.Fatalf("expected default gateway address to be injected, got %q", provider.lastReq.GatewayAddress)
+	}
+	if provider.lastReq.ReleaseID != "release-1" || provider.lastReq.ProtocolVersion != "1" {
+		t.Fatalf("expected rollout identity to be injected, got release=%q protocol=%q", provider.lastReq.ReleaseID, provider.lastReq.ProtocolVersion)
 	}
 }
 

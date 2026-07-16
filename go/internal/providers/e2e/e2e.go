@@ -384,6 +384,13 @@ func (p *Provider) buildEnv(req *providers.ProvisionRequest) map[string]string {
 	if workerToken := strings.TrimSpace(req.WorkerToken); workerToken != "" {
 		env["INFERA_WORKER_SHARED_TOKEN"] = workerToken
 	}
+	if releaseID := strings.TrimSpace(req.ReleaseID); releaseID != "" {
+		env["INFERA_RELEASE_ID"] = releaseID
+		env["INFERA_VERSION"] = releaseID
+	}
+	if protocolVersion := strings.TrimSpace(req.ProtocolVersion); protocolVersion != "" {
+		env["INFERA_WORKER_PROTOCOL_VERSION"] = protocolVersion
+	}
 	if workerAddress := strings.TrimSpace(p.options[optionWorkerAddr]); workerAddress != "" {
 		env["INFERA_WORKER_ADDRESS"] = workerAddress
 	} else if ingressHost := strings.TrimSpace(p.options[optionIngressHost]); ingressHost != "" {

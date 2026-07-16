@@ -295,6 +295,8 @@ class HTTPServer:
             "worker_id": self.worker.worker_id,
             "address": worker_address,
             "status": "healthy",
+            "release_id": self.config.release_id,
+            "protocol_version": self.config.worker_protocol_version,
             "tags": self._worker_tags(),
             "loaded_models": [
                 {
@@ -658,6 +660,8 @@ class HTTPServer:
                 "ready": ready,
                 "draining": state == WorkerState.DRAINING,
                 "gateway_registered": self._gateway_registered,
+                "release_id": self.config.release_id,
+                "protocol_version": self.config.worker_protocol_version,
                 "startup": self.worker.get_startup_status(),
                 "models_loaded": len(self.worker.get_loaded_models()),
                 "memory_used_bytes": stats.memory_used_bytes,

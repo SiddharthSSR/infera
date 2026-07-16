@@ -199,6 +199,50 @@ func TestRequireWorkerTokenOnRegister(t *testing.T) {
 	}
 }
 
+func TestRegisterWorkerRejectsIncompatibleRolloutIdentity(t *testing.T) {
+	r := router.New(router.DefaultConfig())
+	defer r.Stop()
+
+	config := DefaultConfig()
+	config.WorkerSharedToken = "secret-token"
+	config.ReleaseID = "release-1"
+	config.WorkerProtocolVersion = "1"
+	config.RequireMatchingWorkerRelease = true
+	g := New(config, r, nil)
+	handler := g.requireWorkerToken(g.handleRegisterWorker)
+
+	tests := []struct {
+		name string
+		body string
+		code string
+	}{
+		{
+			name: "protocol mismatch",
+			body: `{"worker_id":"w1","address":"localhost:8081","status":"healthy","release_id":"release-1","protocol_version":"2"}`,
+			code: "worker_protocol_mismatch",
+		},
+		{
+			name: "release mismatch",
+			body: `{"worker_id":"w1","address":"localhost:8081","status":"healthy","release_id":"release-0","protocol_version":"1"}`,
+			code: "worker_release_mismatch",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/workers/register", strings.NewReader(tc.body))
+			req.Header.Set("X-Worker-Token", "secret-token")
+			rec := httptest.NewRecorder()
+			handler(rec, req)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.code) {
+				t.Fatalf("expected error code %q, got %s", tc.code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 	r := router.New(router.DefaultConfig())
 	defer r.Stop()

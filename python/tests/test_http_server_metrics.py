@@ -162,6 +162,30 @@ async def test_gateway_client_is_reused_and_closed_on_stop(mock_worker_config, m
 
 
 @pytest.mark.asyncio
+async def test_gateway_registration_includes_rollout_identity(mock_worker_config, monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeAsyncClient:
+        is_closed = False
+
+        async def post(self, _url, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(status_code=200, text="", is_error=False)
+
+    mock_worker_config.release_id = "release-1"
+    mock_worker_config.worker_protocol_version = "1"
+    worker = Worker(mock_worker_config)
+    server = HTTPServer(worker, mock_worker_config)
+    monkeypatch.setattr(server, "_ensure_gateway_client", lambda: FakeAsyncClient())
+
+    await server._register_with_gateway()
+
+    payload = captured["json"]
+    assert payload["release_id"] == "release-1"
+    assert payload["protocol_version"] == "1"
+
+
+@pytest.mark.asyncio
 async def test_health_endpoint_reports_live_but_not_ready_while_initializing(mock_worker_config):
     worker = Worker(mock_worker_config)
     server = HTTPServer(worker, mock_worker_config)
@@ -174,6 +198,8 @@ async def test_health_endpoint_reports_live_but_not_ready_while_initializing(moc
     assert payload["state"] == "initializing"
     assert payload["live"] is True
     assert payload["ready"] is False
+    assert payload["release_id"] == mock_worker_config.release_id
+    assert payload["protocol_version"] == mock_worker_config.worker_protocol_version
     assert "worker_created" in payload["startup"]["stages"]
 
 
