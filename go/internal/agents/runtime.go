@@ -473,7 +473,11 @@ func (r *Runtime) CreateRun(ctx context.Context, actor *auth.KeyRecord, session 
 		return nil, err
 	}
 
-	go r.executeRun(actor, session, run, adjustDefinitionForRun(def, run))
+	// The returned run is an immutable queued snapshot that handlers may
+	// serialize while execution starts. Give the background executor its own
+	// copy; subsequent state is read from the store.
+	executionRun := *run
+	go r.executeRun(actor, session, &executionRun, adjustDefinitionForRun(def, run))
 	return run, nil
 }
 
