@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -73,6 +74,46 @@ func TestReconcileUsageRowsDetectsMismatches(t *testing.T) {
 		if result.Discrepancies[i] != want[i] {
 			t.Fatalf("unexpected discrepancies: %+v", result.Discrepancies)
 		}
+	}
+}
+
+func TestUsageSummaryPayloadReconcilesMonthlyTotals(t *testing.T) {
+	store := &stubAuditUsageStore{
+		usageSummaryValue: &audit.UsageSummary{
+			AttemptCount:          2,
+			SuccessCount:          2,
+			RequestCount:          2,
+			ExactRequestCount:     1,
+			EstimatedRequestCount: 0,
+			TokenCount:            20,
+			ExactTokenCount:       20,
+		},
+		usageRows: []audit.UsageRow{{
+			AttemptCount:      1,
+			SuccessCount:      1,
+			RequestCount:      1,
+			ExactRequestCount: 1,
+			TokenCount:        10,
+			ExactTokenCount:   10,
+		}},
+	}
+	g := New(DefaultConfig(), nil, nil)
+	g.SetAuditStore(store)
+	t.Cleanup(func() {
+		close(g.auditCh)
+		g.auditWg.Wait()
+	})
+
+	payload, err := g.usageSummaryPayload("ws_alpha", time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("usageSummaryPayload: %v", err)
+	}
+	reconciliation, ok := payload["reconciliation"].(usageReconciliation)
+	if !ok {
+		t.Fatalf("unexpected reconciliation payload: %#v", payload["reconciliation"])
+	}
+	if reconciliation.Status != "mismatch" || len(reconciliation.Discrepancies) != 1 || reconciliation.Discrepancies[0] != "request_accuracy_mismatch" {
+		t.Fatalf("expected monthly mismatch, got %+v", reconciliation)
 	}
 }
 
@@ -187,5 +228,54 @@ func TestAuditWriterRetriesBeforeAcknowledging(t *testing.T) {
 	defer store.mu.Unlock()
 	if store.appendCalls != 3 || len(store.appended) != 1 {
 		t.Fatalf("expected 3 attempts and one durable record, got calls=%d records=%d", store.appendCalls, len(store.appended))
+	}
+}
+
+func TestAuditWriterSurfacesExhaustedRetries(t *testing.T) {
+	store := &stubAuditUsageStore{appendFailures: 4}
+	g := New(DefaultConfig(), nil, nil)
+	g.SetAuditStore(store)
+
+	rec := audit.InferenceAuditRecord{RequestID: "req-exhausted", Model: "model-1", Status: "success"}
+	if err := g.enqueueAuditRecord(rec); err == nil {
+		t.Fatal("expected exhausted retry error")
+	}
+	close(g.auditCh)
+	g.auditWg.Wait()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.appendCalls != 3 || len(store.appended) != 0 {
+		t.Fatalf("expected 3 attempts and no durable record, got calls=%d records=%d", store.appendCalls, len(store.appended))
+	}
+}
+
+func TestEnqueueAuditRecordTimesOutWhenWriterUnavailable(t *testing.T) {
+	store := &stubAuditUsageStore{}
+	g := &Gateway{
+		auditStore: store,
+		auditCh:    make(chan auditWriteRequest),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := g.enqueueAuditRecordWithContext(ctx, audit.InferenceAuditRecord{RequestID: "req-timeout"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+}
+
+func TestEnqueueAuditRecordTimesOutWaitingForAcknowledgement(t *testing.T) {
+	store := &stubAuditUsageStore{}
+	g := &Gateway{
+		auditStore: store,
+		auditCh:    make(chan auditWriteRequest, 1),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := g.enqueueAuditRecordWithContext(ctx, audit.InferenceAuditRecord{RequestID: "req-timeout"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
 	}
 }

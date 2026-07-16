@@ -487,7 +487,7 @@ export function WorkspaceAdmin() {
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
                     {formatCount(usageSummary.requests)} billable / {formatCount(usageSummary.attempts)} total attempts
                   </div>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: '0.3rem' }}>
+                  <div className="workspace-usage-detail">
                     {formatCount(usageSummary.successes)} success / {formatCount(usageSummary.errors)} error
                   </div>
                 </div>
@@ -497,9 +497,11 @@ export function WorkspaceAdmin() {
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
                     {usageSummary.estimatedTokens > 0
                       ? `${formatCount(usageSummary.exactTokens)} exact / ${formatCount(usageSummary.estimatedTokens)} estimated or mixed`
-                      : usageSummary.tokens > 0
+                      : usageSummary.exactTokens > 0 && usageSummary.exactTokens === usageSummary.tokens
                         ? 'All metered tokens reported as exact'
-                        : 'No billable token usage recorded'}
+                        : usageSummary.tokens > 0
+                          ? 'Token accuracy is unavailable for this billable usage'
+                          : 'No billable token usage recorded'}
                   </div>
                 </div>
               </div>

@@ -1,10 +1,13 @@
 package gateway
 
 import (
+	"context"
 	"time"
 
 	"github.com/infera/infera/go/internal/audit"
 )
+
+const auditWriteTimeout = 2 * time.Second
 
 // auditUsageStore isolates the subset of audit-store behavior the gateway uses
 // for async event writes and usage queries.
@@ -20,12 +23,27 @@ type auditWriteRequest struct {
 }
 
 func (g *Gateway) enqueueAuditRecord(record audit.InferenceAuditRecord) error {
+	ctx, cancel := context.WithTimeout(context.Background(), auditWriteTimeout)
+	defer cancel()
+	return g.enqueueAuditRecordWithContext(ctx, record)
+}
+
+func (g *Gateway) enqueueAuditRecordWithContext(ctx context.Context, record audit.InferenceAuditRecord) error {
 	if g.auditCh == nil || g.auditStore == nil {
 		return nil
 	}
 	done := make(chan error, 1)
-	g.auditCh <- auditWriteRequest{record: record, done: done}
-	return <-done
+	select {
+	case g.auditCh <- auditWriteRequest{record: record, done: done}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (g *Gateway) appendAuditRecordWithRetry(record audit.InferenceAuditRecord) error {
@@ -80,4 +98,18 @@ func reconcileUsageRows(rows []audit.UsageRow) usageReconciliation {
 		status = "mismatch"
 	}
 	return usageReconciliation{Status: status, Discrepancies: discrepancies}
+}
+
+func reconcileUsageSummary(summary audit.UsageSummary) usageReconciliation {
+	return reconcileUsageRows([]audit.UsageRow{{
+		AttemptCount:          summary.AttemptCount,
+		RequestCount:          summary.RequestCount,
+		TokenCount:            summary.TokenCount,
+		ExactRequestCount:     summary.ExactRequestCount,
+		EstimatedRequestCount: summary.EstimatedRequestCount,
+		ExactTokenCount:       summary.ExactTokenCount,
+		EstimatedTokenCount:   summary.EstimatedTokenCount,
+		SuccessCount:          summary.SuccessCount,
+		ErrorCount:            summary.ErrorCount,
+	}})
 }

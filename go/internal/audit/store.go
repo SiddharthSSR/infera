@@ -59,9 +59,19 @@ var auditMigrations = []migrate.Migration{
 		ALTER TABLE inference_audit ADD COLUMN token_source TEXT NOT NULL DEFAULT 'unknown';
 		ALTER TABLE inference_audit ADD COLUMN billable INTEGER NOT NULL DEFAULT 0;
 		UPDATE inference_audit SET billable = CASE WHEN status = 'success' THEN 1 ELSE 0 END;
+		-- v2 assigned every legacy row to ws_default. Preserve colliding legacy
+		-- events by giving later rows a stable synthetic request ID.
+		UPDATE inference_audit
+		SET request_id = request_id || '#legacy-row-' || id
+		WHERE workspace_id = 'ws_default'
+		  AND id NOT IN (
+			SELECT MIN(id) FROM inference_audit
+			WHERE workspace_id = 'ws_default'
+			GROUP BY workspace_id, request_id
+		  );
 		DELETE FROM inference_audit
 		WHERE id NOT IN (
-			SELECT MAX(id) FROM inference_audit GROUP BY workspace_id, request_id
+			SELECT MIN(id) FROM inference_audit GROUP BY workspace_id, request_id
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_inference_audit_workspace_request
 			ON inference_audit(workspace_id, request_id);`,

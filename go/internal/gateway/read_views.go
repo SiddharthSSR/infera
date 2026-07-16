@@ -270,7 +270,7 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 
 	return map[string]any{
 		"workspace_id":   workspaceID,
-		"reconciliation": reconcileUsageRows(rows),
+		"reconciliation": reconcileUsageSummary(totals),
 		"period": map[string]any{
 			"current_month_start": monthStart.Format(time.RFC3339),
 			"current_period_end":  now.Format(time.RFC3339),

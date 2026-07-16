@@ -1,9 +1,12 @@
 package audit
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/infera/infera/go/internal/migrate"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -113,6 +116,88 @@ func TestAppendInferenceIsIdempotentPerWorkspaceRequest(t *testing.T) {
 	otherWorkspace.WorkspaceID = "ws_beta"
 	if err := s.AppendInference(otherWorkspace); err != nil {
 		t.Fatalf("AppendInference other workspace: %v", err)
+	}
+}
+
+func TestTrustworthyUsageMigrationPreservesLegacyCollisionsAndFirstWrite(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "audit.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if err := migrate.Run(db, auditMigrations[:2]); err != nil {
+		_ = db.Close()
+		t.Fatalf("migrate v1-v2: %v", err)
+	}
+	for _, row := range []struct {
+		workspaceID string
+		requestID   string
+		tokenCount  int
+	}{
+		{workspaceID: "ws_default", requestID: "req_legacy", tokenCount: 10},
+		{workspaceID: "ws_default", requestID: "req_legacy", tokenCount: 20},
+		{workspaceID: "ws_alpha", requestID: "req_duplicate", tokenCount: 30},
+		{workspaceID: "ws_alpha", requestID: "req_duplicate", tokenCount: 40},
+	} {
+		if _, err := db.Exec(`
+			INSERT INTO inference_audit (
+				ts_unix_ms, request_id, key_id, workspace_id, model, status, token_count
+			) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			time.Now().UTC().UnixMilli(), row.requestID, "key_1", row.workspaceID, "model-1", "success", row.tokenCount,
+		); err != nil {
+			_ = db.Close()
+			t.Fatalf("insert pre-v3 row: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pre-v3 database: %v", err)
+	}
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	rows, err := store.db.Query(`
+		SELECT request_id, token_count
+		FROM inference_audit
+		WHERE workspace_id = 'ws_default'
+		ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query legacy rows: %v", err)
+	}
+	defer rows.Close()
+	var legacyRequests []string
+	var legacyTokens []int
+	for rows.Next() {
+		var requestID string
+		var tokenCount int
+		if err := rows.Scan(&requestID, &tokenCount); err != nil {
+			t.Fatalf("scan legacy row: %v", err)
+		}
+		legacyRequests = append(legacyRequests, requestID)
+		legacyTokens = append(legacyTokens, tokenCount)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate legacy rows: %v", err)
+	}
+	if len(legacyRequests) != 2 || legacyRequests[0] != "req_legacy" || legacyRequests[1] == "req_legacy" {
+		t.Fatalf("legacy collisions were not preserved safely: requests=%v", legacyRequests)
+	}
+	if legacyTokens[0] != 10 || legacyTokens[1] != 20 {
+		t.Fatalf("unexpected legacy token totals: %v", legacyTokens)
+	}
+
+	var tokenCount int
+	if err := store.db.QueryRow(`
+		SELECT token_count FROM inference_audit
+		WHERE workspace_id = 'ws_alpha' AND request_id = 'req_duplicate'`,
+	).Scan(&tokenCount); err != nil {
+		t.Fatalf("query deduplicated row: %v", err)
+	}
+	if tokenCount != 30 {
+		t.Fatalf("expected earliest row to survive, got token_count=%d", tokenCount)
 	}
 }
 

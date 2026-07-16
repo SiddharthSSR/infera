@@ -1705,6 +1705,12 @@ h1, h2, h3, h4 {
   line-height: 1.55;
 }
 
+.workspace-usage-detail {
+  margin-top: 0.3rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
 .badge.status-warning {
   border-color: rgba(173, 109, 27, 0.22);
   background: rgba(223, 181, 103, 0.16);
