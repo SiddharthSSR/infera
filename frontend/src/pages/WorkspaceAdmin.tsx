@@ -166,13 +166,19 @@ export function WorkspaceAdmin() {
     const byDay = new Map<string, { requests: number; tokens: number }>();
     const byKey = new Map<string, { requests: number; tokens: number; successes: number; errors: number }>();
     let requests = 0;
+    let attempts = 0;
     let tokens = 0;
+    let exactTokens = 0;
+    let estimatedTokens = 0;
     let successes = 0;
     let errors = 0;
 
     for (const row of usageRows) {
       requests += row.requests;
+      attempts += row.attempts ?? (row.successes + row.errors);
       tokens += row.tokens;
+      exactTokens += row.exact_tokens ?? 0;
+      estimatedTokens += row.estimated_tokens ?? 0;
       successes += row.successes;
       errors += row.errors;
 
@@ -201,7 +207,7 @@ export function WorkspaceAdmin() {
       .slice(0, 5)
       .map(([keyId, totals]) => ({ keyId, ...totals }));
 
-    return { requests, tokens, successes, errors, dailyTrend, topKeys };
+    return { requests, attempts, tokens, exactTokens, estimatedTokens, successes, errors, dailyTrend, topKeys };
   }, [usageRows]);
 
   const requestUsageRatio = usageRatio(usageSummary.requests, quota?.monthly_request_limit);
@@ -479,6 +485,9 @@ export function WorkspaceAdmin() {
                   <LabelText as="div">REQUESTS</LabelText>
                   <div style={{ fontSize: '2rem', marginTop: '0.5rem' }}>{formatCount(usageSummary.requests)}</div>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                    {formatCount(usageSummary.requests)} billable / {formatCount(usageSummary.attempts)} total attempts
+                  </div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: '0.3rem' }}>
                     {formatCount(usageSummary.successes)} success / {formatCount(usageSummary.errors)} error
                   </div>
                 </div>
@@ -486,7 +495,11 @@ export function WorkspaceAdmin() {
                   <LabelText as="div">TOKENS</LabelText>
                   <div style={{ fontSize: '2rem', marginTop: '0.5rem' }}>{formatCount(usageSummary.tokens)}</div>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
-                    Aggregated from workspace audit records
+                    {usageSummary.estimatedTokens > 0
+                      ? `${formatCount(usageSummary.exactTokens)} exact / ${formatCount(usageSummary.estimatedTokens)} estimated or mixed`
+                      : usageSummary.tokens > 0
+                        ? 'All metered tokens reported as exact'
+                        : 'No billable token usage recorded'}
                   </div>
                 </div>
               </div>

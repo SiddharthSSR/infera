@@ -4,8 +4,55 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/pkg/types"
 )
+
+func TestResolveUsageMeasurementTracksAccuracy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                string
+		actualPrompt        int
+		actualCompletion    int
+		actualTotal         int
+		estimatedPrompt     int
+		estimatedCompletion int
+		want                usageMeasurement
+	}{
+		{
+			name:         "exact components",
+			actualPrompt: 12, actualCompletion: 4, actualTotal: 16,
+			estimatedPrompt: 10, estimatedCompletion: 3,
+			want: usageMeasurement{PromptTokens: 12, CompletionTokens: 4, TotalTokens: 16, TokenSource: audit.TokenSourceExact},
+		},
+		{
+			name:            "estimated components",
+			estimatedPrompt: 10, estimatedCompletion: 3,
+			want: usageMeasurement{PromptTokens: 10, CompletionTokens: 3, TotalTokens: 13, TokenSource: audit.TokenSourceEstimated},
+		},
+		{
+			name:         "mixed components",
+			actualPrompt: 12, estimatedPrompt: 10, estimatedCompletion: 3,
+			want: usageMeasurement{PromptTokens: 12, CompletionTokens: 3, TotalTokens: 15, TokenSource: audit.TokenSourceMixed},
+		},
+		{
+			name:        "exact total with estimated breakdown",
+			actualTotal: 20, estimatedPrompt: 10, estimatedCompletion: 3,
+			want: usageMeasurement{PromptTokens: 10, CompletionTokens: 3, TotalTokens: 20, TokenSource: audit.TokenSourceMixed},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveUsageMeasurement(tt.actualPrompt, tt.actualCompletion, tt.actualTotal, tt.estimatedPrompt, tt.estimatedCompletion)
+			if got != tt.want {
+				t.Fatalf("resolveUsageMeasurement() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestBuildChatCompletionResponseMatchesSharedFixture(t *testing.T) {
 	t.Parallel()

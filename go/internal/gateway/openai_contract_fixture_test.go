@@ -193,7 +193,7 @@ func TestHandleStreamingInferenceMatchesSharedFixtures(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	tokenCount, status := g.handleStreamingInference(
+	result := g.handleStreamingInference(
 		rec,
 		httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(context.Background()),
 		client,
@@ -201,11 +201,11 @@ func TestHandleStreamingInferenceMatchesSharedFixtures(t *testing.T) {
 		req.ModelID,
 	)
 
-	if status != "success" {
-		t.Fatalf("expected success status, got %q", status)
+	if result.Status != "success" {
+		t.Fatalf("expected success status, got %q", result.Status)
 	}
-	if tokenCount != 6 {
-		t.Fatalf("expected token count 6, got %d", tokenCount)
+	if result.Usage.TotalTokens != 6 {
+		t.Fatalf("expected token count 6, got %d", result.Usage.TotalTokens)
 	}
 
 	events := sseEvents(rec.Body.String())

@@ -256,3 +256,33 @@ func TestUsageSummary(t *testing.T) {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
 }
+
+func TestUsageSummarySeparatesExactAndEstimatedTokens(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 7, 16, 5, 0, 0, 0, time.UTC)
+	records := []InferenceAuditRecord{
+		{Timestamp: base, RequestID: "req_exact", WorkspaceID: "ws_alpha", Model: "m1", Status: "success", TokenCount: 100, TokenSource: TokenSourceExact},
+		{Timestamp: base.Add(time.Minute), RequestID: "req_estimated", WorkspaceID: "ws_alpha", Model: "m1", Status: "success", TokenCount: 40, TokenSource: TokenSourceEstimated},
+		{Timestamp: base.Add(2 * time.Minute), RequestID: "req_mixed", WorkspaceID: "ws_alpha", Model: "m1", Status: "success", TokenCount: 60, TokenSource: TokenSourceMixed},
+		{Timestamp: base.Add(3 * time.Minute), RequestID: "req_failed", WorkspaceID: "ws_alpha", Model: "m1", Status: "failed", TokenCount: 999, TokenSource: TokenSourceEstimated},
+	}
+	for _, rec := range records {
+		if err := s.AppendInference(rec); err != nil {
+			t.Fatalf("AppendInference %s: %v", rec.RequestID, err)
+		}
+	}
+
+	summary, err := s.UsageSummary(UsageSummaryQuery{Start: base.Add(-time.Hour), End: base.Add(time.Hour), WorkspaceID: "ws_alpha"})
+	if err != nil {
+		t.Fatalf("UsageSummary: %v", err)
+	}
+	if summary.AttemptCount != 4 || summary.RequestCount != 3 || summary.TokenCount != 200 {
+		t.Fatalf("unexpected usage totals: %+v", summary)
+	}
+	if summary.ExactRequestCount != 1 || summary.EstimatedRequestCount != 2 {
+		t.Fatalf("unexpected request accuracy totals: %+v", summary)
+	}
+	if summary.ExactTokenCount != 100 || summary.EstimatedTokenCount != 100 {
+		t.Fatalf("unexpected token accuracy totals: %+v", summary)
+	}
+}

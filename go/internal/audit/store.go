@@ -10,6 +10,13 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+const (
+	TokenSourceExact     = "exact"
+	TokenSourceEstimated = "estimated"
+	TokenSourceMixed     = "mixed"
+	TokenSourceUnknown   = "unknown"
+)
+
 var auditMigrations = []migrate.Migration{
 	{
 		Version:     1,
@@ -95,14 +102,18 @@ type UsageQuery struct {
 }
 
 type UsageRow struct {
-	BucketStartMS int64
-	WorkspaceID   string
-	KeyID         string
-	AttemptCount  int64
-	RequestCount  int64
-	TokenCount    int64
-	SuccessCount  int64
-	ErrorCount    int64
+	BucketStartMS         int64
+	WorkspaceID           string
+	KeyID                 string
+	AttemptCount          int64
+	RequestCount          int64
+	TokenCount            int64
+	ExactRequestCount     int64
+	EstimatedRequestCount int64
+	ExactTokenCount       int64
+	EstimatedTokenCount   int64
+	SuccessCount          int64
+	ErrorCount            int64
 }
 
 type UsageSummaryQuery struct {
@@ -112,11 +123,15 @@ type UsageSummaryQuery struct {
 }
 
 type UsageSummary struct {
-	AttemptCount int64 `json:"attempt_count"`
-	RequestCount int64 `json:"request_count"`
-	TokenCount   int64 `json:"token_count"`
-	SuccessCount int64 `json:"success_count"`
-	ErrorCount   int64 `json:"error_count"`
+	AttemptCount          int64 `json:"attempt_count"`
+	RequestCount          int64 `json:"request_count"`
+	TokenCount            int64 `json:"token_count"`
+	ExactRequestCount     int64 `json:"exact_request_count"`
+	EstimatedRequestCount int64 `json:"estimated_request_count"`
+	ExactTokenCount       int64 `json:"exact_token_count"`
+	EstimatedTokenCount   int64 `json:"estimated_token_count"`
+	SuccessCount          int64 `json:"success_count"`
+	ErrorCount            int64 `json:"error_count"`
 }
 
 func NewStore(dbPath string) (*Store, error) {
@@ -182,7 +197,7 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 		tokenSource = "unknown"
 	}
 	switch tokenSource {
-	case "exact", "estimated", "mixed", "unknown":
+	case TokenSourceExact, TokenSourceEstimated, TokenSourceMixed, TokenSourceUnknown:
 	default:
 		return fmt.Errorf("invalid token_source %q", rec.TokenSource)
 	}
@@ -253,6 +268,10 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 		COUNT(*) AS attempt_count,
 		COALESCE(SUM(CASE WHEN billable = 1 THEN 1 ELSE 0 END), 0) AS request_count,
 		COALESCE(SUM(CASE WHEN billable = 1 THEN token_count ELSE 0 END), 0) AS token_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source = 'exact' THEN 1 ELSE 0 END), 0) AS exact_request_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source <> 'exact' THEN 1 ELSE 0 END), 0) AS estimated_request_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source = 'exact' THEN token_count ELSE 0 END), 0) AS exact_token_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source <> 'exact' THEN token_count ELSE 0 END), 0) AS estimated_token_count,
 		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
 		COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS error_count
 	FROM inference_audit
@@ -290,6 +309,10 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 			&row.AttemptCount,
 			&row.RequestCount,
 			&row.TokenCount,
+			&row.ExactRequestCount,
+			&row.EstimatedRequestCount,
+			&row.ExactTokenCount,
+			&row.EstimatedTokenCount,
 			&row.SuccessCount,
 			&row.ErrorCount,
 		); err != nil {
@@ -319,6 +342,10 @@ func (s *Store) UsageSummary(q UsageSummaryQuery) (*UsageSummary, error) {
 		COUNT(*) AS attempt_count,
 		COALESCE(SUM(CASE WHEN billable = 1 THEN 1 ELSE 0 END), 0) AS request_count,
 		COALESCE(SUM(CASE WHEN billable = 1 THEN token_count ELSE 0 END), 0) AS token_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source = 'exact' THEN 1 ELSE 0 END), 0) AS exact_request_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source <> 'exact' THEN 1 ELSE 0 END), 0) AS estimated_request_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source = 'exact' THEN token_count ELSE 0 END), 0) AS exact_token_count,
+		COALESCE(SUM(CASE WHEN billable = 1 AND token_source <> 'exact' THEN token_count ELSE 0 END), 0) AS estimated_token_count,
 		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
 		COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS error_count
 	FROM inference_audit
@@ -334,6 +361,10 @@ func (s *Store) UsageSummary(q UsageSummaryQuery) (*UsageSummary, error) {
 		&summary.AttemptCount,
 		&summary.RequestCount,
 		&summary.TokenCount,
+		&summary.ExactRequestCount,
+		&summary.EstimatedRequestCount,
+		&summary.ExactTokenCount,
+		&summary.EstimatedTokenCount,
 		&summary.SuccessCount,
 		&summary.ErrorCount,
 	); err != nil {

@@ -42,6 +42,32 @@ func (s *stubAuditUsageStore) UsageByKey(q audit.UsageQuery) ([]audit.UsageRow, 
 	return s.usageRows, nil
 }
 
+func TestReconcileUsageRowsDetectsMismatches(t *testing.T) {
+	result := reconcileUsageRows([]audit.UsageRow{{
+		AttemptCount:          3,
+		SuccessCount:          1,
+		ErrorCount:            1,
+		RequestCount:          2,
+		ExactRequestCount:     1,
+		EstimatedRequestCount: 0,
+		TokenCount:            100,
+		ExactTokenCount:       80,
+		EstimatedTokenCount:   10,
+	}})
+	if result.Status != "mismatch" {
+		t.Fatalf("expected mismatch, got %+v", result)
+	}
+	want := []string{"attempt_status_mismatch", "request_accuracy_mismatch", "token_accuracy_mismatch"}
+	if len(result.Discrepancies) != len(want) {
+		t.Fatalf("unexpected discrepancies: %+v", result.Discrepancies)
+	}
+	for i := range want {
+		if result.Discrepancies[i] != want[i] {
+			t.Fatalf("unexpected discrepancies: %+v", result.Discrepancies)
+		}
+	}
+}
+
 func TestHandleGetAuditUsageUsesInjectedAuditStore(t *testing.T) {
 	store := &stubAuditUsageStore{
 		usageRows: []audit.UsageRow{{
