@@ -51,6 +51,31 @@ func TestWorkerClientInferMatchesSharedContractFixture(t *testing.T) {
 	}
 }
 
+func TestWorkerClientSendsWorkerToken(t *testing.T) {
+	client := newWorkerClient("worker.test:8081", "worker-secret")
+	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get("X-Worker-Token"); got != "worker-secret" {
+			t.Fatalf("expected worker token header, got %q", got)
+		}
+		return jsonHTTPResponse(http.StatusOK, `{
+			"request_id":"req-1",
+			"model_id":"model-1",
+			"choices":[],
+			"usage":{},
+			"latency":{}
+		}`), nil
+	})
+
+	_, err := client.InferWithContext(context.Background(), &types.InferenceRequest{
+		RequestID:  "req-1",
+		ModelID:    "model-1",
+		Parameters: types.DefaultInferenceParameters(),
+	})
+	if err != nil {
+		t.Fatalf("InferWithContext: %v", err)
+	}
+}
+
 func TestWorkerClientInferStreamMatchesSharedContractFixture(t *testing.T) {
 	requestFixture := loadWorkerInferRequestFixture(t, "infer_stream_request_tool_calls.json")
 	chunkFixture := loadWorkerFixtureBytes(t, "infer_stream_chunk_tool_calls.json")

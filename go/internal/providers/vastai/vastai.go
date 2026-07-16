@@ -376,6 +376,7 @@ func (p *Provider) buildEnv(req *providers.ProvisionRequest) map[string]string {
 	if len(req.Models) > 0 {
 		if modelsJSON, err := json.Marshal(req.Models); err == nil {
 			env["INFERA_PRELOAD_MODELS"] = string(modelsJSON)
+			env["INFERA_ALLOWED_MODELS"] = string(modelsJSON)
 		}
 	}
 
