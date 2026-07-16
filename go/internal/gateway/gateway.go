@@ -44,7 +44,7 @@ type Gateway struct {
 
 	// Audit (inference usage tracking)
 	auditStore auditUsageStore
-	auditCh    chan audit.InferenceAuditRecord
+	auditCh    chan auditWriteRequest
 	auditWg    sync.WaitGroup
 
 	// Deployments (shared deployment history)
@@ -172,22 +172,21 @@ func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 	g.vaultHandler = h
 }
 
-// SetAuditStore sets the inference audit store and starts the async writer.
+// SetAuditStore sets the inference audit store and starts the serialized writer.
 func (g *Gateway) SetAuditStore(s auditUsageStore) {
 	g.auditStore = s
-	g.auditCh = make(chan audit.InferenceAuditRecord, 1024)
+	g.auditCh = make(chan auditWriteRequest, 1024)
 	g.auditWg.Add(1)
 	go g.runAuditWriter()
 }
 
-// runAuditWriter drains auditCh in the background, keeping audit writes off
-// the inference hot path.
+// runAuditWriter serializes audit writes and acknowledges durable persistence.
 func (g *Gateway) runAuditWriter() {
 	defer g.auditWg.Done()
-	for rec := range g.auditCh {
-		if err := g.auditStore.AppendInference(rec); err != nil {
-			g.log.Warn("inference.audit_persist_failed", slog.String("error", err.Error()))
-		}
+	for write := range g.auditCh {
+		err := g.appendAuditRecordWithRetry(write.record)
+		write.done <- err
+		close(write.done)
 	}
 }
 
@@ -590,10 +589,8 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 				ErrorCode:        auditErrorCode,
 				LatencyMS:        latencyMS,
 			}
-			select {
-			case g.auditCh <- rec:
-			default:
-				g.log.Warn("inference.audit_dropped", slog.String("request_id", requestID))
+			if err := g.enqueueAuditRecord(rec); err != nil {
+				g.log.Error("inference.audit_persist_failed", slog.String("request_id", requestID), slog.String("error", err.Error()))
 			}
 		}
 		if g.metrics != nil {

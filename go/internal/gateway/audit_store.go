@@ -1,6 +1,10 @@
 package gateway
 
-import "github.com/infera/infera/go/internal/audit"
+import (
+	"time"
+
+	"github.com/infera/infera/go/internal/audit"
+)
 
 // auditUsageStore isolates the subset of audit-store behavior the gateway uses
 // for async event writes and usage queries.
@@ -8,6 +12,35 @@ type auditUsageStore interface {
 	AppendInference(rec audit.InferenceAuditRecord) error
 	UsageSummary(q audit.UsageSummaryQuery) (*audit.UsageSummary, error)
 	UsageByKey(q audit.UsageQuery) ([]audit.UsageRow, error)
+}
+
+type auditWriteRequest struct {
+	record audit.InferenceAuditRecord
+	done   chan error
+}
+
+func (g *Gateway) enqueueAuditRecord(record audit.InferenceAuditRecord) error {
+	if g.auditCh == nil || g.auditStore == nil {
+		return nil
+	}
+	done := make(chan error, 1)
+	g.auditCh <- auditWriteRequest{record: record, done: done}
+	return <-done
+}
+
+func (g *Gateway) appendAuditRecordWithRetry(record audit.InferenceAuditRecord) error {
+	const maxAttempts = 3
+	var err error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err = g.auditStore.AppendInference(record)
+		if err == nil {
+			return nil
+		}
+		if attempt < maxAttempts {
+			time.Sleep(time.Duration(attempt*25) * time.Millisecond)
+		}
+	}
+	return err
 }
 
 type usageReconciliation struct {

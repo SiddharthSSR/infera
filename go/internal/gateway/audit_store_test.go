@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -19,11 +20,18 @@ type stubAuditUsageStore struct {
 	lastSummaryQuery  audit.UsageSummaryQuery
 	usageRows         []audit.UsageRow
 	usageSummaryValue *audit.UsageSummary
+	appendFailures    int
+	appendCalls       int
 }
 
 func (s *stubAuditUsageStore) AppendInference(rec audit.InferenceAuditRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.appendCalls++
+	if s.appendFailures > 0 {
+		s.appendFailures--
+		return errors.New("temporary audit write failure")
+	}
 	s.appended = append(s.appended, rec)
 	return nil
 }
@@ -147,7 +155,9 @@ func TestRunAuditWriterUsesInjectedAuditStore(t *testing.T) {
 		Status:      "success",
 		TokenCount:  9,
 	}
-	g.auditCh <- rec
+	if err := g.enqueueAuditRecord(rec); err != nil {
+		t.Fatalf("enqueueAuditRecord: %v", err)
+	}
 	close(g.auditCh)
 	g.auditWg.Wait()
 
@@ -158,5 +168,24 @@ func TestRunAuditWriterUsesInjectedAuditStore(t *testing.T) {
 	}
 	if store.appended[0].RequestID != "req-1" {
 		t.Fatalf("expected req-1, got %#v", store.appended[0])
+	}
+}
+
+func TestAuditWriterRetriesBeforeAcknowledging(t *testing.T) {
+	store := &stubAuditUsageStore{appendFailures: 2}
+	g := New(DefaultConfig(), nil, nil)
+	g.SetAuditStore(store)
+
+	rec := audit.InferenceAuditRecord{RequestID: "req-retry", Model: "model-1", Status: "success"}
+	if err := g.enqueueAuditRecord(rec); err != nil {
+		t.Fatalf("enqueueAuditRecord: %v", err)
+	}
+	close(g.auditCh)
+	g.auditWg.Wait()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.appendCalls != 3 || len(store.appended) != 1 {
+		t.Fatalf("expected 3 attempts and one durable record, got calls=%d records=%d", store.appendCalls, len(store.appended))
 	}
 }

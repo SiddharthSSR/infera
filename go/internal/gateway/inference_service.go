@@ -184,10 +184,8 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 				ErrorCode:        auditErrorCode,
 				LatencyMS:        latencyMS,
 			}
-			select {
-			case g.auditCh <- rec:
-			default:
-				g.log.Warn("inference.audit_dropped", slog.String("request_id", requestID))
+			if err := g.enqueueAuditRecord(rec); err != nil {
+				g.log.Error("inference.audit_persist_failed", slog.String("request_id", requestID), slog.String("error", err.Error()))
 			}
 		}
 
