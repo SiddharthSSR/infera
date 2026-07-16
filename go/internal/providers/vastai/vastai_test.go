@@ -139,14 +139,16 @@ func TestProvisionUsesSelectedOfferAndEnv(t *testing.T) {
 	})
 
 	instance, err := provider.Provision(context.Background(), &providers.ProvisionRequest{
-		Name:           "worker",
-		WorkspaceID:    "ws_123",
-		GPUType:        providers.GPUL40S,
-		GPUCount:       1,
-		DockerImage:    "custom/worker:v1",
-		Models:         []string{"meta-llama/Meta-Llama-3.1-8B-Instruct"},
-		GatewayAddress: "https://inferai.co.in",
-		WorkerToken:    "shared-token",
+		Name:            "worker",
+		WorkspaceID:     "ws_123",
+		GPUType:         providers.GPUL40S,
+		GPUCount:        1,
+		DockerImage:     "custom/worker:v1",
+		Models:          []string{"meta-llama/Meta-Llama-3.1-8B-Instruct"},
+		GatewayAddress:  "https://inferai.co.in",
+		WorkerToken:     "shared-token",
+		ReleaseID:       "release-1",
+		ProtocolVersion: "1",
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -167,6 +169,9 @@ func TestProvisionUsesSelectedOfferAndEnv(t *testing.T) {
 	}
 	if env["INFERA_WORKER_SHARED_TOKEN"] != "shared-token" {
 		t.Fatalf("expected worker token in env, got %#v", env["INFERA_WORKER_SHARED_TOKEN"])
+	}
+	if env["INFERA_RELEASE_ID"] != "release-1" || env["INFERA_WORKER_PROTOCOL_VERSION"] != "1" {
+		t.Fatalf("expected rollout identity in env, got release=%#v protocol=%#v", env["INFERA_RELEASE_ID"], env["INFERA_WORKER_PROTOCOL_VERSION"])
 	}
 	if env["INFERA_ALLOWED_MODELS"] != `["meta-llama/Meta-Llama-3.1-8B-Instruct"]` {
 		t.Fatalf("expected approved models in env, got %#v", env["INFERA_ALLOWED_MODELS"])

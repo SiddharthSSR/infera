@@ -194,11 +194,13 @@ type ProvisionRequest struct {
 	AllowedCudaVersions []string     `json:"allowed_cuda_versions,omitempty"`
 
 	// Worker configuration
-	Models         []string        `json:"models,omitempty"`
-	Engine         InferenceEngine `json:"engine,omitempty"`
-	DockerImage    string          `json:"docker_image,omitempty"`
-	GatewayAddress string          `json:"gateway_address,omitempty"` // Address for worker to connect back
-	WorkerToken    string          `json:"-"`
+	Models          []string        `json:"models,omitempty"`
+	Engine          InferenceEngine `json:"engine,omitempty"`
+	DockerImage     string          `json:"docker_image,omitempty"`
+	GatewayAddress  string          `json:"gateway_address,omitempty"` // Address for worker to connect back
+	WorkerToken     string          `json:"-"`
+	ReleaseID       string          `json:"-"`
+	ProtocolVersion string          `json:"-"`
 
 	// SSH key for access
 	SSHPublicKey string `json:"ssh_public_key,omitempty"`

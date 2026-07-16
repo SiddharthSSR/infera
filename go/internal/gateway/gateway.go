@@ -81,29 +81,34 @@ type Gateway struct {
 
 // Config configures the gateway.
 type Config struct {
-	HTTPPort          int
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	InferenceTimeout  time.Duration
-	EnableCORS        bool
-	AllowedOrigins    []string
-	WorkerSharedToken string
-	RequestTimeoutMS  int
-	RateLimiter       *RateLimiterConfig
-	MaxInFlight       int64
+	HTTPPort                     int
+	ReadTimeout                  time.Duration
+	WriteTimeout                 time.Duration
+	InferenceTimeout             time.Duration
+	EnableCORS                   bool
+	AllowedOrigins               []string
+	WorkerSharedToken            string
+	ReleaseID                    string
+	WorkerProtocolVersion        string
+	RequireMatchingWorkerRelease bool
+	RequestTimeoutMS             int
+	RateLimiter                  *RateLimiterConfig
+	MaxInFlight                  int64
 }
 
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		HTTPPort:          8080,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      300 * time.Second,
-		InferenceTimeout:  120 * time.Second,
-		EnableCORS:        true,
-		AllowedOrigins:    []string{"*"},
-		WorkerSharedToken: "",
-		RequestTimeoutMS:  30000,
+		HTTPPort:              8080,
+		ReadTimeout:           30 * time.Second,
+		WriteTimeout:          300 * time.Second,
+		InferenceTimeout:      120 * time.Second,
+		EnableCORS:            true,
+		AllowedOrigins:        []string{"*"},
+		WorkerSharedToken:     "",
+		ReleaseID:             "",
+		WorkerProtocolVersion: "",
+		RequestTimeoutMS:      30000,
 	}
 }
 
@@ -804,11 +809,13 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		WorkerID     string            `json:"worker_id"`
-		Address      string            `json:"address"`
-		Status       string            `json:"status"`
-		Tags         map[string]string `json:"tags"`
-		LoadedModels []struct {
+		WorkerID        string            `json:"worker_id"`
+		Address         string            `json:"address"`
+		Status          string            `json:"status"`
+		Tags            map[string]string `json:"tags"`
+		ReleaseID       string            `json:"release_id"`
+		ProtocolVersion string            `json:"protocol_version"`
+		LoadedModels    []struct {
 			ModelID           string `json:"model_id"`
 			Version           string `json:"version"`
 			MemoryBytes       int64  `json:"memory_bytes"`
@@ -834,6 +841,17 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.WorkerID) == "" || strings.TrimSpace(req.Address) == "" {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "worker_id and address are required")
 		return
+	}
+	if expected := strings.TrimSpace(g.config.WorkerProtocolVersion); expected != "" && strings.TrimSpace(req.ProtocolVersion) != expected {
+		g.writeError(w, http.StatusConflict, "worker_protocol_mismatch", "Worker protocol is incompatible with this gateway release")
+		return
+	}
+	if g.config.RequireMatchingWorkerRelease {
+		expected := strings.TrimSpace(g.config.ReleaseID)
+		if expected == "" || strings.TrimSpace(req.ReleaseID) != expected {
+			g.writeError(w, http.StatusConflict, "worker_release_mismatch", "Worker release does not match the gateway release")
+			return
+		}
 	}
 	principal, managed := r.Context().Value(workerPrincipalContextKey{}).(workerPrincipal)
 	if managed {
@@ -1252,11 +1270,13 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":          status,
-		"version":         "0.1.0",
-		"uptime_seconds":  int64(time.Since(g.startedAt).Seconds()),
-		"workers":         stats.TotalWorkers,
-		"healthy_workers": stats.HealthyWorkers,
+		"status":                  status,
+		"version":                 "0.1.0",
+		"release_id":              g.config.ReleaseID,
+		"worker_protocol_version": g.config.WorkerProtocolVersion,
+		"uptime_seconds":          int64(time.Since(g.startedAt).Seconds()),
+		"workers":                 stats.TotalWorkers,
+		"healthy_workers":         stats.HealthyWorkers,
 	})
 }
 

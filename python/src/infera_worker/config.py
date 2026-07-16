@@ -90,6 +90,10 @@ class WorkerConfig(BaseSettings):
     )
     vault_address: str = Field(default="localhost:50053", description="Vault address")
     worker_shared_token: str = Field(default="", description="Shared token for gateway worker auth")
+    release_id: str = Field(default="dev", description="Coordinated gateway/worker release identity")
+    worker_protocol_version: str = Field(
+        default="1", description="Gateway/worker control-plane protocol version"
+    )
 
     # Capacity
     max_concurrent_requests: int = Field(default=32, description="Max concurrent requests")

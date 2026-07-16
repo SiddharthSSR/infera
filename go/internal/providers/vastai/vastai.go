@@ -378,6 +378,13 @@ func (p *Provider) buildEnv(req *providers.ProvisionRequest) map[string]string {
 	if workerToken := strings.TrimSpace(req.WorkerToken); workerToken != "" {
 		env["INFERA_WORKER_SHARED_TOKEN"] = workerToken
 	}
+	if releaseID := strings.TrimSpace(req.ReleaseID); releaseID != "" {
+		env["INFERA_RELEASE_ID"] = releaseID
+		env["INFERA_VERSION"] = releaseID
+	}
+	if protocolVersion := strings.TrimSpace(req.ProtocolVersion); protocolVersion != "" {
+		env["INFERA_WORKER_PROTOCOL_VERSION"] = protocolVersion
+	}
 
 	if len(req.Models) > 0 {
 		if modelsJSON, err := json.Marshal(req.Models); err == nil {

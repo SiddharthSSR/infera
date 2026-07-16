@@ -196,13 +196,15 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	})
 
 	instance, err := provider.Provision(context.Background(), &providers.ProvisionRequest{
-		Name:           "worker",
-		GPUType:        providers.GPUL40S,
-		GPUCount:       1,
-		DockerImage:    "custom/worker:v1",
-		Models:         []string{"meta-llama/Meta-Llama-3.1-8B-Instruct"},
-		GatewayAddress: "https://gateway.example.com",
-		WorkerToken:    "worker-shared-token",
+		Name:            "worker",
+		GPUType:         providers.GPUL40S,
+		GPUCount:        1,
+		DockerImage:     "custom/worker:v1",
+		Models:          []string{"meta-llama/Meta-Llama-3.1-8B-Instruct"},
+		GatewayAddress:  "https://gateway.example.com",
+		WorkerToken:     "worker-shared-token",
+		ReleaseID:       "release-1",
+		ProtocolVersion: "1",
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -232,6 +234,8 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	}
 	assertEnvContains(t, env, "INFERA_ROUTER_ADDRESS", "https://gateway.example.com")
 	assertEnvContains(t, env, "INFERA_WORKER_SHARED_TOKEN", "worker-shared-token")
+	assertEnvContains(t, env, "INFERA_RELEASE_ID", "release-1")
+	assertEnvContains(t, env, "INFERA_WORKER_PROTOCOL_VERSION", "1")
 	assertEnvContains(t, env, "INFERA_ALLOWED_MODELS", `["meta-llama/Meta-Llama-3.1-8B-Instruct"]`)
 	assertEnvContains(t, env, "XDG_CACHE_HOME", "/workspace/.cache")
 	assertEnvContains(t, env, "HF_HOME", "/workspace/.cache/huggingface")

@@ -118,6 +118,8 @@ func TestProvisionUsesPublicImageAndRuntimeEnv(t *testing.T) {
 		GPUCount:          1,
 		DockerImage:       "ghcr.io/codingtensor/infera-worker-e2e:v1",
 		GatewayAddress:    "https://gateway.example.com",
+		ReleaseID:         "release-1",
+		ProtocolVersion:   "1",
 		Models:            []string{"Qwen/Qwen2.5-7B-Instruct"},
 	})
 	if err != nil {
@@ -141,6 +143,9 @@ func TestProvisionUsesPublicImageAndRuntimeEnv(t *testing.T) {
 	}
 	if env["INFERA_HTTP_PORT"] != "8081" {
 		t.Fatalf("expected http port env, got %#v", env["INFERA_HTTP_PORT"])
+	}
+	if env["INFERA_RELEASE_ID"] != "release-1" || env["INFERA_WORKER_PROTOCOL_VERSION"] != "1" {
+		t.Fatalf("expected rollout identity env, got release=%#v protocol=%#v", env["INFERA_RELEASE_ID"], env["INFERA_WORKER_PROTOCOL_VERSION"])
 	}
 }
 
