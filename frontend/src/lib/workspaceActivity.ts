@@ -3,7 +3,7 @@ import type {
   WorkspaceInvitationRecord,
   WorkspaceMemberRecord,
   WorkspaceProviderConfigRecord,
-} from './api';
+} from '../types';
 import { getProviderDisplayName } from './providerInventory';
 import { normalizeInviteStatus } from './workspaceLifecycle';
 

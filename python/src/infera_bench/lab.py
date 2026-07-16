@@ -7,10 +7,10 @@ internal package layout so the lab can be extracted later with minimal churn.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 from .adapters import build_adapter_registry
 from .catalog import (
@@ -28,7 +28,13 @@ from .evals import (
 from .matrix import expand_suite
 from .orchestration import execute_suite
 from .results import compare_result_indexes, format_comparison_markdown, write_comparison_markdown
-from .schema import EvalHistory, EvalIteration, ExperimentResultIndex, ExperimentSuite, ResultComparison
+from .schema import (
+    EvalHistory,
+    EvalIteration,
+    ExperimentResultIndex,
+    ExperimentSuite,
+    ResultComparison,
+)
 
 
 @dataclass(frozen=True)
@@ -45,7 +51,7 @@ class BenchmarkLab:
         self._catalog: BenchmarkCatalogBundle | None = None
 
     @classmethod
-    def default(cls) -> "BenchmarkLab":
+    def default(cls) -> BenchmarkLab:
         root = default_catalog_root()
         return cls(
             BenchmarkLabPaths(
@@ -106,17 +112,23 @@ class BenchmarkLab:
 
     def load_result_indexes(self, paths: list[Path]) -> list[ExperimentResultIndex]:
         return [
-            ExperimentResultIndex.model_validate(json.loads(path.expanduser().read_text(encoding="utf-8")))
+            ExperimentResultIndex.model_validate(
+                json.loads(path.expanduser().read_text(encoding="utf-8"))
+            )
             for path in paths
         ]
 
-    def compare_indexes(self, indexes: list[ExperimentResultIndex], objective: str) -> ResultComparison:
+    def compare_indexes(
+        self, indexes: list[ExperimentResultIndex], objective: str
+    ) -> ResultComparison:
         return compare_result_indexes(indexes, objective)
 
     def format_comparison_markdown(self, comparison: ResultComparison, *, top_k: int = 10) -> str:
         return format_comparison_markdown(comparison, top_k=top_k)
 
-    def write_comparison_markdown(self, comparison: ResultComparison, path: Path, *, top_k: int = 10) -> Path:
+    def write_comparison_markdown(
+        self, comparison: ResultComparison, path: Path, *, top_k: int = 10
+    ) -> Path:
         return write_comparison_markdown(comparison, path, top_k=top_k)
 
     def load_eval_history(self, path: Path, *, history_id: str | None = None) -> EvalHistory:

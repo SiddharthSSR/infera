@@ -330,7 +330,9 @@ class HTTPServer:
                         gateway_url=gateway_url,
                         worker_id=self.worker.worker_id,
                     )
-                    raise RuntimeError("Gateway registration failed with non-retriable client error")
+                    raise RuntimeError(
+                        "Gateway registration failed with non-retriable client error"
+                    )
                 else:
                     self._record_gateway_registration("http_error")
                     logger.warning(
@@ -360,8 +362,7 @@ class HTTPServer:
             return
 
         gateway_url = build_gateway_url(
-            self.config.router_address,
-            f"/api/workers/{self.worker.worker_id}"
+            self.config.router_address, f"/api/workers/{self.worker.worker_id}"
         )
 
         try:
@@ -387,10 +388,7 @@ class HTTPServer:
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeats to the gateway."""
-        gateway_url = build_gateway_url(
-            self.config.router_address,
-            "/api/workers/heartbeat"
-        )
+        gateway_url = build_gateway_url(self.config.router_address, "/api/workers/heartbeat")
         interval = self.config.health_report_interval_ms / 1000.0
 
         while True:
@@ -530,21 +528,18 @@ class HTTPServer:
         except ValueError as e:
             status = "invalid_request"
             return web.json_response(
-                {"error": {"type": "invalid_request", "message": str(e)}},
-                status=400
+                {"error": {"type": "invalid_request", "message": str(e)}}, status=400
             )
         except RuntimeError as e:
             status = "worker_error"
             return web.json_response(
-                {"error": {"type": "worker_error", "message": str(e)}},
-                status=503
+                {"error": {"type": "worker_error", "message": str(e)}}, status=503
             )
         except Exception as e:
             status = "internal_error"
             logger.error("Inference error", error=str(e))
             return web.json_response(
-                {"error": {"type": "internal_error", "message": str(e)}},
-                status=500
+                {"error": {"type": "internal_error", "message": str(e)}}, status=500
             )
         finally:
             self._record_inference_metrics(
@@ -573,72 +568,49 @@ class HTTPServer:
                     "Content-Type": "application/x-ndjson",
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
-                }
+                },
             )
             await response.prepare(request)
 
             try:
                 async for chunk in stream:
-                    chunk_data = {
-                        "request_id": chunk.request_id,
-                        "index": chunk.index,
-                        "delta": chunk.delta,
-                    }
-
-                    if chunk.finish_reason is not None:
-                        chunk_data["finish_reason"] = chunk.finish_reason.value
-
+                    chunk_data = self._format_stream_chunk(chunk)
                     if chunk.usage is not None:
-                        chunk_data["usage"] = {
-                            "prompt_tokens": chunk.usage.prompt_tokens,
-                            "completion_tokens": chunk.usage.completion_tokens,
-                            "total_tokens": chunk.usage.total_tokens,
-                        }
                         token_count = max(token_count, chunk.usage.total_tokens)
-
-                    if chunk.tool_calls is not None:
-                        chunk_data["tool_calls"] = [
-                            {
-                                "index": tc.index,
-                                "id": tc.id,
-                                "type": tc.type,
-                                "function": tc.function,
-                            }
-                            for tc in chunk.tool_calls
-                        ]
 
                     await response.write(json.dumps(chunk_data).encode() + b"\n")
             except ValueError as e:
                 status = "invalid_request"
-                await response.write(json.dumps({
-                    "error": {"type": "invalid_request", "message": str(e)}
-                }).encode() + b"\n")
+                await response.write(
+                    json.dumps({"error": {"type": "invalid_request", "message": str(e)}}).encode()
+                    + b"\n"
+                )
             except RuntimeError as e:
                 status = "worker_error"
-                await response.write(json.dumps({
-                    "error": {"type": "worker_error", "message": str(e)}
-                }).encode() + b"\n")
+                await response.write(
+                    json.dumps({"error": {"type": "worker_error", "message": str(e)}}).encode()
+                    + b"\n"
+                )
             except Exception as e:
                 status = "internal_error"
                 logger.error("Streaming error", error=str(e))
-                await response.write(json.dumps({
-                    "error": {"type": "internal_error", "message": str(e)}
-                }).encode() + b"\n")
+                await response.write(
+                    json.dumps({"error": {"type": "internal_error", "message": str(e)}}).encode()
+                    + b"\n"
+                )
 
             await response.write_eof()
             return response
         except ValueError as e:
             status = "invalid_request"
             return web.json_response(
-                {"error": {"type": "invalid_request", "message": str(e)}},
-                status=400
+                {"error": {"type": "invalid_request", "message": str(e)}}, status=400
             )
         except Exception as e:
             status = "internal_error"
             logger.error("Streaming error", error=str(e))
             return web.json_response(
-                {"error": {"type": "internal_error", "message": str(e)}},
-                status=500
+                {"error": {"type": "internal_error", "message": str(e)}}, status=500
             )
         finally:
             self._record_inference_metrics(
@@ -655,19 +627,21 @@ class HTTPServer:
         ready = state in {WorkerState.READY, WorkerState.BUSY}
         live = state not in {WorkerState.ERROR, WorkerState.SHUTTING_DOWN}
 
-        return web.json_response({
-            "status": "healthy" if ready else state.value,
-            "worker_id": self.worker.worker_id,
-            "state": state.value,
-            "live": live,
-            "ready": ready,
-            "draining": state == WorkerState.DRAINING,
-            "gateway_registered": self._gateway_registered,
-            "startup": self.worker.get_startup_status(),
-            "models_loaded": len(self.worker.get_loaded_models()),
-            "memory_used_bytes": stats.memory_used_bytes,
-            "memory_total_bytes": stats.memory_total_bytes,
-        })
+        return web.json_response(
+            {
+                "status": "healthy" if ready else state.value,
+                "worker_id": self.worker.worker_id,
+                "state": state.value,
+                "live": live,
+                "ready": ready,
+                "draining": state == WorkerState.DRAINING,
+                "gateway_registered": self._gateway_registered,
+                "startup": self.worker.get_startup_status(),
+                "models_loaded": len(self.worker.get_loaded_models()),
+                "memory_used_bytes": stats.memory_used_bytes,
+                "memory_total_bytes": stats.memory_total_bytes,
+            }
+        )
 
     async def handle_metrics(self, request: web.Request) -> web.Response:
         """Expose Prometheus metrics for scraping."""
@@ -682,19 +656,21 @@ class HTTPServer:
         """Handle list models request."""
         models = self.worker.get_loaded_models()
 
-        return web.json_response({
-            "models": [
-                {
-                    "model_id": m.model_id,
-                    "version": m.version,
-                    "memory_bytes": m.memory_bytes,
-                    "max_batch_size": m.max_batch_size,
-                    "max_sequence_length": m.max_sequence_length,
-                    "loaded_at": m.loaded_at.isoformat(),
-                }
-                for m in models
-            ]
-        })
+        return web.json_response(
+            {
+                "models": [
+                    {
+                        "model_id": m.model_id,
+                        "version": m.version,
+                        "memory_bytes": m.memory_bytes,
+                        "max_batch_size": m.max_batch_size,
+                        "max_sequence_length": m.max_sequence_length,
+                        "loaded_at": m.loaded_at.isoformat(),
+                    }
+                    for m in models
+                ]
+            }
+        )
 
     async def handle_load_model(self, request: web.Request) -> web.Response:
         """Handle load model request."""
@@ -713,18 +689,17 @@ class HTTPServer:
             loaded = await self.worker.load_model(model_config)
             load_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
-            return web.json_response({
-                "success": True,
-                "model_id": loaded.model_id,
-                "memory_bytes": loaded.memory_bytes,
-                "load_time_ms": load_time_ms,
-            })
+            return web.json_response(
+                {
+                    "success": True,
+                    "model_id": loaded.model_id,
+                    "memory_bytes": loaded.memory_bytes,
+                    "load_time_ms": load_time_ms,
+                }
+            )
 
         except Exception as e:
-            return web.json_response(
-                {"success": False, "error": str(e)},
-                status=400
-            )
+            return web.json_response({"success": False, "error": str(e)}, status=400)
 
     async def handle_unload_model(self, request: web.Request) -> web.Response:
         """Handle unload model request."""
@@ -734,33 +709,34 @@ class HTTPServer:
 
             success = await self.worker.unload_model(model_id)
 
-            return web.json_response({
-                "success": success,
-                "model_id": model_id,
-            })
+            return web.json_response(
+                {
+                    "success": success,
+                    "model_id": model_id,
+                }
+            )
 
         except Exception as e:
-            return web.json_response(
-                {"success": False, "error": str(e)},
-                status=400
-            )
+            return web.json_response({"success": False, "error": str(e)}, status=400)
 
     async def handle_stats(self, request: web.Request) -> web.Response:
         """Handle stats request."""
         stats = self.worker.get_stats()
 
-        return web.json_response({
-            "queue_depth": stats.queue_depth,
-            "active_requests": stats.active_requests,
-            "gpu_utilization": stats.gpu_utilization,
-            "memory_used_bytes": stats.memory_used_bytes,
-            "memory_total_bytes": stats.memory_total_bytes,
-            "requests_per_second": stats.requests_per_second,
-            "avg_latency_ms": stats.avg_latency_ms,
-            "p50_latency_ms": stats.p50_latency_ms,
-            "p99_latency_ms": stats.p99_latency_ms,
-            "error_rate": stats.error_rate,
-        })
+        return web.json_response(
+            {
+                "queue_depth": stats.queue_depth,
+                "active_requests": stats.active_requests,
+                "gpu_utilization": stats.gpu_utilization,
+                "memory_used_bytes": stats.memory_used_bytes,
+                "memory_total_bytes": stats.memory_total_bytes,
+                "requests_per_second": stats.requests_per_second,
+                "avg_latency_ms": stats.avg_latency_ms,
+                "p50_latency_ms": stats.p50_latency_ms,
+                "p99_latency_ms": stats.p99_latency_ms,
+                "error_rate": stats.error_rate,
+            }
+        )
 
     def _parse_request(self, data: dict[str, Any]) -> InferenceRequest:
         """Parse request data into InferenceRequest."""
@@ -771,14 +747,16 @@ class HTTPServer:
             result = []
             for tc in raw_calls:
                 fn = tc.get("function", {})
-                result.append(ToolCall(
-                    id=tc.get("id", ""),
-                    type=tc.get("type", "function"),
-                    function=FunctionCall(
-                        name=fn.get("name", ""),
-                        arguments=fn.get("arguments", ""),
-                    ),
-                ))
+                result.append(
+                    ToolCall(
+                        id=tc.get("id", ""),
+                        type=tc.get("type", "function"),
+                        function=FunctionCall(
+                            name=fn.get("name", ""),
+                            arguments=fn.get("arguments", ""),
+                        ),
+                    )
+                )
             return result or None
 
         messages = [
@@ -835,6 +813,37 @@ class HTTPServer:
             tools=tools,
             tool_choice=tool_choice,
         )
+
+    def _format_stream_chunk(self, chunk) -> dict[str, Any]:
+        """Format TokenChunk data for the NDJSON streaming wire contract."""
+        chunk_data: dict[str, Any] = {
+            "request_id": chunk.request_id,
+            "index": chunk.index,
+            "delta": chunk.delta,
+        }
+
+        if chunk.finish_reason is not None:
+            chunk_data["finish_reason"] = chunk.finish_reason.value
+
+        if chunk.usage is not None:
+            chunk_data["usage"] = {
+                "prompt_tokens": chunk.usage.prompt_tokens,
+                "completion_tokens": chunk.usage.completion_tokens,
+                "total_tokens": chunk.usage.total_tokens,
+            }
+
+        if chunk.tool_calls is not None:
+            chunk_data["tool_calls"] = [
+                {
+                    "index": tc.index,
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": tc.function,
+                }
+                for tc in chunk.tool_calls
+            ]
+
+        return chunk_data
 
     def _format_response(self, response) -> dict[str, Any]:
         """Format InferenceResponse as dict."""

@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
 import shlex
 import subprocess
 import uuid
+from pathlib import Path
 from typing import Any
 
 from .schema import EvalHistory, EvalIteration, utc_now_iso
-
 
 OVERALL_KEY_CANDIDATES = (
     "overall_score",
@@ -32,7 +31,9 @@ OVERALL_PATTERNS = (
     re.compile(r"overall(?:\s+score)?\s+([0-9]+(?:\.[0-9]+)?)%?", re.IGNORECASE),
 )
 LLM_AVERAGE_PATTERNS = (
-    re.compile(r"llm(?:\s+average|\s+avg)?(?:\s+score)?\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)%?", re.IGNORECASE),
+    re.compile(
+        r"llm(?:\s+average|\s+avg)?(?:\s+score)?\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)%?", re.IGNORECASE
+    ),
     re.compile(r"llm(?:\s+average|\s+avg)?(?:\s+score)?\s+([0-9]+(?:\.[0-9]+)?)%?", re.IGNORECASE),
 )
 
@@ -92,7 +93,9 @@ def parse_eval_scores(text: str) -> tuple[float | None, float | None]:
 def load_eval_history(path: Path, *, history_id: str | None = None) -> EvalHistory:
     if path.exists():
         return EvalHistory.model_validate_json(path.read_text(encoding="utf-8"))
-    return EvalHistory(history_id=history_id or path.stem or "eval-history", generated_at=utc_now_iso())
+    return EvalHistory(
+        history_id=history_id or path.stem or "eval-history", generated_at=utc_now_iso()
+    )
 
 
 def write_eval_history(path: Path, history: EvalHistory) -> Path:
@@ -102,8 +105,12 @@ def write_eval_history(path: Path, history: EvalHistory) -> Path:
 
 
 def best_scores(history: EvalHistory) -> dict[str, float | None]:
-    overall_values = [item.overall_score for item in history.iterations if item.overall_score is not None]
-    llm_values = [item.llm_average_score for item in history.iterations if item.llm_average_score is not None]
+    overall_values = [
+        item.overall_score for item in history.iterations if item.overall_score is not None
+    ]
+    llm_values = [
+        item.llm_average_score for item in history.iterations if item.llm_average_score is not None
+    ]
     return {
         "overall_score": max(overall_values) if overall_values else None,
         "llm_average_score": max(llm_values) if llm_values else None,
@@ -117,7 +124,9 @@ def summarize_eval_history(history: EvalHistory) -> str:
         "",
         "## Current Best Scores",
         "",
-        f"- overall score: {best['overall_score']:.2f}%" if best["overall_score"] is not None else "- overall score: unavailable",
+        f"- overall score: {best['overall_score']:.2f}%"
+        if best["overall_score"] is not None
+        else "- overall score: unavailable",
         (
             f"- LLM average: {best['llm_average_score']:.2f}%"
             if best["llm_average_score"] is not None
@@ -179,8 +188,14 @@ def record_eval_iteration(
     overall_target: float,
     llm_average_target: float,
 ) -> tuple[EvalHistory, EvalIteration, int]:
-    completed = subprocess.run(eval_command, cwd=str(cwd), capture_output=True, text=True, check=False)
-    combined_output = (completed.stdout or "") + ("\n" if completed.stdout and completed.stderr else "") + (completed.stderr or "")
+    completed = subprocess.run(
+        eval_command, cwd=str(cwd), capture_output=True, text=True, check=False
+    )
+    combined_output = (
+        (completed.stdout or "")
+        + ("\n" if completed.stdout and completed.stderr else "")
+        + (completed.stderr or "")
+    )
     overall_score, llm_average_score = parse_eval_scores(combined_output)
 
     history = load_eval_history(history_path)
@@ -221,6 +236,8 @@ def record_eval_iteration(
     if exit_code == 0:
         if status != "ok":
             exit_code = 1
-        elif (overall_score or 0.0) < overall_target or (llm_average_score or 0.0) < llm_average_target:
+        elif (overall_score or 0.0) < overall_target or (
+            llm_average_score or 0.0
+        ) < llm_average_target:
             exit_code = 2
     return history, iteration, exit_code

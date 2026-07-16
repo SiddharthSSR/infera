@@ -20,15 +20,9 @@ def test_expand_suite_marks_tensorrt_qwen_as_unverified() -> None:
                 "models": ["Qwen/Qwen2.5-7B-Instruct"],
                 "workloads": ["mixed"],
                 "benchmark_profiles": ["provision_full"],
-                "runtime_presets": ["baseline"]
+                "runtime_presets": ["baseline"],
             },
-            "runtime_presets": [
-                {
-                    "id": "baseline",
-                    "display_name": "Baseline",
-                    "parameters": {}
-                }
-            ]
+            "runtime_presets": [{"id": "baseline", "display_name": "Baseline", "parameters": {}}],
         }
     )
 
@@ -53,8 +47,8 @@ def test_expand_suite_blocks_when_provider_selector_missing() -> None:
                 "models": ["Qwen/Qwen2.5-7B-Instruct"],
                 "workloads": ["mixed"],
                 "benchmark_profiles": ["provision_full"],
-                "runtime_presets": ["baseline"]
-            }
+                "runtime_presets": ["baseline"],
+            },
         }
     )
 

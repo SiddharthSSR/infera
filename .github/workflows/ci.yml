@@ -82,6 +82,21 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Check generated OpenAI chat contract
+        run: node ./scripts/generate-openai-chat-contracts.mjs --check
+
+      - name: Check generated auth access contract
+        run: node ./scripts/generate-auth-access-contracts.mjs --check
+
+      - name: Check generated infrastructure dashboard contract
+        run: node ./scripts/generate-infrastructure-contracts.mjs --check
+
+      - name: Check generated deployment history contract
+        run: node ./scripts/generate-deployment-history-contracts.mjs --check
+
+      - name: Check generated workspace admin contract
+        run: node ./scripts/generate-workspace-admin-contracts.mjs --check
+
       - name: Run frontend tests
         working-directory: frontend
         run: npm run test:run

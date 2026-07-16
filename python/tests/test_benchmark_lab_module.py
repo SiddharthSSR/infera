@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from infera_bench.catalog import default_catalog_root
 from infera_bench.lab import BenchmarkLab
 

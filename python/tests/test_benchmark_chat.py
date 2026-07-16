@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "benchmark-chat.py"
@@ -140,9 +139,24 @@ def test_build_result_row_computes_cost_and_throughput():
 def test_summarize_rows_handles_decode_percentiles():
     module = load_benchmark_chat_module()
     rows = [
-        {"ttft_ms": 400.0, "stream_total_ms": 2500.0, "non_stream_total_ms": 3000.0, "decode_tok_s": 50.0},
-        {"ttft_ms": 600.0, "stream_total_ms": 2700.0, "non_stream_total_ms": 3200.0, "decode_tok_s": 60.0},
-        {"ttft_ms": 800.0, "stream_total_ms": 2900.0, "non_stream_total_ms": 3400.0, "decode_tok_s": 0.0},
+        {
+            "ttft_ms": 400.0,
+            "stream_total_ms": 2500.0,
+            "non_stream_total_ms": 3000.0,
+            "decode_tok_s": 50.0,
+        },
+        {
+            "ttft_ms": 600.0,
+            "stream_total_ms": 2700.0,
+            "non_stream_total_ms": 3200.0,
+            "decode_tok_s": 60.0,
+        },
+        {
+            "ttft_ms": 800.0,
+            "stream_total_ms": 2900.0,
+            "non_stream_total_ms": 3400.0,
+            "decode_tok_s": 0.0,
+        },
     ]
 
     summary = module.summarize_rows(rows)

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path
 import statistics
+from pathlib import Path
 from typing import Any
 
 from .schema import (
@@ -44,7 +44,7 @@ def _choose_workload_rows(payload: dict[str, Any]) -> tuple[str, list[dict[str, 
         name, rows = next(iter(presets.items()))
         return str(name), list(rows or [])
     name = sorted(presets)[0]
-    return str(name), list((presets.get(name) or []))
+    return str(name), list(presets.get(name) or [])
 
 
 def summarize_warm_output(path: Path, cache_reuse_mode: str) -> WarmMetricSummary:
@@ -53,11 +53,27 @@ def summarize_warm_output(path: Path, cache_reuse_mode: str) -> WarmMetricSummar
     ttft_values = [float(row.get("ttft_ms", 0.0)) for row in rows]
     stream_totals = [float(row.get("stream_total_ms", 0.0)) for row in rows]
     non_stream_totals = [float(row.get("non_stream_total_ms", 0.0)) for row in rows]
-    decode_values = [float(row.get("decode_tok_s", 0.0)) for row in rows if float(row.get("decode_tok_s", 0.0)) > 0]
-    aggregate_decode_values = [float(row.get("aggregate_decode_tok_s", 0.0)) for row in rows if float(row.get("aggregate_decode_tok_s", 0.0)) > 0]
-    aggregate_total_values = [float(row.get("aggregate_total_tok_s", 0.0)) for row in rows if float(row.get("aggregate_total_tok_s", 0.0)) > 0]
-    tpot_values = [float(row.get("tpot_ms", 0.0)) for row in rows if float(row.get("tpot_ms", 0.0)) > 0]
-    itl_values = [float(row.get("itl_ms", 0.0)) for row in rows if float(row.get("itl_ms", 0.0)) > 0]
+    decode_values = [
+        float(row.get("decode_tok_s", 0.0))
+        for row in rows
+        if float(row.get("decode_tok_s", 0.0)) > 0
+    ]
+    aggregate_decode_values = [
+        float(row.get("aggregate_decode_tok_s", 0.0))
+        for row in rows
+        if float(row.get("aggregate_decode_tok_s", 0.0)) > 0
+    ]
+    aggregate_total_values = [
+        float(row.get("aggregate_total_tok_s", 0.0))
+        for row in rows
+        if float(row.get("aggregate_total_tok_s", 0.0)) > 0
+    ]
+    tpot_values = [
+        float(row.get("tpot_ms", 0.0)) for row in rows if float(row.get("tpot_ms", 0.0)) > 0
+    ]
+    itl_values = [
+        float(row.get("itl_ms", 0.0)) for row in rows if float(row.get("itl_ms", 0.0)) > 0
+    ]
     failures = sum(1 for row in rows if row.get("status") == "failed")
     health_sampling = payload.get("health_sampling") or {}
     request_throughput_rps = 0.0
@@ -175,7 +191,9 @@ def build_result_index(
 
 
 def _record_score(record: ExperimentResultRecord, objective: str) -> tuple[float, str]:
-    warm = next((item for item in record.warm_summaries if item.cache_reuse_mode == "affinity"), None)
+    warm = next(
+        (item for item in record.warm_summaries if item.cache_reuse_mode == "affinity"), None
+    )
     if warm is None:
         warm = record.warm_summaries[0] if record.warm_summaries else None
     if warm is None:
@@ -185,7 +203,9 @@ def _record_score(record: ExperimentResultRecord, objective: str) -> tuple[float
     if objective == "lowest_ttft":
         return -warm.ttft_p50_ms, "lower ttft_p50_ms is better"
     if objective == "best_tpot":
-        return -warm.tpot_p50_ms if warm.tpot_p50_ms > 0 else float("-inf"), "lower tpot_p50_ms is better"
+        return -warm.tpot_p50_ms if warm.tpot_p50_ms > 0 else float(
+            "-inf"
+        ), "lower tpot_p50_ms is better"
     # balanced
     score = (
         (warm.aggregate_total_tok_s_p50 / 1000.0)
@@ -196,7 +216,9 @@ def _record_score(record: ExperimentResultRecord, objective: str) -> tuple[float
     return score, "balanced score favors throughput and penalizes TTFT, TPOT, and failures"
 
 
-def compare_result_indexes(indexes: list[ExperimentResultIndex], objective: str) -> ResultComparison:
+def compare_result_indexes(
+    indexes: list[ExperimentResultIndex], objective: str
+) -> ResultComparison:
     entries: list[ResultComparisonEntry] = []
     for index in indexes:
         for record in index.results:
@@ -214,7 +236,9 @@ def compare_result_indexes(indexes: list[ExperimentResultIndex], objective: str)
     return ResultComparison(generated_at=utc_now_iso(), objective=objective, entries=entries)
 
 
-def _comparison_winner_groups(comparison: ResultComparison) -> dict[tuple[str, str, str], ResultComparisonEntry]:
+def _comparison_winner_groups(
+    comparison: ResultComparison,
+) -> dict[tuple[str, str, str], ResultComparisonEntry]:
     winners: dict[tuple[str, str, str], ResultComparisonEntry] = {}
     for entry in comparison.entries:
         key = (

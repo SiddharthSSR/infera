@@ -1,0 +1,22 @@
+{
+  "session": {
+    "id": "sess_fixture_admin",
+    "expires_at": "2026-04-12T00:00:00Z"
+  },
+  "key": {
+    "id": "key_fixture_admin",
+    "key_prefix": "inf_fixture_admin...",
+    "name": "Fixture Admin",
+    "role": "admin",
+    "principal_type": "human",
+    "workspace_id": "ws_alpha",
+    "workspace_slug": "fixture-team",
+    "workspace_name": "Fixture Team"
+  },
+  "workspace": {
+    "id": "ws_alpha",
+    "slug": "fixture-team",
+    "name": "Fixture Team"
+  },
+  "member": null
+}

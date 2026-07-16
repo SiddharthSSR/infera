@@ -219,7 +219,9 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		http.Error(w, `{"error":{"type":"encode_error","message":"Failed to encode JSON response"}}`, http.StatusInternalServerError)
+	}
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, status int, errType, message string) {

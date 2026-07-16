@@ -96,8 +96,8 @@ func TestHandleChatCompletionsReturnsOpenAICompatibleResponse(t *testing.T) {
 	if !strings.HasPrefix(resp.ID, "chatcmpl-") {
 		t.Fatalf("expected chat completion id, got %q", resp.ID)
 	}
-	if resp.Object != "chat.completion" {
-		t.Fatalf("expected chat.completion object, got %q", resp.Object)
+	if resp.Object != OpenAIChatCompletionObject {
+		t.Fatalf("expected %s object, got %q", OpenAIChatCompletionObject, resp.Object)
 	}
 	if resp.Model != modelID {
 		t.Fatalf("expected model %q, got %q", modelID, resp.Model)
@@ -333,7 +333,7 @@ func TestHandleChatCompletionsStreamingReturnsSSEChunksAndDone(t *testing.T) {
 	if err := json.Unmarshal([]byte(events[0]), &initial); err != nil {
 		t.Fatalf("decode initial chunk: %v", err)
 	}
-	if initial.Object != "chat.completion.chunk" {
+	if initial.Object != OpenAIChatCompletionChunkObject {
 		t.Fatalf("expected chunk object, got %q", initial.Object)
 	}
 	if initial.Choices[0].Delta.Role != "assistant" {
@@ -498,8 +498,8 @@ func TestHandleChatCompletionsRejectsInvalidStopType(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode error payload: %v", err)
 	}
-	if payload["error"]["type"] != "invalid_request" {
-		t.Fatalf("expected invalid_request type, got %#v", payload)
+	if payload["error"]["type"] != OpenAIChatErrorTypeInvalidRequest {
+		t.Fatalf("expected %s type, got %#v", OpenAIChatErrorTypeInvalidRequest, payload)
 	}
 	if !strings.Contains(payload["error"]["message"], "stop") {
 		t.Fatalf("expected stop-related message, got %#v", payload)
@@ -535,8 +535,8 @@ func TestHandleChatCompletionsStreamingWorkerErrorBeforeCommitReturnsJSONError(t
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-	if resp["error"]["type"] != "inference_error" {
-		t.Fatalf("expected inference_error type, got %#v", resp)
+	if resp["error"]["type"] != OpenAIChatErrorTypeInferenceError {
+		t.Fatalf("expected %s type, got %#v", OpenAIChatErrorTypeInferenceError, resp)
 	}
 	if strings.Contains(rec.Body.String(), "[DONE]") {
 		t.Fatalf("expected no SSE trailer in json error response")

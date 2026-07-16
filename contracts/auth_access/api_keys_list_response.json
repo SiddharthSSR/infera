@@ -1,0 +1,29 @@
+{
+  "keys": [
+    {
+      "id": "key_fixture_service_account",
+      "workspace_id": "ws_alpha",
+      "workspace_slug": "fixture-team",
+      "workspace_name": "Fixture Team",
+      "key_prefix": "inf_fixture_bot...",
+      "name": "CI Bot",
+      "role": "operator",
+      "principal_type": "service_account",
+      "created_at": "2026-04-10T00:05:00Z",
+      "status": "active"
+    },
+    {
+      "id": "key_fixture_admin",
+      "workspace_id": "ws_alpha",
+      "workspace_slug": "fixture-team",
+      "workspace_name": "Fixture Team",
+      "key_prefix": "inf_fixture_admin...",
+      "name": "Fixture Admin",
+      "role": "admin",
+      "principal_type": "human",
+      "created_at": "2026-04-10T00:00:00Z",
+      "status": "active"
+    }
+  ],
+  "total": 2
+}

@@ -5,10 +5,9 @@ import {
   acceptWorkspaceInvitation,
   createSession,
   fetchInvitationPreview,
-  type SessionInfo,
-  type WorkspaceInvitationPreview,
-} from '../lib/api';
+} from '../lib/authAccessClient';
 import { DisplayHeader, GridRow, Cell, LabelText, ActionButton, ControlInput, AppShell, PublicNav } from '../components/shared';
+import type { SessionInfo, WorkspaceInvitationPreview } from '../types';
 
 type AcceptInvitationProps = {
   onAccepted: (session: SessionInfo) => void;

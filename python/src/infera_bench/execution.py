@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import shlex
 import shutil
 import ssl
 import subprocess
 import sys
 import time
-from typing import Any
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from .schema import ExecutionStepResult, ExperimentExecutionResult, ResolvedRunSpec, utc_now_iso
-
 
 PROGRESS_LOG_INTERVAL_S = 15.0
 HEALTH_REQUEST_TIMEOUT_S = 5
@@ -128,7 +127,9 @@ def fetch_health(health_url: str, *, insecure: bool) -> dict[str, Any]:
     except Exception as exc:
         if "HTTP 403" not in str(exc) or "1010" not in str(exc):
             raise
-    return request_json_via_curl("GET", health_url, timeout=HEALTH_REQUEST_TIMEOUT_S, insecure=insecure)
+    return request_json_via_curl(
+        "GET", health_url, timeout=HEALTH_REQUEST_TIMEOUT_S, insecure=insecure
+    )
 
 
 def fetch_gateway_workers(base_url: str, api_key: str) -> dict[str, Any]:
@@ -158,7 +159,13 @@ def lifecycle_record_for_step(step_name: str, output_path: str) -> dict[str, Any
     if not path.exists():
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
-    records_key = "captures" if step_name == "startup_health" else "scenarios" if step_name == "cold_start" else None
+    records_key = (
+        "captures"
+        if step_name == "startup_health"
+        else "scenarios"
+        if step_name == "cold_start"
+        else None
+    )
     if records_key is None:
         return None
     records = payload.get(records_key) or []
@@ -210,7 +217,9 @@ def build_warm_command(
     health_insecure: bool,
     health_sample_interval_ms: int,
 ) -> list[str]:
-    legacy_prompt_preset = str(run_spec.generic_parameters.get("legacy_prompt_preset") or "").strip()
+    legacy_prompt_preset = str(
+        run_spec.generic_parameters.get("legacy_prompt_preset") or ""
+    ).strip()
     warm_runs = int(run_spec.generic_parameters.get("warm_runs") or 3)
     warmup = int(run_spec.generic_parameters.get("warmup") or 0)
     concurrency = int(run_spec.generic_parameters.get("concurrency") or 1)
@@ -251,14 +260,23 @@ def build_warm_command(
     if temperature is not None:
         command.extend(["--temperature", str(temperature)])
     if cache_reuse_mode == "affinity":
-        cache_key_prefix = run_spec.attach_target.cache_key_prefix if run_spec.attach_target else "benchmark"
+        cache_key_prefix = (
+            run_spec.attach_target.cache_key_prefix if run_spec.attach_target else "benchmark"
+        )
         command.extend(["--cache-key-prefix", cache_key_prefix])
     if cost_per_hour is not None:
         command.extend(["--cost-per-hour", str(cost_per_hour)])
     for name, value in sorted({**run_spec.benchmark_headers, **run_spec.workload_headers}.items()):
         command.extend(["--header", f"{name}: {value}"])
     if health_url:
-        command.extend(["--sample-health-url", health_url, "--health-sample-interval-ms", str(health_sample_interval_ms)])
+        command.extend(
+            [
+                "--sample-health-url",
+                health_url,
+                "--health-sample-interval-ms",
+                str(health_sample_interval_ms),
+            ]
+        )
         if health_insecure:
             command.append("--health-insecure")
     return command
@@ -276,7 +294,9 @@ def build_cold_start_command(
     quiet_progress: bool,
     terminate_final_instance: bool,
 ) -> list[str]:
-    instance_name_prefix = str(run_spec.generic_parameters.get("instance_name_prefix") or run_spec.run_id).strip()
+    instance_name_prefix = str(
+        run_spec.generic_parameters.get("instance_name_prefix") or run_spec.run_id
+    ).strip()
     command = [
         python_bin,
         "scripts/cold-start-benchmark.py",
@@ -326,7 +346,9 @@ def build_startup_health_command(
     quiet_progress: bool,
     terminate_final_instance: bool,
 ) -> list[str]:
-    instance_name_prefix = str(run_spec.generic_parameters.get("instance_name_prefix") or run_spec.run_id).strip()
+    instance_name_prefix = str(
+        run_spec.generic_parameters.get("instance_name_prefix") or run_spec.run_id
+    ).strip()
     command = [
         python_bin,
         "scripts/capture-startup-health.py",
@@ -506,7 +528,9 @@ def wait_for_model_registry_drain(
             for worker in workers
             if model_id in [str(model) for model in (worker.get("models") or [])]
         ]
-        addresses = [str(worker.get("address") or "") for worker in matching if worker.get("address")]
+        addresses = [
+            str(worker.get("address") or "") for worker in matching if worker.get("address")
+        ]
         last_state = f"matching_workers={len(matching)} total={payload.get('total')} addresses={addresses[:3]}"
         if not matching:
             print(
@@ -525,7 +549,9 @@ def wait_for_model_registry_drain(
         time.sleep(poll_interval_ms / 1000.0)
 
     if last_error is not None:
-        raise RuntimeError(f"timed out waiting for gateway drain; last error: {last_error}") from last_error
+        raise RuntimeError(
+            f"timed out waiting for gateway drain; last error: {last_error}"
+        ) from last_error
     raise RuntimeError(
         "timed out waiting for gateway drain"
         + (f"; last state: {last_state}" if last_state else "")
@@ -618,7 +644,9 @@ class ProvisionExecutor:
                 continue
             if cache_mode not in {"none", "affinity"}:
                 continue
-            warm_path = output_dir / f"infera-benchmark-{engine_slug}-{hardware_slug}-{cache_mode}.json"
+            warm_path = (
+                output_dir / f"infera-benchmark-{engine_slug}-{hardware_slug}-{cache_mode}.json"
+            )
             steps.append(
                 ExecutionStep(
                     name=stage_name,
@@ -647,7 +675,9 @@ class ProvisionExecutor:
             "Warm benchmark results are only valid when the active fleet serving the target model is deployed with the selected engine.",
         ]
         steps = self.build_steps(run_spec, benchmark_profile)
-        retained_health_url: str | None = run_spec.attach_target.health_url if run_spec.attach_target else None
+        retained_health_url: str | None = (
+            run_spec.attach_target.health_url if run_spec.attach_target else None
+        )
         retained_instance_id: str | None = None
         exit_status = "ok"
         skipped_warm_due_to_lifecycle = False
@@ -658,9 +688,16 @@ class ProvisionExecutor:
                     continue
                 if retained_health_url is None:
                     for previous in reversed(step_results):
-                        if previous.category in {"cold_start", "startup_health"} and previous.status == "ok":
-                            retained_health_url = retained_health_url_for_step(previous.name, previous.output_path)
-                            retained_instance_id = retained_instance_id_for_step(previous.name, previous.output_path)
+                        if (
+                            previous.category in {"cold_start", "startup_health"}
+                            and previous.status == "ok"
+                        ):
+                            retained_health_url = retained_health_url_for_step(
+                                previous.name, previous.output_path
+                            )
+                            retained_instance_id = retained_instance_id_for_step(
+                                previous.name, previous.output_path
+                            )
                             if retained_health_url:
                                 break
                 if retained_health_url is None:
@@ -721,7 +758,10 @@ class ProvisionExecutor:
                 result.status == "ok"
                 and step.category in {"cold_start", "startup_health"}
                 and any(candidate.category == "warm" for candidate in steps[index + 1 :])
-                and not any(candidate.category in {"cold_start", "startup_health"} for candidate in steps[index + 1 :])
+                and not any(
+                    candidate.category in {"cold_start", "startup_health"}
+                    for candidate in steps[index + 1 :]
+                )
             ):
                 retained_health_url = retained_health_url_for_step(step.name, step.output_path)
                 retained_instance_id = retained_instance_id_for_step(step.name, step.output_path)
@@ -812,7 +852,9 @@ class AttachExecutor:
                         cache_reuse_mode=cache_mode,
                         output_path=output_path,
                         cost_per_hour=self.cost_per_hour,
-                        health_url=run_spec.attach_target.health_url if run_spec.attach_target else None,
+                        health_url=run_spec.attach_target.health_url
+                        if run_spec.attach_target
+                        else None,
                         health_insecure=self.health_insecure,
                         health_sample_interval_ms=benchmark_profile.health_sample_interval_ms,
                     ),

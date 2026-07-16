@@ -31,6 +31,14 @@ type workspaceConfiguredProvider struct {
 	apiKey string
 }
 
+type workspaceConfiguredProviderResolver struct {
+	resolve func(workspaceID string, providerType ProviderType) (*ProviderConfig, error)
+}
+
+func (r workspaceConfiguredProviderResolver) ResolveProviderConfig(workspaceID string, providerType ProviderType) (*ProviderConfig, error) {
+	return r.resolve(workspaceID, providerType)
+}
+
 type instanceAwareStartProvider struct {
 	*mockTestProvider
 	startedWithInstance []string
@@ -457,6 +465,37 @@ func TestManagerWorkspaceScopedProviderResolution(t *testing.T) {
 	}
 }
 
+func TestManagerWorkspaceScopedProviderResolutionUsesTypedResolver(t *testing.T) {
+	RegisterProvider(ProviderRunPod, func(config ProviderConfig) (Provider, error) {
+		return &workspaceConfiguredProvider{apiKey: config.APIKey}, nil
+	})
+
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(newMockTestProvider())
+	mgr.SetWorkspaceProviderConfigSource(workspaceConfiguredProviderResolver{
+		resolve: func(workspaceID string, providerType ProviderType) (*ProviderConfig, error) {
+			if workspaceID == "ws_beta" && providerType == ProviderRunPod {
+				return &ProviderConfig{Type: providerType, APIKey: "typed-workspace-key"}, nil
+			}
+			return nil, context.Canceled
+		},
+	})
+
+	statuses := mgr.GetProviderStatusForWorkspace(context.Background(), "ws_beta")
+	found := false
+	for _, status := range statuses {
+		if status.Provider == ProviderRunPod {
+			found = true
+			if !status.Connected {
+				t.Fatalf("expected typed workspace-scoped provider to be connected: %+v", status)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected runpod status from typed workspace resolver")
+	}
+}
+
 func TestManagerProvisionUnregisteredProvider(t *testing.T) {
 	mgr := newTestManager(t, ManagerConfig{})
 	// Don't register any providers
@@ -555,13 +594,43 @@ func TestManagerStartUsesInstanceStarterWhenAvailable(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 	provider.instances[instance.ID] = instance
-	mgr.instances[instance.ID] = instance
+	mgr.instances.put(instance)
 
 	if err := mgr.Start(context.Background(), instance.ID); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 	if len(provider.startedWithInstance) != 1 || provider.startedWithInstance[0] != instance.ID {
 		t.Fatalf("expected StartWithInstance to be used, got %#v", provider.startedWithInstance)
+	}
+}
+
+func TestNewManagerWithStoreUsesInjectedInstanceStore(t *testing.T) {
+	store := newInMemoryInstanceStore()
+	instance := &Instance{
+		ID:          "inst-store",
+		ProviderID:  "mock-store",
+		Provider:    ProviderMock,
+		Status:      InstanceStatusStopped,
+		GPUType:     GPURTX4090,
+		GPUCount:    1,
+		WorkspaceID: "ws_store",
+		Models:      []string{"Qwen/Qwen2.5-7B-Instruct"},
+		CreatedAt:   time.Now(),
+	}
+	store.put(instance)
+
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgrWithStore, err := NewManagerWithStore(ManagerConfig{DefaultProvider: ProviderMock}, store)
+	if err != nil {
+		t.Fatalf("NewManagerWithStore failed: %v", err)
+	}
+	t.Cleanup(func() { _ = mgrWithStore.Close() })
+
+	if _, exists := mgr.GetInstance("inst-store"); exists {
+		t.Fatal("unexpected instance in default manager")
+	}
+	if found, exists := mgrWithStore.GetInstance("inst-store"); !exists || found.ID != "inst-store" {
+		t.Fatalf("expected injected store instance, got %+v exists=%v", found, exists)
 	}
 }
 
@@ -573,7 +642,9 @@ func TestManagerStartRejectedForTerminatedInstance(t *testing.T) {
 	ctx := context.Background()
 	req := &ProvisionRequest{Name: "terminated-start", GPUType: GPURTX4090}
 	instance, _ := mgr.Provision(ctx, req)
-	instance.Status = InstanceStatusTerminated
+	mgr.instances.update(instance.ID, func(stored *Instance) {
+		stored.Status = InstanceStatusTerminated
+	})
 
 	err := mgr.Start(ctx, instance.ID)
 	if err == nil {
@@ -693,7 +764,9 @@ func TestManagerGetCostSummary(t *testing.T) {
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		req := &ProvisionRequest{Name: "cost-test", GPUType: GPURTX4090}
-		mgr.Provision(ctx, req)
+		if _, err := mgr.Provision(ctx, req); err != nil {
+			t.Fatalf("Provision %d: %v", i, err)
+		}
 	}
 
 	summary := mgr.GetCostSummary()
@@ -745,8 +818,10 @@ func TestManagerGetInstanceByProviderRef(t *testing.T) {
 		t.Fatalf("Provision failed: %v", err)
 	}
 
-	instance.Provider = ProviderRunPod
-	instance.ProviderID = "pod-123"
+	mgr.instances.update(instance.ID, func(stored *Instance) {
+		stored.Provider = ProviderRunPod
+		stored.ProviderID = "pod-123"
+	})
 
 	found, ok := mgr.GetInstanceByProviderRef(ProviderRunPod, "pod-123")
 	if !ok {

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "summarize-engine-phase1-baseline.py"
@@ -211,8 +210,12 @@ def create_manifest(tmp_path: Path, engine: str, *, include_warm: bool) -> Path:
     out_dir = tmp_path / engine.replace("_", "-")
     steps = []
     if include_warm:
-        warm_none_path = out_dir / f"infera-benchmark-{engine.replace('_', '-')}-a100-80gb-none.json"
-        warm_affinity_path = out_dir / f"infera-benchmark-{engine.replace('_', '-')}-a100-80gb-affinity.json"
+        warm_none_path = (
+            out_dir / f"infera-benchmark-{engine.replace('_', '-')}-a100-80gb-none.json"
+        )
+        warm_affinity_path = (
+            out_dir / f"infera-benchmark-{engine.replace('_', '-')}-a100-80gb-affinity.json"
+        )
         write_json(warm_none_path, build_warm_payload(engine, "none"))
         write_json(warm_affinity_path, build_warm_payload(engine, "affinity"))
         steps.extend(
@@ -320,7 +323,11 @@ def test_build_report_marks_blocked_engines_separately(tmp_path):
         {
             "engine": "tensorrt_llm",
             "reason": "Blocked on current RunPod provider/model combination.",
-            "manifest_path": str((tmp_path / "tensorrt-llm" / "phase1-tensorrt-llm-a100-80gb-manifest.json").resolve()),
+            "manifest_path": str(
+                (
+                    tmp_path / "tensorrt-llm" / "phase1-tensorrt-llm-a100-80gb-manifest.json"
+                ).resolve()
+            ),
             "step_names": ["cold_start", "startup_health"],
         }
     ]

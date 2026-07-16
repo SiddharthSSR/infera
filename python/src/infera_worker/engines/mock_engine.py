@@ -111,7 +111,9 @@ class MockEngine(BaseInferenceEngine):
                     index=i,
                     delta=token + " ",
                     finish_reason=FinishReason.STOP if is_last else None,
-                    usage=UsageStats(prompt_tokens, i + 1, prompt_tokens + i + 1) if is_last else None,
+                    usage=UsageStats(prompt_tokens, i + 1, prompt_tokens + i + 1)
+                    if is_last
+                    else None,
                 )
         finally:
             self.active_requests.discard(request.request_id)

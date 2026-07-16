@@ -16,7 +16,6 @@ from .schema import (
     WorkloadProfile,
 )
 
-
 CATALOG_FILENAMES = {
     "engines": "engines.json",
     "hardware": "hardware.json",

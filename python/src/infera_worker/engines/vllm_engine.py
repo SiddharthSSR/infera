@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import AsyncGenerator
 from datetime import datetime
-import inspect
 from typing import Any
+
 import structlog
 
 from ..config import ModelConfig, WorkerConfig
@@ -19,9 +20,9 @@ from ..types import (
     LoadedModel,
     Message,
     Role,
+    TokenChunk,
     ToolCall,
     ToolCallChunkDelta,
-    TokenChunk,
     UsageStats,
 )
 from .base import TokenizerPromptEngine
@@ -94,7 +95,9 @@ class VLLMEngine(TokenizerPromptEngine):
             optional_engine_kwargs["speculative_model"] = spec_model
             optional_engine_kwargs["num_speculative_tokens"] = runtime.num_speculative_tokens
             if spec_model == "[ngram]" and runtime.ngram_prompt_lookup_num_tokens > 0:
-                optional_engine_kwargs["ngram_prompt_lookup_num_tokens"] = runtime.ngram_prompt_lookup_num_tokens
+                optional_engine_kwargs["ngram_prompt_lookup_num_tokens"] = (
+                    runtime.ngram_prompt_lookup_num_tokens
+                )
 
         tool_call_parser = self.config.tool_call_parser.strip()
         if tool_call_parser:
@@ -127,7 +130,9 @@ class VLLMEngine(TokenizerPromptEngine):
             loaded_at=datetime.now(),
             memory_bytes=self._estimate_memory(),
             max_batch_size=model_config.max_batch_size,
-            max_sequence_length=getattr(model_cfg, "max_model_len", model_config.max_sequence_length),
+            max_sequence_length=getattr(
+                model_cfg, "max_model_len", model_config.max_sequence_length
+            ),
         )
         self.loaded_models[model_config.model_id] = loaded
         return loaded
@@ -194,7 +199,8 @@ class VLLMEngine(TokenizerPromptEngine):
                 usage=UsageStats(
                     prompt_tokens=len(final_output.prompt_token_ids),
                     completion_tokens=len(completion_output.token_ids),
-                    total_tokens=len(final_output.prompt_token_ids) + len(completion_output.token_ids),
+                    total_tokens=len(final_output.prompt_token_ids)
+                    + len(completion_output.token_ids),
                 ),
                 latency=LatencyStats(
                     queue_ms=0,
@@ -206,9 +212,7 @@ class VLLMEngine(TokenizerPromptEngine):
         finally:
             self.active_requests.discard(request.request_id)
 
-    async def infer_stream(
-        self, request: InferenceRequest
-    ) -> AsyncGenerator[TokenChunk, None]:
+    async def infer_stream(self, request: InferenceRequest) -> AsyncGenerator[TokenChunk, None]:
         """Stream tokens from vLLM."""
         engine = self.engines.get(request.model_id)
         if engine is None:
@@ -229,7 +233,7 @@ class VLLMEngine(TokenizerPromptEngine):
                     prompt_tokens = len(output.prompt_token_ids)
 
                 completion_output = output.outputs[0]
-                new_text = completion_output.text[len(prev_text):]
+                new_text = completion_output.text[len(prev_text) :]
                 prev_text = completion_output.text
                 tool_call_deltas = self._build_tool_call_chunk_deltas(
                     getattr(completion_output, "tool_calls", None)
@@ -245,7 +249,9 @@ class VLLMEngine(TokenizerPromptEngine):
                     request_id=request.request_id,
                     index=chunk_index,
                     delta=new_text,
-                    finish_reason=self._map_finish_reason(completion_output.finish_reason) if is_finished else None,
+                    finish_reason=self._map_finish_reason(completion_output.finish_reason)
+                    if is_finished
+                    else None,
                     tool_calls=tool_call_deltas or None,
                     usage=(
                         UsageStats(
@@ -283,11 +289,13 @@ class VLLMEngine(TokenizerPromptEngine):
             fn_obj = getattr(raw_tc, "function", None)
             fn_name = getattr(fn_obj, "name", "") or "" if fn_obj is not None else ""
             fn_args = getattr(fn_obj, "arguments", "") or "" if fn_obj is not None else ""
-            tool_calls.append(ToolCall(
-                id=tc_id,
-                type=tc_type,
-                function=FunctionCall(name=fn_name, arguments=fn_args),
-            ))
+            tool_calls.append(
+                ToolCall(
+                    id=tc_id,
+                    type=tc_type,
+                    function=FunctionCall(name=fn_name, arguments=fn_args),
+                )
+            )
 
         return Message(
             role=Role.ASSISTANT,
@@ -309,12 +317,14 @@ class VLLMEngine(TokenizerPromptEngine):
                 delta_payload["name"] = fn_name
             if fn_args:
                 delta_payload["arguments"] = fn_args
-            deltas.append(ToolCallChunkDelta(
-                index=index,
-                id=getattr(raw_tc, "id", "") or None,
-                type=getattr(raw_tc, "type", "function") or "function",
-                function=delta_payload or None,
-            ))
+            deltas.append(
+                ToolCallChunkDelta(
+                    index=index,
+                    id=getattr(raw_tc, "id", "") or None,
+                    type=getattr(raw_tc, "type", "function") or "function",
+                    function=delta_payload or None,
+                )
+            )
         return deltas
 
     def _estimate_memory(self) -> int:

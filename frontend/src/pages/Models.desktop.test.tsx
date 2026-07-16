@@ -20,15 +20,24 @@ vi.mock('../hooks/useIsMobile', () => ({
   useIsMobile: () => false,
 }));
 
-vi.mock('../hooks/useApi', () => ({
+vi.mock('../hooks/useRuntimeApi', () => ({
   useModels: () => mocks.models,
-  useVaultModels: () => mocks.vaultModels,
+  useWorkers: () => mocks.workers,
+}));
+
+vi.mock('../hooks/useInfrastructureApi', () => ({
   useOfferings: () => mocks.offerings,
   useProviders: () => mocks.providers,
   useInstances: () => mocks.instances,
-  useWorkers: () => mocks.workers,
+}));
+
+vi.mock('../hooks/useDeploymentApi', () => ({
   useDeploymentAttempts: () => mocks.deploymentAttempts,
   useUpdateDeploymentVerification: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock('../hooks/useVaultApi', () => ({
+  useVaultModels: () => mocks.vaultModels,
   useRegisterVaultModel: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useDeleteVaultModel: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));

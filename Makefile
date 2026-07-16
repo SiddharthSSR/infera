@@ -15,6 +15,10 @@ INFERA_WORKER_IMAGE ?=
 INFERA_GITHUB_REPO ?= 
 DOCKER_USERNAME ?= 
 INFERA_BASE_URL ?= https://inferai.co.in
+PYTHON_CMD ?= $(if $(wildcard $(CURDIR)/python/venv/bin/python),$(CURDIR)/python/venv/bin/python,python3)
+GOLANGCI_LINT_VERSION ?= v1.64.8
+GOLANGCI_LINT_BIN ?= $(shell command -v golangci-lint 2>/dev/null)
+GOLANGCI_LINT_CMD ?= $(if $(GOLANGCI_LINT_BIN),$(GOLANGCI_LINT_BIN),go run github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION))
 
 # Ports
 GATEWAY_PORT ?= 8080
@@ -37,7 +41,7 @@ go-deps:
 	cd go && go mod tidy
 
 python-deps:
-	cd python && pip install -e ".[dev]"
+	cd python && $(PYTHON_CMD) -m pip install -e ".[dev]"
 
 frontend-deps:
 	cd frontend && npm install
@@ -55,7 +59,7 @@ go-test-cover:
 	cd go && go test -v -cover ./...
 
 go-lint:
-	cd go && golangci-lint run
+	cd go && $(GOLANGCI_LINT_CMD) run
 
 # Run gateway (basic - mock only)
 run-gateway:
@@ -79,39 +83,39 @@ run-gateway-runpod:
 # Python Worker
 # ============================================================================
 python-build:
-	cd python && pip install -e .
+	cd python && $(PYTHON_CMD) -m pip install -e .
 
 python-test:
-	cd python && pytest -v
+	cd python && $(PYTHON_CMD) -m pytest -v
 
 python-test-cover:
-	cd python && pytest -v --cov=infera_worker --cov-report=html
+	cd python && $(PYTHON_CMD) -m pytest -v --cov=infera_worker --cov-report=html
 
 python-lint:
-	cd python && ruff check .
+	cd python && $(PYTHON_CMD) -m ruff check .
 
 python-format:
-	cd python && ruff format .
+	cd python && $(PYTHON_CMD) -m ruff format .
 
 # Run worker with mock engine (no GPU required)
 run-worker:
 	cd python && INFERA_ENGINE=mock \
 		INFERA_HTTP_PORT=$(WORKER_PORT) \
-		python -m infera_worker.cli
+		$(PYTHON_CMD) -m infera_worker.cli
 
 # Run worker with mock engine and connect to gateway
 run-worker-connected:
 	cd python && INFERA_ENGINE=mock \
 		INFERA_HTTP_PORT=$(WORKER_PORT) \
 		INFERA_ROUTER_ADDRESS=localhost:$(GATEWAY_PORT) \
-		python -m infera_worker.cli
+		$(PYTHON_CMD) -m infera_worker.cli
 
 # Run worker with vLLM (requires GPU)
 run-worker-vllm:
 	cd python && INFERA_ENGINE=vllm \
 		INFERA_HTTP_PORT=$(WORKER_PORT) \
 		INFERA_ROUTER_ADDRESS=localhost:$(GATEWAY_PORT) \
-		python -m infera_worker.cli
+		$(PYTHON_CMD) -m infera_worker.cli
 
 # ============================================================================
 # Frontend

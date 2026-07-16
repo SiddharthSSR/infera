@@ -45,7 +45,9 @@ def test_create_run_request_validation(
     report_observation,
 ) -> None:
     mark_mock_only_if_live(case.id, hermes_config.is_live)
-    report_observation.set_case(case.id, case.category, case.prompt or case.operation, case.expected_tools)
+    report_observation.set_case(
+        case.id, case.category, case.prompt or case.operation, case.expected_tools
+    )
 
     if case.operation == "upload_attachment":
         result = hermes_client.upload_attachment("notes.txt", b"plain text", "text/plain")
@@ -79,7 +81,9 @@ def test_detail_and_wait_failure_modes(
     report_observation,
 ) -> None:
     mark_mock_only_if_live(case.id, hermes_config.is_live)
-    report_observation.set_case(case.id, case.category, case.prompt or case.operation, case.expected_tools)
+    report_observation.set_case(
+        case.id, case.category, case.prompt or case.operation, case.expected_tools
+    )
 
     attachments = upload_attachment_ids(
         hermes_client,
@@ -120,9 +124,13 @@ def test_detail_and_wait_failure_modes(
 
 
 def test_rate_limit_retry_behavior(hermes_client, hermes_config, report_observation) -> None:
-    case = next(case for case in _CATALOG.condition_cases if case.mock_behavior == "rate_limit_then_success")
+    case = next(
+        case for case in _CATALOG.condition_cases if case.mock_behavior == "rate_limit_then_success"
+    )
     mark_mock_only_if_live(case.id, hermes_config.is_live)
-    report_observation.set_case(case.id, case.category, case.prompt or case.operation, case.expected_tools)
+    report_observation.set_case(
+        case.id, case.category, case.prompt or case.operation, case.expected_tools
+    )
 
     result = hermes_client.create_run(
         build_run_payload(
@@ -143,10 +151,16 @@ def test_rate_limit_retry_behavior(hermes_client, hermes_config, report_observat
     assert_final_output_matches(detail, case.response_keywords)
 
 
-@pytest.mark.parametrize("case", _condition_cases_for("external_run_wait"), ids=lambda case: case.id)
-def test_external_wait_timeout(hermes_client, hermes_config, case: ConditionCase, report_observation) -> None:
+@pytest.mark.parametrize(
+    "case", _condition_cases_for("external_run_wait"), ids=lambda case: case.id
+)
+def test_external_wait_timeout(
+    hermes_client, hermes_config, case: ConditionCase, report_observation
+) -> None:
     mark_mock_only_if_live(case.id, hermes_config.is_live)
-    report_observation.set_case(case.id, case.category, case.prompt or case.operation, case.expected_tools)
+    report_observation.set_case(
+        case.id, case.category, case.prompt or case.operation, case.expected_tools
+    )
 
     result = hermes_client.create_external_run(
         build_run_payload(
@@ -163,7 +177,9 @@ def test_external_wait_timeout(hermes_client, hermes_config, case: ConditionCase
     assert result.data.timed_out is True
 
 
-def test_cancel_run_transitions_to_canceled(hermes_client, hermes_config, report_observation) -> None:
+def test_cancel_run_transitions_to_canceled(
+    hermes_client, hermes_config, report_observation
+) -> None:
     mark_mock_only_if_live("condition-cancel-run", hermes_config.is_live)
     report_observation.set_case(
         "condition-cancel-run",

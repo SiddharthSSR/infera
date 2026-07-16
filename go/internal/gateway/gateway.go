@@ -16,11 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/infera/infera/go/internal/agents"
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
-	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/internal/vault"
@@ -45,12 +43,12 @@ type Gateway struct {
 	vaultHandler *vault.Handler
 
 	// Audit (inference usage tracking)
-	auditStore *audit.Store
+	auditStore auditUsageStore
 	auditCh    chan audit.InferenceAuditRecord
 	auditWg    sync.WaitGroup
 
 	// Deployments (shared deployment history)
-	deploymentStore *deployments.Store
+	deploymentStore deploymentHistoryStore
 
 	// Agents runtime
 	agentRuntime   *agents.Runtime
@@ -66,6 +64,7 @@ type Gateway struct {
 	// Backpressure: track in-flight inference requests
 	inFlightRequests   int64
 	maxInFlightDefault int64
+	quotaCache         *quotaCache
 
 	// Structured logger
 	log *slog.Logger
@@ -126,6 +125,7 @@ func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gatew
 		rateLimiter:        rateLimiter,
 		metrics:            NewGatewayMetrics(),
 		maxInFlightDefault: maxInFlight,
+		quotaCache:         newQuotaCache(defaultQuotaRecordCacheTTL, defaultQuotaUsageCacheTTL),
 		log:                NewLogger(),
 		workerClients:      make(map[string]*WorkerClient),
 		startedAt:          time.Now(),
@@ -165,7 +165,7 @@ func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 }
 
 // SetAuditStore sets the inference audit store and starts the async writer.
-func (g *Gateway) SetAuditStore(s *audit.Store) {
+func (g *Gateway) SetAuditStore(s auditUsageStore) {
 	g.auditStore = s
 	g.auditCh = make(chan audit.InferenceAuditRecord, 1024)
 	g.auditWg.Add(1)
@@ -184,7 +184,7 @@ func (g *Gateway) runAuditWriter() {
 }
 
 // SetDeploymentStore sets the shared deployment history store.
-func (g *Gateway) SetDeploymentStore(s *deployments.Store) {
+func (g *Gateway) SetDeploymentStore(s deploymentHistoryStore) {
 	g.deploymentStore = s
 	if g.instanceHandlers != nil {
 		g.instanceHandlers.SetDeploymentStore(s)
@@ -389,106 +389,6 @@ func (g *Gateway) requireWorkerToken(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// ============================================================================
-// OpenAI-Compatible Endpoints
-// ============================================================================
-
-// ChatCompletionRequest is the OpenAI-compatible request format.
-type ChatCompletionRequest struct {
-	Model            string            `json:"model"`
-	Messages         []ChatMessage     `json:"messages"`
-	Temperature      *float64          `json:"temperature,omitempty"`
-	TopP             *float64          `json:"top_p,omitempty"`
-	MaxTokens        *int              `json:"max_tokens,omitempty"`
-	Stop             StopSequences     `json:"stop,omitempty"`
-	Stream           bool              `json:"stream,omitempty"`
-	Seed             *int64            `json:"seed,omitempty"`
-	PresencePenalty  *float64          `json:"presence_penalty,omitempty"`
-	FrequencyPenalty *float64          `json:"frequency_penalty,omitempty"`
-	Tools            []json.RawMessage `json:"tools,omitempty"`
-	ToolChoice       json.RawMessage   `json:"tool_choice,omitempty"`
-}
-
-// StopSequences accepts either a single stop string or a list of stop strings.
-type StopSequences []string
-
-func (s *StopSequences) UnmarshalJSON(data []byte) error {
-	if string(data) == "null" {
-		*s = nil
-		return nil
-	}
-
-	var single string
-	if err := json.Unmarshal(data, &single); err == nil {
-		*s = StopSequences{single}
-		return nil
-	}
-
-	var many []string
-	if err := json.Unmarshal(data, &many); err == nil {
-		*s = StopSequences(many)
-		return nil
-	}
-
-	return fmt.Errorf("stop must be a string or array of strings")
-}
-
-// ChatMessage is a single message.
-type ChatMessage struct {
-	Role       string            `json:"role"`
-	Content    string            `json:"content"`
-	Name       string            `json:"name,omitempty"`
-	ToolCalls  []json.RawMessage `json:"tool_calls,omitempty"`
-	ToolCallID string            `json:"tool_call_id,omitempty"`
-}
-
-// ChatCompletionResponse is the OpenAI-compatible response format.
-type ChatCompletionResponse struct {
-	ID      string       `json:"id"`
-	Object  string       `json:"object"`
-	Created int64        `json:"created"`
-	Model   string       `json:"model"`
-	Choices []ChatChoice `json:"choices"`
-	Usage   Usage        `json:"usage"`
-}
-
-// ChatChoice is a single completion choice.
-type ChatChoice struct {
-	Index        int         `json:"index"`
-	Message      ChatMessage `json:"message"`
-	FinishReason string      `json:"finish_reason"`
-}
-
-// Usage tracks token usage.
-type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
-// ChatCompletionChunk is a streaming response chunk.
-type ChatCompletionChunk struct {
-	ID      string            `json:"id"`
-	Object  string            `json:"object"`
-	Created int64             `json:"created"`
-	Model   string            `json:"model"`
-	Choices []ChatChunkChoice `json:"choices"`
-}
-
-// ChatChunkChoice is a streaming choice.
-type ChatChunkChoice struct {
-	Index        int       `json:"index"`
-	Delta        ChatDelta `json:"delta"`
-	FinishReason *string   `json:"finish_reason"`
-}
-
-// ChatDelta is the delta content in streaming.
-type ChatDelta struct {
-	Role      string            `json:"role,omitempty"`
-	Content   string            `json:"content,omitempty"`
-	ToolCalls []json.RawMessage `json:"tool_calls,omitempty"`
-}
-
 func hashPrompt(messages []ChatMessage) string {
 	if len(messages) == 0 {
 		return ""
@@ -542,24 +442,6 @@ func hashPromptPrefix(messages []ChatMessage, maxBytes int) string {
 	return sum
 }
 
-func buildAffinityMetadata(r *http.Request, req *ChatCompletionRequest) map[string]string {
-	messages := make([]types.Message, len(req.Messages))
-	for i, msg := range req.Messages {
-		messages[i] = types.Message{
-			Role:    types.Role(msg.Role),
-			Content: msg.Content,
-			Name:    msg.Name,
-		}
-	}
-	return buildAffinityMetadataFromMessages(
-		req.Model,
-		messages,
-		strings.TrimSpace(r.Header.Get("X-Infera-Affinity-Key")),
-		auth.KeyFromContext(r.Context()),
-		auth.SessionFromContext(r.Context()),
-	)
-}
-
 func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed")
@@ -568,17 +450,17 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	var req ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON: "+err.Error())
+		g.writeError(w, http.StatusBadRequest, OpenAIChatErrorTypeInvalidRequest, "Invalid JSON: "+err.Error())
 		return
 	}
 
 	// Validate
 	if req.Model == "" {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "model is required")
+		g.writeError(w, http.StatusBadRequest, OpenAIChatErrorTypeInvalidRequest, "model is required")
 		return
 	}
 	if len(req.Messages) == 0 {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "messages is required")
+		g.writeError(w, http.StatusBadRequest, OpenAIChatErrorTypeInvalidRequest, "messages is required")
 		return
 	}
 
@@ -601,7 +483,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			g.writeError(w, g.errorCodeToStatus(inferaErr.Code), string(inferaErr.Code), inferaErr.Message)
 			return
 		}
-		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
+		g.writeError(w, http.StatusInternalServerError, OpenAIChatErrorTypeInferenceError, err.Error())
 		return
 	}
 	g.writeChatCompletionResponse(w, inferenceReq.RequestID, req.Model, inferenceReq, result.Response)
@@ -728,267 +610,6 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 	}
 }
 
-func (g *Gateway) handleNonStreamingInference(w http.ResponseWriter, ctx context.Context, client *WorkerClient, req *types.InferenceRequest, model string) (int, string) {
-	// Call worker
-	resp, err := client.InferWithContext(ctx, req)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			g.writeError(w, http.StatusGatewayTimeout, "inference_timeout", "Inference request timed out")
-			return 0, "inference_timeout"
-		}
-		if errors.Is(err, context.Canceled) {
-			return 0, "client_canceled"
-		}
-		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
-		return 0, "inference_error"
-	}
-
-	// Convert to OpenAI format
-	promptTokens := resp.Usage.PromptTokens
-	if promptTokens == 0 {
-		promptTokens = req.TokenEstimate()
-	}
-	completionTokens := resp.Usage.CompletionTokens
-	if completionTokens == 0 {
-		completionTokens = estimateCompletionTokens(resp)
-	}
-	if g.metrics != nil {
-		g.recordNonStreamingLatencyMetrics(model, resp, completionTokens)
-	}
-	totalTokens := usageTotalTokens(
-		promptTokens,
-		completionTokens,
-		resp.Usage.TotalTokens,
-	)
-
-	openAIResp := ChatCompletionResponse{
-		ID:      "chatcmpl-" + req.RequestID,
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   model,
-		Choices: make([]ChatChoice, len(resp.Choices)),
-		Usage: Usage{
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			TotalTokens:      totalTokens,
-		},
-	}
-
-	for i, choice := range resp.Choices {
-		openAIResp.Choices[i] = ChatChoice{
-			Index: choice.Index,
-			Message: ChatMessage{
-				Role:      string(choice.Message.Role),
-				Content:   choice.Message.Content,
-				ToolCalls: marshalToolCalls(choice.Message.ToolCalls),
-			},
-			FinishReason: string(choice.FinishReason),
-		}
-	}
-
-	g.writeJSON(w, http.StatusOK, openAIResp)
-	return openAIResp.Usage.TotalTokens, "success"
-}
-
-func (g *Gateway) writeChatCompletionResponse(w http.ResponseWriter, requestID, model string, req *types.InferenceRequest, resp *types.InferenceResponse) {
-	promptTokens := resp.Usage.PromptTokens
-	if promptTokens == 0 {
-		promptTokens = req.TokenEstimate()
-	}
-	completionTokens := resp.Usage.CompletionTokens
-	if completionTokens == 0 {
-		completionTokens = estimateCompletionTokens(resp)
-	}
-	totalTokens := usageTotalTokens(
-		promptTokens,
-		completionTokens,
-		resp.Usage.TotalTokens,
-	)
-
-	openAIResp := ChatCompletionResponse{
-		ID:      "chatcmpl-" + requestID,
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   model,
-		Choices: make([]ChatChoice, len(resp.Choices)),
-		Usage: Usage{
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			TotalTokens:      totalTokens,
-		},
-	}
-
-	for i, choice := range resp.Choices {
-		openAIResp.Choices[i] = ChatChoice{
-			Index: choice.Index,
-			Message: ChatMessage{
-				Role:      string(choice.Message.Role),
-				Content:   choice.Message.Content,
-				ToolCalls: marshalToolCalls(choice.Message.ToolCalls),
-			},
-			FinishReason: string(choice.FinishReason),
-		}
-	}
-
-	g.writeJSON(w, http.StatusOK, openAIResp)
-}
-
-func (g *Gateway) enforceWorkspaceQuota(w http.ResponseWriter, r *http.Request, req *types.InferenceRequest) bool {
-	if err := g.enforceWorkspaceQuotaForKey(auth.KeyFromContext(r.Context()), req); err != nil {
-		g.writeError(w, g.errorCodeToStatus(err.Code), string(err.Code), err.Message)
-		return false
-	}
-	return true
-}
-
-func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) (int, string) {
-	// First, try to get the stream from worker
-	// This validates the request before we commit to SSE
-	chunks, err := client.InferStream(r.Context(), req)
-	if err != nil {
-		// Return regular error response (not SSE) since we haven't committed to streaming yet
-		g.writeError(w, http.StatusInternalServerError, "inference_error", err.Error())
-		return 0, "inference_error"
-	}
-
-	// Now commit to SSE
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no") // For nginx proxies
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		g.writeError(w, http.StatusInternalServerError, "streaming_not_supported", "Streaming not supported")
-		return 0, "streaming_not_supported"
-	}
-
-	requestID := "chatcmpl-" + req.RequestID
-	created := time.Now().Unix()
-	streamStart := time.Now()
-
-	// Send initial role chunk (OpenAI format)
-	initialChunk := ChatCompletionChunk{
-		ID:      requestID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   model,
-		Choices: []ChatChunkChoice{
-			{
-				Index: 0,
-				Delta: ChatDelta{
-					Role: "assistant",
-				},
-			},
-		},
-	}
-	data, _ := json.Marshal(initialChunk)
-	fmt.Fprintf(w, "data: %s\n\n", data)
-	flusher.Flush()
-
-	tokenCount := 0
-	generatedChars := 0
-	bestPromptTokens := 0
-	bestCompletionTokens := 0
-	bestTotalTokens := 0
-	firstChunkObserved := false
-	var previousChunkAt time.Time
-	prevCompletionTokens := 0
-
-	for chunk := range chunks {
-		now := time.Now()
-		if !firstChunkObserved {
-			firstChunkObserved = true
-			if g.metrics != nil {
-				g.metrics.RecordTTFT(model, true, now.Sub(streamStart))
-			}
-		} else if g.metrics != nil {
-			elapsed := now.Sub(previousChunkAt)
-			// Derive how many completion tokens arrived in this chunk using
-			// the cumulative CompletionTokens counter. Fall back to 1 when
-			// the worker doesn't populate Usage mid-stream.
-			tokensInChunk := 1
-			if chunk.Usage != nil && chunk.Usage.CompletionTokens > prevCompletionTokens {
-				tokensInChunk = chunk.Usage.CompletionTokens - prevCompletionTokens
-			}
-			perToken := elapsed / time.Duration(tokensInChunk)
-			for i := 0; i < tokensInChunk; i++ {
-				g.metrics.RecordTPOT(model, true, perToken)
-			}
-		}
-		if chunk.Usage != nil && chunk.Usage.CompletionTokens > 0 {
-			prevCompletionTokens = chunk.Usage.CompletionTokens
-		}
-		previousChunkAt = now
-
-		generatedChars += len(chunk.Delta)
-		if chunk.Usage != nil {
-			bestPromptTokens = maxInt(bestPromptTokens, chunk.Usage.PromptTokens)
-			bestCompletionTokens = maxInt(bestCompletionTokens, chunk.Usage.CompletionTokens)
-			bestTotalTokens = maxInt(bestTotalTokens, chunk.Usage.TotalTokens)
-		}
-
-		openAIChunk := ChatCompletionChunk{
-			ID:      requestID,
-			Object:  "chat.completion.chunk",
-			Created: created,
-			Model:   model,
-			Choices: []ChatChunkChoice{
-				{
-					Index: chunk.Index,
-					Delta: ChatDelta{
-						Content:   chunk.Delta,
-						ToolCalls: marshalToolCallChunkDeltas(chunk.ToolCalls),
-					},
-				},
-			},
-		}
-
-		if chunk.FinishReason != nil {
-			reason := string(*chunk.FinishReason)
-			openAIChunk.Choices[0].FinishReason = &reason
-		}
-
-		data, _ := json.Marshal(openAIChunk)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-
-	// Send [DONE]
-	fmt.Fprintf(w, "data: [DONE]\n\n")
-	flusher.Flush()
-
-	if bestPromptTokens == 0 {
-		bestPromptTokens = req.TokenEstimate()
-	}
-	if bestCompletionTokens == 0 {
-		bestCompletionTokens = estimateCompletionChars(generatedChars)
-	}
-	tokenCount = maxInt(tokenCount, usageTotalTokens(
-		bestPromptTokens,
-		bestCompletionTokens,
-		bestTotalTokens,
-	))
-
-	return tokenCount, "success"
-}
-
-func (g *Gateway) recordNonStreamingLatencyMetrics(model string, resp *types.InferenceResponse, completionTokens int) {
-	ttft := time.Duration(resp.Latency.TimeToFirstTokenMS) * time.Millisecond
-	g.metrics.RecordTTFT(model, false, ttft)
-
-	if completionTokens <= 1 {
-		return
-	}
-
-	total := time.Duration(resp.Latency.TotalMS) * time.Millisecond
-	if total <= ttft {
-		return
-	}
-
-	g.metrics.RecordTPOT(model, false, (total-ttft)/time.Duration(completionTokens-1))
-}
-
 func (g *Gateway) handlePrometheusWorkerTargets(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is allowed")
@@ -1043,36 +664,6 @@ func workerMetricsScheme(address string) string {
 	default:
 		return "http"
 	}
-}
-
-func usageTotalTokens(promptTokens, completionTokens, totalTokens int) int {
-	if totalTokens > 0 {
-		return totalTokens
-	}
-	sum := promptTokens + completionTokens
-	if sum > 0 {
-		return sum
-	}
-	return 0
-}
-
-func estimateCompletionTokens(resp *types.InferenceResponse) int {
-	totalChars := 0
-	for _, choice := range resp.Choices {
-		totalChars += len(choice.Message.Content)
-	}
-	return estimateCompletionChars(totalChars)
-}
-
-func estimateCompletionChars(chars int) int {
-	if chars <= 0 {
-		return 0
-	}
-	estimate := chars / 4
-	if estimate == 0 {
-		return 1
-	}
-	return estimate
 }
 
 func maxInt(a, b int) int {
@@ -1532,128 +1123,6 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ============================================================================
-// Helper Methods
-// ============================================================================
-
-func (g *Gateway) toInferenceRequest(r *http.Request, req *ChatCompletionRequest) *types.InferenceRequest {
-	messages := make([]types.Message, len(req.Messages))
-	for i, msg := range req.Messages {
-		messages[i] = types.Message{
-			Role:       types.Role(msg.Role),
-			Content:    msg.Content,
-			Name:       msg.Name,
-			ToolCalls:  convertToolCalls(msg.ToolCalls),
-			ToolCallID: msg.ToolCallID,
-		}
-	}
-
-	params := types.DefaultInferenceParameters()
-	if req.Temperature != nil {
-		params.Temperature = *req.Temperature
-	}
-	if req.TopP != nil {
-		params.TopP = *req.TopP
-	}
-	if req.MaxTokens != nil {
-		params.MaxTokens = *req.MaxTokens
-	}
-	if req.Stop != nil {
-		params.StopSequences = []string(req.Stop)
-	}
-	if req.Seed != nil {
-		params.Seed = req.Seed
-	}
-	if req.PresencePenalty != nil {
-		params.PresencePenalty = *req.PresencePenalty
-	}
-	if req.FrequencyPenalty != nil {
-		params.FrequencyPenalty = *req.FrequencyPenalty
-	}
-
-	return &types.InferenceRequest{
-		RequestID:  defaultRequestID(r),
-		ModelID:    req.Model,
-		Messages:   messages,
-		Parameters: params,
-		Stream:     req.Stream,
-		Priority:   types.PriorityNormal,
-		Metadata:   buildAffinityMetadata(r, req),
-		CreatedAt:  time.Now(),
-		Tools:      convertToolDefinitions(req.Tools),
-		ToolChoice: req.ToolChoice,
-	}
-}
-
-// convertToolCalls unmarshals a slice of raw JSON tool call objects into typed ToolCall values.
-// Items that fail to unmarshal are silently dropped — we prefer a degraded pass-through
-// over rejecting the whole request for a single malformed entry.
-func convertToolCalls(raw []json.RawMessage) []types.ToolCall {
-	if len(raw) == 0 {
-		return nil
-	}
-	result := make([]types.ToolCall, 0, len(raw))
-	for _, r := range raw {
-		var tc types.ToolCall
-		if err := json.Unmarshal(r, &tc); err == nil {
-			result = append(result, tc)
-		}
-	}
-	return result
-}
-
-// convertToolDefinitions unmarshals a slice of raw JSON tool definition objects into typed
-// ToolDefinition values. Items that fail to unmarshal are silently dropped.
-func convertToolDefinitions(raw []json.RawMessage) []types.ToolDefinition {
-	if len(raw) == 0 {
-		return nil
-	}
-	result := make([]types.ToolDefinition, 0, len(raw))
-	for _, r := range raw {
-		var td types.ToolDefinition
-		if err := json.Unmarshal(r, &td); err == nil {
-			result = append(result, td)
-		}
-	}
-	return result
-}
-
-// marshalToolCalls serialises typed ToolCall values back into raw JSON for the API response.
-// A nil or empty input returns nil so the field is omitted from the JSON output.
-func marshalToolCalls(calls []types.ToolCall) []json.RawMessage {
-	if len(calls) == 0 {
-		return nil
-	}
-	result := make([]json.RawMessage, len(calls))
-	for i, tc := range calls {
-		data, _ := json.Marshal(tc)
-		result[i] = data
-	}
-	return result
-}
-
-// marshalToolCallChunkDeltas serialises streaming tool-call deltas into raw JSON slices.
-func marshalToolCallChunkDeltas(deltas []types.ToolCallChunkDelta) []json.RawMessage {
-	if len(deltas) == 0 {
-		return nil
-	}
-	result := make([]json.RawMessage, len(deltas))
-	for i, d := range deltas {
-		data, _ := json.Marshal(d)
-		result[i] = data
-	}
-	return result
-}
-
-func defaultRequestID(r *http.Request) string {
-	if r != nil {
-		if requestID := strings.TrimSpace(r.Header.Get(HeaderRequestID)); requestID != "" {
-			return requestID
-		}
-	}
-	return uuid.New().String()
-}
-
 func (g *Gateway) getWorkerClient(workerID string) (*WorkerClient, error) {
 	g.workerClientsMu.RLock()
 	client, exists := g.workerClients[workerID]
@@ -1722,29 +1191,4 @@ func (g *Gateway) errorCodeToStatus(code types.ErrorCode) int {
 	default:
 		return http.StatusInternalServerError
 	}
-}
-
-func (g *Gateway) writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
-}
-
-func (g *Gateway) writeError(w http.ResponseWriter, status int, errType, message string) {
-	g.writeJSON(w, status, map[string]interface{}{
-		"error": map[string]interface{}{
-			"type":    errType,
-			"message": message,
-		},
-	})
-}
-
-func (g *Gateway) writeSSEError(w http.ResponseWriter, flusher http.Flusher, message string) {
-	errData, _ := json.Marshal(map[string]interface{}{
-		"error": map[string]interface{}{
-			"message": message,
-		},
-	})
-	fmt.Fprintf(w, "data: %s\n\n", errData)
-	flusher.Flush()
 }

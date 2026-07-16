@@ -90,7 +90,9 @@ def test_live_simple_run_succeeds_with_loaded_model(
     assert_status_code(result, 201)
     assert result.data is not None
 
-    detail = hermes_client.wait_for_run(result.data.run.id, timeout_seconds=max(hermes_client.config.max_wait_seconds, 20))
+    detail = hermes_client.wait_for_run(
+        result.data.run.id, timeout_seconds=max(hermes_client.config.max_wait_seconds, 20)
+    )
     report_observation.set_actual_tools(actual_tool_names(detail))
 
     assert detail.run.status == "succeeded"
@@ -128,7 +130,9 @@ def test_live_research_run_returns_sources(
     assert_status_code(result, 201)
     assert result.data is not None
 
-    detail = hermes_client.wait_for_run(result.data.run.id, timeout_seconds=max(hermes_client.config.max_wait_seconds, 20))
+    detail = hermes_client.wait_for_run(
+        result.data.run.id, timeout_seconds=max(hermes_client.config.max_wait_seconds, 20)
+    )
     report_observation.set_actual_tools(actual_tool_names(detail))
 
     assert detail.run.status == "succeeded"
@@ -172,11 +176,15 @@ def test_live_multimodal_run_links_attachment(
     assert_status_code(result, 201)
     assert result.data is not None
 
-    detail = hermes_client.wait_for_run(result.data.run.id, timeout_seconds=max(hermes_client.config.max_wait_seconds, 20))
+    detail = hermes_client.wait_for_run(
+        result.data.run.id, timeout_seconds=max(hermes_client.config.max_wait_seconds, 20)
+    )
     report_observation.set_actual_tools(actual_tool_names(detail))
 
     assert detail.run.status == "succeeded"
     assert "vision_analyze" in actual_tool_names(detail)
-    assert detail.attachments, "multimodal smoke should include attachment metadata on the run detail"
+    assert detail.attachments, (
+        "multimodal smoke should include attachment metadata on the run detail"
+    )
     assert detail.attachments[0].id == attachment_id
     assert detail.run.final_output

@@ -1,4 +1,4 @@
-import type { WorkspaceInvitationRecord, WorkspaceMemberRecord } from './api';
+import type { WorkspaceInvitationRecord, WorkspaceMemberRecord } from '../types';
 
 export type InviteLifecycleState = 'pending' | 'expired' | 'accepted' | 'revoked';
 

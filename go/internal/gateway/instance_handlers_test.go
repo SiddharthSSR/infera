@@ -133,7 +133,9 @@ func TestHandleInstances(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		instances := resp["instances"].([]interface{})
 		if len(instances) != 0 {
@@ -190,7 +192,9 @@ func TestHandleProvision(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		if resp["success"] != true {
 			t.Error("expected success to be true")
@@ -335,7 +339,9 @@ func TestHandleInstanceByID(t *testing.T) {
 	h.handleProvision(provW, provReq)
 
 	var provResp map[string]interface{}
-	json.Unmarshal(provW.Body.Bytes(), &provResp)
+	if err := json.Unmarshal(provW.Body.Bytes(), &provResp); err != nil {
+		t.Fatalf("json.Unmarshal provision response: %v", err)
+	}
 	instance := provResp["instance"].(map[string]interface{})
 	instanceID := instance["id"].(string)
 
@@ -350,7 +356,9 @@ func TestHandleInstanceByID(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		if resp["id"] != instanceID {
 			t.Errorf("expected %s, got %s", instanceID, resp["id"])
@@ -379,7 +387,9 @@ func TestHandleInstanceByID(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		if resp["success"] != true {
 			t.Error("expected success to be true")
@@ -404,7 +414,9 @@ func TestHandleStartStop(t *testing.T) {
 	h.handleProvision(provW, provReq)
 
 	var provResp map[string]interface{}
-	json.Unmarshal(provW.Body.Bytes(), &provResp)
+	if err := json.Unmarshal(provW.Body.Bytes(), &provResp); err != nil {
+		t.Fatalf("json.Unmarshal provision response: %v", err)
+	}
 	instance := provResp["instance"].(map[string]interface{})
 	instanceID := instance["id"].(string)
 
@@ -456,7 +468,9 @@ func TestHandleOfferings(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		offerings := resp["offerings"].([]interface{})
 		if len(offerings) == 0 {
@@ -498,7 +512,9 @@ func TestHandleProviders(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		providers := resp["providers"].([]interface{})
 		if len(providers) == 0 {
@@ -550,7 +566,9 @@ func TestWorkspaceScopedInstanceIsolation(t *testing.T) {
 	}
 
 	var provResp map[string]interface{}
-	json.Unmarshal(provW.Body.Bytes(), &provResp)
+	if err := json.Unmarshal(provW.Body.Bytes(), &provResp); err != nil {
+		t.Fatalf("json.Unmarshal provision response: %v", err)
+	}
 	instance := provResp["instance"].(map[string]interface{})
 	instanceID := instance["id"].(string)
 
@@ -561,7 +579,9 @@ func TestWorkspaceScopedInstanceIsolation(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", listW.Code, listW.Body.String())
 	}
 	var listResp map[string]interface{}
-	json.Unmarshal(listW.Body.Bytes(), &listResp)
+	if err := json.Unmarshal(listW.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("json.Unmarshal list response: %v", err)
+	}
 	if got := len(listResp["instances"].([]interface{})); got != 0 {
 		t.Fatalf("expected 0 instances for unrelated workspace, got %d", got)
 	}
@@ -810,7 +830,9 @@ func TestHandleCosts(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		if resp["current_hourly"].(float64) != 0 {
 			t.Errorf("expected 0 hourly cost with no instances, got %f", resp["current_hourly"])
@@ -842,7 +864,9 @@ func TestHandleCosts(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		if resp["current_hourly"].(float64) <= 0 {
 			t.Error("expected positive hourly cost with running instance")

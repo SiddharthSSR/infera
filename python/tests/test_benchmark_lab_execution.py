@@ -7,7 +7,12 @@ from types import SimpleNamespace
 
 from infera_bench.execution import ExecutionStepResult, ProvisionExecutor
 from infera_bench.orchestration import execute_suite
-from infera_bench.schema import BenchmarkProfile, ExperimentExecutionResult, ExperimentSuite, ResolvedRunSpec
+from infera_bench.schema import (
+    BenchmarkProfile,
+    ExperimentExecutionResult,
+    ExperimentSuite,
+    ResolvedRunSpec,
+)
 
 
 def build_run_spec(tmp_path: Path, *, run_id: str, workload_id: str) -> ResolvedRunSpec:
@@ -56,7 +61,9 @@ def test_provision_executor_terminates_retained_instance_after_warm_steps(monkey
             status="ok",
         ),
     )
-    monkeypatch.setattr("infera_bench.execution.build_warm_command", lambda *args, **kwargs: ["echo", "warm"])
+    monkeypatch.setattr(
+        "infera_bench.execution.build_warm_command", lambda *args, **kwargs: ["echo", "warm"]
+    )
     monkeypatch.setattr("infera_bench.execution.wait_for_warm_registration", lambda **kwargs: None)
     monkeypatch.setattr(
         "infera_bench.execution.retained_health_url_for_step",
@@ -69,7 +76,9 @@ def test_provision_executor_terminates_retained_instance_after_warm_steps(monkey
     terminated: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
         "infera_bench.execution.terminate_instance",
-        lambda base_url, api_key, instance_id: terminated.append((base_url, api_key, instance_id)) or {"success": True},
+        lambda base_url, api_key, instance_id: (
+            terminated.append((base_url, api_key, instance_id)) or {"success": True}
+        ),
     )
 
     result = executor.execute(run_spec, profile)
@@ -103,7 +112,9 @@ def test_execute_suite_waits_for_registry_drain_between_runs(monkeypatch, tmp_pa
     )
 
     monkeypatch.setattr("infera_bench.orchestration.build_adapter_registry", lambda catalog: {})
-    monkeypatch.setattr("infera_bench.orchestration.expand_suite", lambda suite, catalog, adapters: run_specs)
+    monkeypatch.setattr(
+        "infera_bench.orchestration.expand_suite", lambda suite, catalog, adapters: run_specs
+    )
     waits: list[dict[str, object]] = []
     monkeypatch.setattr(
         "infera_bench.orchestration.wait_for_model_registry_drain",
@@ -187,10 +198,16 @@ def test_provision_executor_skips_warm_steps_without_successful_lifecycle(monkey
         )
 
     monkeypatch.setattr("infera_bench.execution.run_step", fake_run_step)
-    monkeypatch.setattr("infera_bench.execution.build_warm_command", lambda *args, **kwargs: ["echo", "warm"])
+    monkeypatch.setattr(
+        "infera_bench.execution.build_warm_command", lambda *args, **kwargs: ["echo", "warm"]
+    )
     monkeypatch.setattr("infera_bench.execution.wait_for_warm_registration", lambda **kwargs: None)
-    monkeypatch.setattr("infera_bench.execution.retained_health_url_for_step", lambda *args, **kwargs: None)
-    monkeypatch.setattr("infera_bench.execution.retained_instance_id_for_step", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "infera_bench.execution.retained_health_url_for_step", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "infera_bench.execution.retained_instance_id_for_step", lambda *args, **kwargs: None
+    )
 
     result = executor.execute(run_spec, profile)
 
@@ -224,7 +241,9 @@ def test_execute_suite_waits_for_registry_drain_after_failed_provision_runs(monk
     )
 
     monkeypatch.setattr("infera_bench.orchestration.build_adapter_registry", lambda catalog: {})
-    monkeypatch.setattr("infera_bench.orchestration.expand_suite", lambda suite, catalog, adapters: run_specs)
+    monkeypatch.setattr(
+        "infera_bench.orchestration.expand_suite", lambda suite, catalog, adapters: run_specs
+    )
     waits: list[dict[str, object]] = []
     monkeypatch.setattr(
         "infera_bench.orchestration.wait_for_model_registry_drain",

@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
-from datetime import datetime
 import asyncio
 import inspect
+from collections.abc import AsyncGenerator
+from datetime import datetime
 from typing import Any
 
 import structlog
 
 from ..config import ModelConfig, WorkerConfig
 from ..engine import EngineCapabilities, EngineDefinition, register_engine
-from ..types import Choice, InferenceRequest, InferenceResponse, LatencyStats, LoadedModel, TokenChunk, UsageStats
+from ..types import (
+    Choice,
+    InferenceRequest,
+    InferenceResponse,
+    LatencyStats,
+    LoadedModel,
+    TokenChunk,
+    UsageStats,
+)
 from .base import TokenizerPromptEngine
 
 try:
@@ -130,7 +138,9 @@ class SGLangEngine(TokenizerPromptEngine):
                 final_output = outputs[0]
                 text = self._extract_text(final_output)
                 first_token_time: datetime | None = None
-                prompt_tokens, completion_tokens = self._estimate_usage(final_output, request, prompt, text)
+                prompt_tokens, completion_tokens = self._estimate_usage(
+                    final_output, request, prompt, text
+                )
             else:
                 first_token_time = None
                 chunks: list[str] = []
@@ -142,7 +152,9 @@ class SGLangEngine(TokenizerPromptEngine):
                     chunks.append(chunk_text)
                 final_output = None
                 text = "".join(chunks)
-                prompt_tokens = self._count_prompt_tokens_from_prompt(request.model_id, prompt, request)
+                prompt_tokens = self._count_prompt_tokens_from_prompt(
+                    request.model_id, prompt, request
+                )
                 completion_tokens = self._count_completion_tokens(request.model_id, text)
 
             latency_ms = int((datetime.now() - start_time).total_seconds() * 1000)
@@ -230,7 +242,7 @@ class SGLangEngine(TokenizerPromptEngine):
             if inspect.isawaitable(result):
                 await result
             else:
-                await asyncio.to_thread(lambda: result)
+                await asyncio.to_thread(lambda current=result: current)
         return True
 
     def _infer_max_sequence_length(self, engine: Any, model_config: ModelConfig) -> int:
@@ -268,9 +280,9 @@ class SGLangEngine(TokenizerPromptEngine):
         if isinstance(output, dict):
             return str(output.get("text", ""))
         if hasattr(output, "text"):
-            return str(getattr(output, "text"))
+            return str(output.text)
         if hasattr(output, "outputs"):
-            outputs = getattr(output, "outputs")
+            outputs = output.outputs
             if outputs:
                 return str(getattr(outputs[0], "text", ""))
         return str(output)
@@ -280,10 +292,12 @@ class SGLangEngine(TokenizerPromptEngine):
             reason = output.get("finish_reason") or output.get("meta_info", {}).get("finish_reason")
             return self._map_finish_reason(reason)
         if hasattr(output, "finish_reason"):
-            return self._map_finish_reason(getattr(output, "finish_reason"))
+            return self._map_finish_reason(output.finish_reason)
         return self._map_finish_reason("stop")
 
-    def _estimate_usage(self, output: Any, request: InferenceRequest, prompt: str, text: str) -> tuple[int, int]:
+    def _estimate_usage(
+        self, output: Any, request: InferenceRequest, prompt: str, text: str
+    ) -> tuple[int, int]:
         prompt_tokens = self._count_prompt_tokens_from_prompt(request.model_id, prompt, request)
         completion_tokens = self._count_completion_tokens(request.model_id, text)
         if isinstance(output, dict):

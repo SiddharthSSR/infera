@@ -38,7 +38,9 @@ func TestRecoveryMiddleware(t *testing.T) {
 	t.Run("passes through on no panic", func(t *testing.T) {
 		handler := recoveryMiddleware(testLogger())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("ok"))
+			if _, err := w.Write([]byte("ok")); err != nil {
+				panic(err)
+			}
 		}))
 
 		req := httptest.NewRequest(http.MethodGet, "/", nil)

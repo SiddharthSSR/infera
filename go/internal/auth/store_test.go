@@ -105,8 +105,12 @@ func TestValidateKey_Revoked(t *testing.T) {
 
 func TestListKeys(t *testing.T) {
 	s := newTestStore(t)
-	s.CreateKey("a", "user")
-	s.CreateKey("b", "admin")
+	if _, _, err := s.CreateKey("a", "user"); err != nil {
+		t.Fatalf("CreateKey a: %v", err)
+	}
+	if _, _, err := s.CreateKey("b", "admin"); err != nil {
+		t.Fatalf("CreateKey b: %v", err)
+	}
 
 	keys, err := s.ListKeys()
 	if err != nil {
@@ -150,8 +154,12 @@ func TestCount(t *testing.T) {
 	if c != 0 {
 		t.Fatalf("expected 0, got %d", c)
 	}
-	s.CreateKey("a", "user")
-	s.CreateKey("b", "user")
+	if _, _, err := s.CreateKey("a", "user"); err != nil {
+		t.Fatalf("CreateKey a: %v", err)
+	}
+	if _, _, err := s.CreateKey("b", "user"); err != nil {
+		t.Fatalf("CreateKey b: %v", err)
+	}
 	c, _ = s.Count()
 	if c != 2 {
 		t.Fatalf("expected 2, got %d", c)

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import sys
-import pytest
+from pathlib import Path
 
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "cold-start-benchmark.py"
@@ -250,7 +250,9 @@ def test_wait_for_condition_aborts_on_fatal_reason():
             timeout_s=1,
             poll_interval_ms=1,
             args=args,
-            abort_fn=lambda: "worker entered error state during startup: gpu_preflight failed: RuntimeError: CUDA unknown error",
+            abort_fn=lambda: (
+                "worker entered error state during startup: gpu_preflight failed: RuntimeError: CUDA unknown error"
+            ),
         )
 
 
@@ -344,12 +346,12 @@ def test_fetch_health_falls_back_to_curl_on_1010(monkeypatch):
 def test_summarize_health_poll_error_classifies_bootstrap_failures():
     module = load_module()
 
-    assert module.summarize_health_poll_error(RuntimeError("GET /health failed with HTTP 404:")) == (
-        "bootstrap in progress: worker health route not published yet (HTTP 404)"
-    )
-    assert module.summarize_health_poll_error(RuntimeError("GET /health failed with HTTP 502: bad gateway")) == (
-        "bootstrap in progress: proxy upstream not ready yet (HTTP 502)"
-    )
+    assert module.summarize_health_poll_error(
+        RuntimeError("GET /health failed with HTTP 404:")
+    ) == ("bootstrap in progress: worker health route not published yet (HTTP 404)")
+    assert module.summarize_health_poll_error(
+        RuntimeError("GET /health failed with HTTP 502: bad gateway")
+    ) == ("bootstrap in progress: proxy upstream not ready yet (HTTP 502)")
     assert module.summarize_health_poll_error(RuntimeError("The read operation timed out")) == (
         "bootstrap in progress: worker health endpoint not responding yet (timeout)"
     )
@@ -378,7 +380,10 @@ def test_run_ready_path_does_not_block_registration_or_probe_on_health(monkeypat
         call_order.append("registration")
         assert kwargs["scenario_start_ms"] == 1000
         assert kwargs["previous_worker_id"] is None
-        return 2400, {"total": 1, "workers": [{"worker_id": "worker-1", "address": "pod-1-8081.proxy.runpod.net"}]}
+        return 2400, {
+            "total": 1,
+            "workers": [{"worker_id": "worker-1", "address": "pod-1-8081.proxy.runpod.net"}],
+        }
 
     def fake_run_first_success_probe(*args, **kwargs):
         call_order.append("probe")

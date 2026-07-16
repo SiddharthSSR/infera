@@ -18,7 +18,7 @@ import (
 
 type InstanceHandlers struct {
 	manager          *providers.Manager
-	deploymentStore  *deployments.Store
+	deploymentStore  deploymentHistoryStore
 	benchmarkService BenchmarkService
 }
 
@@ -29,7 +29,7 @@ func NewInstanceHandlers(manager *providers.Manager) *InstanceHandlers {
 	}
 }
 
-func (h *InstanceHandlers) SetDeploymentStore(store *deployments.Store) {
+func (h *InstanceHandlers) SetDeploymentStore(store deploymentHistoryStore) {
 	h.deploymentStore = store
 }
 
@@ -498,16 +498,6 @@ func deploymentFailureReason(err error) string {
 		return providerErr.Message
 	}
 	return err.Error()
-}
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
-}
-
-func writeError(w http.ResponseWriter, status int, errType, message string) {
-	writeJSON(w, status, map[string]interface{}{"error": map[string]interface{}{"type": errType, "message": message}})
 }
 
 func writeProviderActionError(w http.ResponseWriter, fallbackType string, err error) {

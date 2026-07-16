@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "run-engine-benchmark-phase1.py"
@@ -166,7 +165,9 @@ def test_build_phase1_steps_respects_skip_flags(tmp_path):
     assert "--terminate-final-instance" not in steps[0].command
 
 
-def test_build_phase1_steps_keeps_cold_start_instance_when_warm_follows_and_startup_health_skipped(tmp_path):
+def test_build_phase1_steps_keeps_cold_start_instance_when_warm_follows_and_startup_health_skipped(
+    tmp_path,
+):
     module = load_module()
     args = type(
         "Args",
@@ -302,7 +303,10 @@ def test_retained_health_url_for_startup_health(tmp_path):
     output = tmp_path / "startup.json"
     output.write_text(json.dumps(payload), encoding="utf-8")
 
-    assert module.retained_health_url_for_step("startup_health", str(output)) == "https://last.example/health"
+    assert (
+        module.retained_health_url_for_step("startup_health", str(output))
+        == "https://last.example/health"
+    )
 
 
 def test_retained_health_url_for_cold_start(tmp_path):
@@ -316,4 +320,7 @@ def test_retained_health_url_for_cold_start(tmp_path):
     output = tmp_path / "cold.json"
     output.write_text(json.dumps(payload), encoding="utf-8")
 
-    assert module.retained_health_url_for_step("cold_start", str(output)) == "https://reuse.example/health"
+    assert (
+        module.retained_health_url_for_step("cold_start", str(output))
+        == "https://reuse.example/health"
+    )

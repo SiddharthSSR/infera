@@ -1,0 +1,6 @@
+{
+  "error": {
+    "type": "inference_error",
+    "message": "worker error (status 503): upstream unavailable"
+  }
+}

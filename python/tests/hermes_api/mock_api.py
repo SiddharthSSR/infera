@@ -25,7 +25,11 @@ from .tool_catalog import (
 
 
 def _utc_now(offset_seconds: int = 0) -> str:
-    return (datetime(2026, 4, 9, tzinfo=timezone.utc) + timedelta(seconds=offset_seconds)).isoformat().replace("+00:00", "Z")
+    return (
+        (datetime(2026, 4, 9, tzinfo=timezone.utc) + timedelta(seconds=offset_seconds))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 @dataclass
@@ -73,7 +77,9 @@ class MockHermesTransport(httpx.BaseTransport):
         if path.startswith("/api/agents/runs/"):
             return self._handle_run_route(request)
 
-        return self._error_response(request, 404, "not_found", f"Unsupported mock endpoint: {method} {path}")
+        return self._error_response(
+            request, 404, "not_found", f"Unsupported mock endpoint: {method} {path}"
+        )
 
     def close(self) -> None:
         """Match the transport interface used by httpx.Client."""
@@ -108,11 +114,16 @@ class MockHermesTransport(httpx.BaseTransport):
     def _handle_attachment_upload(self, request: httpx.Request) -> httpx.Response:
         content_type = request.headers.get("content-type", "")
         if "multipart/form-data" not in content_type:
-            return self._error_response(request, 400, "invalid_request", "Expected multipart form upload")
+            return self._error_response(
+                request, 400, "invalid_request", "Expected multipart form upload"
+            )
 
         request.read()
         message = BytesParser(policy=default).parsebytes(
-            b"Content-Type: " + content_type.encode("utf-8") + b"\r\nMIME-Version: 1.0\r\n\r\n" + request.content
+            b"Content-Type: "
+            + content_type.encode("utf-8")
+            + b"\r\nMIME-Version: 1.0\r\n\r\n"
+            + request.content
         )
         upload_part = None
         for part in message.iter_parts():
@@ -126,9 +137,16 @@ class MockHermesTransport(httpx.BaseTransport):
         payload = upload_part.get_payload(decode=True) or b""
         mime_type = upload_part.get_content_type()
         if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
-            return self._error_response(request, 400, "invalid_request", "Only PNG, JPEG, and WEBP screenshots are supported")
+            return self._error_response(
+                request,
+                400,
+                "invalid_request",
+                "Only PNG, JPEG, and WEBP screenshots are supported",
+            )
         if len(payload) > 8 << 20:
-            return self._error_response(request, 400, "invalid_request", "Screenshot exceeds the 8 MiB upload limit")
+            return self._error_response(
+                request, 400, "invalid_request", "Screenshot exceeds the 8 MiB upload limit"
+            )
 
         attachment_id = f"att_{len(self.attachments) + 1}"
         attachment = {
@@ -163,10 +181,17 @@ class MockHermesTransport(httpx.BaseTransport):
         if not prompt:
             return self._error_response(request, 400, "invalid_request", "input is required")
         if mode != "multimodal" and attachments:
-            return self._error_response(request, 400, "invalid_request", "attachments are only valid for multimodal runs")
+            return self._error_response(
+                request, 400, "invalid_request", "attachments are only valid for multimodal runs"
+            )
         for attachment_id in attachments:
             if attachment_id not in self.attachments:
-                return self._error_response(request, 400, "invalid_request", f"attachment {attachment_id!r} is unavailable for this run")
+                return self._error_response(
+                    request,
+                    400,
+                    "invalid_request",
+                    f"attachment {attachment_id!r} is unavailable for this run",
+                )
 
         condition_case = self.condition_by_prompt.get(prompt)
         if condition_case and condition_case.mock_behavior == "rate_limit_then_success":
@@ -176,7 +201,12 @@ class MockHermesTransport(httpx.BaseTransport):
                 return self._json_response(
                     request,
                     429,
-                    {"error": {"type": "rate_limited", "message": "Rate limit exceeded. Retry after 0 seconds."}},
+                    {
+                        "error": {
+                            "type": "rate_limited",
+                            "message": "Rate limit exceeded. Retry after 0 seconds.",
+                        }
+                    },
                     headers={"Retry-After": "0"},
                 )
 
@@ -229,7 +259,9 @@ class MockHermesTransport(httpx.BaseTransport):
             return self._json_response(request, 200, {"run": canceled})
 
         if request.method.upper() != "GET" or len(parts) != 1:
-            return self._error_response(request, 405, "method_not_allowed", "Unsupported run action")
+            return self._error_response(
+                request, 405, "method_not_allowed", "Unsupported run action"
+            )
 
         if execution.malformed_detail_once:
             execution.malformed_detail_once = False
@@ -257,11 +289,17 @@ class MockHermesTransport(httpx.BaseTransport):
         body: dict[str, Any],
     ) -> MockRunExecution:
         run_id = f"run_{uuid.uuid4().hex[:8]}"
-        mode = str(body.get("mode", "")).strip() or (case.mode if case else condition.mode if condition else "operations")
+        mode = str(body.get("mode", "")).strip() or (
+            case.mode if case else condition.mode if condition else "operations"
+        )
         analysis_depth = str(body.get("analysis_depth", "")).strip() or (
             case.analysis_depth if case else condition.analysis_depth if condition else "standard"
         )
-        attachments = [deepcopy(self.attachments[attachment_id]) for attachment_id in body.get("attachments", []) if attachment_id in self.attachments]
+        attachments = [
+            deepcopy(self.attachments[attachment_id])
+            for attachment_id in body.get("attachments", [])
+            if attachment_id in self.attachments
+        ]
         prompt = str(body.get("input", "")).strip()
         max_steps = int(body.get("max_steps") or (case.max_steps if case else 8))
 
@@ -281,16 +319,26 @@ class MockHermesTransport(httpx.BaseTransport):
             "updated_at": _utc_now(),
         }
 
-        expected_tools = list(case.expected_tools if case else condition.expected_tools if condition else [])
-        expected_arguments = deepcopy(case.expected_arguments if case else condition.expected_arguments if condition else {})
+        expected_tools = list(
+            case.expected_tools if case else condition.expected_tools if condition else []
+        )
+        expected_arguments = deepcopy(
+            case.expected_arguments if case else condition.expected_arguments if condition else {}
+        )
         final_output = case.final_output if case else (condition.final_output or "")
         expected_status = case.expected_status if case else "succeeded"
-        behavior = case.mock_behavior if case else condition.mock_behavior if condition else "success"
+        behavior = (
+            case.mock_behavior if case else condition.mock_behavior if condition else "success"
+        )
 
         steps: list[dict[str, Any]] = []
         for tool_name in expected_tools:
             arguments = deepcopy(expected_arguments.get(tool_name, {}))
-            if "attachment_id" in arguments and arguments["attachment_id"] == "$attachment_id" and attachments:
+            if (
+                "attachment_id" in arguments
+                and arguments["attachment_id"] == "$attachment_id"
+                and attachments
+            ):
                 arguments["attachment_id"] = attachments[0]["id"]
             steps.append(
                 {
@@ -312,7 +360,10 @@ class MockHermesTransport(httpx.BaseTransport):
                         "index": len(steps),
                         "type": "error",
                         "tool_name": tool_name,
-                        "payload": {"error": "invalid_tool_arguments", "message": f"{tool_name} arguments were rejected"},
+                        "payload": {
+                            "error": "invalid_tool_arguments",
+                            "message": f"{tool_name} arguments were rejected",
+                        },
                         "created_at": _utc_now(len(steps) + 1),
                     }
                 )
@@ -327,8 +378,13 @@ class MockHermesTransport(httpx.BaseTransport):
             else:
                 attachment_model = None
                 if attachments:
-                    attachment_model = type("AttachmentShim", (), attachments[0])()  # simple attribute shim
-                result_payload = {"ok": True, "result": build_tool_result(tool_name, arguments, attachment_model)}
+                    attachment_model = type(
+                        "AttachmentShim", (), attachments[0]
+                    )()  # simple attribute shim
+                result_payload = {
+                    "ok": True,
+                    "result": build_tool_result(tool_name, arguments, attachment_model),
+                }
 
             steps.append(
                 {
@@ -397,7 +453,11 @@ class MockHermesTransport(httpx.BaseTransport):
             "sources": sources,
         }
 
-        detail_sequence = [queued_detail, terminal_detail if not running_steps else running_detail, terminal_detail]
+        detail_sequence = [
+            queued_detail,
+            terminal_detail if not running_steps else running_detail,
+            terminal_detail,
+        ]
         if behavior == "missing_attachment_final":
             detail_sequence = [queued_detail, terminal_detail]
 
@@ -436,5 +496,9 @@ class MockHermesTransport(httpx.BaseTransport):
             merged_headers.update(headers)
         return httpx.Response(status_code, json=payload, headers=merged_headers, request=request)
 
-    def _error_response(self, request: httpx.Request, status_code: int, err_type: str, message: str) -> httpx.Response:
-        return self._json_response(request, status_code, {"error": {"type": err_type, "message": message}})
+    def _error_response(
+        self, request: httpx.Request, status_code: int, err_type: str, message: str
+    ) -> httpx.Response:
+        return self._json_response(
+            request, status_code, {"error": {"type": err_type, "message": message}}
+        )

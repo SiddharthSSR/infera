@@ -1,0 +1,26 @@
+{
+  "session": {
+    "id": "sess_fixture_member",
+    "expires_at": "2026-04-12T00:00:00Z"
+  },
+  "key": {
+    "id": "key_fixture_switched",
+    "key_prefix": "inf_fixture_switched...",
+    "name": "Joined Member",
+    "role": "developer",
+    "principal_type": "human",
+    "workspace_id": "ws_beta",
+    "workspace_slug": "beta-team",
+    "workspace_name": "Beta Team"
+  },
+  "workspace": {
+    "id": "ws_beta",
+    "slug": "beta-team",
+    "name": "Beta Team"
+  },
+  "member": {
+    "id": "mbr_fixture_member_beta",
+    "email": "member@example.com",
+    "display_name": "Joined Member"
+  }
+}

@@ -4,29 +4,28 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { toast } from 'sonner';
 import { cn } from './lib/utils';
-import { destroySession, fetchWorkspaces, getSession, switchSessionWorkspace, type SessionInfo, type WorkspaceRecord } from './lib/api';
+import { destroySession, fetchWorkspaces, getSession, switchSessionWorkspace } from './lib/authAccessClient';
 import { AuthContext, useAuthSession } from './lib/auth-context';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ChatContext, type ChatContextType, type Message, type PlaygroundHistoryEntry } from './lib/chat-context';
 import { lazyWithRetry } from './lib/lazyWithRetry';
 import { useIsMobile } from './hooks/useIsMobile';
-import type { AgentAnalysisDepth, AgentExecutionMode, PlaygroundMode } from './types';
+import type { AgentAnalysisDepth, AgentExecutionMode, PlaygroundMode, SessionInfo, WorkspaceRecord } from './types';
 import { AppShell, PageHeader } from './components/shared';
 import { CommandPalette } from './components/CommandPalette';
 import { PageTransition } from './components/PageTransition';
-
-import { Dashboard } from './pages/Dashboard';
-import { Playground } from './pages/Playground';
-import { Instances } from './pages/Instances';
-import { Logs } from './pages/Logs';
-import { Models } from './pages/Models';
-import { ApiKeys } from './pages/ApiKeys';
-import { WorkspaceAdmin } from './pages/WorkspaceAdmin';
 
 const Login = lazyWithRetry(() => import('./pages/Login').then((module) => ({ default: module.Login })), 'login');
 const PublicApiDocs = lazyWithRetry(() => import('./pages/PublicApiDocs').then((module) => ({ default: module.PublicApiDocs })), 'docs');
 const GettingStarted = lazyWithRetry(() => import('./pages/GettingStarted').then((module) => ({ default: module.GettingStarted })), 'getting-started');
 const AcceptInvitation = lazyWithRetry(() => import('./pages/AcceptInvitation').then((module) => ({ default: module.AcceptInvitation })), 'accept-invite');
+const Dashboard = lazyWithRetry(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })), 'dashboard');
+const Playground = lazyWithRetry(() => import('./pages/Playground').then((module) => ({ default: module.Playground })), 'playground');
+const Instances = lazyWithRetry(() => import('./pages/Instances').then((module) => ({ default: module.Instances })), 'instances');
+const Logs = lazyWithRetry(() => import('./pages/Logs').then((module) => ({ default: module.Logs })), 'logs');
+const Models = lazyWithRetry(() => import('./pages/Models').then((module) => ({ default: module.Models })), 'models');
+const ApiKeys = lazyWithRetry(() => import('./pages/ApiKeys').then((module) => ({ default: module.ApiKeys })), 'api-keys');
+const WorkspaceAdmin = lazyWithRetry(() => import('./pages/WorkspaceAdmin').then((module) => ({ default: module.WorkspaceAdmin })), 'workspace');
 const workspacePreferenceKeyPrefix = 'infera:last-workspace:';
 
 // Query Client
@@ -35,7 +34,6 @@ const queryClient = new QueryClient({
     queries: {
       retry: 1,
       staleTime: 2000,
-      refetchInterval: 5000,
     },
   },
 });
@@ -361,6 +359,21 @@ function AppContent() {
     if (!email) return null;
     return `${workspacePreferenceKeyPrefix}${email}`;
   }, [session?.member?.email]);
+  const sessionKeyID = session?.key?.id ?? '';
+  const workspaceID = session?.workspace?.id ?? '';
+  const workspaceSlug = session?.workspace?.slug ?? '';
+  const workspaceName = session?.workspace?.name ?? '';
+  const fallbackWorkspaces = useMemo(() => (
+    workspaceID
+      ? [{
+        id: workspaceID,
+        slug: workspaceSlug,
+        name: workspaceName,
+        created_at: '',
+        status: 'active',
+      }]
+      : []
+  ), [workspaceID, workspaceName, workspaceSlug]);
 
   const handleWorkspaceSwitch = useCallback(async (workspaceId: string) => {
     if (!session?.workspace?.id || workspaceId === session.workspace.id) {
@@ -394,7 +407,7 @@ function AppContent() {
   }, [session?.workspace?.id, workspacePreferenceKey, setHistory, setMaxTokens, setMessages, setSelectedModel, setTemperature]);
 
   useEffect(() => {
-    if (!session) {
+    if (!sessionKeyID) {
       return;
     }
 
@@ -406,19 +419,13 @@ function AppContent() {
       })
       .catch(() => {
         if (!active) return;
-        setAvailableWorkspaces(session.workspace ? [{
-          id: session.workspace.id,
-          slug: session.workspace.slug,
-          name: session.workspace.name,
-          created_at: '',
-          status: 'active',
-        }] : []);
+        setAvailableWorkspaces(fallbackWorkspaces);
       });
 
     return () => {
       active = false;
     };
-  }, [session?.key?.id, session?.workspace?.id, session?.workspace?.name, session?.workspace?.slug]);
+  }, [fallbackWorkspaces, sessionKeyID]);
 
   useEffect(() => {
     if (!session?.session?.id || !session.workspace?.id || !workspacePreferenceKey) {
@@ -449,7 +456,7 @@ function AppContent() {
     }
   }, [session?.workspace?.id, workspacePreferenceKey]);
 
-  // Listen for auth-expired events from api.ts
+  // Listen for auth-expired events from authenticated client requests.
   useEffect(() => {
     const handler = () => handleLogout();
     window.addEventListener('auth-expired', handler);

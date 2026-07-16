@@ -56,7 +56,7 @@ export function useCountUp(target: number, duration = 1200, delay = 0): number {
   // On first mount, snap to 0 then animate
   useEffect(() => {
     prevTarget.current = 0;
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   return display;
 }

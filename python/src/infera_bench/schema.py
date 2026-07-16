@@ -7,7 +7,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 CompatibilityStatus = Literal["invalid", "unsupported", "unverified", "blocked", "skipped", "ready"]
 ExecutionMode = Literal["provision", "attach"]
 StageName = Literal["cold_start", "startup_health", "warm_none", "warm_affinity"]
@@ -136,7 +135,7 @@ class WorkloadProfile(BenchmarkBaseModel):
     tags: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_prompt_source(self) -> "WorkloadProfile":
+    def validate_prompt_source(self) -> WorkloadProfile:
         if not self.prompt_preset and not self.prompt_text:
             raise ValueError("workload must define prompt_preset or prompt_text")
         return self
@@ -160,7 +159,9 @@ class BenchmarkProfile(BenchmarkBaseModel):
     display_name: str
     description: str = ""
     execution_mode: ExecutionMode = "provision"
-    stages: list[StageName] = Field(default_factory=lambda: ["cold_start", "startup_health", "warm_none", "warm_affinity"])
+    stages: list[StageName] = Field(
+        default_factory=lambda: ["cold_start", "startup_health", "warm_none", "warm_affinity"]
+    )
     lifecycle_timeout_s: int = 900
     objective_weights: dict[RankingObjective, ObjectiveWeights] = Field(default_factory=dict)
     health_sample_interval_ms: int = 5000

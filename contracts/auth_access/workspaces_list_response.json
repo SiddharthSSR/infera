@@ -1,0 +1,19 @@
+{
+  "workspaces": [
+    {
+      "id": "ws_alpha",
+      "slug": "fixture-team",
+      "name": "Fixture Team",
+      "created_at": "2026-04-10T00:00:00Z",
+      "status": "active"
+    },
+    {
+      "id": "ws_beta",
+      "slug": "beta-team",
+      "name": "Beta Team",
+      "created_at": "2026-04-11T00:00:00Z",
+      "status": "active"
+    }
+  ],
+  "total": 2
+}

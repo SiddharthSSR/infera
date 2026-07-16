@@ -49,7 +49,9 @@ func TestHandleCreateKey(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
 	if resp["key"] == nil {
 		t.Error("expected key in response")
 	}
@@ -651,7 +653,9 @@ func TestHandleGetSession_Valid(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
 	if resp["session"] == nil || resp["key"] == nil {
 		t.Error("expected session and key in response")
 	}

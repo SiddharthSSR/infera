@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
-import { createSession, type SessionInfo } from '../lib/api';
+import { createSession } from '../lib/authAccessClient';
 import { LabelText, StatusDot, ControlInput, ActionButton } from '../components/shared';
+import type { SessionInfo } from '../types';
 
 interface LoginProps {
   onAuthenticated: (session: SessionInfo) => void;

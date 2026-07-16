@@ -163,6 +163,22 @@ func writeAuthorizationError(w http.ResponseWriter, message string) {
 	writeTypedError(w, http.StatusForbidden, "authorization_error", message)
 }
 
+func writeInvalidRequestError(w http.ResponseWriter, message string) {
+	writeTypedError(w, http.StatusBadRequest, "invalid_request_error", message)
+}
+
+func writeNotFoundError(w http.ResponseWriter, message string) {
+	writeTypedError(w, http.StatusNotFound, "not_found_error", message)
+}
+
+func writeMethodNotAllowedError(w http.ResponseWriter) {
+	writeTypedError(w, http.StatusMethodNotAllowed, "invalid_request_error", "Method not allowed")
+}
+
+func writeInternalError(w http.ResponseWriter, message string) {
+	writeTypedError(w, http.StatusInternalServerError, "internal_error", message)
+}
+
 func writeTypedError(w http.ResponseWriter, status int, errType, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

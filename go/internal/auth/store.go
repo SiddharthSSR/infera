@@ -1632,9 +1632,6 @@ func normalizeWorkspaceProviderOptions(options map[string]string) map[string]str
 		}
 		normalized[trimmedKey] = trimmedValue
 	}
-	if normalized == nil {
-		return map[string]string{}
-	}
 	return normalized
 }
 

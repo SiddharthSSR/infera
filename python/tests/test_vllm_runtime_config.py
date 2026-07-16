@@ -214,7 +214,9 @@ async def test_vllm_engine_defers_tokenizer_load_until_prompt_build(monkeypatch)
             created_tokenizers.append(model_path)
             return FakeTokenizer()
 
-    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer))
+    monkeypatch.setitem(
+        sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer)
+    )
 
     config = WorkerConfig(engine="vllm")
     engine = vllm_module.VLLMEngine(config)
@@ -241,7 +243,9 @@ async def test_vllm_prompt_builder_preserves_tool_call_messages(monkeypatch):
     observed: dict[str, object] = {}
 
     class FakeTokenizer:
-        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, tools=None, tool_choice=None):
+        def apply_chat_template(
+            self, messages, *, tokenize, add_generation_prompt, tools=None, tool_choice=None
+        ):
             observed["messages"] = messages
             observed["tools"] = tools
             observed["tool_choice"] = tool_choice
@@ -253,7 +257,9 @@ async def test_vllm_prompt_builder_preserves_tool_call_messages(monkeypatch):
             del model_path, trust_remote_code
             return FakeTokenizer()
 
-    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer))
+    monkeypatch.setitem(
+        sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer)
+    )
 
     engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm"))
     await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
@@ -269,13 +275,13 @@ async def test_vllm_prompt_builder_preserves_tool_call_messages(monkeypatch):
                         ToolCall(
                             id="call_1",
                             type="function",
-                            function=FunctionCall(name="get_weather", arguments="{\"city\":\"SF\"}"),
+                            function=FunctionCall(name="get_weather", arguments='{"city":"SF"}'),
                         )
                     ],
                 ),
                 Message(
                     role=Role.TOOL,
-                    content="{\"temp\":72}",
+                    content='{"temp":72}',
                     tool_call_id="call_1",
                 ),
             ],
@@ -300,14 +306,14 @@ async def test_vllm_prompt_builder_preserves_tool_call_messages(monkeypatch):
                     "type": "function",
                     "function": {
                         "name": "get_weather",
-                        "arguments": "{\"city\":\"SF\"}",
+                        "arguments": '{"city":"SF"}',
                     },
                 }
             ],
         },
         {
             "role": "tool",
-            "content": "{\"temp\":72}",
+            "content": '{"temp":72}',
             "tool_call_id": "call_1",
         },
     ]
@@ -336,7 +342,9 @@ async def test_vllm_tokenizer_respects_trust_remote_code_setting(monkeypatch):
             observed_values.append(trust_remote_code)
             return FakeTokenizer()
 
-    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer))
+    monkeypatch.setitem(
+        sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer)
+    )
 
     engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm", trust_remote_code=False))
     await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
@@ -385,7 +393,9 @@ async def test_vllm_engine_warm_model_runtime_loads_deferred_tokenizer(monkeypat
             created_tokenizers.append(model_path)
             return object()
 
-    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer))
+    monkeypatch.setitem(
+        sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer)
+    )
 
     engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm"))
     engine.set_startup_stage_recorder(recorded_stages.append)
@@ -405,12 +415,7 @@ async def test_vllm_engine_records_cache_probe_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
 
     hub_cache = tmp_path / "huggingface" / "hub"
-    snapshot_dir = (
-        hub_cache
-        / "models--Qwen--Qwen2.5-7B-Instruct"
-        / "snapshots"
-        / "snapshot-1"
-    )
+    snapshot_dir = hub_cache / "models--Qwen--Qwen2.5-7B-Instruct" / "snapshots" / "snapshot-1"
     snapshot_dir.mkdir(parents=True)
     (snapshot_dir / "config.json").write_text("{}", encoding="utf-8")
     (snapshot_dir / "tokenizer_config.json").write_text("{}", encoding="utf-8")
@@ -422,7 +427,9 @@ async def test_vllm_engine_records_cache_probe_metadata(monkeypatch, tmp_path):
 
     recorded_metadata: list[tuple[str, dict[str, object]]] = []
     engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm"))
-    engine.set_startup_metadata_recorder(lambda key, payload: recorded_metadata.append((key, payload)))
+    engine.set_startup_metadata_recorder(
+        lambda key, payload: recorded_metadata.append((key, payload))
+    )
 
     await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
 

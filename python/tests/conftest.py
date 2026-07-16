@@ -1,10 +1,10 @@
 """Pytest configuration and fixtures."""
 
-import pytest
 import asyncio
-from pathlib import Path
 import sys
+from pathlib import Path
 
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON_SRC = REPO_ROOT / "python" / "src"
@@ -24,6 +24,7 @@ def event_loop():
 def mock_worker_config():
     """Create a mock worker configuration."""
     from infera_worker.config import WorkerConfig
+
     return WorkerConfig(
         engine="mock",
         http_port=8081,
@@ -36,6 +37,7 @@ def mock_worker_config():
 def sample_messages():
     """Create sample messages for testing."""
     from infera_worker.types import Message, Role
+
     return [
         Message(role=Role.SYSTEM, content="You are a helpful assistant."),
         Message(role=Role.USER, content="Hello!"),

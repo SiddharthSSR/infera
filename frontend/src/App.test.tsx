@@ -17,14 +17,14 @@ vi.mock('./pages/PublicApiDocs', () => ({ PublicApiDocs: () => <div className="t
 vi.mock('./pages/GettingStarted', () => ({ GettingStarted: () => <div className="top-nav">GETTING STARTED PAGE</div> }));
 vi.mock('./hooks/useIsMobile', () => ({ useIsMobile: vi.fn(() => false) }));
 
-vi.mock('./lib/api', () => ({
+vi.mock('./lib/authAccessClient', () => ({
   getSession: vi.fn(),
   destroySession: vi.fn(),
   fetchWorkspaces: vi.fn(),
   switchSessionWorkspace: vi.fn(),
 }));
 
-import { fetchWorkspaces, getSession, switchSessionWorkspace } from './lib/api';
+import { fetchWorkspaces, getSession, switchSessionWorkspace } from './lib/authAccessClient';
 import { useIsMobile } from './hooks/useIsMobile';
 
 const mockGetSession = vi.mocked(getSession);

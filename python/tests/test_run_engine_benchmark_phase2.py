@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "run-engine-benchmark-phase2.py"
@@ -145,7 +144,15 @@ def test_build_phase1_command_includes_profile_metadata_and_runtime_options(tmp_
     assert "running_requests_32" in command
     assert "--runtime-option" in command
     assert "INFERA_SGLANG_MAX_RUNNING_REQUESTS=32" in command
-    assert str(tmp_path / "sglang" / "running-requests-32" / "phase2-sglang-a100-80gb-running-requests-32-manifest.json") in command
+    assert (
+        str(
+            tmp_path
+            / "sglang"
+            / "running-requests-32"
+            / "phase2-sglang-a100-80gb-running-requests-32-manifest.json"
+        )
+        in command
+    )
 
 
 def test_load_profile_config_returns_blocked_reason(tmp_path):

@@ -370,7 +370,6 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 				index++
 
 				if chunk.FinishReason != nil {
-					streamCompleted = true
 					return
 				}
 			}

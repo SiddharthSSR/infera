@@ -13,7 +13,12 @@ from .evals import (
 )
 from .execution import AttachExecutor, ProvisionExecutor
 from .lab import BenchmarkLab, BenchmarkLabPaths
-from .results import compare_result_indexes, format_comparison_markdown, write_comparison_markdown, write_result_artifacts
+from .results import (
+    compare_result_indexes,
+    format_comparison_markdown,
+    write_comparison_markdown,
+    write_result_artifacts,
+)
 from .schema import (
     BenchmarkCatalogEnvelope,
     EvalHistory,

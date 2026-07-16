@@ -4,21 +4,14 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { GPUOffering, Instance, ProviderStatus, VaultModel } from '../types';
-import { ProvisionModal } from './Instances';
+import { ProvisionModal } from '../components/instances/ProvisionModal';
 
-vi.mock('../hooks/useApi', () => ({
-  useDeploymentAttempts: vi.fn(),
-  useInstances: vi.fn(),
-  useMarkDeploymentAutoVerificationRequested: vi.fn(),
-  useOfferings: vi.fn(),
-  useProviders: vi.fn(),
-  useTerminateInstance: vi.fn(),
-  useStartInstance: vi.fn(),
-  useStopInstance: vi.fn(),
+vi.mock('../hooks/useInfrastructureApi', () => ({
   useProvisionInstance: vi.fn(),
-  useUpdateDeploymentVerification: vi.fn(),
+}));
+
+vi.mock('../hooks/useVaultApi', () => ({
   useVaultModels: vi.fn(),
-  useWorkers: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({
@@ -28,7 +21,8 @@ vi.mock('sonner', () => ({
   },
 }));
 
-import { useProvisionInstance, useVaultModels } from '../hooks/useApi';
+import { useProvisionInstance } from '../hooks/useInfrastructureApi';
+import { useVaultModels } from '../hooks/useVaultApi';
 
 const mockUseProvisionInstance = vi.mocked(useProvisionInstance);
 const mockUseVaultModels = vi.mocked(useVaultModels);

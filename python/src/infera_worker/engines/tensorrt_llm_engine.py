@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
-from datetime import datetime
 import asyncio
 import inspect
+from collections.abc import AsyncGenerator
+from datetime import datetime
 from typing import Any
 
 from ..config import ModelConfig, WorkerConfig
 from ..engine import EngineCapabilities, EngineDefinition, register_engine
-from ..types import Choice, InferenceRequest, InferenceResponse, LatencyStats, LoadedModel, TokenChunk, UsageStats
+from ..types import (
+    Choice,
+    InferenceRequest,
+    InferenceResponse,
+    LatencyStats,
+    LoadedModel,
+    TokenChunk,
+    UsageStats,
+)
 from .base import TokenizerPromptEngine
 
 try:
     from tensorrt_llm import SamplingParams
+
     try:
         from tensorrt_llm import BuildConfig
     except ImportError:
@@ -50,7 +59,11 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
 
     def __init__(self, config: WorkerConfig) -> None:
         if not TENSORRT_LLM_AVAILABLE:
-            detail = f" Original import error: {TENSORRT_LLM_IMPORT_ERROR}" if TENSORRT_LLM_IMPORT_ERROR else ""
+            detail = (
+                f" Original import error: {TENSORRT_LLM_IMPORT_ERROR}"
+                if TENSORRT_LLM_IMPORT_ERROR
+                else ""
+            )
             raise ImportError(
                 "TensorRT-LLM import failed. Ensure the worker image includes tensorrt_llm and its runtime dependencies."
                 f"{detail}"
@@ -66,7 +79,12 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
 
         runtime = self.config.tensorrt_llm_runtime
         requested_backend = (runtime.backend or "").strip().lower()
-        if requested_backend and requested_backend not in {"tensorrt", "tensorrt_llm", "trt", "trtllm"}:
+        if requested_backend and requested_backend not in {
+            "tensorrt",
+            "tensorrt_llm",
+            "trt",
+            "trtllm",
+        }:
             raise ValueError(
                 "TensorRTLLMEngine only supports the TensorRT backend. "
                 "Leave INFERA_TENSORRT_LLM_BACKEND unset or set it to 'tensorrt'."
@@ -88,11 +106,15 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
                 llm_kwargs[key] = value
 
         build_config = self._build_build_config(runtime)
-        if build_config is not None and (llm_accepts_variadic_kwargs or "build_config" in supported_llm_kwargs):
+        if build_config is not None and (
+            llm_accepts_variadic_kwargs or "build_config" in supported_llm_kwargs
+        ):
             llm_kwargs["build_config"] = build_config
 
         kv_cache_config = self._build_kv_cache_config(runtime)
-        if kv_cache_config is not None and (llm_accepts_variadic_kwargs or "kv_cache_config" in supported_llm_kwargs):
+        if kv_cache_config is not None and (
+            llm_accepts_variadic_kwargs or "kv_cache_config" in supported_llm_kwargs
+        ):
             llm_kwargs["kv_cache_config"] = kv_cache_config
 
         self._record_stage("tensorrt_llm_engine_init_started")
@@ -211,7 +233,7 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
 
             async for output in generate_async(prompt, sampling_params, streaming=True):
                 text = self._extract_text(output)
-                new_text = text[len(prev_text):]
+                new_text = text[len(prev_text) :]
                 prev_text = text
                 if not new_text:
                     continue
@@ -232,7 +254,9 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
                 chunk_index += 1
 
             if not emitted_final_chunk:
-                prompt_tokens = self._count_prompt_tokens_from_prompt(request.model_id, prompt, request)
+                prompt_tokens = self._count_prompt_tokens_from_prompt(
+                    request.model_id, prompt, request
+                )
                 completion_tokens = self._count_completion_tokens(request.model_id, prev_text)
                 yield TokenChunk(
                     request_id=request.request_id,
@@ -260,7 +284,7 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
             if inspect.isawaitable(result):
                 await result
             else:
-                await asyncio.to_thread(lambda: result)
+                await asyncio.to_thread(lambda current=result: current)
         return True
 
     def _build_sampling_params(self, request: InferenceRequest) -> Any:
@@ -276,13 +300,21 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
             parameter.kind == inspect.Parameter.VAR_KEYWORD
             for parameter in signature.parameters.values()
         )
-        if runtime.max_batch_size is not None and (accepts_variadic_kwargs or "max_batch_size" in supported):
+        if runtime.max_batch_size is not None and (
+            accepts_variadic_kwargs or "max_batch_size" in supported
+        ):
             kwargs["max_batch_size"] = runtime.max_batch_size
-        if runtime.max_num_tokens is not None and (accepts_variadic_kwargs or "max_num_tokens" in supported):
+        if runtime.max_num_tokens is not None and (
+            accepts_variadic_kwargs or "max_num_tokens" in supported
+        ):
             kwargs["max_num_tokens"] = runtime.max_num_tokens
-        if runtime.max_beam_width is not None and (accepts_variadic_kwargs or "max_beam_width" in supported):
+        if runtime.max_beam_width is not None and (
+            accepts_variadic_kwargs or "max_beam_width" in supported
+        ):
             kwargs["max_beam_width"] = runtime.max_beam_width
-        if runtime.enable_chunked_context and (accepts_variadic_kwargs or "enable_chunked_context" in supported):
+        if runtime.enable_chunked_context and (
+            accepts_variadic_kwargs or "enable_chunked_context" in supported
+        ):
             kwargs["enable_chunked_context"] = runtime.enable_chunked_context
         return BuildConfig(**kwargs) if kwargs else None
 
@@ -332,7 +364,7 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
             if outputs:
                 return str(getattr(outputs[0], "text", outputs[0].get("text", "")))
         if hasattr(output, "text"):
-            return str(getattr(output, "text"))
+            return str(output.text)
         outputs = getattr(output, "outputs", None)
         if outputs:
             first = outputs[0]
@@ -348,10 +380,14 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
             reason = output.get("finish_reason")
             if reason is None and output.get("outputs"):
                 first = output["outputs"][0]
-                reason = first.get("finish_reason") if isinstance(first, dict) else getattr(first, "finish_reason", None)
+                reason = (
+                    first.get("finish_reason")
+                    if isinstance(first, dict)
+                    else getattr(first, "finish_reason", None)
+                )
             return self._map_finish_reason(reason)
         if hasattr(output, "finish_reason"):
-            return self._map_finish_reason(getattr(output, "finish_reason"))
+            return self._map_finish_reason(output.finish_reason)
         outputs = getattr(output, "outputs", None)
         if outputs:
             first = outputs[0]
@@ -367,7 +403,10 @@ class TensorRTLLMEngine(TokenizerPromptEngine):
         if output is None:
             return prompt_tokens, completion_tokens
 
-        for container in (output, getattr(output, "outputs", [None])[0] if getattr(output, "outputs", None) else None):
+        for container in (
+            output,
+            getattr(output, "outputs", [None])[0] if getattr(output, "outputs", None) else None,
+        ):
             if container is None:
                 continue
             if isinstance(container, dict):

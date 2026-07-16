@@ -1,26 +1,27 @@
 """Main Infera Worker implementation."""
 
 import asyncio
-from collections import deque
-from collections.abc import AsyncGenerator
-from datetime import datetime
 import json
 import os
 import sys
-from typing import Any
 import uuid
+from collections import deque
+from collections.abc import AsyncGenerator
+from datetime import datetime
+from typing import Any
+
 import structlog
 
-from .config import WorkerConfig, ModelConfig
+from .config import ModelConfig, WorkerConfig
+from .engine import InferenceEngine, create_engine
 from .types import (
     InferenceRequest,
     InferenceResponse,
-    TokenChunk,
     LoadedModel,
-    WorkerStats,
+    TokenChunk,
     WorkerState,
+    WorkerStats,
 )
-from .engine import InferenceEngine, create_engine
 
 logger = structlog.get_logger()
 
@@ -79,7 +80,7 @@ class Worker:
             "worker_created": datetime.now(),
         }
         self._startup_metadata: dict[str, Any] = {}
-        
+
         # Stats tracking
         self._request_count = 0
         self._error_count = 0
@@ -88,13 +89,11 @@ class Worker:
         self._started_at = datetime.now()
         self._active_requests = 0
         self._queued_requests = 0
-        self._request_semaphore = asyncio.Semaphore(
-            max(1, self.config.max_concurrent_requests)
-        )
+        self._request_semaphore = asyncio.Semaphore(max(1, self.config.max_concurrent_requests))
         self._all_requests_idle = asyncio.Event()
         self._all_requests_idle.set()
         self._model_lifecycle_lock = asyncio.Lock()
-        
+
         # Lifecycle
         self._shutdown_event = asyncio.Event()
         self._background_tasks: set[asyncio.Task[None]] = set()
@@ -102,7 +101,7 @@ class Worker:
     async def start(self) -> None:
         """Initialize the worker."""
         logger.info("Starting worker", worker_id=self.worker_id, engine=self.config.engine)
-        
+
         try:
             self.record_startup_stage("model_load_started")
             await self._run_gpu_preflight()
@@ -113,7 +112,7 @@ class Worker:
             self.engine.set_startup_stage_recorder(self.record_startup_stage)
             self.engine.set_startup_metadata_recorder(self.record_startup_metadata)
             self.record_startup_stage("engine_create_finished")
-            
+
             # Preload models if configured
             for model_id in self.config.preload_models:
                 self.record_startup_stage("preload_model_started")
@@ -126,7 +125,7 @@ class Worker:
             self.record_startup_stage("worker_ready")
             self._schedule_post_ready_warmup()
             logger.info("Worker ready", worker_id=self.worker_id)
-            
+
         except Exception as e:
             self.record_startup_stage("worker_error")
             self.record_startup_metadata(
@@ -143,7 +142,7 @@ class Worker:
     async def stop(self, graceful: bool = True) -> None:
         """Shutdown the worker."""
         logger.info("Stopping worker", worker_id=self.worker_id, graceful=graceful)
-        
+
         if graceful:
             self.state = WorkerState.DRAINING
             try:
@@ -159,7 +158,7 @@ class Worker:
                     queued_requests=self._queued_requests,
                     drain_timeout_s=self.config.drain_timeout_s,
                 )
-        
+
         self.state = WorkerState.SHUTTING_DOWN
         self._shutdown_event.set()
         if self._background_tasks:
@@ -167,12 +166,12 @@ class Worker:
                 task.cancel()
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
-        
+
         # Unload all models
         if self.engine:
             for model in self.engine.get_loaded_models():
                 await self.engine.unload_model(model.model_id)
-        
+
         logger.info("Worker stopped", worker_id=self.worker_id)
 
     def request_shutdown(self) -> None:
@@ -239,33 +238,33 @@ class Worker:
         """Process an inference request."""
         if self.engine is None:
             raise RuntimeError("Worker not ready: not initialized")
-        
+
         if self.state not in {WorkerState.READY, WorkerState.BUSY}:
             raise RuntimeError(f"Worker not ready: {self.state}")
-        
+
         if not self.engine.is_model_loaded(request.model_id):
             raise ValueError(f"Model {request.model_id} not loaded")
-        
+
         start_time = datetime.now()
         await self._acquire_request_slot()
         self._request_count += 1
-        
+
         try:
             response = await self.engine.infer(request)
-            
+
             # Track latency
             latency_ms = (datetime.now() - start_time).total_seconds() * 1000
             self._record_latency(latency_ms)
-            
+
             logger.debug(
                 "Inference complete",
                 request_id=request.request_id,
                 latency_ms=latency_ms,
                 tokens=response.usage.total_tokens,
             )
-            
+
             return response
-            
+
         except Exception as e:
             self._error_count += 1
             logger.error(
@@ -277,27 +276,25 @@ class Worker:
         finally:
             self._release_request_slot()
 
-    async def infer_stream(
-        self, request: InferenceRequest
-    ) -> AsyncGenerator[TokenChunk, None]:
+    async def infer_stream(self, request: InferenceRequest) -> AsyncGenerator[TokenChunk, None]:
         """Process a streaming inference request."""
         if self.engine is None:
             raise RuntimeError("Worker not ready: not initialized")
-        
+
         if self.state not in {WorkerState.READY, WorkerState.BUSY}:
             raise RuntimeError(f"Worker not ready: {self.state}")
-        
+
         if not self.engine.is_model_loaded(request.model_id):
             raise ValueError(f"Model {request.model_id} not loaded")
-        
+
         start_time = datetime.now()
         await self._acquire_request_slot()
         self._request_count += 1
-        
+
         try:
             async for chunk in self.engine.infer_stream(request):
                 yield chunk
-                
+
                 if chunk.is_final():
                     latency_ms = (datetime.now() - start_time).total_seconds() * 1000
                     self._record_latency(latency_ms)
@@ -306,7 +303,7 @@ class Worker:
                         request_id=request.request_id,
                         latency_ms=latency_ms,
                     )
-                    
+
         except Exception as e:
             self._error_count += 1
             logger.error(
@@ -332,6 +329,7 @@ class Worker:
         """
         try:
             import pynvml
+
             pynvml.nvmlInit()
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             util = pynvml.nvmlDeviceGetUtilizationRates(handle)
@@ -350,6 +348,7 @@ class Worker:
         """Get best-effort GPU memory usage in bytes."""
         try:
             import pynvml
+
             pynvml.nvmlInit()
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
@@ -359,6 +358,7 @@ class Worker:
 
         try:
             import torch
+
             if torch.cuda.is_available():
                 allocated = torch.cuda.memory_allocated()
                 reserved = torch.cuda.memory_reserved()
@@ -386,11 +386,7 @@ class Worker:
         rps = self._request_count / uptime if uptime > 0 else 0
 
         # Error rate
-        error_rate = (
-            self._error_count / self._request_count
-            if self._request_count > 0
-            else 0
-        )
+        error_rate = self._error_count / self._request_count if self._request_count > 0 else 0
 
         gpu_util = self._get_gpu_utilization()
 
@@ -402,9 +398,7 @@ class Worker:
             memory_total_bytes=total_memory,
             requests_per_second=rps,
             avg_latency_ms=(
-                self._total_latency_ms / len(self._latencies)
-                if self._latencies
-                else 0
+                self._total_latency_ms / len(self._latencies) if self._latencies else 0
             ),
             p50_latency_ms=p50,
             p99_latency_ms=p99,
@@ -444,9 +438,7 @@ class Worker:
             payload = {
                 "status": "failed",
                 "error_type": "TimeoutError",
-                "error": (
-                    f"GPU preflight timed out after {self.config.gpu_preflight_timeout_s}s"
-                ),
+                "error": (f"GPU preflight timed out after {self.config.gpu_preflight_timeout_s}s"),
             }
             self.record_startup_metadata("gpu_preflight", payload)
             self.record_startup_stage("gpu_preflight_failed")
@@ -563,7 +555,7 @@ class Worker:
         """Calculate percentile of latencies."""
         if not self._latencies:
             return 0.0
-        
+
         sorted_latencies = sorted(self._latencies)
         index = int(len(sorted_latencies) * p / 100)
         index = min(index, len(sorted_latencies) - 1)

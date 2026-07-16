@@ -16,7 +16,7 @@ import (
 // Manager orchestrates multiple GPU providers.
 type Manager struct {
 	providers map[ProviderType]Provider
-	instances map[string]*Instance // instanceID -> Instance
+	instances instanceStore
 	costs     *CostTracker
 	mu        sync.RWMutex
 
@@ -26,7 +26,21 @@ type Manager struct {
 	workerImages    map[InferenceEngine]string
 	gatewayAddress  string
 
-	workspaceProviderConfigResolver func(workspaceID string, providerType ProviderType) (*ProviderConfig, error)
+	workspaceProviderConfigResolver WorkspaceProviderConfigResolver
+}
+
+// WorkspaceProviderConfigResolver resolves workspace-scoped provider credentials
+// and endpoint settings for the manager. The default wiring still uses an
+// in-process function adapter, but the manager no longer depends on a raw
+// callback type internally.
+type WorkspaceProviderConfigResolver interface {
+	ResolveProviderConfig(workspaceID string, providerType ProviderType) (*ProviderConfig, error)
+}
+
+type workspaceProviderConfigResolverFunc func(workspaceID string, providerType ProviderType) (*ProviderConfig, error)
+
+func (f workspaceProviderConfigResolverFunc) ResolveProviderConfig(workspaceID string, providerType ProviderType) (*ProviderConfig, error) {
+	return f(workspaceID, providerType)
 }
 
 // ManagerConfig configures the instance manager.
@@ -40,6 +54,11 @@ type ManagerConfig struct {
 
 // NewManager creates a new instance manager.
 func NewManager(config ManagerConfig) (*Manager, error) {
+	return NewManagerWithStore(config, newInMemoryInstanceStore())
+}
+
+// NewManagerWithStore creates a manager with an explicit tracked-instance store.
+func NewManagerWithStore(config ManagerConfig, store instanceStore) (*Manager, error) {
 	var costs *CostTracker
 	if config.CostDBPath != "" {
 		var err error
@@ -50,10 +69,13 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 	} else {
 		costs = NewCostTracker()
 	}
+	if store == nil {
+		store = newInMemoryInstanceStore()
+	}
 
 	return &Manager{
 		providers:       make(map[ProviderType]Provider),
-		instances:       make(map[string]*Instance),
+		instances:       store,
 		costs:           costs,
 		defaultProvider: config.DefaultProvider,
 		workerImage:     config.WorkerImage,
@@ -75,6 +97,14 @@ func (m *Manager) RegisterProvider(provider Provider) {
 }
 
 func (m *Manager) SetWorkspaceProviderConfigResolver(resolver func(workspaceID string, providerType ProviderType) (*ProviderConfig, error)) {
+	if resolver == nil {
+		m.SetWorkspaceProviderConfigSource(nil)
+		return
+	}
+	m.SetWorkspaceProviderConfigSource(workspaceProviderConfigResolverFunc(resolver))
+}
+
+func (m *Manager) SetWorkspaceProviderConfigSource(resolver WorkspaceProviderConfigResolver) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.workspaceProviderConfigResolver = resolver
@@ -94,7 +124,7 @@ func (m *Manager) resolveProvider(workspaceID string, providerType ProviderType)
 	m.mu.RUnlock()
 
 	if workspaceID != "" && resolver != nil && providerType != ProviderMock {
-		config, err := resolver(workspaceID, providerType)
+		config, err := resolver.ResolveProviderConfig(workspaceID, providerType)
 		if err != nil {
 			return nil, &ProviderError{
 				Provider: providerType,
@@ -194,9 +224,7 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	}
 
 	// Track instance
-	m.mu.Lock()
-	m.instances[instance.ID] = instance
-	m.mu.Unlock()
+	m.instances.put(instance)
 
 	// Start cost tracking
 	m.costs.StartTracking(instance)
@@ -225,11 +253,11 @@ func (m *Manager) Terminate(ctx context.Context, instanceID string) error {
 	m.costs.StopTracking(instanceID)
 
 	// Update status
-	m.mu.Lock()
-	instance.Status = InstanceStatusTerminated
-	now := time.Now()
-	instance.StoppedAt = &now
-	m.mu.Unlock()
+	m.instances.update(instanceID, func(instance *Instance) {
+		instance.Status = InstanceStatusTerminated
+		now := time.Now()
+		instance.StoppedAt = &now
+	})
 
 	return nil
 }
@@ -266,13 +294,13 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 	// Resume cost tracking
 	m.costs.StartTracking(instance)
 
-	m.mu.Lock()
-	now := time.Now()
-	instance.Status = InstanceStatusProvisioning
-	instance.StartedAt = &now
-	instance.StoppedAt = nil
-	instance.ErrorMessage = ""
-	m.mu.Unlock()
+	m.instances.update(instanceID, func(instance *Instance) {
+		now := time.Now()
+		instance.Status = InstanceStatusProvisioning
+		instance.StartedAt = &now
+		instance.StoppedAt = nil
+		instance.ErrorMessage = ""
+	})
 
 	return nil
 }
@@ -296,20 +324,17 @@ func (m *Manager) Stop(ctx context.Context, instanceID string) error {
 	// Stop cost tracking
 	m.costs.StopTracking(instanceID)
 
-	m.mu.Lock()
-	now := time.Now()
-	instance.Status = InstanceStatusStopped
-	instance.StoppedAt = &now
-	m.mu.Unlock()
+	m.instances.update(instanceID, func(instance *Instance) {
+		now := time.Now()
+		instance.Status = InstanceStatusStopped
+		instance.StoppedAt = &now
+	})
 
 	return nil
 }
 
 func (m *Manager) getTrackedInstance(instanceID string) (*Instance, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	instance, exists := m.instances[instanceID]
-	return instance, exists
+	return m.instances.get(instanceID)
 }
 
 func cloneInstance(instance *Instance) *Instance {
@@ -340,102 +365,25 @@ func (m *Manager) GetInstance(instanceID string) (*Instance, bool) {
 
 // ListInstances returns all tracked instances.
 func (m *Manager) ListInstances() []*Instance {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	instances := make([]*Instance, 0, len(m.instances))
-	for _, inst := range m.instances {
-		instances = append(instances, cloneInstance(inst))
-	}
-	return instances
+	return m.instances.list()
 }
 
 // ListInstancesByProvider returns instances for a specific provider.
 func (m *Manager) ListInstancesByProvider(providerType ProviderType) []*Instance {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var instances []*Instance
-	for _, inst := range m.instances {
-		if inst.Provider == providerType {
-			instances = append(instances, cloneInstance(inst))
-		}
-	}
-	return instances
+	return m.instances.listByProvider(providerType)
 }
 
 func (m *Manager) ListInstancesByWorkspace(workspaceID string) []*Instance {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var instances []*Instance
-	for _, inst := range m.instances {
-		if inst.WorkspaceID == workspaceID {
-			instances = append(instances, cloneInstance(inst))
-		}
-	}
-	return instances
+	return m.instances.listByWorkspace(workspaceID)
 }
 
 func (m *Manager) findReusableStoppedInstance(providerType ProviderType, req *ProvisionRequest) *Instance {
-	if len(req.Models) == 0 {
-		return nil
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var best *Instance
-	for _, inst := range m.instances {
-		if inst.Provider != providerType || inst.WorkspaceID != req.WorkspaceID {
-			continue
-		}
-		if inst.Status != InstanceStatusStopped {
-			continue
-		}
-		if inst.GPUType != req.GPUType || inst.GPUCount != req.GPUCount {
-			continue
-		}
-		if inst.Engine.OrDefault() != req.Engine.OrDefault() {
-			continue
-		}
-		if !sameModels(inst.Models, req.Models) {
-			continue
-		}
-		if best == nil || stoppedAtUnix(inst) > stoppedAtUnix(best) {
-			best = inst
-		}
-	}
-
-	return best
-}
-
-func sameModels(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	left := append([]string(nil), a...)
-	right := append([]string(nil), b...)
-	slices.Sort(left)
-	slices.Sort(right)
-	return slices.Equal(left, right)
-}
-
-func stoppedAtUnix(inst *Instance) int64 {
-	if inst.StoppedAt != nil {
-		return inst.StoppedAt.Unix()
-	}
-	return inst.CreatedAt.Unix()
+	return m.instances.findReusableStopped(providerType, req)
 }
 
 // RefreshInstances updates instance status from providers.
 func (m *Manager) RefreshInstances(ctx context.Context) error {
-	m.mu.RLock()
-	instances := make([]*Instance, 0, len(m.instances))
-	for _, inst := range m.instances {
-		instances = append(instances, inst)
-	}
-	m.mu.RUnlock()
+	instances := m.instances.list()
 
 	for _, inst := range instances {
 		provider, err := m.resolveProvider(inst.WorkspaceID, inst.Provider)
@@ -446,23 +394,20 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 		if err != nil {
 			var providerErr *ProviderError
 			if errors.As(err, &providerErr) && providerErr.Code == ProviderErrorNotFound {
-				m.mu.Lock()
-				if existing, exists := m.instances[inst.ID]; exists {
+				m.instances.update(inst.ID, func(existing *Instance) {
 					existing.Status = InstanceStatusTerminated
 					existing.ErrorMessage = "Provider no longer reports this instance"
 					now := time.Now()
 					if existing.StoppedAt == nil {
 						existing.StoppedAt = &now
 					}
-				}
-				m.mu.Unlock()
+				})
 				m.costs.StopTracking(inst.ID)
 			}
 			continue
 		}
 
-		m.mu.Lock()
-		if existing, exists := m.instances[inst.ID]; exists {
+		m.instances.update(inst.ID, func(existing *Instance) {
 			existing.Status = refreshed.Status
 			existing.PublicIP = refreshed.PublicIP
 			existing.ErrorMessage = refreshed.ErrorMessage
@@ -472,8 +417,7 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 			if refreshed.WorkerID != "" {
 				existing.WorkerID = refreshed.WorkerID
 			}
-		}
-		m.mu.Unlock()
+		})
 	}
 
 	return nil
@@ -553,50 +497,27 @@ func (m *Manager) GetCostSummaryForWorkspace(workspaceID string) *CostSummary {
 
 // LinkWorker associates a worker with an instance.
 func (m *Manager) LinkWorker(instanceID, workerID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	instance, exists := m.instances[instanceID]
-	if !exists {
+	if updated := m.instances.update(instanceID, func(instance *Instance) {
+		instance.WorkerID = workerID
+	}); !updated {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
-
-	instance.WorkerID = workerID
 	return nil
 }
 
 // UnlinkWorker removes worker association from an instance.
 func (m *Manager) UnlinkWorker(instanceID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if instance, exists := m.instances[instanceID]; exists {
+	m.instances.update(instanceID, func(instance *Instance) {
 		instance.WorkerID = ""
-	}
+	})
 }
 
 // GetInstanceByWorker finds an instance by its linked worker ID.
 func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, inst := range m.instances {
-		if inst.WorkerID == workerID {
-			return cloneInstance(inst), true
-		}
-	}
-	return nil, false
+	return m.instances.findByWorker(workerID)
 }
 
 // GetInstanceByProviderRef finds an instance by provider type and provider-native ID.
 func (m *Manager) GetInstanceByProviderRef(providerType ProviderType, providerID string) (*Instance, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, inst := range m.instances {
-		if inst.Provider == providerType && inst.ProviderID == providerID {
-			return cloneInstance(inst), true
-		}
-	}
-	return nil, false
+	return m.instances.findByProviderRef(providerType, providerID)
 }
