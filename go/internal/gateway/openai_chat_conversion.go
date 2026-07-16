@@ -64,17 +64,22 @@ func (g *Gateway) toInferenceRequest(r *http.Request, req *ChatCompletionRequest
 		params.FrequencyPenalty = *req.FrequencyPenalty
 	}
 
+	workspaceID := auth.DefaultWorkspaceID
+	if key := auth.KeyFromContext(r.Context()); key != nil {
+		workspaceID = normalizeWorkspaceIDForGateway(key.WorkspaceID)
+	}
 	return &types.InferenceRequest{
-		RequestID:  defaultRequestID(r),
-		ModelID:    req.Model,
-		Messages:   messages,
-		Parameters: params,
-		Stream:     req.Stream,
-		Priority:   types.PriorityNormal,
-		Metadata:   buildAffinityMetadata(r, req),
-		CreatedAt:  time.Now(),
-		Tools:      convertToolDefinitions(req.Tools),
-		ToolChoice: req.ToolChoice,
+		RequestID:   defaultRequestID(r),
+		ModelID:     req.Model,
+		Messages:    messages,
+		Parameters:  params,
+		Stream:      req.Stream,
+		Priority:    types.PriorityNormal,
+		Metadata:    buildAffinityMetadata(r, req),
+		CreatedAt:   time.Now(),
+		Tools:       convertToolDefinitions(req.Tools),
+		ToolChoice:  req.ToolChoice,
+		WorkspaceID: workspaceID,
 	}
 }
 

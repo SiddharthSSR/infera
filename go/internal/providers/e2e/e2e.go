@@ -376,6 +376,9 @@ func (p *Provider) buildEnv(req *providers.ProvisionRequest) map[string]string {
 	if gatewayAddress := strings.TrimSpace(req.GatewayAddress); gatewayAddress != "" {
 		env["INFERA_ROUTER_ADDRESS"] = gatewayAddress
 	}
+	if workerToken := strings.TrimSpace(req.WorkerToken); workerToken != "" {
+		env["INFERA_WORKER_SHARED_TOKEN"] = workerToken
+	}
 	if workerAddress := strings.TrimSpace(p.options[optionWorkerAddr]); workerAddress != "" {
 		env["INFERA_WORKER_ADDRESS"] = workerAddress
 	} else if ingressHost := strings.TrimSpace(p.options[optionIngressHost]); ingressHost != "" {

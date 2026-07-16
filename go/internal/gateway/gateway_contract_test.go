@@ -338,7 +338,7 @@ func TestHandleChatCompletionsLogsRouteDecisionAndMetrics(t *testing.T) {
 	t.Cleanup(r.Stop)
 	if err := r.RegisterWorker(&types.WorkerInfo{
 		WorkerID: "worker-1",
-		Address:  "worker.test:8081",
+		Address:  "http://localhost:8081",
 		Status:   types.WorkerStatusHealthy,
 		Tags:     map[string]string{"provider": "runpod", "gpu_type": "A100_80GB"},
 		LoadedModels: []types.LoadedModel{
@@ -357,7 +357,7 @@ func TestHandleChatCompletionsLogsRouteDecisionAndMetrics(t *testing.T) {
 	g := New(DefaultConfig(), r, nil)
 	g.log = slog.New(slog.NewJSONHandler(&logs, nil))
 	g.workerClients["worker-1"] = &WorkerClient{
-		address:             "worker.test:8081",
+		address:             "http://localhost:8081",
 		httpClient:          &http.Client{Transport: transport},
 		streamingHTTPClient: &http.Client{Transport: transport},
 		breaker:             NewCircuitBreaker(),
@@ -641,7 +641,7 @@ func TestHandleListModelsIncludesCoreOpenAIFields(t *testing.T) {
 	t.Cleanup(r.Stop)
 	if err := r.RegisterWorker(&types.WorkerInfo{
 		WorkerID: "worker-1",
-		Address:  "worker.test:8081",
+		Address:  "http://localhost:8081",
 		Status:   types.WorkerStatusHealthy,
 		LoadedModels: []types.LoadedModel{
 			{ModelID: "b-model"},
@@ -872,11 +872,12 @@ func newGatewayWithTestWorker(t *testing.T, modelID string, transport http.Round
 	r := router.New(router.DefaultConfig())
 	t.Cleanup(r.Stop)
 
-	address := "worker.test:8081"
+	address := "http://localhost:8081"
 	if err := r.RegisterWorker(&types.WorkerInfo{
-		WorkerID: "worker-1",
-		Address:  address,
-		Status:   types.WorkerStatusHealthy,
+		WorkerID:   "worker-1",
+		SharedPool: true,
+		Address:    address,
+		Status:     types.WorkerStatusHealthy,
 		LoadedModels: []types.LoadedModel{
 			{ModelID: modelID},
 		},

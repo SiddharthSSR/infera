@@ -21,7 +21,8 @@ import (
 )
 
 type runPodLinkTestProvider struct {
-	instances map[string]*providers.Instance
+	instances   map[string]*providers.Instance
+	workerToken string
 }
 
 func newRunPodLinkTestProvider() *runPodLinkTestProvider {
@@ -35,6 +36,7 @@ func (p *runPodLinkTestProvider) Name() providers.ProviderType {
 }
 
 func (p *runPodLinkTestProvider) Provision(ctx context.Context, req *providers.ProvisionRequest) (*providers.Instance, error) {
+	p.workerToken = req.WorkerToken
 	instance := &providers.Instance{
 		ID:         "inst-runpod-link",
 		ProviderID: "uxh9he0pyoqpho",
@@ -228,7 +230,7 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 
 	body := `{"worker_id":"w1","address":"uxh9he0pyoqpho-8081.proxy.runpod.net","status":"healthy","tags":{"provider":"runpod"},"loaded_models":[{"model_id":"Qwen/Qwen2.5-7B-Instruct","version":"main"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/workers/register", strings.NewReader(body))
-	req.Header.Set("X-Worker-Token", "secret-token")
+	req.Header.Set("X-Worker-Token", runpod.workerToken)
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
@@ -242,6 +244,17 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 	}
 	if linked.WorkerID != "w1" {
 		t.Fatalf("expected instance worker_id to be linked to w1, got %q", linked.WorkerID)
+	}
+
+	replacement := httptest.NewRequest(http.MethodPost, "/api/workers/register", strings.NewReader(`{"worker_id":"w2","address":"uxh9he0pyoqpho-8081.proxy.runpod.net","status":"healthy"}`))
+	replacement.Header.Set("X-Worker-Token", runpod.workerToken)
+	replacementRec := httptest.NewRecorder()
+	handler(replacementRec, replacement)
+	if replacementRec.Code != http.StatusForbidden {
+		t.Fatalf("expected deployment-bound credential to reject worker identity change, got %d body=%s", replacementRec.Code, replacementRec.Body.String())
+	}
+	if _, found := r.GetWorker("w2"); found {
+		t.Fatal("rejected identity change mutated the worker registry")
 	}
 }
 
@@ -287,7 +300,7 @@ func TestHandleWorkerHeartbeatRepairsMissingInstanceLink(t *testing.T) {
 	handler := g.requireWorkerToken(g.handleWorkerHeartbeat)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(`{"worker_id":"w1","stats":{"queue_depth":0,"active_requests":0}}`))
-	req.Header.Set("X-Worker-Token", "secret-token")
+	req.Header.Set("X-Worker-Token", runpod.workerToken)
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
@@ -510,7 +523,7 @@ func TestUsageTotalTokensFallsBackToComponentSum(t *testing.T) {
 
 func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *testing.T) {
 	g := New(DefaultConfig(), nil, nil)
-	client := NewWorkerClient("worker.test:8081")
+	client := NewWorkerClient("http://localhost:8081")
 	client.streamingHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var builder strings.Builder
 		encoder := json.NewEncoder(&builder)
@@ -552,7 +565,7 @@ func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *
 }
 
 func TestWorkerClientInferWithContextForwardsAndDecodesToolCalls(t *testing.T) {
-	client := NewWorkerClient("worker.test:8081")
+	client := NewWorkerClient("http://localhost:8081")
 	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/infer" {
 			t.Fatalf("expected /infer request, got %s", r.URL.Path)
@@ -628,7 +641,7 @@ func TestWorkerClientInferWithContextForwardsAndDecodesToolCalls(t *testing.T) {
 }
 
 func TestWorkerClientInferStreamForwardsAndDecodesToolCallChunks(t *testing.T) {
-	client := NewWorkerClient("worker.test:8081")
+	client := NewWorkerClient("http://localhost:8081")
 	client.streamingHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/infer/stream" {
 			t.Fatalf("expected /infer/stream request, got %s", r.URL.Path)

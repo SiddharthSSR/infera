@@ -101,6 +101,7 @@ func TestProvisionUsesSelectedOfferAndEnv(t *testing.T) {
 		DockerImage:    "custom/worker:v1",
 		Models:         []string{"meta-llama/Meta-Llama-3.1-8B-Instruct"},
 		GatewayAddress: "https://inferai.co.in",
+		WorkerToken:    "shared-token",
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
