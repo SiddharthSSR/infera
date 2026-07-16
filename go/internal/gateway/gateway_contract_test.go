@@ -22,6 +22,19 @@ import (
 func TestHandleChatCompletionsPersistsExactUsageProvenance(t *testing.T) {
 	const modelID = "model-usage"
 	g := newGatewayWithTestWorker(t, modelID, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get("X-Worker-Token"); got != "worker-secret" {
+			t.Fatalf("expected authenticated worker request, got token %q", got)
+		}
+		if executionID := r.Header.Get(HeaderRequestID); executionID == "" || executionID == "req-usage-exact" {
+			t.Fatalf("expected server execution id at worker boundary, got %q", executionID)
+		}
+		var workerReq WorkerInferRequest
+		if err := json.NewDecoder(r.Body).Decode(&workerReq); err != nil {
+			t.Fatalf("decode worker request: %v", err)
+		}
+		if workerReq.RequestID != r.Header.Get(HeaderRequestID) {
+			t.Fatalf("worker request identity mismatch: body=%q header=%q", workerReq.RequestID, r.Header.Get(HeaderRequestID))
+		}
 		resp := WorkerInferResponse{RequestID: "req-worker", ModelID: modelID}
 		resp.Choices = append(resp.Choices, struct {
 			Index   int `json:"index"`
@@ -905,9 +918,12 @@ func newGatewayWithTestWorker(t *testing.T, modelID string, transport http.Round
 		t.Fatalf("register worker: %v", err)
 	}
 
-	g := New(DefaultConfig(), r, nil)
+	config := DefaultConfig()
+	config.WorkerSharedToken = "worker-secret"
+	g := New(config, r, nil)
 	g.workerClients["worker-1"] = &WorkerClient{
 		address:             address,
+		workerToken:         config.WorkerSharedToken,
 		httpClient:          &http.Client{Transport: transport},
 		streamingHTTPClient: &http.Client{Transport: transport},
 		breaker:             NewCircuitBreaker(),
