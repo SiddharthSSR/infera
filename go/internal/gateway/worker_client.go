@@ -21,6 +21,7 @@ import (
 // In production, this would use gRPC, but HTTP is simpler for the vertical slice.
 type WorkerClient struct {
 	address             string
+	workerToken         string
 	httpClient          *http.Client
 	streamingHTTPClient *http.Client
 	breaker             *CircuitBreaker
@@ -28,6 +29,10 @@ type WorkerClient struct {
 
 // NewWorkerClient creates a new worker client.
 func NewWorkerClient(address string) *WorkerClient {
+	return newWorkerClient(address, "")
+}
+
+func newWorkerClient(address, workerToken string) *WorkerClient {
 	// Shared transport keeps connections alive across requests to the same worker.
 	// MaxIdleConnsPerHost matches a typical max_concurrent_requests per worker (32).
 	transport := &http.Transport{
@@ -37,7 +42,8 @@ func NewWorkerClient(address string) *WorkerClient {
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 	return &WorkerClient{
-		address: address,
+		address:     address,
+		workerToken: strings.TrimSpace(workerToken),
 		httpClient: &http.Client{
 			Timeout:   120 * time.Second,
 			Transport: transport,
@@ -46,6 +52,12 @@ func NewWorkerClient(address string) *WorkerClient {
 			Transport: transport,
 		},
 		breaker: NewCircuitBreaker(),
+	}
+}
+
+func (c *WorkerClient) addWorkerAuthHeader(req *http.Request) {
+	if c.workerToken != "" {
+		req.Header.Set("X-Worker-Token", c.workerToken)
 	}
 }
 
@@ -158,6 +170,7 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	c.addWorkerAuthHeader(httpReq)
 	httpReq.Header.Set(HeaderRequestID, req.RequestID)
 	if tp := traceparentFromContext(ctx); tp != "" {
 		httpReq.Header.Set(HeaderTraceparent, tp)
@@ -266,6 +279,7 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
+	c.addWorkerAuthHeader(httpReq)
 	httpReq.Header.Set(HeaderRequestID, req.RequestID)
 	if tp := traceparentFromContext(ctx); tp != "" {
 		httpReq.Header.Set(HeaderTraceparent, tp)

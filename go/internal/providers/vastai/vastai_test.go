@@ -122,6 +122,9 @@ func TestProvisionUsesSelectedOfferAndEnv(t *testing.T) {
 	if env["INFERA_WORKER_SHARED_TOKEN"] != "shared-token" {
 		t.Fatalf("expected worker token in env, got %#v", env["INFERA_WORKER_SHARED_TOKEN"])
 	}
+	if env["INFERA_ALLOWED_MODELS"] != `["meta-llama/Meta-Llama-3.1-8B-Instruct"]` {
+		t.Fatalf("expected approved models in env, got %#v", env["INFERA_ALLOWED_MODELS"])
+	}
 }
 
 func TestProvisionAddsRuntimeEnvOverridesForKnownModel(t *testing.T) {

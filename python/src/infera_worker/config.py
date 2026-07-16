@@ -97,9 +97,10 @@ class WorkerConfig(BaseSettings):
     request_timeout_ms: int = Field(default=30000, description="Request timeout in ms")
 
     # Model management
-    model_cache_size: int = Field(default=2, description="Max models in memory")
+    model_cache_size: int = Field(default=2, ge=1, description="Max models in memory")
     # Optional constructor-level preload list; env parsing still handled via computed field below.
     preload_models_input: list[str] = Field(default_factory=list, alias="preload_models")
+    allowed_models_input: list[str] = Field(default_factory=list, alias="allowed_models")
     # NOTE: preload_models is handled via computed_field to avoid pydantic-settings JSON parsing issues
 
     # GPU/Device
@@ -114,7 +115,7 @@ class WorkerConfig(BaseSettings):
         description="Timeout in seconds for the startup GPU preflight subprocess",
     )
     trust_remote_code: bool = Field(
-        default=True,
+        default=False,
         description="Allow Hugging Face remote model/tokenizer code when required by the runtime",
     )
 
@@ -260,6 +261,34 @@ class WorkerConfig(BaseSettings):
 
         # Comma-separated
         return [m.strip() for m in value.split(",") if m.strip()]
+
+    @computed_field
+    @property
+    def allowed_models(self) -> list[str]:
+        """Model IDs accepted by the authenticated HTTP load endpoint.
+
+        Explicit ``INFERA_ALLOWED_MODELS`` configuration takes precedence. When it is
+        absent, locally configured preload models form the allowlist.
+        """
+        if self.allowed_models_input:
+            return list(dict.fromkeys(m for m in self.allowed_models_input if m))
+
+        value = os.environ.get("INFERA_ALLOWED_MODELS", "").strip()
+        if value:
+            if value.startswith("["):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list):
+                        return list(dict.fromkeys(str(m) for m in parsed if m))
+                except json.JSONDecodeError:
+                    pass
+            return list(dict.fromkeys(m.strip() for m in value.split(",") if m.strip()))
+
+        return list(dict.fromkeys(self.preload_models))
+
+    def is_model_allowed(self, model_id: str) -> bool:
+        """Return whether a model ID may be loaded through the worker HTTP API."""
+        return model_id in self.allowed_models
 
     def gateway_headers(self) -> dict[str, str]:
         """Headers used for worker calls to the gateway."""
