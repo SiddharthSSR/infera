@@ -58,6 +58,101 @@ func TestPostgresCrossProcessQuotaAdmission(t *testing.T) {
 	}
 }
 
+func TestPostgresQuotaSnapshotCountsReservationDuringAuditTransition(t *testing.T) {
+	dsn := os.Getenv("INFERA_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("INFERA_TEST_POSTGRES_DSN is not configured")
+	}
+	reserveStore, err := NewPostgresStore(dsn)
+	if err != nil {
+		t.Fatalf("NewPostgresStore reserve: %v", err)
+	}
+	defer reserveStore.Close()
+	appendStore, err := NewPostgresStore(dsn)
+	if err != nil {
+		t.Fatalf("NewPostgresStore append: %v", err)
+	}
+	defer appendStore.Close()
+
+	workspaceID := "ws_transition_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	periodStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	limit := int64(1)
+	reservation := QuotaReservation{
+		ExecutionID: "exec_transition", WorkspaceID: workspaceID,
+		PeriodStart: periodStart, PeriodEnd: periodStart.AddDate(0, 1, 0),
+		ReservedRequests: 1, MonthlyRequestLimit: &limit,
+		ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}
+	if err := appendStore.ReserveQuota(reservation); err != nil {
+		t.Fatalf("seed transition reservation: %v", err)
+	}
+
+	lockBase := time.Now().UnixNano() & 0x3fffffffffffffff
+	barrier := &quotaSnapshotBarrier{reachedLockID: lockBase, releaseLockID: lockBase + 1}
+	reserveStore.quotaSnapshotBarrier = barrier
+	ctx := context.Background()
+	gateConn, err := appendStore.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open gate connection: %v", err)
+	}
+	defer gateConn.Close()
+	if _, err := gateConn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, barrier.releaseLockID); err != nil {
+		t.Fatalf("hold snapshot gate: %v", err)
+	}
+	defer func() {
+		_, _ = gateConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, barrier.releaseLockID)
+	}()
+
+	result := make(chan error, 1)
+	go func() {
+		candidate := reservation
+		candidate.ExecutionID = "exec_candidate"
+		result <- reserveStore.ReserveQuota(candidate)
+	}()
+
+	observerConn, err := appendStore.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open observer connection: %v", err)
+	}
+	defer observerConn.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var acquired bool
+		if err := observerConn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, barrier.reachedLockID).Scan(&acquired); err != nil {
+			t.Fatalf("observe snapshot barrier: %v", err)
+		}
+		if !acquired {
+			break
+		}
+		if _, err := observerConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, barrier.reachedLockID); err != nil {
+			t.Fatalf("release observer probe: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("quota snapshot did not reach transition barrier")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if err := appendStore.AppendInference(InferenceAuditRecord{
+		Timestamp: periodStart.Add(time.Hour), RequestID: reservation.ExecutionID,
+		WorkspaceID: workspaceID, Model: "m1", Status: "success", TokenCount: 1,
+	}); err != nil {
+		t.Fatalf("commit reservation-to-audit transition: %v", err)
+	}
+	if _, err := gateConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, barrier.releaseLockID); err != nil {
+		t.Fatalf("release snapshot gate: %v", err)
+	}
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrQuotaExceeded) {
+			t.Fatalf("transition was counted as neither pending nor committed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("quota reservation remained blocked after releasing transition gate")
+	}
+}
+
 func runQuotaHelper(dsn string) {
 	store, err := NewPostgresStore(dsn)
 	if err != nil {

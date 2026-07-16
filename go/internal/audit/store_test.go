@@ -327,6 +327,35 @@ func TestAppendInferenceAtomicallyReconcilesReservations(t *testing.T) {
 	}
 }
 
+func TestReserveQuotaReusesExpiredExecutionFromAnotherPeriod(t *testing.T) {
+	s := newTestStore(t)
+	previousStart := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := s.db.Exec(`
+		INSERT INTO quota_reservations
+		(execution_id, workspace_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"exec_reused", "ws_alpha", previousStart.UnixMilli(), previousStart.AddDate(0, 1, 0).UnixMilli(),
+		1, 10, time.Now().UTC().Add(-time.Minute).UnixMilli(),
+	); err != nil {
+		t.Fatalf("seed expired reservation: %v", err)
+	}
+	currentStart := previousStart.AddDate(0, 1, 0)
+	if err := s.ReserveQuota(QuotaReservation{
+		ExecutionID: "exec_reused", WorkspaceID: "ws_alpha",
+		PeriodStart: currentStart, PeriodEnd: currentStart.AddDate(0, 1, 0),
+		ReservedRequests: 1, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("reuse expired execution identity: %v", err)
+	}
+	var periodStartMS int64
+	if err := s.db.QueryRow(`SELECT period_start_ms FROM quota_reservations WHERE execution_id = ?`, "exec_reused").Scan(&periodStartMS); err != nil {
+		t.Fatalf("query replacement reservation: %v", err)
+	}
+	if periodStartMS != currentStart.UnixMilli() {
+		t.Fatalf("expired reservation was not replaced: period_start_ms=%d", periodStartMS)
+	}
+}
+
 func int64Ptr(value int64) *int64 { return &value }
 
 func TestMigrateSQLiteHistoryRejectsMissingSource(t *testing.T) {

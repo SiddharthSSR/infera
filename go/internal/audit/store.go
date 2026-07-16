@@ -106,8 +106,16 @@ var auditMigrations = []migrate.Migration{
 var ErrQuotaExceeded = errors.New("workspace quota exceeded")
 
 type Store struct {
-	db      *sql.DB
-	dialect ledgerDialect
+	db                   *sql.DB
+	dialect              ledgerDialect
+	quotaSnapshotBarrier *quotaSnapshotBarrier
+}
+
+// quotaSnapshotBarrier is test-only synchronization for proving that both
+// aggregates share one PostgreSQL statement snapshot during reconciliation.
+type quotaSnapshotBarrier struct {
+	reachedLockID int64
+	releaseLockID int64
 }
 
 type ledgerDialect string
@@ -531,7 +539,10 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 		return err
 	}
 	nowMS := time.Now().UTC().UnixMilli()
-	if _, err := tx.Exec(s.bind(`DELETE FROM quota_reservations WHERE expires_at_ms <= ?`), nowMS); err != nil {
+	if _, err := tx.Exec(s.bind(`
+		DELETE FROM quota_reservations
+		WHERE workspace_id = ? AND period_start_ms = ? AND period_end_ms = ? AND expires_at_ms <= ?`),
+		workspaceID, start.UnixMilli(), end.UnixMilli(), nowMS); err != nil {
 		return err
 	}
 
@@ -541,6 +552,12 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 		SELECT workspace_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms
 		FROM quota_reservations WHERE execution_id = ?`), executionID,
 	).Scan(&existingWorkspace, &existingStart, &existingEnd, &existingRequests, &existingTokens, &existingExpiry)
+	if err == nil && existingExpiry <= nowMS {
+		if _, deleteErr := tx.Exec(s.bind(`DELETE FROM quota_reservations WHERE execution_id = ?`), executionID); deleteErr != nil {
+			return deleteErr
+		}
+		err = sql.ErrNoRows
+	}
 	switch {
 	case err == nil:
 		if existingWorkspace == workspaceID && existingStart == start.UnixMilli() &&
@@ -558,24 +575,10 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 		return err
 	}
 
-	var committedRequests, committedTokens int64
-	if err := tx.QueryRow(s.bind(`
-		SELECT
-			COALESCE(SUM(CASE WHEN billable = 1 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN billable = 1 THEN token_count ELSE 0 END), 0)
-		FROM inference_audit
-		WHERE workspace_id = ? AND ts_unix_ms >= ? AND ts_unix_ms < ?`),
-		workspaceID, start.UnixMilli(), end.UnixMilli(),
-	).Scan(&committedRequests, &committedTokens); err != nil {
-		return err
-	}
-	var pendingRequests, pendingTokens int64
-	if err := tx.QueryRow(s.bind(`
-		SELECT COALESCE(SUM(reserved_requests), 0), COALESCE(SUM(reserved_tokens), 0)
-		FROM quota_reservations
-		WHERE workspace_id = ? AND period_start_ms = ? AND period_end_ms = ? AND expires_at_ms > ?`),
-		workspaceID, start.UnixMilli(), end.UnixMilli(), nowMS,
-	).Scan(&pendingRequests, &pendingTokens); err != nil {
+	committedRequests, committedTokens, pendingRequests, pendingTokens, err := s.quotaUsageSnapshot(
+		tx, workspaceID, start.UnixMilli(), end.UnixMilli(), nowMS,
+	)
+	if err != nil {
 		return err
 	}
 	if quotaWouldExceed(res.MonthlyRequestLimit, committedRequests, pendingRequests, res.ReservedRequests) {
@@ -594,6 +597,63 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// quotaUsageSnapshot reads both sides of the reservation-to-audit transition
+// in one statement. Under PostgreSQL READ COMMITTED, a statement has one MVCC
+// snapshot, so an atomic AppendInference commit cannot disappear between the
+// committed and pending aggregates.
+func (s *Store) quotaUsageSnapshot(tx *sql.Tx, workspaceID string, startMS, endMS, nowMS int64) (int64, int64, int64, int64, error) {
+	query := `
+		WITH committed AS (
+			SELECT
+				COALESCE(SUM(CASE WHEN billable = 1 THEN 1 ELSE 0 END), 0) AS requests,
+				COALESCE(SUM(CASE WHEN billable = 1 THEN token_count ELSE 0 END), 0) AS tokens
+			FROM inference_audit
+			WHERE workspace_id = ? AND ts_unix_ms >= ? AND ts_unix_ms < ?
+		), pending AS (
+			SELECT
+				COALESCE(SUM(reserved_requests), 0) AS requests,
+				COALESCE(SUM(reserved_tokens), 0) AS tokens
+			FROM quota_reservations
+			WHERE workspace_id = ? AND period_start_ms = ? AND period_end_ms = ? AND expires_at_ms > ?
+		)
+		SELECT committed.requests, committed.tokens, pending.requests, pending.tokens
+		FROM committed, pending`
+	args := []any{
+		workspaceID, startMS, endMS,
+		workspaceID, startMS, endMS, nowMS,
+	}
+	if s.dialect == dialectPostgres && s.quotaSnapshotBarrier != nil {
+		query = `
+			WITH committed AS MATERIALIZED (
+				SELECT
+					COALESCE(SUM(CASE WHEN billable = 1 THEN 1 ELSE 0 END), 0) AS requests,
+					COALESCE(SUM(CASE WHEN billable = 1 THEN token_count ELSE 0 END), 0) AS tokens
+				FROM inference_audit
+				WHERE workspace_id = ? AND ts_unix_ms >= ? AND ts_unix_ms < ?
+			), barrier AS MATERIALIZED (
+				SELECT pg_advisory_xact_lock(?), pg_advisory_xact_lock(?) FROM committed
+			), pending AS MATERIALIZED (
+				SELECT
+					COALESCE(SUM(reserved_requests), 0) AS requests,
+					COALESCE(SUM(reserved_tokens), 0) AS tokens
+				FROM quota_reservations, barrier
+				WHERE workspace_id = ? AND period_start_ms = ? AND period_end_ms = ? AND expires_at_ms > ?
+			)
+			SELECT committed.requests, committed.tokens, pending.requests, pending.tokens
+			FROM committed, pending`
+		args = []any{
+			workspaceID, startMS, endMS,
+			s.quotaSnapshotBarrier.reachedLockID, s.quotaSnapshotBarrier.releaseLockID,
+			workspaceID, startMS, endMS, nowMS,
+		}
+	}
+	var committedRequests, committedTokens, pendingRequests, pendingTokens int64
+	err := tx.QueryRow(s.bind(query), args...).Scan(
+		&committedRequests, &committedTokens, &pendingRequests, &pendingTokens,
+	)
+	return committedRequests, committedTokens, pendingRequests, pendingTokens, err
 }
 
 func quotaWouldExceed(limit *int64, committed, pending, requested int64) bool {
