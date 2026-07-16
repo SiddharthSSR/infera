@@ -4,10 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/infera/infera/go/internal/migrate"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -104,7 +106,24 @@ var auditMigrations = []migrate.Migration{
 var ErrQuotaExceeded = errors.New("workspace quota exceeded")
 
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect ledgerDialect
+}
+
+type ledgerDialect string
+
+const (
+	dialectSQLite   ledgerDialect = "sqlite"
+	dialectPostgres ledgerDialect = "postgres"
+)
+
+// Ledger is the durable audit and quota contract used by the gateway.
+type Ledger interface {
+	AppendInference(InferenceAuditRecord) error
+	ReserveQuota(QuotaReservation) error
+	UsageSummary(UsageSummaryQuery) (*UsageSummary, error)
+	UsageByKey(UsageQuery) ([]UsageRow, error)
+	Close() error
 }
 
 type InferenceAuditRecord struct {
@@ -197,7 +216,150 @@ func NewStore(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, dialect: dialectSQLite}, nil
+}
+
+// NewPostgresStore opens the shared, multi-replica audit and quota ledger.
+func NewPostgresStore(dsn string) (*Store, error) {
+	if strings.TrimSpace(dsn) == "" {
+		return nil, errors.New("postgres audit ledger DSN is required")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := migratePostgres(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return &Store{db: db, dialect: dialectPostgres}, nil
+}
+
+// NewLedger selects the configured ledger without treating a filesystem path
+// as a shared multi-replica database.
+func NewLedger(backend, sqlitePath, postgresDSN string) (Ledger, error) {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case "", "sqlite":
+		return NewStore(sqlitePath)
+	case "postgres", "postgresql":
+		return NewPostgresStore(postgresDSN)
+	default:
+		return nil, fmt.Errorf("unsupported audit ledger backend %q", backend)
+	}
+}
+
+func migratePostgres(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(4242424201)`); err != nil {
+		return err
+	}
+	ddl := `
+		CREATE TABLE IF NOT EXISTS audit_ledger_metadata (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS inference_audit (
+			id BIGSERIAL PRIMARY KEY,
+			ts_unix_ms BIGINT NOT NULL,
+			request_id TEXT NOT NULL,
+			client_request_id TEXT NOT NULL DEFAULT '',
+			key_id TEXT NOT NULL,
+			workspace_id TEXT NOT NULL,
+			model TEXT NOT NULL,
+			worker_id TEXT NOT NULL DEFAULT '',
+			stream BIGINT NOT NULL DEFAULT 0,
+			message_count BIGINT NOT NULL DEFAULT 0,
+			prompt_tokens BIGINT NOT NULL DEFAULT 0,
+			completion_tokens BIGINT NOT NULL DEFAULT 0,
+			token_count BIGINT NOT NULL DEFAULT 0,
+			token_source TEXT NOT NULL DEFAULT 'unknown',
+			billable BIGINT NOT NULL DEFAULT 0,
+			prompt_hash TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			error_code TEXT NOT NULL DEFAULT '',
+			latency_ms BIGINT NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (workspace_id, request_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_inference_audit_ts ON inference_audit(ts_unix_ms);
+		CREATE INDEX IF NOT EXISTS idx_inference_audit_key_ts ON inference_audit(key_id, ts_unix_ms);
+		CREATE INDEX IF NOT EXISTS idx_inference_audit_model_ts ON inference_audit(model, ts_unix_ms);
+		CREATE INDEX IF NOT EXISTS idx_inference_audit_workspace_ts ON inference_audit(workspace_id, ts_unix_ms);
+		CREATE INDEX IF NOT EXISTS idx_inference_audit_workspace_client_request ON inference_audit(workspace_id, client_request_id);
+		CREATE TABLE IF NOT EXISTS quota_reservations (
+			execution_id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			period_start_ms BIGINT NOT NULL,
+			period_end_ms BIGINT NOT NULL,
+			reserved_requests BIGINT NOT NULL,
+			reserved_tokens BIGINT NOT NULL,
+			expires_at_ms BIGINT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_quota_reservations_workspace_period ON quota_reservations(workspace_id, period_start_ms, period_end_ms);
+		CREATE INDEX IF NOT EXISTS idx_quota_reservations_expiry ON quota_reservations(expires_at_ms);
+		INSERT INTO audit_ledger_metadata (key, value) VALUES ('schema_version', '4')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+		INSERT INTO audit_ledger_metadata (key, value) VALUES ('writer_protocol', '1')
+		ON CONFLICT (key) DO NOTHING;
+	`
+	for _, statement := range strings.Split(ddl, ";") {
+		if strings.TrimSpace(statement) == "" {
+			continue
+		}
+		if _, err := tx.Exec(statement); err != nil {
+			return err
+		}
+	}
+	var protocol string
+	if err := tx.QueryRow(`SELECT value FROM audit_ledger_metadata WHERE key = 'writer_protocol'`).Scan(&protocol); err != nil {
+		return err
+	}
+	if protocol != "1" {
+		return fmt.Errorf("audit ledger writer protocol %q is incompatible with this gateway", protocol)
+	}
+	return tx.Commit()
+}
+
+var placeholderPattern = regexp.MustCompile(`\?`)
+
+func (s *Store) bind(query string) string {
+	if s.dialect != dialectPostgres {
+		return query
+	}
+	n := 0
+	return placeholderPattern.ReplaceAllStringFunc(query, func(string) string {
+		n++
+		return fmt.Sprintf("$%d", n)
+	})
+}
+
+func (s *Store) lockExecution(tx *sql.Tx, executionID string) error {
+	if s.dialect != dialectPostgres {
+		return nil
+	}
+	_, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "execution:"+executionID)
+	return err
+}
+
+func (s *Store) lockQuotaPeriod(tx *sql.Tx, workspaceID string, startMS, endMS int64) error {
+	if s.dialect != dialectPostgres {
+		return nil
+	}
+	key := fmt.Sprintf("quota:%s:%d:%d", workspaceID, startMS, endMS)
+	_, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key)
+	return err
 }
 
 func (s *Store) Close() error {
@@ -259,12 +421,15 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := s.lockExecution(tx, rec.RequestID); err != nil {
+		return err
+	}
 
 	result, err := tx.Exec(
-		`INSERT INTO inference_audit
+		s.bind(`INSERT INTO inference_audit
 		 (ts_unix_ms, request_id, client_request_id, key_id, workspace_id, model, worker_id, stream, message_count, prompt_tokens, completion_tokens, token_count, token_source, billable, prompt_hash, status, error_code, latency_ms)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(workspace_id, request_id) DO NOTHING`,
+		 ON CONFLICT(workspace_id, request_id) DO NOTHING`),
 		ts.UnixMilli(),
 		rec.RequestID,
 		strings.TrimSpace(rec.ClientRequestID),
@@ -295,11 +460,11 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 		var existing InferenceAuditRecord
 		var existingTimestampMS int64
 		var existingStream, existingBillable int
-		if err := tx.QueryRow(`
+		if err := tx.QueryRow(s.bind(`
 			SELECT ts_unix_ms, client_request_id, key_id, model, worker_id, stream,
 			       message_count, prompt_tokens, completion_tokens, token_count,
 			       token_source, billable, prompt_hash, status, error_code, latency_ms
-			FROM inference_audit WHERE workspace_id = ? AND request_id = ?`,
+			FROM inference_audit WHERE workspace_id = ? AND request_id = ?`),
 			workspaceID, rec.RequestID,
 		).Scan(
 			&existingTimestampMS, &existing.ClientRequestID, &existing.KeyID,
@@ -327,7 +492,7 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 			return fmt.Errorf("execution identity %q already records a different inference event", rec.RequestID)
 		}
 	}
-	if _, err := tx.Exec(`DELETE FROM quota_reservations WHERE execution_id = ?`, rec.RequestID); err != nil {
+	if _, err := tx.Exec(s.bind(`DELETE FROM quota_reservations WHERE execution_id = ?`), rec.RequestID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -359,16 +524,22 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := s.lockExecution(tx, executionID); err != nil {
+		return err
+	}
+	if err := s.lockQuotaPeriod(tx, workspaceID, start.UnixMilli(), end.UnixMilli()); err != nil {
+		return err
+	}
 	nowMS := time.Now().UTC().UnixMilli()
-	if _, err := tx.Exec(`DELETE FROM quota_reservations WHERE expires_at_ms <= ?`, nowMS); err != nil {
+	if _, err := tx.Exec(s.bind(`DELETE FROM quota_reservations WHERE expires_at_ms <= ?`), nowMS); err != nil {
 		return err
 	}
 
 	var existingWorkspace string
 	var existingStart, existingEnd, existingRequests, existingTokens, existingExpiry int64
-	err = tx.QueryRow(`
+	err = tx.QueryRow(s.bind(`
 		SELECT workspace_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms
-		FROM quota_reservations WHERE execution_id = ?`, executionID,
+		FROM quota_reservations WHERE execution_id = ?`), executionID,
 	).Scan(&existingWorkspace, &existingStart, &existingEnd, &existingRequests, &existingTokens, &existingExpiry)
 	switch {
 	case err == nil:
@@ -376,7 +547,7 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 			existingEnd == end.UnixMilli() && existingRequests == res.ReservedRequests &&
 			existingTokens == res.ReservedTokens {
 			if expiresAt.UnixMilli() > existingExpiry {
-				if _, err := tx.Exec(`UPDATE quota_reservations SET expires_at_ms = ? WHERE execution_id = ?`, expiresAt.UnixMilli(), executionID); err != nil {
+				if _, err := tx.Exec(s.bind(`UPDATE quota_reservations SET expires_at_ms = ? WHERE execution_id = ?`), expiresAt.UnixMilli(), executionID); err != nil {
 					return err
 				}
 			}
@@ -388,21 +559,21 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 	}
 
 	var committedRequests, committedTokens int64
-	if err := tx.QueryRow(`
+	if err := tx.QueryRow(s.bind(`
 		SELECT
 			COALESCE(SUM(CASE WHEN billable = 1 THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN billable = 1 THEN token_count ELSE 0 END), 0)
 		FROM inference_audit
-		WHERE workspace_id = ? AND ts_unix_ms >= ? AND ts_unix_ms < ?`,
+		WHERE workspace_id = ? AND ts_unix_ms >= ? AND ts_unix_ms < ?`),
 		workspaceID, start.UnixMilli(), end.UnixMilli(),
 	).Scan(&committedRequests, &committedTokens); err != nil {
 		return err
 	}
 	var pendingRequests, pendingTokens int64
-	if err := tx.QueryRow(`
+	if err := tx.QueryRow(s.bind(`
 		SELECT COALESCE(SUM(reserved_requests), 0), COALESCE(SUM(reserved_tokens), 0)
 		FROM quota_reservations
-		WHERE workspace_id = ? AND period_start_ms = ? AND period_end_ms = ? AND expires_at_ms > ?`,
+		WHERE workspace_id = ? AND period_start_ms = ? AND period_end_ms = ? AND expires_at_ms > ?`),
 		workspaceID, start.UnixMilli(), end.UnixMilli(), nowMS,
 	).Scan(&pendingRequests, &pendingTokens); err != nil {
 		return err
@@ -413,10 +584,10 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 	if quotaWouldExceed(res.MonthlyTokenLimit, committedTokens, pendingTokens, res.ReservedTokens) {
 		return ErrQuotaExceeded
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.Exec(s.bind(`
 		INSERT INTO quota_reservations
 		(execution_id, workspace_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?)`),
 		executionID, workspaceID, start.UnixMilli(), end.UnixMilli(),
 		res.ReservedRequests, res.ReservedTokens, expiresAt.UnixMilli(),
 	); err != nil {
@@ -500,7 +671,7 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 
 	sqlQuery += " GROUP BY bucket_start_ms, workspace_id, key_id ORDER BY bucket_start_ms ASC, workspace_id ASC, key_id ASC"
 
-	rows, err := s.db.Query(sqlQuery, args...)
+	rows, err := s.db.Query(s.bind(sqlQuery), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -564,7 +735,7 @@ func (s *Store) UsageSummary(q UsageSummaryQuery) (*UsageSummary, error) {
 	}
 
 	summary := &UsageSummary{}
-	if err := s.db.QueryRow(query, args...).Scan(
+	if err := s.db.QueryRow(s.bind(query), args...).Scan(
 		&summary.AttemptCount,
 		&summary.RequestCount,
 		&summary.TokenCount,

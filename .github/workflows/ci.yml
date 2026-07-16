@@ -28,6 +28,20 @@ jobs:
   go:
     name: Go Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: infera
+          POSTGRES_PASSWORD: infera-test
+          POSTGRES_DB: infera_audit
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U infera -d infera_audit"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,6 +54,8 @@ jobs:
 
       - name: Run Go tests
         working-directory: go
+        env:
+          INFERA_TEST_POSTGRES_DSN: postgres://infera:infera-test@127.0.0.1:5432/infera_audit?sslmode=disable
         run: go test ./...
 
   python:

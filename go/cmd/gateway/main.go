@@ -46,7 +46,7 @@ func main() {
 		log.Error("invalid coordinated rollout configuration", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	if err := validateAuditLedgerTopology(os.Getenv("INFERA_GATEWAY_REPLICAS"), os.Getenv("INFERA_AUDIT_LEDGER_BACKEND")); err != nil {
+	if err := validateAuditLedgerTopology(os.Getenv("INFERA_GATEWAY_REPLICAS"), os.Getenv("INFERA_AUDIT_LEDGER_BACKEND"), os.Getenv("INFERA_AUDIT_LEDGER_DSN")); err != nil {
 		log.Error("invalid audit ledger topology", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
@@ -285,7 +285,11 @@ func main() {
 
 	// Quota admission and usage reconciliation depend on this ledger. Production
 	// must not start in a superficially healthy state without it.
-	auditStore, err := audit.NewStore("data/audit.db")
+	auditStore, err := audit.NewLedger(
+		os.Getenv("INFERA_AUDIT_LEDGER_BACKEND"),
+		"data/audit.db",
+		os.Getenv("INFERA_AUDIT_LEDGER_DSN"),
+	)
 	if err != nil {
 		if !devMode {
 			log.Error("failed to initialize required audit and quota ledger", slog.String("error", err.Error()))
@@ -404,7 +408,7 @@ func rolloutIdentityFromEnv(devMode bool) (string, string, error) {
 	return releaseID, protocolVersion, nil
 }
 
-func validateAuditLedgerTopology(rawReplicas, rawBackend string) error {
+func validateAuditLedgerTopology(rawReplicas, rawBackend, rawDSN string) error {
 	replicas := 1
 	if value := strings.TrimSpace(rawReplicas); value != "" {
 		parsed, err := strconv.Atoi(value)
@@ -417,11 +421,14 @@ func validateAuditLedgerTopology(rawReplicas, rawBackend string) error {
 	if backend == "" {
 		backend = "sqlite"
 	}
-	if backend != "sqlite" {
+	if backend != "sqlite" && backend != "postgres" && backend != "postgresql" {
 		return fmt.Errorf("INFERA_AUDIT_LEDGER_BACKEND %q is not supported by this release", backend)
 	}
-	if replicas > 1 {
-		return errors.New("multiple gateway replicas require a shared transactional audit ledger; this release supports only single-replica sqlite")
+	if replicas > 1 && backend == "sqlite" {
+		return errors.New("multiple gateway replicas require a shared transactional audit ledger; configure the postgres backend")
+	}
+	if (backend == "postgres" || backend == "postgresql") && strings.TrimSpace(rawDSN) == "" {
+		return errors.New("INFERA_AUDIT_LEDGER_DSN is required for the postgres audit ledger")
 	}
 	return nil
 }

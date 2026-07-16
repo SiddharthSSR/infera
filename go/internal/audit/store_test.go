@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -327,6 +328,13 @@ func TestAppendInferenceAtomicallyReconcilesReservations(t *testing.T) {
 }
 
 func int64Ptr(value int64) *int64 { return &value }
+
+func TestMigrateSQLiteHistoryRejectsMissingSource(t *testing.T) {
+	target := &Store{dialect: dialectPostgres}
+	if _, err := target.MigrateSQLiteHistory(context.Background(), filepath.Join(t.TempDir(), "missing.db")); err == nil {
+		t.Fatal("expected a missing SQLite source to fail instead of creating an empty ledger")
+	}
+}
 
 func TestUsageByKey(t *testing.T) {
 	s := newTestStore(t)

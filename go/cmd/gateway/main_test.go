@@ -36,13 +36,19 @@ func TestRolloutIdentityUsesDevelopmentDefaults(t *testing.T) {
 }
 
 func TestAuditLedgerTopologyRejectsUnsafeReplicas(t *testing.T) {
-	if err := validateAuditLedgerTopology("1", "sqlite"); err != nil {
+	if err := validateAuditLedgerTopology("1", "sqlite", ""); err != nil {
 		t.Fatalf("single-replica sqlite should be valid: %v", err)
 	}
-	if err := validateAuditLedgerTopology("2", "sqlite"); err == nil || !strings.Contains(err.Error(), "shared transactional audit ledger") {
+	if err := validateAuditLedgerTopology("2", "sqlite", ""); err == nil || !strings.Contains(err.Error(), "shared transactional audit ledger") {
 		t.Fatalf("expected shared-ledger rejection, got %v", err)
 	}
-	if err := validateAuditLedgerTopology("1", "postgres"); err == nil {
+	if err := validateAuditLedgerTopology("2", "postgres", ""); err == nil || !strings.Contains(err.Error(), "DSN") {
+		t.Fatalf("expected missing DSN rejection, got %v", err)
+	}
+	if err := validateAuditLedgerTopology("3", "postgres", "postgres://ledger"); err != nil {
+		t.Fatalf("multi-replica postgres should be valid: %v", err)
+	}
+	if err := validateAuditLedgerTopology("1", "mysql", "mysql://ledger"); err == nil {
 		t.Fatal("expected unsupported backend rejection")
 	}
 }

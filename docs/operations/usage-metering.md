@@ -44,6 +44,8 @@ Treat any `mismatch` response as a metering incident. Preserve the database and 
 
 ## Persistence behavior
 
-The gateway serializes SQLite usage writes through a single writer. Request completion waits for an acknowledgement from that writer. Temporary failures are retried three times before the gateway emits `inference.audit_persist_failed` with the request ID. Graceful shutdown drains acknowledged writes before closing the database.
+The gateway serializes usage writes through a per-process writer. Request completion waits for an acknowledgement from that writer. Temporary failures are retried three times before the gateway emits `inference.audit_persist_failed` with the request ID. Graceful shutdown drains acknowledged writes before closing the database. In multi-replica deployments, PostgreSQL provides the shared durability and concurrency boundary; SQLite remains restricted to one replica.
 
 Migration version 3 removes duplicate legacy rows by retaining the newest row for each workspace/request pair before creating the unique idempotency index. Legacy successful events remain billable and are classified as having unknown accuracy.
+
+PostgreSQL enforces first-write semantics with a unique `(workspace_id, request_id)` key. Quota reservation retries are keyed by execution ID, and transaction-scoped advisory locks serialize each execution and workspace quota period before committed plus in-flight usage is evaluated.
