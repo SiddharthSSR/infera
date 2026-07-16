@@ -24,6 +24,7 @@ func newTestHandler(t *testing.T) *Handler {
 
 func authedVaultRequest(req *http.Request) *http.Request {
 	return req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+		WorkspaceID:   auth.DefaultWorkspaceID,
 		Role:          auth.RoleAdmin,
 		PrincipalType: auth.PrincipalHuman,
 		Status:        "active",
@@ -94,6 +95,41 @@ func TestHandleCreateModel(t *testing.T) {
 			t.Errorf("expected 400, got %d", w.Code)
 		}
 	})
+}
+
+func TestManageVaultPermissionRoleMatrix(t *testing.T) {
+	cases := []struct {
+		name        string
+		workspaceID string
+		role        string
+		wantStatus  int
+	}{
+		{name: "platform owner", workspaceID: auth.DefaultWorkspaceID, role: auth.RoleOwner, wantStatus: http.StatusCreated},
+		{name: "platform admin", workspaceID: auth.DefaultWorkspaceID, role: auth.RoleAdmin, wantStatus: http.StatusCreated},
+		{name: "platform operator", workspaceID: auth.DefaultWorkspaceID, role: auth.RoleOperator, wantStatus: http.StatusForbidden},
+		{name: "tenant owner", workspaceID: "ws_tenant", role: auth.RoleOwner, wantStatus: http.StatusForbidden},
+		{name: "tenant admin", workspaceID: "ws_tenant", role: auth.RoleAdmin, wantStatus: http.StatusForbidden},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHandler(t)
+			body := bytes.NewBufferString(`{"name":"matrix model","source_uri":"test/matrix"}`)
+			req := httptest.NewRequest(http.MethodPost, "/api/vault/models", body)
+			req = req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+				WorkspaceID:   tc.workspaceID,
+				Role:          tc.role,
+				PrincipalType: auth.PrincipalHuman,
+				Status:        "active",
+			}))
+			w := httptest.NewRecorder()
+
+			h.createModel(w, req)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("expected %d, got %d: %s", tc.wantStatus, w.Code, w.Body.String())
+			}
+		})
+	}
 }
 
 func TestHandleListModels(t *testing.T) {

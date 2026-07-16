@@ -611,6 +611,74 @@ func TestHandleCreateWorkspaceInvite_RoleEscalationForbidden(t *testing.T) {
 	}
 }
 
+func TestHandleAcceptInvitationReusesAuthenticatedHumanIdentity(t *testing.T) {
+	_, s, mux := newTestHandlerWithRoutes(t)
+	_, adminRec, err := s.CreateKey("platform-admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	workspaceA, err := s.CreateWorkspace("Identity A")
+	if err != nil {
+		t.Fatalf("CreateWorkspace A: %v", err)
+	}
+	workspaceB, err := s.CreateWorkspace("Identity B")
+	if err != nil {
+		t.Fatalf("CreateWorkspace B: %v", err)
+	}
+	tokenA, _, err := s.CreateWorkspaceInvitation(workspaceA.ID, "member@example.com", "Member", RoleOperator, adminRec.ID, mustTime(t))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation A: %v", err)
+	}
+	tokenB, _, err := s.CreateWorkspaceInvitation(workspaceB.ID, "member@example.com", "Member", RoleDeveloper, adminRec.ID, mustTime(t))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation B: %v", err)
+	}
+
+	acceptA := httptest.NewRequest(http.MethodPost, "/api/auth/invitations/accept", strings.NewReader(`{"invitation_token":"`+tokenA+`"}`))
+	acceptA.Header.Set("Content-Type", "application/json")
+	acceptARec := httptest.NewRecorder()
+	mux.ServeHTTP(acceptARec, acceptA)
+	if acceptARec.Code != http.StatusCreated {
+		t.Fatalf("accept A: expected 201, got %d: %s", acceptARec.Code, acceptARec.Body.String())
+	}
+	var acceptedA struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(acceptARec.Body.Bytes(), &acceptedA); err != nil {
+		t.Fatalf("decode accept A: %v", err)
+	}
+	identityA, err := s.ValidateKey(acceptedA.Key)
+	if err != nil {
+		t.Fatalf("ValidateKey A: %v", err)
+	}
+	sessionToken, _, err := s.CreateSession(identityA.ID)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	acceptB := httptest.NewRequest(http.MethodPost, "/api/auth/invitations/accept", strings.NewReader(`{"invitation_token":"`+tokenB+`"}`))
+	acceptB.Header.Set("Content-Type", "application/json")
+	acceptB.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionToken})
+	acceptBRec := httptest.NewRecorder()
+	mux.ServeHTTP(acceptBRec, acceptB)
+	if acceptBRec.Code != http.StatusCreated {
+		t.Fatalf("accept B: expected 201, got %d: %s", acceptBRec.Code, acceptBRec.Body.String())
+	}
+	var acceptedB struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(acceptBRec.Body.Bytes(), &acceptedB); err != nil {
+		t.Fatalf("decode accept B: %v", err)
+	}
+	identityB, err := s.ValidateKey(acceptedB.Key)
+	if err != nil {
+		t.Fatalf("ValidateKey B: %v", err)
+	}
+	if identityA.HumanIdentityID == nil || identityB.HumanIdentityID == nil || *identityA.HumanIdentityID != *identityB.HumanIdentityID {
+		t.Fatalf("authenticated acceptance must preserve identity: A=%v B=%v", identityA.HumanIdentityID, identityB.HumanIdentityID)
+	}
+}
+
 // ---------- Session handlers ----------
 
 func TestHandleCreateSession_AdminKey(t *testing.T) {
@@ -819,14 +887,14 @@ func TestHandleListWorkspaces_WithMembershipListsAccessibleWorkspaces(t *testing
 		t.Fatalf("CreateWorkspaceInvitation beta: %v", err)
 	}
 
-	fullKey, _, _, err := func() (string, *WorkspaceMembershipRecord, *KeyRecord, error) {
+	fullKey, _, alphaRecord, err := func() (string, *WorkspaceMembershipRecord, *KeyRecord, error) {
 		membership, key, record, err := s.AcceptWorkspaceInvitation(tokenA, "Joined Member")
 		return key, membership, record, err
 	}()
 	if err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation alpha: %v", err)
 	}
-	if _, _, _, err := s.AcceptWorkspaceInvitation(tokenB, "Joined Member"); err != nil {
+	if _, _, _, err := s.AcceptWorkspaceInvitationForIdentity(tokenB, "Joined Member", alphaRecord); err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation beta: %v", err)
 	}
 
@@ -882,14 +950,14 @@ func TestHandleSwitchSessionWorkspace(t *testing.T) {
 		t.Fatalf("CreateWorkspaceInvitation beta: %v", err)
 	}
 
-	fullKey, _, _, err := func() (string, *WorkspaceMembershipRecord, *KeyRecord, error) {
+	fullKey, _, alphaRecord, err := func() (string, *WorkspaceMembershipRecord, *KeyRecord, error) {
 		membership, key, record, err := s.AcceptWorkspaceInvitation(tokenA, "Joined Member")
 		return key, membership, record, err
 	}()
 	if err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation alpha: %v", err)
 	}
-	if _, _, _, err := s.AcceptWorkspaceInvitation(tokenB, "Joined Member"); err != nil {
+	if _, _, _, err := s.AcceptWorkspaceInvitationForIdentity(tokenB, "Joined Member", alphaRecord); err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation beta: %v", err)
 	}
 

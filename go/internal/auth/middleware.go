@@ -107,6 +107,32 @@ func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// OptionalAuth attaches a validated key or session when one is supplied while
+// preserving public access for endpoints such as first-time invitation
+// acceptance.
+func (h *Handler) OptionalAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+			session, keyRecord, err := h.store.ValidateSession(cookie.Value)
+			if err == nil {
+				ctx := context.WithValue(r.Context(), keyContextKey, keyRecord)
+				ctx = context.WithValue(ctx, sessionContextKey, session)
+				next(w, r.WithContext(ctx))
+				return
+			}
+		}
+
+		if key := extractKey(r); key != "" {
+			if record, err := h.store.ValidateKey(key); err == nil {
+				next(w, r.WithContext(context.WithValue(r.Context(), keyContextKey, record)))
+				return
+			}
+		}
+
+		next(w, r)
+	}
+}
+
 // RequireAdmin middleware rejects requests without an admin API key.
 func (h *Handler) RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return h.RequireAuth(func(w http.ResponseWriter, r *http.Request) {

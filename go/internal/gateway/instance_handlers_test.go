@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -786,6 +787,53 @@ func TestHandleDeploymentVerificationUpdates(t *testing.T) {
 	}
 	if updated[0].AutoVerificationRequestedAt == nil {
 		t.Fatalf("expected auto verification timestamp to be persisted")
+	}
+}
+
+func TestHandleDeploymentVerificationMutationRoleMatrix(t *testing.T) {
+	cases := []struct {
+		name          string
+		role          string
+		principalType string
+		wantStatus    int
+	}{
+		{name: "owner", role: auth.RoleOwner, principalType: auth.PrincipalHuman, wantStatus: http.StatusOK},
+		{name: "admin", role: auth.RoleAdmin, principalType: auth.PrincipalHuman, wantStatus: http.StatusOK},
+		{name: "operator", role: auth.RoleOperator, principalType: auth.PrincipalHuman, wantStatus: http.StatusOK},
+		{name: "operator service", role: auth.RoleOperator, principalType: auth.PrincipalServiceAccount, wantStatus: http.StatusOK},
+		{name: "read only", role: auth.RoleReadOnly, principalType: auth.PrincipalHuman, wantStatus: http.StatusForbidden},
+		{name: "read only service", role: auth.RoleReadOnly, principalType: auth.PrincipalServiceAccount, wantStatus: http.StatusForbidden},
+		{name: "developer", role: auth.RoleDeveloper, principalType: auth.PrincipalHuman, wantStatus: http.StatusForbidden},
+		{name: "billing", role: auth.RoleBilling, principalType: auth.PrincipalHuman, wantStatus: http.StatusForbidden},
+	}
+	actions := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "verification", path: "/api/deployments/attempt-1/verification", body: `{"status":"passed"}`},
+		{name: "auto verification", path: "/api/deployments/attempt-1/auto-verification", body: `{}`},
+	}
+
+	for _, action := range actions {
+		for _, tc := range cases {
+			t.Run(action.name+"/"+tc.name, func(t *testing.T) {
+				h := setupTestHandlers(t)
+				h.SetDeploymentStore(&stubDeploymentHistoryStore{})
+				req := httptest.NewRequest(http.MethodPut, action.path, strings.NewReader(action.body))
+				req = req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+					Role:          tc.role,
+					PrincipalType: tc.principalType,
+					Status:        "active",
+					WorkspaceID:   "ws_alpha",
+				}))
+				rec := httptest.NewRecorder()
+				h.handleDeploymentByID(rec, req)
+				if rec.Code != tc.wantStatus {
+					t.Fatalf("expected %d, got %d: %s", tc.wantStatus, rec.Code, rec.Body.String())
+				}
+			})
+		}
 	}
 }
 

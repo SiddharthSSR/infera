@@ -19,7 +19,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, corsWrap func(http.HandlerF
 	mux.HandleFunc("/api/auth/workspaces", corsWrap(h.RequireAuth(h.handleWorkspaces)))
 	mux.HandleFunc("/api/auth/workspaces/", corsWrap(h.RequireAuth(h.handleWorkspaceByID)))
 	mux.HandleFunc("/api/auth/invitations/preview", corsWrap(h.handlePreviewInvitation))
-	mux.HandleFunc("/api/auth/invitations/accept", corsWrap(h.handleAcceptInvitation))
+	mux.HandleFunc("/api/auth/invitations/accept", corsWrap(h.OptionalAuth(h.handleAcceptInvitation)))
 	mux.HandleFunc("/api/auth/session", corsWrap(h.handleSession))
 	mux.HandleFunc("/api/auth/session/workspace", corsWrap(h.RequireAuth(h.handleSwitchSessionWorkspace)))
 }
@@ -622,7 +622,18 @@ func (h *Handler) handleAcceptInvitation(w http.ResponseWriter, r *http.Request)
 		writeInvalidRequestError(w, "Invalid JSON")
 		return
 	}
-	membership, fullKey, record, err := h.store.AcceptWorkspaceInvitation(req.InvitationToken, req.DisplayName)
+	var membership *WorkspaceMembershipRecord
+	var fullKey string
+	var record *KeyRecord
+	var err error
+	current := KeyFromContext(r.Context())
+	if current != nil && current.PrincipalType == PrincipalHuman && current.HumanIdentityID != nil {
+		membership, fullKey, record, err = h.store.AcceptWorkspaceInvitationForIdentity(
+			req.InvitationToken, req.DisplayName, current,
+		)
+	} else {
+		membership, fullKey, record, err = h.store.AcceptWorkspaceInvitation(req.InvitationToken, req.DisplayName)
+	}
 	if err != nil {
 		writeInvalidRequestError(w, err.Error())
 		return
