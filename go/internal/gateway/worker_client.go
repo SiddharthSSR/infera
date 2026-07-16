@@ -346,7 +346,6 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 		scanner.Buffer(make([]byte, 64<<10), maxWorkerStreamValue)
 		index := 0
 		recordedSuccess := false
-		streamCompleted := false
 
 		for scanner.Scan() {
 			select {
@@ -369,7 +368,7 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 						c.breaker.RecordFailure()
 						return
 					}
-					if recordedSuccess && !streamCompleted && shouldRecordFailure(ctx, err) {
+					if recordedSuccess && shouldRecordFailure(ctx, err) {
 						c.breaker.RecordFailure()
 					}
 					slog.Debug("worker stream decode error after stream start",
@@ -412,7 +411,6 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 				index++
 
 				if chunk.FinishReason != nil {
-					streamCompleted = true
 					return
 				}
 			}
@@ -421,7 +419,7 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 			c.breaker.RecordFailure()
 			return
 		}
-		if !recordedSuccess || (!streamCompleted && ctx.Err() == nil) {
+		if !recordedSuccess || ctx.Err() == nil {
 			c.breaker.RecordFailure()
 		}
 	}()
