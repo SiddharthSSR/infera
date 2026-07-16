@@ -2,7 +2,10 @@ package audit
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,13 +79,14 @@ func TestAppendInferenceRejectsInvalidTokenData(t *testing.T) {
 	}
 }
 
-func TestAppendInferenceIsIdempotentPerWorkspaceRequest(t *testing.T) {
+func TestAppendInferenceSeparatesClientCorrelationFromExecutionIdentity(t *testing.T) {
 	s := newTestStore(t)
 	base := time.Date(2026, 7, 16, 5, 0, 0, 0, time.UTC)
 
 	first := InferenceAuditRecord{
 		Timestamp:        base,
-		RequestID:        "req_duplicate",
+		RequestID:        "exec_1",
+		ClientRequestID:  "req_duplicate",
 		KeyID:            "inf_key_a",
 		WorkspaceID:      "ws_alpha",
 		Model:            "m1",
@@ -94,10 +98,19 @@ func TestAppendInferenceIsIdempotentPerWorkspaceRequest(t *testing.T) {
 	if err := s.AppendInference(first); err != nil {
 		t.Fatalf("AppendInference first: %v", err)
 	}
-	duplicate := first
-	duplicate.TokenCount = 999
-	if err := s.AppendInference(duplicate); err != nil {
-		t.Fatalf("AppendInference duplicate: %v", err)
+	if err := s.AppendInference(first); err != nil {
+		t.Fatalf("AppendInference idempotent retry: %v", err)
+	}
+	conflict := first
+	conflict.TokenCount = 999
+	if err := s.AppendInference(conflict); err == nil {
+		t.Fatal("expected conflicting execution identity to be rejected")
+	}
+	second := first
+	second.RequestID = "exec_2"
+	second.TokenCount = 20
+	if err := s.AppendInference(second); err != nil {
+		t.Fatalf("AppendInference second execution: %v", err)
 	}
 
 	summary, err := s.UsageSummary(UsageSummaryQuery{
@@ -108,8 +121,8 @@ func TestAppendInferenceIsIdempotentPerWorkspaceRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UsageSummary: %v", err)
 	}
-	if summary.AttemptCount != 1 || summary.RequestCount != 1 || summary.TokenCount != 15 {
-		t.Fatalf("duplicate inflated usage: %+v", summary)
+	if summary.AttemptCount != 2 || summary.RequestCount != 2 || summary.TokenCount != 35 {
+		t.Fatalf("client correlation suppressed usage: %+v", summary)
 	}
 
 	otherWorkspace := first
@@ -199,7 +212,121 @@ func TestTrustworthyUsageMigrationPreservesLegacyCollisionsAndFirstWrite(t *test
 	if tokenCount != 30 {
 		t.Fatalf("expected earliest row to survive, got token_count=%d", tokenCount)
 	}
+
+	var clientRequestID string
+	if err := store.db.QueryRow(`SELECT client_request_id FROM inference_audit WHERE workspace_id = 'ws_alpha'`).Scan(&clientRequestID); err != nil {
+		t.Fatalf("query migrated client request id: %v", err)
+	}
+	if clientRequestID != "" {
+		t.Fatalf("expected safe empty correlation metadata for legacy row, got %q", clientRequestID)
+	}
 }
+
+func TestReserveQuotaAtomicallyEnforcesConcurrentHardLimits(t *testing.T) {
+	tests := []struct {
+		name         string
+		requestLimit *int64
+		tokenLimit   *int64
+		tokens       int64
+	}{
+		{name: "requests", requestLimit: int64Ptr(1), tokens: 1},
+		{name: "tokens", tokenLimit: int64Ptr(10), tokens: 10},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "audit.db")
+			stores := make([]*Store, 2)
+			for i := range stores {
+				store, err := NewStore(dbPath)
+				if err != nil {
+					t.Fatalf("NewStore %d: %v", i, err)
+				}
+				stores[i] = store
+				t.Cleanup(func() { _ = store.Close() })
+			}
+			periodStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+			start := make(chan struct{})
+			results := make(chan error, 2)
+			var wg sync.WaitGroup
+			for i := range stores {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					results <- stores[i].ReserveQuota(QuotaReservation{
+						ExecutionID:         fmt.Sprintf("exec_%d", i),
+						WorkspaceID:         "ws_alpha",
+						PeriodStart:         periodStart,
+						PeriodEnd:           periodStart.AddDate(0, 1, 0),
+						ReservedRequests:    1,
+						ReservedTokens:      tt.tokens,
+						MonthlyRequestLimit: tt.requestLimit,
+						MonthlyTokenLimit:   tt.tokenLimit,
+						ExpiresAt:           time.Now().UTC().Add(time.Minute),
+					})
+				}(i)
+			}
+			close(start)
+			wg.Wait()
+			close(results)
+
+			var admitted, rejected int
+			for err := range results {
+				switch {
+				case err == nil:
+					admitted++
+				case errors.Is(err, ErrQuotaExceeded):
+					rejected++
+				default:
+					t.Fatalf("unexpected reservation result: %v", err)
+				}
+			}
+			if admitted != 1 || rejected != 1 {
+				t.Fatalf("expected one admission and one rejection, got admitted=%d rejected=%d", admitted, rejected)
+			}
+		})
+	}
+}
+
+func TestAppendInferenceAtomicallyReconcilesReservations(t *testing.T) {
+	s := newTestStore(t)
+	periodStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	limit := int64(1)
+	reserve := func(executionID string) error {
+		return s.ReserveQuota(QuotaReservation{
+			ExecutionID: executionID, WorkspaceID: "ws_alpha",
+			PeriodStart: periodStart, PeriodEnd: periodStart.AddDate(0, 1, 0),
+			ReservedRequests: 1, ReservedTokens: 10, MonthlyRequestLimit: &limit,
+			ExpiresAt: time.Now().UTC().Add(time.Minute),
+		})
+	}
+	if err := reserve("exec_canceled"); err != nil {
+		t.Fatalf("reserve canceled execution: %v", err)
+	}
+	if err := reserve("exec_canceled"); err != nil {
+		t.Fatalf("retrying the same reservation should be idempotent: %v", err)
+	}
+	if err := s.AppendInference(InferenceAuditRecord{
+		Timestamp: periodStart.Add(time.Hour), RequestID: "exec_canceled", ClientRequestID: "retry-id",
+		WorkspaceID: "ws_alpha", Model: "m1", Status: "client_canceled",
+	}); err != nil {
+		t.Fatalf("record cancellation: %v", err)
+	}
+	if err := reserve("exec_success"); err != nil {
+		t.Fatalf("reservation was not released after cancellation: %v", err)
+	}
+	if err := s.AppendInference(InferenceAuditRecord{
+		Timestamp: periodStart.Add(2 * time.Hour), RequestID: "exec_success", ClientRequestID: "retry-id",
+		WorkspaceID: "ws_alpha", Model: "m1", Status: "success", TokenCount: 9,
+	}); err != nil {
+		t.Fatalf("record success: %v", err)
+	}
+	if err := reserve("exec_over_limit"); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("expected committed usage to enforce the request limit, got %v", err)
+	}
+}
+
+func int64Ptr(value int64) *int64 { return &value }
 
 func TestUsageByKey(t *testing.T) {
 	s := newTestStore(t)

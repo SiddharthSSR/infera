@@ -54,18 +54,28 @@ func TestHandleChatCompletionsPersistsExactUsageProvenance(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	retryReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"model-usage","messages":[{"role":"user","content":"measure this again"}]}`))
+	retryReq.Header.Set(HeaderRequestID, "req-usage-exact")
+	retryRec := httptest.NewRecorder()
+	g.handleChatCompletions(retryRec, retryReq)
+	if retryRec.Code != http.StatusOK {
+		t.Fatalf("expected duplicate correlation request to execute, got %d body=%s", retryRec.Code, retryRec.Body.String())
+	}
 	close(g.auditCh)
 	g.auditWg.Wait()
 	g.auditCh = nil
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if len(store.appended) != 1 {
-		t.Fatalf("expected one usage record, got %d", len(store.appended))
+	if len(store.appended) != 2 {
+		t.Fatalf("expected two usage records, got %d", len(store.appended))
 	}
 	got := store.appended[0]
-	if got.RequestID != "req-usage-exact" || got.PromptTokens != 12 || got.CompletionTokens != 4 || got.TokenCount != 16 || got.TokenSource != audit.TokenSourceExact {
+	if got.RequestID == "req-usage-exact" || got.ClientRequestID != "req-usage-exact" || got.PromptTokens != 12 || got.CompletionTokens != 4 || got.TokenCount != 16 || got.TokenSource != audit.TokenSourceExact {
 		t.Fatalf("unexpected usage record: %+v", got)
+	}
+	if store.appended[1].RequestID == got.RequestID || store.appended[1].ClientRequestID != "req-usage-exact" {
+		t.Fatalf("duplicate client request id reused execution identity: first=%+v second=%+v", got, store.appended[1])
 	}
 }
 
@@ -552,9 +562,12 @@ func TestHandleChatCompletionsStreamingReturnsSSEChunksAndDone(t *testing.T) {
 
 		return jsonHTTPResponse(http.StatusOK, builder.String()), nil
 	}))
+	store := &stubAuditUsageStore{}
+	g.SetAuditStore(store)
 
 	body := `{"model":"` + modelID + `","stream":true,"messages":[{"role":"user","content":"say hello"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set(HeaderRequestID, "stream-correlation-id")
 	rec := httptest.NewRecorder()
 
 	g.handleChatCompletions(rec, req)
@@ -602,6 +615,14 @@ func TestHandleChatCompletionsStreamingReturnsSSEChunksAndDone(t *testing.T) {
 	}
 	if finalChunk.Choices[0].FinishReason == nil || *finalChunk.Choices[0].FinishReason != "stop" {
 		t.Fatalf("expected stop finish_reason, got %+v", finalChunk.Choices[0].FinishReason)
+	}
+	close(g.auditCh)
+	g.auditWg.Wait()
+	g.auditCh = nil
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.appended) != 1 || !store.appended[0].Stream || store.appended[0].RequestID == "stream-correlation-id" || store.appended[0].ClientRequestID != "stream-correlation-id" {
+		t.Fatalf("streaming audit did not separate execution and correlation identities: %+v", store.appended)
 	}
 }
 

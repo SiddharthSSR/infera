@@ -95,17 +95,19 @@ const (
 
 // InferenceRequest represents a request for model inference.
 type InferenceRequest struct {
-	RequestID  string              `json:"request_id"`
-	ModelID    string              `json:"model_id"`
-	Messages   []Message           `json:"messages"`
-	Parameters InferenceParameters `json:"parameters"`
-	Stream     bool                `json:"stream"`
-	Priority   Priority            `json:"priority"`
-	Metadata   map[string]string   `json:"metadata,omitempty"`
-	CreatedAt  time.Time           `json:"created_at"`
-	APIKeyID   string              `json:"api_key_id,omitempty"`
-	Tools      []ToolDefinition    `json:"tools,omitempty"`
-	ToolChoice json.RawMessage     `json:"tool_choice,omitempty"`
+	// RequestID is the server-generated identity for one model execution.
+	RequestID       string              `json:"request_id"`
+	ClientRequestID string              `json:"-"`
+	ModelID         string              `json:"model_id"`
+	Messages        []Message           `json:"messages"`
+	Parameters      InferenceParameters `json:"parameters"`
+	Stream          bool                `json:"stream"`
+	Priority        Priority            `json:"priority"`
+	Metadata        map[string]string   `json:"metadata,omitempty"`
+	CreatedAt       time.Time           `json:"created_at"`
+	APIKeyID        string              `json:"api_key_id,omitempty"`
+	Tools           []ToolDefinition    `json:"tools,omitempty"`
+	ToolChoice      json.RawMessage     `json:"tool_choice,omitempty"`
 }
 
 // NewInferenceRequest creates a new request with generated ID.
