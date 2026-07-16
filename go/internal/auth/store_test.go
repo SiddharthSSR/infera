@@ -1,12 +1,15 @@
 package auth
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/infera/infera/go/internal/migrate"
 )
 
 const testProviderCredentialEncryptionKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -20,6 +23,45 @@ func newTestStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+func TestHumanIdentityMigrationDoesNotMergeLegacyMembershipsByEmail(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "auth_legacy.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if err := migrate.Run(db, authMigrations[:8]); err != nil {
+		t.Fatalf("migrate legacy schema: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO workspaces (id, slug, name) VALUES ('ws_a', 'a', 'A'), ('ws_b', 'b', 'B')`); err != nil {
+		t.Fatalf("insert workspaces: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO workspace_memberships (id, workspace_id, email, display_name, role)
+		VALUES ('mbr_a', 'ws_a', 'same@example.com', 'A', 'operator'),
+		       ('mbr_b', 'ws_b', 'same@example.com', 'B', 'admin')`); err != nil {
+		t.Fatalf("insert legacy memberships: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore after migration: %v", err)
+	}
+	defer store.Close()
+	var identityA, identityB string
+	if err := store.db.QueryRow(`SELECT human_identity_id FROM workspace_memberships WHERE id = 'mbr_a'`).Scan(&identityA); err != nil {
+		t.Fatalf("load identity A: %v", err)
+	}
+	if err := store.db.QueryRow(`SELECT human_identity_id FROM workspace_memberships WHERE id = 'mbr_b'`).Scan(&identityB); err != nil {
+		t.Fatalf("load identity B: %v", err)
+	}
+	if identityA == "" || identityB == "" || identityA == identityB {
+		t.Fatalf("legacy memberships must receive distinct non-empty identities: %q %q", identityA, identityB)
+	}
 }
 
 // ---------- Key CRUD ----------
@@ -271,7 +313,7 @@ func TestListAccessibleWorkspaces_MembershipSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation alpha: %v", err)
 	}
-	if _, _, _, err := s.AcceptWorkspaceInvitation(tokenB, "Joined Member"); err != nil {
+	if _, _, _, err := s.AcceptWorkspaceInvitationForIdentity(tokenB, "Joined Member", currentKey); err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation beta: %v", err)
 	}
 
@@ -314,7 +356,7 @@ func TestSwitchSessionWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation alpha: %v", err)
 	}
-	if _, _, _, err := s.AcceptWorkspaceInvitation(tokenB, "Joined Member"); err != nil {
+	if _, _, _, err := s.AcceptWorkspaceInvitationForIdentity(tokenB, "Joined Member", record); err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation beta: %v", err)
 	}
 
@@ -350,6 +392,60 @@ func TestSwitchSessionWorkspace(t *testing.T) {
 	}
 	if record.WorkspaceID == workspaceB.ID {
 		t.Fatal("expected original record to remain on first workspace")
+	}
+}
+
+func TestSwitchSessionWorkspaceRejectsSameEmailDifferentIdentity(t *testing.T) {
+	s := newTestStore(t)
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspaceA, err := s.CreateWorkspace("Attacker Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace attacker: %v", err)
+	}
+	workspaceB, err := s.CreateWorkspace("Victim Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace victim: %v", err)
+	}
+
+	tokenA, _, err := s.CreateWorkspaceInvitation(workspaceA.ID, "shared@example.com", "Attacker", RoleOperator, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation attacker: %v", err)
+	}
+	tokenB, _, err := s.CreateWorkspaceInvitation(workspaceB.ID, "shared@example.com", "Victim", RoleAdmin, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation victim: %v", err)
+	}
+	_, attackerKey, attackerRecord, err := s.AcceptWorkspaceInvitation(tokenA, "Attacker")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation attacker: %v", err)
+	}
+	_, _, victimRecord, err := s.AcceptWorkspaceInvitation(tokenB, "Victim")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation victim: %v", err)
+	}
+	if *attackerRecord.HumanIdentityID == *victimRecord.HumanIdentityID {
+		t.Fatal("separate invitation acceptance must create distinct human identities")
+	}
+
+	sessionToken, _, err := s.CreateSession(attackerRecord.ID)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, _, err := s.SwitchSessionWorkspace(sessionToken, workspaceB.ID); err == nil {
+		t.Fatal("same email with a different human identity must not switch workspaces")
+	}
+	accessible, err := s.ListAccessibleWorkspaces(attackerRecord)
+	if err != nil {
+		t.Fatalf("ListAccessibleWorkspaces: %v", err)
+	}
+	if len(accessible) != 1 || accessible[0].ID != workspaceA.ID {
+		t.Fatalf("expected only attacker workspace, got %+v", accessible)
+	}
+	if _, err := s.ValidateKey(attackerKey); err != nil {
+		t.Fatalf("attacker key remains valid in its own workspace: %v", err)
 	}
 }
 
