@@ -15,6 +15,18 @@ export type InstanceStatus =
   | 'terminated'
   | 'error';
 export type InstanceEngine = 'vllm' | 'sglang' | 'tensorrt_llm' | 'mock' | (string & {});
+export type WorkerRegistrationStatus =
+  | 'pending'
+  | 'provider_running_no_network'
+  | 'provider_running_worker_unregistered'
+  | 'worker_unreachable'
+  | 'worker_health_unavailable'
+  | 'model_loading'
+  | 'model_load_failed'
+  | 'registration_failed'
+  | 'heartbeat_missing'
+  | 'registered_unhealthy'
+  | 'ready';
 
 export interface Instance {
   id: string;
@@ -34,6 +46,15 @@ export interface Instance {
   worker_id?: string;
   models?: string[];
   engine?: InstanceEngine;
+  worker_registration_status?: WorkerRegistrationStatus;
+  worker_registration_deadline?: string;
+  last_worker_registration_error?: string;
+  last_worker_registration_check_at?: string;
+  worker_registered_at?: string;
+  worker_last_heartbeat_at?: string;
+  worker_health_url?: string;
+  provider_network_ready?: boolean;
+  provider_network_error?: string;
   cost_per_hour: number;
   spot_instance: boolean;
   created_at: string;

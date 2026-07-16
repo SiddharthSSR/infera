@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,10 +22,13 @@ type Manager struct {
 	mu        sync.RWMutex
 
 	// Configuration
-	defaultProvider ProviderType
-	workerImage     string
-	workerImages    map[InferenceEngine]string
-	gatewayAddress  string
+	defaultProvider           ProviderType
+	workerImage               string
+	workerImages              map[InferenceEngine]string
+	gatewayAddress            string
+	workerRegistrationTimeout time.Duration
+	workerHeartbeatTimeout    time.Duration
+	now                       func() time.Time
 
 	workspaceProviderConfigResolver WorkspaceProviderConfigResolver
 }
@@ -45,11 +49,14 @@ func (f workspaceProviderConfigResolverFunc) ResolveProviderConfig(workspaceID s
 
 // ManagerConfig configures the instance manager.
 type ManagerConfig struct {
-	DefaultProvider ProviderType
-	WorkerImage     string                     // Default Docker image for workers
-	WorkerImages    map[InferenceEngine]string // Engine-specific worker images
-	GatewayAddress  string                     // Gateway address for workers to connect
-	CostDBPath      string                     // Path to SQLite DB for persistent cost tracking (empty = in-memory)
+	DefaultProvider           ProviderType
+	WorkerImage               string                     // Default Docker image for workers
+	WorkerImages              map[InferenceEngine]string // Engine-specific worker images
+	GatewayAddress            string                     // Gateway address for workers to connect
+	CostDBPath                string                     // Path to SQLite DB for persistent cost tracking (empty = in-memory)
+	WorkerRegistrationTimeout time.Duration              // Max time a running provider instance may remain unregistered
+	WorkerHeartbeatTimeout    time.Duration              // Max age of a linked worker heartbeat before lifecycle becomes unhealthy
+	Now                       func() time.Time           // Optional clock used by deterministic lifecycle tests
 }
 
 // NewManager creates a new instance manager.
@@ -72,15 +79,30 @@ func NewManagerWithStore(config ManagerConfig, store instanceStore) (*Manager, e
 	if store == nil {
 		store = newInMemoryInstanceStore()
 	}
+	timeout := config.WorkerRegistrationTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	heartbeatTimeout := config.WorkerHeartbeatTimeout
+	if heartbeatTimeout <= 0 {
+		heartbeatTimeout = 90 * time.Second
+	}
+	now := config.Now
+	if now == nil {
+		now = time.Now
+	}
 
 	return &Manager{
-		providers:       make(map[ProviderType]Provider),
-		instances:       store,
-		costs:           costs,
-		defaultProvider: config.DefaultProvider,
-		workerImage:     config.WorkerImage,
-		workerImages:    cloneWorkerImages(config.WorkerImages),
-		gatewayAddress:  config.GatewayAddress,
+		providers:                 make(map[ProviderType]Provider),
+		instances:                 store,
+		costs:                     costs,
+		defaultProvider:           config.DefaultProvider,
+		workerImage:               config.WorkerImage,
+		workerImages:              cloneWorkerImages(config.WorkerImages),
+		gatewayAddress:            config.GatewayAddress,
+		workerRegistrationTimeout: timeout,
+		workerHeartbeatTimeout:    heartbeatTimeout,
+		now:                       now,
 	}, nil
 }
 
@@ -223,7 +245,8 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 		instance.Engine = req.Engine
 	}
 
-	// Track instance
+	// Track instance and begin the worker-registration deadline.
+	m.initializeWorkerRegistration(instance, m.now())
 	m.instances.put(instance)
 
 	// Start cost tracking
@@ -255,8 +278,9 @@ func (m *Manager) Terminate(ctx context.Context, instanceID string) error {
 	// Update status
 	m.instances.update(instanceID, func(instance *Instance) {
 		instance.Status = InstanceStatusTerminated
-		now := time.Now()
+		now := m.now()
 		instance.StoppedAt = &now
+		m.clearWorkerRegistration(instance)
 	})
 
 	return nil
@@ -295,11 +319,12 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 	m.costs.StartTracking(instance)
 
 	m.instances.update(instanceID, func(instance *Instance) {
-		now := time.Now()
+		now := m.now()
 		instance.Status = InstanceStatusProvisioning
 		instance.StartedAt = &now
 		instance.StoppedAt = nil
 		instance.ErrorMessage = ""
+		m.initializeWorkerRegistration(instance, now)
 	})
 
 	return nil
@@ -325,9 +350,10 @@ func (m *Manager) Stop(ctx context.Context, instanceID string) error {
 	m.costs.StopTracking(instanceID)
 
 	m.instances.update(instanceID, func(instance *Instance) {
-		now := time.Now()
+		now := m.now()
 		instance.Status = InstanceStatusStopped
 		instance.StoppedAt = &now
+		m.clearWorkerRegistration(instance)
 	})
 
 	return nil
@@ -356,6 +382,7 @@ func cloneInstance(instance *Instance) *Instance {
 
 // GetInstance returns a defensive copy of an instance by ID.
 func (m *Manager) GetInstance(instanceID string) (*Instance, bool) {
+	m.refreshWorkerRegistrationStates(m.now())
 	instance, exists := m.getTrackedInstance(instanceID)
 	if !exists {
 		return nil, false
@@ -365,15 +392,18 @@ func (m *Manager) GetInstance(instanceID string) (*Instance, bool) {
 
 // ListInstances returns all tracked instances.
 func (m *Manager) ListInstances() []*Instance {
+	m.refreshWorkerRegistrationStates(m.now())
 	return m.instances.list()
 }
 
 // ListInstancesByProvider returns instances for a specific provider.
 func (m *Manager) ListInstancesByProvider(providerType ProviderType) []*Instance {
+	m.refreshWorkerRegistrationStates(m.now())
 	return m.instances.listByProvider(providerType)
 }
 
 func (m *Manager) ListInstancesByWorkspace(workspaceID string) []*Instance {
+	m.refreshWorkerRegistrationStates(m.now())
 	return m.instances.listByWorkspace(workspaceID)
 }
 
@@ -397,7 +427,7 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 				m.instances.update(inst.ID, func(existing *Instance) {
 					existing.Status = InstanceStatusTerminated
 					existing.ErrorMessage = "Provider no longer reports this instance"
-					now := time.Now()
+					now := m.now()
 					if existing.StoppedAt == nil {
 						existing.StoppedAt = &now
 					}
@@ -410,6 +440,8 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 		m.instances.update(inst.ID, func(existing *Instance) {
 			existing.Status = refreshed.Status
 			existing.PublicIP = refreshed.PublicIP
+			existing.HTTPPort = refreshed.HTTPPort
+			existing.SSHPort = refreshed.SSHPort
 			existing.ErrorMessage = refreshed.ErrorMessage
 			// Only update WorkerID from provider if non-empty; providers don't
 			// track our worker process so a blank value from the refresh loop
@@ -417,6 +449,7 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 			if refreshed.WorkerID != "" {
 				existing.WorkerID = refreshed.WorkerID
 			}
+			m.evaluateWorkerRegistration(existing, m.now())
 		})
 	}
 
@@ -499,16 +532,65 @@ func (m *Manager) GetCostSummaryForWorkspace(workspaceID string) *CostSummary {
 func (m *Manager) LinkWorker(instanceID, workerID string) error {
 	if updated := m.instances.update(instanceID, func(instance *Instance) {
 		instance.WorkerID = workerID
+		now := m.now()
+		if instance.WorkerRegisteredAt == nil {
+			instance.WorkerRegisteredAt = &now
+		}
+		instance.WorkerLastHeartbeatAt = &now
+		instance.LastWorkerRegistrationCheckAt = &now
+		instance.WorkerRegistrationStatus = WorkerRegistrationReady
+		instance.LastWorkerRegistrationError = ""
 	}); !updated {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
 	return nil
 }
 
+// RecordWorkerUnhealthy marks a linked worker unhealthy until a later heartbeat.
+func (m *Manager) RecordWorkerUnhealthy(workerID string, observedAt time.Time) bool {
+	instance, exists := m.instances.findByWorker(workerID)
+	if !exists {
+		return false
+	}
+	return m.instances.update(instance.ID, func(stored *Instance) {
+		at := observedAt
+		if at.IsZero() {
+			at = m.now()
+		}
+		stored.LastWorkerRegistrationCheckAt = &at
+		stored.WorkerRegistrationStatus = WorkerRegistrationRegisteredUnhealthy
+		stored.LastWorkerRegistrationError = "Gateway registry reports the linked worker as unhealthy"
+	})
+}
+
+// RecordWorkerHeartbeat updates the lifecycle timestamps for a linked worker.
+func (m *Manager) RecordWorkerHeartbeat(workerID string, heartbeatAt time.Time) bool {
+	instance, exists := m.instances.findByWorker(workerID)
+	if !exists {
+		return false
+	}
+	return m.instances.update(instance.ID, func(stored *Instance) {
+		at := heartbeatAt
+		if at.IsZero() {
+			at = m.now()
+		}
+		stored.WorkerLastHeartbeatAt = &at
+		if stored.WorkerRegisteredAt == nil {
+			stored.WorkerRegisteredAt = &at
+		}
+		stored.LastWorkerRegistrationCheckAt = &at
+		stored.WorkerRegistrationStatus = WorkerRegistrationReady
+		stored.LastWorkerRegistrationError = ""
+	})
+}
+
 // UnlinkWorker removes worker association from an instance.
 func (m *Manager) UnlinkWorker(instanceID string) {
 	m.instances.update(instanceID, func(instance *Instance) {
 		instance.WorkerID = ""
+		instance.WorkerRegisteredAt = nil
+		instance.WorkerLastHeartbeatAt = nil
+		m.evaluateWorkerRegistration(instance, m.now())
 	})
 }
 
@@ -520,4 +602,148 @@ func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
 // GetInstanceByProviderRef finds an instance by provider type and provider-native ID.
 func (m *Manager) GetInstanceByProviderRef(providerType ProviderType, providerID string) (*Instance, bool) {
 	return m.instances.findByProviderRef(providerType, providerID)
+}
+
+func (m *Manager) initializeWorkerRegistration(instance *Instance, now time.Time) {
+	if instance == nil {
+		return
+	}
+	if instance.StartedAt == nil && instance.Status == InstanceStatusRunning {
+		startedAt := now
+		instance.StartedAt = &startedAt
+	}
+	if instance.Status == InstanceStatusRunning || instance.Status == InstanceStatusProvisioning || instance.Status == InstanceStatusPending {
+		base := now
+		if instance.StartedAt != nil {
+			base = *instance.StartedAt
+		} else if !instance.CreatedAt.IsZero() {
+			base = instance.CreatedAt
+		}
+		deadline := base.Add(m.workerRegistrationTimeout)
+		instance.WorkerRegistrationDeadline = &deadline
+		if instance.WorkerRegistrationStatus == "" {
+			instance.WorkerRegistrationStatus = WorkerRegistrationPending
+		}
+	}
+	m.evaluateWorkerRegistration(instance, now)
+}
+
+func (m *Manager) refreshWorkerRegistrationStates(now time.Time) {
+	for _, instance := range m.instances.list() {
+		m.instances.update(instance.ID, func(stored *Instance) {
+			m.evaluateWorkerRegistration(stored, now)
+		})
+	}
+}
+
+func (m *Manager) evaluateWorkerRegistration(instance *Instance, now time.Time) {
+	if instance == nil {
+		return
+	}
+	previousCheckAt := instance.LastWorkerRegistrationCheckAt
+	instance.LastWorkerRegistrationCheckAt = &now
+	instance.WorkerHealthURL = workerHealthURL(instance)
+	instance.ProviderNetworkReady = providerNetworkReady(instance)
+	instance.ProviderNetworkError = ""
+
+	switch instance.Status {
+	case InstanceStatusStopped, InstanceStatusStopping, InstanceStatusTerminated, InstanceStatusTerminating:
+		m.clearWorkerRegistration(instance)
+		return
+	case InstanceStatusError:
+		instance.WorkerRegistrationStatus = WorkerRegistrationFailed
+		if instance.LastWorkerRegistrationError == "" {
+			instance.LastWorkerRegistrationError = firstNonEmpty(instance.ErrorMessage, "Provider reported an instance error")
+		}
+		return
+	}
+
+	if instance.WorkerID != "" {
+		if instance.WorkerLastHeartbeatAt == nil {
+			instance.WorkerRegistrationStatus = WorkerRegistrationHeartbeatMissing
+			instance.LastWorkerRegistrationError = "Worker is linked to the instance, but no heartbeat timestamp is available"
+			return
+		}
+		if instance.WorkerRegistrationStatus == WorkerRegistrationRegisteredUnhealthy && previousCheckAt != nil && previousCheckAt.After(*instance.WorkerLastHeartbeatAt) {
+			return
+		}
+		if m.workerHeartbeatTimeout > 0 && now.Sub(*instance.WorkerLastHeartbeatAt) > m.workerHeartbeatTimeout {
+			instance.WorkerRegistrationStatus = WorkerRegistrationRegisteredUnhealthy
+			instance.LastWorkerRegistrationError = "Worker is registered, but its last heartbeat is stale"
+			return
+		}
+		instance.WorkerRegistrationStatus = WorkerRegistrationReady
+		instance.LastWorkerRegistrationError = ""
+		return
+	}
+	if instance.Status != InstanceStatusRunning {
+		instance.WorkerRegistrationStatus = WorkerRegistrationPending
+		instance.LastWorkerRegistrationError = ""
+		return
+	}
+	if !instance.ProviderNetworkReady {
+		instance.WorkerRegistrationStatus = WorkerRegistrationProviderRunningNoNetwork
+		instance.ProviderNetworkError = "Provider reports instance running, but no public/proxy endpoint is available yet"
+		instance.LastWorkerRegistrationError = instance.ProviderNetworkError
+		return
+	}
+	if instance.WorkerRegistrationDeadline == nil {
+		base := now
+		if instance.StartedAt != nil {
+			base = *instance.StartedAt
+		} else if !instance.CreatedAt.IsZero() {
+			base = instance.CreatedAt
+		}
+		deadline := base.Add(m.workerRegistrationTimeout)
+		instance.WorkerRegistrationDeadline = &deadline
+	}
+	if now.After(*instance.WorkerRegistrationDeadline) {
+		instance.WorkerRegistrationStatus = WorkerRegistrationProviderRunningUnregistered
+		instance.LastWorkerRegistrationError = "Provider reports instance running, but no gateway worker registered before the deadline"
+		return
+	}
+	instance.WorkerRegistrationStatus = WorkerRegistrationPending
+	instance.LastWorkerRegistrationError = ""
+}
+
+func (m *Manager) clearWorkerRegistration(instance *Instance) {
+	if instance == nil {
+		return
+	}
+	instance.WorkerID = ""
+	instance.WorkerRegistrationStatus = ""
+	instance.WorkerRegistrationDeadline = nil
+	instance.LastWorkerRegistrationError = ""
+	instance.LastWorkerRegistrationCheckAt = nil
+	instance.WorkerRegisteredAt = nil
+	instance.WorkerLastHeartbeatAt = nil
+	instance.WorkerHealthURL = ""
+	instance.ProviderNetworkReady = false
+	instance.ProviderNetworkError = ""
+}
+
+func providerNetworkReady(instance *Instance) bool {
+	return instance != nil && strings.TrimSpace(instance.PublicIP) != "" && instance.HTTPPort > 0
+}
+
+func workerHealthURL(instance *Instance) string {
+	if instance == nil {
+		return ""
+	}
+	if strings.TrimSpace(instance.PublicIP) != "" && instance.HTTPPort > 0 {
+		return fmt.Sprintf("http://%s:%d/health", strings.TrimSpace(instance.PublicIP), instance.HTTPPort)
+	}
+	if instance.Provider == ProviderRunPod && strings.TrimSpace(instance.ProviderID) != "" {
+		return fmt.Sprintf("https://%s-8081.proxy.runpod.net/health", strings.TrimSpace(instance.ProviderID))
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

@@ -23,7 +23,89 @@ function elapsedMinutes(startTimeMs: number | null, now: number): number | null 
   return Math.max(1, Math.round((now - startTimeMs) / 60000));
 }
 
+function readinessFromRegistrationStatus(instance: Instance): InstanceReadiness | null {
+  switch (instance.worker_registration_status) {
+    case 'provider_running_no_network':
+      return {
+        label: 'NO NETWORK',
+        detail: instance.provider_network_error || 'Provider reports this node running, but no public/proxy endpoint is available yet.',
+        tone: 'error',
+        serving: false,
+        verified: false,
+      };
+    case 'provider_running_worker_unregistered':
+      return {
+        label: 'WORKER NOT REGISTERED',
+        detail: instance.last_worker_registration_error || 'Provider reports this node running, but no gateway worker registered before the deadline.',
+        tone: 'error',
+        serving: false,
+        verified: false,
+      };
+    case 'worker_unreachable':
+      return {
+        label: 'WORKER UNREACHABLE',
+        detail: instance.last_worker_registration_error || 'Worker endpoint is known but not reachable.',
+        tone: 'error',
+        serving: false,
+        verified: false,
+      };
+    case 'worker_health_unavailable':
+      return {
+        label: 'HEALTH UNAVAILABLE',
+        detail: instance.last_worker_registration_error || 'Worker endpoint responded without a usable health signal.',
+        tone: 'warning',
+        serving: false,
+        verified: false,
+      };
+    case 'model_loading':
+      return {
+        label: 'MODEL LOADING',
+        detail: 'Worker is reachable and loading the assigned model.',
+        tone: 'warning',
+        serving: false,
+        verified: false,
+      };
+    case 'model_load_failed':
+      return {
+        label: 'MODEL LOAD FAILED',
+        detail: instance.last_worker_registration_error || 'Worker failed while loading the assigned model.',
+        tone: 'error',
+        serving: false,
+        verified: false,
+      };
+    case 'registration_failed':
+      return {
+        label: 'REGISTRATION FAILED',
+        detail: instance.last_worker_registration_error || 'Worker failed gateway registration.',
+        tone: 'error',
+        serving: false,
+        verified: false,
+      };
+    case 'heartbeat_missing':
+      return {
+        label: 'HEARTBEAT MISSING',
+        detail: instance.last_worker_registration_error || 'Worker is linked to this node, but heartbeat data is missing.',
+        tone: 'error',
+        serving: false,
+        verified: false,
+      };
+    case 'registered_unhealthy':
+      return {
+        label: 'WORKER UNHEALTHY',
+        detail: instance.last_worker_registration_error || 'Worker is registered but not healthy.',
+        tone: 'warning',
+        serving: false,
+        verified: false,
+      };
+    default:
+      return null;
+  }
+}
+
 export function getInstanceReadiness(instance: Instance, workers: Worker[] | undefined, now = new Date()): InstanceReadiness {
+  const lifecycleReadiness = readinessFromRegistrationStatus(instance);
+  if (lifecycleReadiness) return lifecycleReadiness;
+
   const nowMs = now.getTime();
   const linkedWorker = workers?.find((worker) => worker.worker_id === instance.worker_id);
   const assignedModels = instance.models || [];

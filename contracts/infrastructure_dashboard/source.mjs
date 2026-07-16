@@ -11,6 +11,18 @@ export type InstanceStatus =
   | 'terminated'
   | 'error';
 export type InstanceEngine = 'vllm' | 'sglang' | 'tensorrt_llm' | 'mock' | (string & {});
+export type WorkerRegistrationStatus =
+  | 'pending'
+  | 'provider_running_no_network'
+  | 'provider_running_worker_unregistered'
+  | 'worker_unreachable'
+  | 'worker_health_unavailable'
+  | 'model_loading'
+  | 'model_load_failed'
+  | 'registration_failed'
+  | 'heartbeat_missing'
+  | 'registered_unhealthy'
+  | 'ready';
 
 export interface Instance {
   id: string;
@@ -30,6 +42,15 @@ export interface Instance {
   worker_id?: string;
   models?: string[];
   engine?: InstanceEngine;
+  worker_registration_status?: WorkerRegistrationStatus;
+  worker_registration_deadline?: string;
+  last_worker_registration_error?: string;
+  last_worker_registration_check_at?: string;
+  worker_registered_at?: string;
+  worker_last_heartbeat_at?: string;
+  worker_health_url?: string;
+  provider_network_ready?: boolean;
+  provider_network_error?: string;
   cost_per_hour: number;
   spot_instance: boolean;
   created_at: string;
@@ -121,6 +142,15 @@ export const fixtures = {
         worker_id: 'worker-fixture-1',
         models: ['Qwen/Qwen2.5-7B-Instruct'],
         engine: 'sglang',
+        worker_registration_status: 'ready',
+        worker_registration_deadline: '2026-04-10T00:15:00Z',
+        last_worker_registration_error: '',
+        last_worker_registration_check_at: '2026-04-10T00:05:00Z',
+        worker_registered_at: '2026-04-10T00:05:00Z',
+        worker_last_heartbeat_at: '2026-04-10T00:05:00Z',
+        worker_health_url: 'http://203.0.113.10:8081/health',
+        provider_network_ready: true,
+        provider_network_error: '',
         cost_per_hour: 3.5,
         spot_instance: false,
         created_at: '2026-04-10T00:00:00Z',

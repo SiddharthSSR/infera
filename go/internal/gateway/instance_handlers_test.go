@@ -39,13 +39,14 @@ func newTestDeploymentStore(t *testing.T) *deployments.Store {
 }
 
 type failingProvider struct {
-	provisionErr error
-	lastReq      *providers.ProvisionRequest
-	startErr     error
-	stopErr      error
-	terminateErr error
-	status       *providers.ProviderStatus
-	instances    map[string]*providers.Instance
+	provisionErr      error
+	provisionInstance *providers.Instance
+	lastReq           *providers.ProvisionRequest
+	startErr          error
+	stopErr           error
+	terminateErr      error
+	status            *providers.ProviderStatus
+	instances         map[string]*providers.Instance
 }
 
 func (p *failingProvider) Name() providers.ProviderType { return providers.ProviderMock }
@@ -54,6 +55,19 @@ func (p *failingProvider) Provision(ctx context.Context, req *providers.Provisio
 		return nil, p.provisionErr
 	}
 	p.lastReq = req
+	if p.provisionInstance != nil {
+		inst := *p.provisionInstance
+		inst.Models = append([]string(nil), p.provisionInstance.Models...)
+		inst.Metadata = make(map[string]string, len(p.provisionInstance.Metadata))
+		for key, value := range p.provisionInstance.Metadata {
+			inst.Metadata[key] = value
+		}
+		if p.instances == nil {
+			p.instances = map[string]*providers.Instance{}
+		}
+		p.instances[inst.ID] = &inst
+		return &inst, nil
+	}
 	if p.instances == nil {
 		p.instances = map[string]*providers.Instance{}
 	}
@@ -954,4 +968,70 @@ func TestInstanceToMap(t *testing.T) {
 			t.Error("stopped_at should not exist when nil")
 		}
 	})
+}
+
+func TestInstanceToMapIncludesWorkerRegistrationLifecycle(t *testing.T) {
+	now := time.Now()
+	deadline := now.Add(10 * time.Minute)
+	registeredAt := now.Add(-2 * time.Minute)
+	heartbeatAt := now.Add(-30 * time.Second)
+	instance := &providers.Instance{
+		ID:                            "map-lifecycle",
+		ProviderID:                    "runpod-lifecycle",
+		Provider:                      providers.ProviderRunPod,
+		Name:                          "Lifecycle Instance",
+		Status:                        providers.InstanceStatusRunning,
+		GPUType:                       providers.GPUA100_80,
+		GPUCount:                      1,
+		CostPerHour:                   1.19,
+		CreatedAt:                     now.Add(-15 * time.Minute),
+		WorkerID:                      "worker-lifecycle",
+		WorkerRegistrationStatus:      providers.WorkerRegistrationProviderRunningNoNetwork,
+		WorkerRegistrationDeadline:    &deadline,
+		LastWorkerRegistrationError:   "Provider reports instance running, but no public/proxy endpoint is available yet",
+		LastWorkerRegistrationCheckAt: &now,
+		WorkerRegisteredAt:            &registeredAt,
+		WorkerLastHeartbeatAt:         &heartbeatAt,
+		WorkerHealthURL:               "https://runpod-lifecycle-8081.proxy.runpod.net/health",
+		ProviderNetworkReady:          false,
+		ProviderNetworkError:          "Provider reports instance running, but no public/proxy endpoint is available yet",
+		Metadata: map[string]string{
+			"api_key":       "secret",
+			"authorization": "Bearer secret",
+		},
+	}
+
+	m := instanceToMap(instance)
+
+	if got := m["worker_registration_status"]; got != providers.WorkerRegistrationProviderRunningNoNetwork {
+		t.Fatalf("expected lifecycle status, got %v", got)
+	}
+	if got := m["last_worker_registration_error"]; got == "" {
+		t.Fatal("expected last registration error")
+	}
+	if got := m["worker_health_url"]; got != "https://runpod-lifecycle-8081.proxy.runpod.net/health" {
+		t.Fatalf("expected worker health url, got %v", got)
+	}
+	if got := m["provider_network_ready"]; got != false {
+		t.Fatalf("expected provider network not ready, got %v", got)
+	}
+	for _, key := range []string{
+		"worker_registration_deadline",
+		"last_worker_registration_check_at",
+		"worker_registered_at",
+		"worker_last_heartbeat_at",
+	} {
+		if _, ok := m[key]; !ok {
+			t.Fatalf("expected %s in instance map", key)
+		}
+	}
+	if _, ok := m["metadata"]; ok {
+		t.Fatal("instance map must not expose provider metadata")
+	}
+	if _, ok := m["api_key"]; ok {
+		t.Fatal("instance map must not expose API keys")
+	}
+	if _, ok := m["authorization"]; ok {
+		t.Fatal("instance map must not expose authorization headers")
+	}
 }

@@ -73,8 +73,10 @@ func newInfrastructureFixtureHandlers(t *testing.T, withInstance bool) *Instance
 		return newInfrastructureFixtureProvider(), nil
 	})
 
+	fixtureNow := time.Date(2026, time.April, 10, 0, 5, 0, 0, time.UTC)
 	manager, err := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider: providers.ProviderRunPod,
+		Now:             func() time.Time { return fixtureNow },
 	})
 	if err != nil {
 		t.Fatalf("create provider manager: %v", err)
@@ -96,6 +98,9 @@ func newInfrastructureFixtureHandlers(t *testing.T, withInstance bool) *Instance
 			DockerImage:  "ghcr.io/example/infera-worker:test",
 		}); err != nil {
 			t.Fatalf("seed fixture instance: %v", err)
+		}
+		if !manager.RecordWorkerHeartbeat("worker-fixture-1", fixtureNow) {
+			t.Fatal("seed fixture worker heartbeat")
 		}
 	}
 

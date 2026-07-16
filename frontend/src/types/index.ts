@@ -84,6 +84,7 @@ export type {
   Instance,
   InstanceEngine,
   InstanceStatus,
+  WorkerRegistrationStatus,
   KnownGPUType,
   OfferingsResponse,
   ProviderCapabilities,
