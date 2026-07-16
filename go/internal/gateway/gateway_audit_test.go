@@ -66,6 +66,7 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 		Rows []struct {
 			WorkspaceID string `json:"workspace_id"`
 			KeyID       string `json:"key_id"`
+			Attempts    int64  `json:"attempts"`
 			Requests    int64  `json:"requests"`
 			Tokens      int64  `json:"tokens"`
 			Successes   int64  `json:"successes"`
@@ -86,7 +87,7 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 	if row.KeyID != "inf_key_a" {
 		t.Fatalf("expected key inf_key_a, got %q", row.KeyID)
 	}
-	if row.Requests != 2 || row.Tokens != 120 || row.Successes != 1 || row.Errors != 1 {
+	if row.Attempts != 2 || row.Requests != 1 || row.Tokens != 120 || row.Successes != 1 || row.Errors != 1 {
 		t.Fatalf("unexpected row values: %+v", row)
 	}
 }

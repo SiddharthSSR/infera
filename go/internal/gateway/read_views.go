@@ -226,6 +226,7 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 	}
 
 	type usageBucket struct {
+		Attempts  int64
 		Requests  int64
 		Tokens    int64
 		Successes int64
@@ -234,6 +235,7 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 	aggregate := make(map[int64]usageBucket, len(rows))
 	for _, row := range rows {
 		current := aggregate[row.BucketStartMS]
+		current.Attempts += row.AttemptCount
 		current.Requests += row.RequestCount
 		current.Tokens += row.TokenCount
 		current.Successes += row.SuccessCount
@@ -246,6 +248,7 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 		snapshot := aggregate[bucket.UnixMilli()]
 		trend = append(trend, map[string]any{
 			"bucket_start": bucket.Format(time.RFC3339),
+			"attempts":     snapshot.Attempts,
 			"requests":     snapshot.Requests,
 			"tokens":       snapshot.Tokens,
 			"successes":    snapshot.Successes,
@@ -263,6 +266,7 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 			"trend_bucket":        "day",
 		},
 		"totals": map[string]any{
+			"attempts":  totals.AttemptCount,
 			"requests":  totals.RequestCount,
 			"tokens":    totals.TokenCount,
 			"successes": totals.SuccessCount,

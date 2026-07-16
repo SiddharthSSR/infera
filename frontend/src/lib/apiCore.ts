@@ -4,6 +4,7 @@ export interface AuditUsageRow {
   bucket_start: string;
   workspace_id: string;
   key_id: string;
+  attempts?: number;
   requests: number;
   tokens: number;
   successes: number;

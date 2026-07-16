@@ -1132,6 +1132,7 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 		BucketStart string `json:"bucket_start"`
 		WorkspaceID string `json:"workspace_id"`
 		KeyID       string `json:"key_id"`
+		Attempts    int64  `json:"attempts"`
 		Requests    int64  `json:"requests"`
 		Tokens      int64  `json:"tokens"`
 		Successes   int64  `json:"successes"`
@@ -1144,6 +1145,7 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 			BucketStart: time.UnixMilli(row.BucketStartMS).UTC().Format(time.RFC3339),
 			WorkspaceID: row.WorkspaceID,
 			KeyID:       row.KeyID,
+			Attempts:    row.AttemptCount,
 			Requests:    row.RequestCount,
 			Tokens:      row.TokenCount,
 			Successes:   row.SuccessCount,

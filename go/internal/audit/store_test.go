@@ -21,21 +21,98 @@ func TestAppendInference(t *testing.T) {
 	s := newTestStore(t)
 
 	err := s.AppendInference(InferenceAuditRecord{
-		Timestamp:    time.Now().UTC(),
-		RequestID:    "req_1",
-		KeyID:        "inf_abcd1234",
-		WorkspaceID:  "ws_default",
-		Model:        "meta-llama/Llama-3.1-8B-Instruct",
-		WorkerID:     "w1",
-		Stream:       false,
-		MessageCount: 2,
-		TokenCount:   128,
-		PromptHash:   "aabbccddeeff0011",
-		Status:       "success",
-		LatencyMS:    320,
+		Timestamp:        time.Now().UTC(),
+		RequestID:        "req_1",
+		KeyID:            "inf_abcd1234",
+		WorkspaceID:      "ws_default",
+		Model:            "meta-llama/Llama-3.1-8B-Instruct",
+		WorkerID:         "w1",
+		Stream:           false,
+		MessageCount:     2,
+		PromptTokens:     96,
+		CompletionTokens: 32,
+		TokenCount:       128,
+		TokenSource:      "exact",
+		PromptHash:       "aabbccddeeff0011",
+		Status:           "success",
+		LatencyMS:        320,
 	})
 	if err != nil {
 		t.Fatalf("AppendInference: %v", err)
+	}
+
+	var promptTokens, completionTokens, totalTokens, billable int
+	var tokenSource string
+	if err := s.db.QueryRow(
+		`SELECT prompt_tokens, completion_tokens, token_count, token_source, billable
+		 FROM inference_audit WHERE workspace_id = ? AND request_id = ?`,
+		"ws_default", "req_1",
+	).Scan(&promptTokens, &completionTokens, &totalTokens, &tokenSource, &billable); err != nil {
+		t.Fatalf("query persisted usage: %v", err)
+	}
+	if promptTokens != 96 || completionTokens != 32 || totalTokens != 128 || tokenSource != "exact" || billable != 1 {
+		t.Fatalf("unexpected persisted usage detail: prompt=%d completion=%d total=%d source=%q billable=%d", promptTokens, completionTokens, totalTokens, tokenSource, billable)
+	}
+}
+
+func TestAppendInferenceRejectsInvalidTokenData(t *testing.T) {
+	s := newTestStore(t)
+	tests := []struct {
+		name   string
+		record InferenceAuditRecord
+	}{
+		{name: "negative prompt tokens", record: InferenceAuditRecord{RequestID: "req_negative", Model: "m1", Status: "success", PromptTokens: -1}},
+		{name: "unknown token source", record: InferenceAuditRecord{RequestID: "req_source", Model: "m1", Status: "success", TokenSource: "guessed"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := s.AppendInference(tt.record); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestAppendInferenceIsIdempotentPerWorkspaceRequest(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 7, 16, 5, 0, 0, 0, time.UTC)
+
+	first := InferenceAuditRecord{
+		Timestamp:        base,
+		RequestID:        "req_duplicate",
+		KeyID:            "inf_key_a",
+		WorkspaceID:      "ws_alpha",
+		Model:            "m1",
+		Status:           "success",
+		PromptTokens:     10,
+		CompletionTokens: 5,
+		TokenSource:      "exact",
+	}
+	if err := s.AppendInference(first); err != nil {
+		t.Fatalf("AppendInference first: %v", err)
+	}
+	duplicate := first
+	duplicate.TokenCount = 999
+	if err := s.AppendInference(duplicate); err != nil {
+		t.Fatalf("AppendInference duplicate: %v", err)
+	}
+
+	summary, err := s.UsageSummary(UsageSummaryQuery{
+		Start:       base.Add(-time.Hour),
+		End:         base.Add(time.Hour),
+		WorkspaceID: "ws_alpha",
+	})
+	if err != nil {
+		t.Fatalf("UsageSummary: %v", err)
+	}
+	if summary.AttemptCount != 1 || summary.RequestCount != 1 || summary.TokenCount != 15 {
+		t.Fatalf("duplicate inflated usage: %+v", summary)
+	}
+
+	otherWorkspace := first
+	otherWorkspace.WorkspaceID = "ws_beta"
+	if err := s.AppendInference(otherWorkspace); err != nil {
+		t.Fatalf("AppendInference other workspace: %v", err)
 	}
 }
 
@@ -100,6 +177,9 @@ func TestUsageByKey(t *testing.T) {
 			if row.RequestCount != 2 {
 				t.Fatalf("expected 2 requests for key a, got %d", row.RequestCount)
 			}
+			if row.AttemptCount != 2 {
+				t.Fatalf("expected 2 attempts for key a, got %d", row.AttemptCount)
+			}
 			if row.TokenCount != 150 {
 				t.Fatalf("expected 150 tokens for key a, got %d", row.TokenCount)
 			}
@@ -110,11 +190,11 @@ func TestUsageByKey(t *testing.T) {
 			if row.WorkspaceID != "ws_beta" {
 				t.Fatalf("expected ws_beta, got %q", row.WorkspaceID)
 			}
-			if row.RequestCount != 1 {
-				t.Fatalf("expected 1 request for key b, got %d", row.RequestCount)
+			if row.AttemptCount != 1 || row.RequestCount != 0 {
+				t.Fatalf("expected 1 attempt and 0 billable requests for key b, got attempts=%d requests=%d", row.AttemptCount, row.RequestCount)
 			}
-			if row.TokenCount != 10 {
-				t.Fatalf("expected 10 tokens for key b, got %d", row.TokenCount)
+			if row.TokenCount != 0 {
+				t.Fatalf("expected failed request to contribute 0 billable tokens, got %d", row.TokenCount)
 			}
 			if row.SuccessCount != 0 || row.ErrorCount != 1 {
 				t.Fatalf("expected success=0 error=1 for key b, got success=%d error=%d", row.SuccessCount, row.ErrorCount)
@@ -172,7 +252,7 @@ func TestUsageSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UsageSummary: %v", err)
 	}
-	if summary.RequestCount != 2 || summary.TokenCount != 110 || summary.SuccessCount != 1 || summary.ErrorCount != 1 {
+	if summary.AttemptCount != 2 || summary.RequestCount != 1 || summary.TokenCount != 100 || summary.SuccessCount != 1 || summary.ErrorCount != 1 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
 }
