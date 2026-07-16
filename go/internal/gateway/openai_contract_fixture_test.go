@@ -143,7 +143,7 @@ func TestHandleStreamingInferenceMatchesSharedFixtures(t *testing.T) {
 	defer r.Stop()
 
 	g := New(DefaultConfig(), r, nil)
-	client := NewWorkerClient("worker.test:8081")
+	client := NewWorkerClient("http://localhost:8081")
 	client.streamingHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/infer/stream" {
 			t.Fatalf("expected /infer/stream request, got %s", r.URL.Path)

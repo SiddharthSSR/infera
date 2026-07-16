@@ -2,6 +2,7 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,10 +12,18 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 
 	"github.com/infera/infera/go/pkg/types"
+)
+
+const (
+	maxWorkerErrorBytes    int64 = 64 << 10
+	maxWorkerResponseBytes int64 = 16 << 20
+	maxWorkerStreamValue         = 1 << 20
 )
 
 // WorkerClient communicates with a worker via HTTP.
@@ -61,6 +70,39 @@ func shouldRecordFailure(ctx context.Context, err error) bool {
 		return false
 	}
 	return true
+}
+
+func readWorkerBody(r io.Reader, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("worker response exceeds %d bytes", limit)
+	}
+	return body, nil
+}
+
+func validatedWorkerURL(address, endpoint string) (*url.URL, error) {
+	raw := strings.TrimSpace(address)
+	if raw == "" {
+		return nil, errors.New("worker address is required")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return nil, errors.New("worker address must be an absolute HTTP(S) URL without credentials, query, or fragment")
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	loopback := strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())
+	if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
+		return nil, errors.New("non-loopback workers require HTTPS")
+	}
+	u.Path = path.Join(strings.TrimSuffix(u.Path, "/"), endpoint)
+	return u, nil
 }
 
 // WorkerInferRequest is the request format for the worker.
@@ -147,13 +189,11 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Use HTTPS for RunPod proxy URLs, HTTP for localhost
-	protocol := "http"
-	if strings.Contains(c.address, ".proxy.runpod.net") || strings.Contains(c.address, ".runpod.") {
-		protocol = "https"
+	workerURL, err := validatedWorkerURL(c.address, "/infer")
+	if err != nil {
+		return nil, fmt.Errorf("invalid worker address: %w", err)
 	}
-	url := fmt.Sprintf("%s://%s/infer", protocol, c.address)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", workerURL.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -174,13 +214,21 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 
 	if resp.StatusCode != http.StatusOK {
 		c.breaker.RecordFailure()
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, readErr := readWorkerBody(resp.Body, maxWorkerErrorBytes)
+		if readErr != nil {
+			return nil, fmt.Errorf("worker error (status %d): %w", resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("worker error (status %d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	// Parse response
+	bodyBytes, err := readWorkerBody(resp.Body, maxWorkerResponseBytes)
+	if err != nil {
+		c.breaker.RecordFailure()
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
 	var workerResp WorkerInferResponse
-	if err := json.NewDecoder(resp.Body).Decode(&workerResp); err != nil {
+	if err := json.Unmarshal(bodyBytes, &workerResp); err != nil {
 		if shouldRecordFailure(ctx, err) {
 			c.breaker.RecordFailure()
 		}
@@ -254,13 +302,11 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Use HTTPS for RunPod proxy URLs, HTTP for localhost
-	protocol := "http"
-	if strings.Contains(c.address, ".proxy.runpod.net") || strings.Contains(c.address, ".runpod.") {
-		protocol = "https"
+	workerURL, err := validatedWorkerURL(c.address, "/infer/stream")
+	if err != nil {
+		return nil, fmt.Errorf("invalid worker address: %w", err)
 	}
-	url := fmt.Sprintf("%s://%s/infer/stream", protocol, c.address)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", workerURL.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -281,8 +327,11 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 
 	if resp.StatusCode != http.StatusOK {
 		c.breaker.RecordFailure()
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, readErr := readWorkerBody(resp.Body, maxWorkerErrorBytes)
 		resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("worker error (status %d): %w", resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("worker error (status %d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -293,12 +342,13 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 		defer close(chunks)
 		defer resp.Body.Close()
 
-		decoder := json.NewDecoder(resp.Body)
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 64<<10), maxWorkerStreamValue)
 		index := 0
 		recordedSuccess := false
 		streamCompleted := false
 
-		for {
+		for scanner.Scan() {
 			select {
 			case <-ctx.Done():
 				return
@@ -314,15 +364,7 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 					} `json:"usage"`
 				}
 
-				if err := decoder.Decode(&chunk); err != nil {
-					if err == io.EOF {
-						if !recordedSuccess {
-							c.breaker.RecordFailure()
-						} else if !streamCompleted && ctx.Err() == nil {
-							c.breaker.RecordFailure()
-						}
-						return
-					}
+				if err := json.Unmarshal(scanner.Bytes(), &chunk); err != nil {
 					if !recordedSuccess && shouldRecordFailure(ctx, err) {
 						c.breaker.RecordFailure()
 						return
@@ -370,9 +412,17 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 				index++
 
 				if chunk.FinishReason != nil {
+					streamCompleted = true
 					return
 				}
 			}
+		}
+		if err := scanner.Err(); err != nil && shouldRecordFailure(ctx, err) {
+			c.breaker.RecordFailure()
+			return
+		}
+		if !recordedSuccess || (!streamCompleted && ctx.Err() == nil) {
+			c.breaker.RecordFailure()
 		}
 	}()
 
