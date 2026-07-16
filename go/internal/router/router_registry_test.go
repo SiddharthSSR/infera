@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 
 type stubWorkerRegistry struct {
 	workers            map[string]*types.WorkerInfo
-	healthCheckerCalls int
+	healthCheckerCalls atomic.Int32
 }
 
 func newStubWorkerRegistry(workers ...*types.WorkerInfo) *stubWorkerRegistry {
@@ -96,7 +97,7 @@ func (r *stubWorkerRegistry) Count() int {
 }
 
 func (r *stubWorkerRegistry) StartHealthChecker(ctx context.Context) {
-	r.healthCheckerCalls++
+	r.healthCheckerCalls.Add(1)
 	<-ctx.Done()
 }
 
@@ -118,13 +119,13 @@ func TestNewWithRegistryUsesInjectedWorkerRegistry(t *testing.T) {
 
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if registry.healthCheckerCalls == 1 {
+		if registry.healthCheckerCalls.Load() == 1 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if registry.healthCheckerCalls != 1 {
-		t.Fatalf("expected injected registry health checker to start once, got %d", registry.healthCheckerCalls)
+	if calls := registry.healthCheckerCalls.Load(); calls != 1 {
+		t.Fatalf("expected injected registry health checker to start once, got %d", calls)
 	}
 
 	routed, err := r.Route(context.Background(), &types.InferenceRequest{
