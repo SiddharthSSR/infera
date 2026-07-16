@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -165,7 +164,6 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		MaxCostHour         float64           `json:"max_cost_hour"`
 		Models              []string          `json:"models"`
 		SelectedModelName   string            `json:"selected_model_name"`
-		GatewayAddress      string            `json:"gateway_address"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -188,12 +186,6 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Get gateway address from request, env, or default
-	gatewayAddress := req.GatewayAddress
-	if gatewayAddress == "" {
-		gatewayAddress = os.Getenv("INFERA_GATEWAY_ADDRESS")
-	}
-
 	provisionReq := &providers.ProvisionRequest{
 		Name:                req.Name,
 		Provider:            providers.ProviderType(req.Provider),
@@ -208,7 +200,6 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		MaxCostHour:         req.MaxCostHour,
 		Models:              req.Models,
 		Engine:              engine,
-		GatewayAddress:      gatewayAddress,
 	}
 
 	if provisionReq.Name == "" {

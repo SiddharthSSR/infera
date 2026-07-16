@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -372,14 +371,11 @@ func (p *Provider) buildEnv(req *providers.ProvisionRequest) map[string]string {
 	}
 
 	gatewayAddress := strings.TrimSpace(req.GatewayAddress)
-	if gatewayAddress == "" {
-		gatewayAddress = strings.TrimSpace(os.Getenv("INFERA_GATEWAY_ADDRESS"))
-	}
 	if gatewayAddress != "" {
 		env["INFERA_ROUTER_ADDRESS"] = gatewayAddress
 	}
 
-	if workerToken := strings.TrimSpace(os.Getenv("INFERA_WORKER_SHARED_TOKEN")); workerToken != "" {
+	if workerToken := strings.TrimSpace(req.WorkerToken); workerToken != "" {
 		env["INFERA_WORKER_SHARED_TOKEN"] = workerToken
 	}
 

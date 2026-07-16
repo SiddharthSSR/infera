@@ -22,7 +22,8 @@ import (
 )
 
 type runPodLinkTestProvider struct {
-	instances map[string]*providers.Instance
+	instances   map[string]*providers.Instance
+	workerToken string
 }
 
 func newRunPodLinkTestProvider() *runPodLinkTestProvider {
@@ -36,6 +37,7 @@ func (p *runPodLinkTestProvider) Name() providers.ProviderType {
 }
 
 func (p *runPodLinkTestProvider) Provision(ctx context.Context, req *providers.ProvisionRequest) (*providers.Instance, error) {
+	p.workerToken = req.WorkerToken
 	instance := &providers.Instance{
 		ID:         "inst-runpod-link",
 		ProviderID: "uxh9he0pyoqpho",
@@ -229,7 +231,7 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 
 	body := `{"worker_id":"w1","address":"uxh9he0pyoqpho-8081.proxy.runpod.net","status":"healthy","tags":{"provider":"runpod"},"loaded_models":[{"model_id":"Qwen/Qwen2.5-7B-Instruct","version":"main"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/workers/register", strings.NewReader(body))
-	req.Header.Set("X-Worker-Token", "secret-token")
+	req.Header.Set("X-Worker-Token", runpod.workerToken)
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
@@ -243,6 +245,34 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 	}
 	if linked.WorkerID != "w1" {
 		t.Fatalf("expected instance worker_id to be linked to w1, got %q", linked.WorkerID)
+	}
+	client, err := g.getWorkerClient("w1")
+	if err != nil {
+		t.Fatalf("getWorkerClient: %v", err)
+	}
+	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get("X-Worker-Token"); got != runpod.workerToken {
+			t.Fatalf("expected deployment-bound worker token, got %q", got)
+		}
+		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"Qwen/Qwen2.5-7B-Instruct","choices":[],"usage":{},"latency":{}}`), nil
+	})
+	if _, err := client.InferWithContext(context.Background(), &types.InferenceRequest{
+		RequestID:  "req-1",
+		ModelID:    "Qwen/Qwen2.5-7B-Instruct",
+		Parameters: types.DefaultInferenceParameters(),
+	}); err != nil {
+		t.Fatalf("managed worker inference: %v", err)
+	}
+
+	replacement := httptest.NewRequest(http.MethodPost, "/api/workers/register", strings.NewReader(`{"worker_id":"w2","address":"uxh9he0pyoqpho-8081.proxy.runpod.net","status":"healthy"}`))
+	replacement.Header.Set("X-Worker-Token", runpod.workerToken)
+	replacementRec := httptest.NewRecorder()
+	handler(replacementRec, replacement)
+	if replacementRec.Code != http.StatusForbidden {
+		t.Fatalf("expected deployment-bound credential to reject worker identity change, got %d body=%s", replacementRec.Code, replacementRec.Body.String())
+	}
+	if _, found := r.GetWorker("w2"); found {
+		t.Fatal("rejected identity change mutated the worker registry")
 	}
 }
 
@@ -288,7 +318,7 @@ func TestHandleWorkerHeartbeatRepairsMissingInstanceLink(t *testing.T) {
 	handler := g.requireWorkerToken(g.handleWorkerHeartbeat)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(`{"worker_id":"w1","stats":{"queue_depth":0,"active_requests":0}}`))
-	req.Header.Set("X-Worker-Token", "secret-token")
+	req.Header.Set("X-Worker-Token", runpod.workerToken)
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
@@ -353,6 +383,29 @@ func TestToInferenceRequestBuildsAPIKeyAffinityMetadata(t *testing.T) {
 	}
 	if got := inferenceReq.Metadata[types.MetadataAffinityKey]; !strings.Contains(got, "key:key-42") {
 		t.Fatalf("expected api-key affinity key, got %q", got)
+	}
+}
+
+func TestToInferenceRequestSeparatesExecutionIdentityFromTenantClientIdentity(t *testing.T) {
+	g := New(DefaultConfig(), nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set(HeaderRequestID, "client-retry-key")
+	req = req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+		ID:          "key-42",
+		WorkspaceID: "ws_alpha",
+	}))
+
+	first := g.toInferenceRequest(req, &ChatCompletionRequest{Model: "approved-model"})
+	second := g.toInferenceRequest(req, &ChatCompletionRequest{Model: "approved-model"})
+
+	if first.RequestID == "" || first.RequestID == second.RequestID {
+		t.Fatalf("expected unique server execution IDs, got %q and %q", first.RequestID, second.RequestID)
+	}
+	if first.RequestID == "client-retry-key" || first.ClientRequestID != "client-retry-key" {
+		t.Fatalf("expected separate server and client request IDs, got server=%q client=%q", first.RequestID, first.ClientRequestID)
+	}
+	if first.WorkspaceID != "ws_alpha" {
+		t.Fatalf("expected workspace-scoped routing identity, got %q", first.WorkspaceID)
 	}
 }
 
@@ -511,7 +564,7 @@ func TestUsageTotalTokensFallsBackToComponentSum(t *testing.T) {
 
 func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *testing.T) {
 	g := New(DefaultConfig(), nil, nil)
-	client := NewWorkerClient("worker.test:8081")
+	client := NewWorkerClient("http://localhost:8081")
 	client.streamingHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var builder strings.Builder
 		encoder := json.NewEncoder(&builder)
@@ -553,7 +606,7 @@ func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *
 }
 
 func TestWorkerClientInferWithContextForwardsAndDecodesToolCalls(t *testing.T) {
-	client := NewWorkerClient("worker.test:8081")
+	client := NewWorkerClient("http://localhost:8081")
 	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/infer" {
 			t.Fatalf("expected /infer request, got %s", r.URL.Path)
@@ -629,7 +682,7 @@ func TestWorkerClientInferWithContextForwardsAndDecodesToolCalls(t *testing.T) {
 }
 
 func TestWorkerClientInferStreamForwardsAndDecodesToolCallChunks(t *testing.T) {
-	client := NewWorkerClient("worker.test:8081")
+	client := NewWorkerClient("http://localhost:8081")
 	client.streamingHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/infer/stream" {
 			t.Fatalf("expected /infer/stream request, got %s", r.URL.Path)

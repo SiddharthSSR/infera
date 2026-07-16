@@ -4,6 +4,7 @@ package gateway
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,10 @@ import (
 	"github.com/infera/infera/go/internal/vault"
 	"github.com/infera/infera/go/pkg/types"
 )
+
+type workerPrincipalContextKey struct{}
+
+type workerPrincipal struct{ InstanceID, WorkspaceID string }
 
 // Gateway is the HTTP API server.
 type Gateway struct {
@@ -391,12 +396,6 @@ func (g *Gateway) hasWildcardOrigin() bool {
 
 func (g *Gateway) requireWorkerToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		expected := strings.TrimSpace(g.config.WorkerSharedToken)
-		if expected == "" {
-			next(w, r)
-			return
-		}
-
 		token := strings.TrimSpace(r.Header.Get("X-Worker-Token"))
 		if token == "" {
 			auth := strings.TrimSpace(r.Header.Get("Authorization"))
@@ -405,7 +404,19 @@ func (g *Gateway) requireWorkerToken(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
-		if token == "" || token != expected {
+		if g.instanceManager != nil {
+			instance, ok := g.instanceManager.AuthenticateWorkerToken(token)
+			if !ok {
+				g.writeError(w, http.StatusUnauthorized, "unauthorized", "Invalid worker token")
+				return
+			}
+			principal := workerPrincipal{InstanceID: instance.ID, WorkspaceID: normalizeWorkspaceIDForGateway(instance.WorkspaceID)}
+			next(w, r.WithContext(context.WithValue(r.Context(), workerPrincipalContextKey{}, principal)))
+			return
+		}
+
+		expected := strings.TrimSpace(g.config.WorkerSharedToken)
+		if token == "" || expected == "" || subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
 			g.writeError(w, http.StatusUnauthorized, "unauthorized", "Invalid worker token")
 			return
 		}
@@ -478,7 +489,6 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		g.writeError(w, http.StatusBadRequest, OpenAIChatErrorTypeInvalidRequest, "Invalid JSON: "+err.Error())
 		return
 	}
-
 	// Validate
 	if req.Model == "" {
 		g.writeError(w, http.StatusBadRequest, OpenAIChatErrorTypeInvalidRequest, "model is required")
@@ -780,7 +790,7 @@ func (g *Gateway) handleGetWorkers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := g.listWorkerEntries()
+	response := g.listWorkerEntries(currentWorkspaceID(r))
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"workers": response,
 		"total":   len(response),
@@ -821,6 +831,24 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON")
 		return
 	}
+	if strings.TrimSpace(req.WorkerID) == "" || strings.TrimSpace(req.Address) == "" {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "worker_id and address are required")
+		return
+	}
+	principal, managed := r.Context().Value(workerPrincipalContextKey{}).(workerPrincipal)
+	if managed {
+		instance, _ := g.instanceManager.GetInstance(principal.InstanceID)
+		address, err := trustedWorkerAddress(instance, req.Address)
+		if err != nil {
+			g.writeError(w, http.StatusForbidden, "worker_address_mismatch", err.Error())
+			return
+		}
+		req.Address = address
+		if err := g.instanceManager.LinkWorker(principal.InstanceID, req.WorkerID); err != nil {
+			g.writeError(w, http.StatusForbidden, "worker_identity_mismatch", err.Error())
+			return
+		}
+	}
 
 	// Convert to WorkerInfo
 	loadedModels := make([]types.LoadedModel, len(req.LoadedModels))
@@ -837,6 +865,7 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 
 	workerInfo := &types.WorkerInfo{
 		WorkerID:     req.WorkerID,
+		WorkspaceID:  principal.WorkspaceID,
 		Address:      req.Address,
 		Status:       types.WorkerStatus(req.Status),
 		LoadedModels: loadedModels,
@@ -855,22 +884,59 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 		RegisteredAt:    time.Now(),
 		Tags:            req.Tags,
 	}
+	workerToken, err := g.workerCredentialForWorker(req.WorkerID)
+	if err != nil {
+		g.writeError(w, http.StatusForbidden, "worker_credential_unavailable", err.Error())
+		return
+	}
 
 	if err := g.router.RegisterWorker(workerInfo); err != nil {
 		g.writeError(w, http.StatusInternalServerError, "registration_failed", err.Error())
 		return
 	}
 
-	g.linkWorkerToInstance(workerInfo)
+	if !managed {
+		g.linkWorkerToInstance(workerInfo)
+	}
 
 	// Register worker client
-	g.RegisterWorkerClient(req.WorkerID, req.Address)
+	g.registerWorkerClient(req.WorkerID, req.Address, workerToken)
 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":   true,
 		"worker_id": req.WorkerID,
 		"message":   "Worker registered successfully",
 	})
+}
+
+func trustedWorkerAddress(instance *providers.Instance, presented string) (string, error) {
+	if instance == nil {
+		return "", errors.New("worker instance is not available")
+	}
+	if instance.Provider == providers.ProviderRunPod && strings.TrimSpace(instance.ProviderID) != "" {
+		expected := fmt.Sprintf("%s-8081.proxy.runpod.net", strings.TrimSpace(instance.ProviderID))
+		raw := strings.TrimSpace(presented)
+		if !strings.Contains(raw, "://") {
+			raw = "https://" + raw
+		}
+		u, err := validatedWorkerURL(raw, "/")
+		if err != nil || !strings.EqualFold(u.Host, expected) {
+			return "", errors.New("worker address does not match the provisioned RunPod endpoint")
+		}
+		return "https://" + expected, nil
+	}
+	u, err := validatedWorkerURL(presented, "/")
+	if err != nil {
+		return "", err
+	}
+	host := u.Hostname()
+	if ip := strings.TrimSpace(instance.PublicIP); ip != "" && host != ip {
+		return "", errors.New("worker address does not match the provisioned instance address")
+	}
+	if instance.HTTPPort > 0 && u.Port() != fmt.Sprint(instance.HTTPPort) {
+		return "", errors.New("worker address does not match the provisioned instance port")
+	}
+	return strings.TrimSuffix(u.String(), "/"), nil
 }
 
 func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -902,6 +968,12 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON")
 		return
+	}
+	if principal, managed := r.Context().Value(workerPrincipalContextKey{}).(workerPrincipal); managed {
+		if err := g.instanceManager.AuthorizeWorkerBinding(principal.InstanceID, req.WorkerID); err != nil {
+			g.writeError(w, http.StatusForbidden, "worker_identity_mismatch", err.Error())
+			return
+		}
 	}
 
 	stats := types.WorkerStats{
@@ -1055,7 +1127,7 @@ func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	g.writeJSON(w, http.StatusOK, g.statsPayload())
+	g.writeJSON(w, http.StatusOK, g.statsPayload(currentWorkspaceID(r)))
 }
 
 func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
@@ -1212,16 +1284,44 @@ func (g *Gateway) getWorkerClient(workerID string) (*WorkerClient, error) {
 		return client, nil
 	}
 
-	client = newWorkerClient(worker.Address, g.config.WorkerSharedToken)
+	workerToken, err := g.workerCredentialForWorker(workerID)
+	if err != nil {
+		return nil, err
+	}
+	client = newWorkerClient(worker.Address, workerToken)
 	g.workerClients[workerID] = client
 	return client, nil
 }
 
+func (g *Gateway) workerCredentialForWorker(workerID string) (string, error) {
+	if g.instanceManager == nil {
+		credential := strings.TrimSpace(g.config.WorkerSharedToken)
+		if credential == "" {
+			return "", errors.New("worker credential is not configured")
+		}
+		return credential, nil
+	}
+	credential, found := g.instanceManager.WorkerCredentialForWorker(workerID)
+	if !found {
+		return "", fmt.Errorf("deployment-bound credential for worker %s is unavailable", workerID)
+	}
+	return credential, nil
+}
+
 // RegisterWorkerClient registers a worker client (called when worker connects).
-func (g *Gateway) RegisterWorkerClient(workerID, address string) {
+func (g *Gateway) RegisterWorkerClient(workerID, address string) error {
+	workerToken, err := g.workerCredentialForWorker(workerID)
+	if err != nil {
+		return err
+	}
+	g.registerWorkerClient(workerID, address, workerToken)
+	return nil
+}
+
+func (g *Gateway) registerWorkerClient(workerID, address, workerToken string) {
 	g.workerClientsMu.Lock()
 	defer g.workerClientsMu.Unlock()
-	g.workerClients[workerID] = newWorkerClient(address, g.config.WorkerSharedToken)
+	g.workerClients[workerID] = newWorkerClient(address, workerToken)
 }
 
 // RemoveWorkerClient removes a worker client.

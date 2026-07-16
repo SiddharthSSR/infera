@@ -2,6 +2,7 @@
 package providers
 
 import (
+	"crypto/sha256"
 	"strings"
 	"time"
 )
@@ -171,7 +172,9 @@ type Instance struct {
 	StoppedAt *time.Time `json:"stopped_at,omitempty"`
 
 	// Provider-specific metadata
-	Metadata map[string]string `json:"metadata,omitempty"`
+	Metadata             map[string]string `json:"metadata,omitempty"`
+	WorkerCredential     string            `json:"-"`
+	WorkerCredentialHash [sha256.Size]byte `json:"-"`
 
 	// Error info
 	ErrorMessage string `json:"error_message,omitempty"`
@@ -195,6 +198,7 @@ type ProvisionRequest struct {
 	Engine         InferenceEngine `json:"engine,omitempty"`
 	DockerImage    string          `json:"docker_image,omitempty"`
 	GatewayAddress string          `json:"gateway_address,omitempty"` // Address for worker to connect back
+	WorkerToken    string          `json:"-"`
 
 	// SSH key for access
 	SSHPublicKey string `json:"ssh_public_key,omitempty"`

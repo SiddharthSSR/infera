@@ -135,10 +135,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 	}
 
 	// Add gateway address for worker registration
-	gatewayAddress := req.GatewayAddress
-	if gatewayAddress == "" {
-		gatewayAddress = os.Getenv("INFERA_GATEWAY_ADDRESS")
-	}
+	gatewayAddress := strings.TrimSpace(req.GatewayAddress)
 	if gatewayAddress != "" {
 		env = append(env, map[string]string{
 			"key": "INFERA_ROUTER_ADDRESS", "value": gatewayAddress,
@@ -146,7 +143,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 	}
 
 	// Add shared worker auth token so worker can register/heartbeat on protected gateway endpoints.
-	if workerToken := os.Getenv("INFERA_WORKER_SHARED_TOKEN"); workerToken != "" {
+	if workerToken := strings.TrimSpace(req.WorkerToken); workerToken != "" {
 		env = append(env, map[string]string{
 			"key": "INFERA_WORKER_SHARED_TOKEN", "value": workerToken,
 		})

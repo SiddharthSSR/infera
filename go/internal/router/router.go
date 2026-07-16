@@ -193,7 +193,7 @@ func (r *Router) HandleFailure(request *types.RoutedRequest, err error) (*types.
 
 	retry := request.WithRetry()
 
-	candidates := r.registry.GetHealthyWorkersForModel(request.Request.ModelID)
+	candidates := workersForWorkspace(r.registry.GetHealthyWorkersForModel(request.Request.ModelID), request.Request.WorkspaceID)
 	filtered := make([]*types.WorkerInfo, 0, len(candidates))
 	for _, w := range candidates {
 		if w.WorkerID != request.WorkerID {
@@ -377,14 +377,14 @@ func (r *Router) completeBatchRoute(requestID string, result batchRouteResult) {
 }
 
 func (r *Router) validateModelAvailability(request *types.InferenceRequest) error {
-	if len(r.registry.GetHealthyWorkers()) == 0 {
+	if len(workersForWorkspace(r.registry.GetHealthyWorkers(), request.WorkspaceID)) == 0 {
 		return types.NewInferaError(
 			types.ErrorCodeNoWorkersAvailable,
 			"No healthy workers are currently available to serve the requested model.",
 		).WithRequestID(request.RequestID)
 	}
 
-	allWorkers := r.registry.GetWorkersForModel(request.ModelID)
+	allWorkers := workersForWorkspace(r.registry.GetWorkersForModel(request.ModelID), request.WorkspaceID)
 	if len(allWorkers) == 0 {
 		return types.NewInferaError(
 			types.ErrorCodeModelNotFound,
@@ -392,7 +392,7 @@ func (r *Router) validateModelAvailability(request *types.InferenceRequest) erro
 		).WithRequestID(request.RequestID)
 	}
 
-	if len(r.registry.GetHealthyWorkersForModel(request.ModelID)) == 0 {
+	if len(workersForWorkspace(r.registry.GetHealthyWorkersForModel(request.ModelID), request.WorkspaceID)) == 0 {
 		return types.NewInferaError(
 			types.ErrorCodeModelOverloaded,
 			fmt.Sprintf("all workers for model %s at capacity", request.ModelID),
@@ -411,7 +411,7 @@ func (r *Router) selectWorker(request *types.InferenceRequest) (*strategy.Select
 		return selection, nil
 	}
 
-	candidates := r.registry.GetHealthyWorkersForModel(request.ModelID)
+	candidates := workersForWorkspace(r.registry.GetHealthyWorkersForModel(request.ModelID), request.WorkspaceID)
 	selection, err := r.strategyEngine.SelectWorker(request, candidates)
 	if err != nil {
 		return nil, types.NewInferaError(
@@ -529,7 +529,7 @@ func (r *Router) selectAffinityWorker(request *types.InferenceRequest) (*strateg
 	}
 
 	worker, ok := r.registry.Get(binding.WorkerID)
-	if !ok || !worker.IsHealthy() || !worker.HasCapacity() || !worker.HasModel(request.ModelID) {
+	if !ok || len(workersForWorkspace([]*types.WorkerInfo{worker}, request.WorkspaceID)) != 1 || !worker.IsHealthy() || !worker.HasCapacity() || !worker.HasModel(request.ModelID) {
 		r.clearAffinity(key)
 		return nil, false
 	}
@@ -545,6 +545,23 @@ func (r *Router) selectAffinityWorker(request *types.InferenceRequest) (*strateg
 			SelectedWorkerScore: score,
 		},
 	}, true
+}
+
+func workersForWorkspace(workers []*types.WorkerInfo, workspaceID string) []*types.WorkerInfo {
+	if strings.TrimSpace(workspaceID) == "" {
+		workspaceID = "ws_default"
+	}
+	filtered := make([]*types.WorkerInfo, 0, len(workers))
+	for _, worker := range workers {
+		workerWorkspaceID := strings.TrimSpace(worker.WorkspaceID)
+		if workerWorkspaceID == "" {
+			workerWorkspaceID = "ws_default"
+		}
+		if worker.SharedPool || workerWorkspaceID == workspaceID {
+			filtered = append(filtered, worker)
+		}
+	}
+	return filtered
 }
 
 func (r *Router) rememberAffinity(request *types.InferenceRequest, workerID string) {

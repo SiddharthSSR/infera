@@ -116,6 +116,9 @@ func (g *Gateway) newInferenceRequest(model string, messages []types.Message, pa
 	}
 	if key != nil {
 		request.APIKeyID = key.ID
+		request.WorkspaceID = normalizeWorkspaceIDForGateway(key.WorkspaceID)
+	} else {
+		request.WorkspaceID = auth.DefaultWorkspaceID
 	}
 	return request
 }

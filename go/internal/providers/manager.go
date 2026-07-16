@@ -3,6 +3,10 @@ package providers
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,10 +20,11 @@ import (
 
 // Manager orchestrates multiple GPU providers.
 type Manager struct {
-	providers map[ProviderType]Provider
-	instances instanceStore
-	costs     *CostTracker
-	mu        sync.RWMutex
+	providers       map[ProviderType]Provider
+	instances       instanceStore
+	costs           *CostTracker
+	mu              sync.RWMutex
+	workerBindingMu sync.Mutex
 
 	// Configuration
 	defaultProvider           ProviderType
@@ -207,9 +212,15 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	if req.DockerImage == "" {
 		req.DockerImage = resolveWorkerImage(req.Engine, m.workerImage, m.workerImages)
 	}
-	if req.GatewayAddress == "" {
-		req.GatewayAddress = m.gatewayAddress
+	// The credential-bearing callback destination is platform configuration,
+	// never a caller-controlled provisioning option.
+	req.GatewayAddress = strings.TrimSpace(m.gatewayAddress)
+	credential := make([]byte, 32)
+	if _, err := rand.Read(credential); err != nil {
+		return nil, fmt.Errorf("generate worker credential: %w", err)
 	}
+	req.WorkerToken = base64.RawURLEncoding.EncodeToString(credential)
+	credentialHash := sha256.Sum256([]byte(req.WorkerToken))
 	ApplyRuntimeDefaults(req)
 	if providerType != ProviderMock {
 		if err := ValidateWorkerImageRef(req.DockerImage); err != nil {
@@ -244,6 +255,11 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	if instance.Engine == "" {
 		instance.Engine = req.Engine
 	}
+	// Keep the deployment-bound credential available only in the internal
+	// instance record so the gateway can authenticate inference requests back
+	// to this worker. Both credential forms are excluded from JSON responses.
+	instance.WorkerCredential = req.WorkerToken
+	instance.WorkerCredentialHash = credentialHash
 
 	// Track instance and begin the worker-registration deadline.
 	m.initializeWorkerRegistration(instance, m.now())
@@ -253,6 +269,41 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	m.costs.StartTracking(instance)
 
 	return instance, nil
+}
+
+// AuthenticateWorkerToken resolves a provisioned instance from its unique worker credential.
+func (m *Manager) AuthenticateWorkerToken(token string) (*Instance, bool) {
+	tokenHash := sha256.Sum256([]byte(strings.TrimSpace(token)))
+	if strings.TrimSpace(token) == "" {
+		return nil, false
+	}
+	for _, instance := range m.instances.list() {
+		if subtle.ConstantTimeCompare(tokenHash[:], instance.WorkerCredentialHash[:]) == 1 {
+			return instance, true
+		}
+	}
+	return nil, false
+}
+
+// AuthorizeWorkerBinding prevents one deployment credential from claiming another deployment's worker ID.
+func (m *Manager) AuthorizeWorkerBinding(instanceID, workerID string) error {
+	m.workerBindingMu.Lock()
+	defer m.workerBindingMu.Unlock()
+	return m.authorizeWorkerBinding(instanceID, workerID)
+}
+
+func (m *Manager) authorizeWorkerBinding(instanceID, workerID string) error {
+	instance, ok := m.getTrackedInstance(instanceID)
+	if !ok {
+		return fmt.Errorf("instance %s not found", instanceID)
+	}
+	if instance.WorkerID != "" && instance.WorkerID != workerID {
+		return fmt.Errorf("instance is already bound to worker %s", instance.WorkerID)
+	}
+	if owner, found := m.GetInstanceByWorker(workerID); found && owner.ID != instanceID {
+		return fmt.Errorf("worker %s is already bound to another instance", workerID)
+	}
+	return nil
 }
 
 // Terminate destroys an instance.
@@ -530,6 +581,11 @@ func (m *Manager) GetCostSummaryForWorkspace(workspaceID string) *CostSummary {
 
 // LinkWorker associates a worker with an instance.
 func (m *Manager) LinkWorker(instanceID, workerID string) error {
+	m.workerBindingMu.Lock()
+	defer m.workerBindingMu.Unlock()
+	if err := m.authorizeWorkerBinding(instanceID, workerID); err != nil {
+		return err
+	}
 	if updated := m.instances.update(instanceID, func(instance *Instance) {
 		instance.WorkerID = workerID
 		now := m.now()
@@ -597,6 +653,17 @@ func (m *Manager) UnlinkWorker(instanceID string) {
 // GetInstanceByWorker finds an instance by its linked worker ID.
 func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
 	return m.instances.findByWorker(workerID)
+}
+
+// WorkerCredentialForWorker returns the deployment-bound credential for a
+// linked worker. It intentionally fails closed for unknown or legacy records.
+func (m *Manager) WorkerCredentialForWorker(workerID string) (string, bool) {
+	instance, found := m.instances.findByWorker(workerID)
+	if !found {
+		return "", false
+	}
+	credential := strings.TrimSpace(instance.WorkerCredential)
+	return credential, credential != ""
 }
 
 // GetInstanceByProviderRef finds an instance by provider type and provider-native ID.

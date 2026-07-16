@@ -19,7 +19,7 @@ func TestWorkerClientInferMatchesSharedContractFixture(t *testing.T) {
 	requestFixture := loadWorkerInferRequestFixture(t, "infer_request_tool_calls.json")
 	responseFixture := loadWorkerFixtureBytes(t, "infer_response_tool_calls.json")
 
-	client := NewWorkerClient("worker.test:8081")
+	client := NewWorkerClient("http://localhost:8081")
 	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/infer" {
 			t.Fatalf("expected /infer request, got %s", r.URL.Path)
@@ -52,7 +52,7 @@ func TestWorkerClientInferMatchesSharedContractFixture(t *testing.T) {
 }
 
 func TestWorkerClientSendsWorkerToken(t *testing.T) {
-	client := newWorkerClient("worker.test:8081", "worker-secret")
+	client := newWorkerClient("https://worker.test:8081", "worker-secret")
 	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if got := r.Header.Get("X-Worker-Token"); got != "worker-secret" {
 			t.Fatalf("expected worker token header, got %q", got)
@@ -80,7 +80,7 @@ func TestWorkerClientInferStreamMatchesSharedContractFixture(t *testing.T) {
 	requestFixture := loadWorkerInferRequestFixture(t, "infer_stream_request_tool_calls.json")
 	chunkFixture := loadWorkerFixtureBytes(t, "infer_stream_chunk_tool_calls.json")
 
-	client := NewWorkerClient("worker.test:8081")
+	client := NewWorkerClient("http://localhost:8081")
 	client.streamingHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/infer/stream" {
 			t.Fatalf("expected /infer/stream request, got %s", r.URL.Path)
@@ -90,7 +90,15 @@ func TestWorkerClientInferStreamMatchesSharedContractFixture(t *testing.T) {
 			t.Fatalf("read request body: %v", err)
 		}
 		assertJSONEqual(t, requestFixture.raw, body)
-		return jsonHTTPResponse(http.StatusOK, string(chunkFixture)), nil
+		var chunk any
+		if err := json.Unmarshal(chunkFixture, &chunk); err != nil {
+			t.Fatalf("decode chunk fixture: %v", err)
+		}
+		compact, err := json.Marshal(chunk)
+		if err != nil {
+			t.Fatalf("compact chunk fixture: %v", err)
+		}
+		return jsonHTTPResponse(http.StatusOK, string(compact)+"\n"), nil
 	})
 
 	chunks, err := client.InferStream(context.Background(), buildInferenceRequest(requestFixture.request))

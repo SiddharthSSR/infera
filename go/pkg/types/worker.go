@@ -60,6 +60,8 @@ func (s *WorkerStats) IsOverloaded() bool {
 // WorkerInfo contains everything the router knows about a worker.
 type WorkerInfo struct {
 	WorkerID        string            `json:"worker_id"`
+	WorkspaceID     string            `json:"-"`
+	SharedPool      bool              `json:"-"`
 	Address         string            `json:"address"`
 	Status          WorkerStatus      `json:"status"`
 	LoadedModels    []LoadedModel     `json:"loaded_models"`
@@ -133,6 +135,8 @@ func (w *WorkerInfo) Clone() *WorkerInfo {
 
 	return &WorkerInfo{
 		WorkerID:        w.WorkerID,
+		WorkspaceID:     w.WorkspaceID,
+		SharedPool:      w.SharedPool,
 		Address:         w.Address,
 		Status:          w.Status,
 		LoadedModels:    models,

@@ -60,7 +60,10 @@ func (m *Manager) OnBatchReady(callback BatchReadyCallback) {
 
 // ShouldBatch determines if a request should be batched.
 func (m *Manager) ShouldBatch(request *types.InferenceRequest) bool {
-	if !m.config.Enabled || request.Stream || request.Priority == types.PriorityHigh {
+	// Workspace-scoped queues require a composite workspace/model key. Until
+	// that contract is introduced, fail closed by bypassing cross-request
+	// batching for tenant traffic.
+	if !m.config.Enabled || request.Stream || request.Priority == types.PriorityHigh || request.WorkspaceID != "" {
 		return false
 	}
 	return true

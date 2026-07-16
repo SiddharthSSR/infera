@@ -106,6 +106,7 @@ type InferenceRequest struct {
 	Metadata        map[string]string   `json:"metadata,omitempty"`
 	CreatedAt       time.Time           `json:"created_at"`
 	APIKeyID        string              `json:"api_key_id,omitempty"`
+	WorkspaceID     string              `json:"-"`
 	Tools           []ToolDefinition    `json:"tools,omitempty"`
 	ToolChoice      json.RawMessage     `json:"tool_choice,omitempty"`
 }

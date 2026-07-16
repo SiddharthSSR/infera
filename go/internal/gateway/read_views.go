@@ -11,6 +11,7 @@ import (
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/vault"
+	"github.com/infera/infera/go/pkg/types"
 )
 
 func (g *Gateway) listModelEntries() ([]map[string]interface{}, error) {
@@ -98,8 +99,20 @@ func (g *Gateway) modelExists(modelID string) bool {
 	return false
 }
 
-func (g *Gateway) listWorkerEntries() []map[string]interface{} {
+func (g *Gateway) workersForWorkspace(workspaceID string) []*types.WorkerInfo {
+	workspaceID = normalizeWorkspaceIDForGateway(workspaceID)
 	workers := g.router.GetWorkers("", false)
+	filtered := make([]*types.WorkerInfo, 0, len(workers))
+	for _, worker := range workers {
+		if worker.SharedPool || normalizeWorkspaceIDForGateway(worker.WorkspaceID) == workspaceID {
+			filtered = append(filtered, worker)
+		}
+	}
+	return filtered
+}
+
+func (g *Gateway) listWorkerEntries(workspaceID string) []map[string]interface{} {
+	workers := g.workersForWorkspace(workspaceID)
 	response := make([]map[string]interface{}, 0, len(workers))
 	for _, worker := range workers {
 		models := make([]string, 0, len(worker.LoadedModels))
@@ -129,14 +142,15 @@ func (g *Gateway) listWorkerEntries() []map[string]interface{} {
 	return response
 }
 
-func (g *Gateway) statsPayload() map[string]interface{} {
-	stats := g.router.GetStats()
-	workers := g.router.GetWorkers("", false)
+func (g *Gateway) statsPayload(workspaceID string) map[string]interface{} {
+	workers := g.workersForWorkspace(workspaceID)
 
 	var totalRPS float64
 	var totalMemoryUsed, totalMemoryTotal int64
 	var totalGPUUtil float64
 	healthyCount := 0
+	totalQueueDepth := 0
+	models := make(map[string]struct{})
 	var weightedLatencySum, totalWeight float64
 
 	for _, worker := range workers {
@@ -144,6 +158,10 @@ func (g *Gateway) statsPayload() map[string]interface{} {
 		totalMemoryUsed += worker.Stats.MemoryUsedBytes
 		totalMemoryTotal += worker.Stats.MemoryTotalBytes
 		totalGPUUtil += worker.Stats.GPUUtilization
+		totalQueueDepth += worker.Stats.QueueDepth
+		for _, model := range worker.LoadedModels {
+			models[model.ModelID] = struct{}{}
+		}
 		if worker.IsHealthy() {
 			healthyCount++
 		}
@@ -166,15 +184,15 @@ func (g *Gateway) statsPayload() map[string]interface{} {
 
 	return map[string]interface{}{
 		"workers": map[string]interface{}{
-			"total":   stats.TotalWorkers,
+			"total":   len(workers),
 			"healthy": healthyCount,
 		},
 		"models": map[string]interface{}{
-			"available": stats.ModelsAvailable,
+			"available": len(models),
 		},
 		"requests": map[string]interface{}{
 			"per_second":  totalRPS,
-			"queue_depth": stats.TotalQueueDepth,
+			"queue_depth": totalQueueDepth,
 		},
 		"latency": map[string]interface{}{
 			"avg_ms": avgLatency,
