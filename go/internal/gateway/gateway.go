@@ -495,9 +495,6 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	inferenceReq := g.toInferenceRequest(r, &req)
-	if requestID := strings.TrimSpace(r.Header.Get(HeaderRequestID)); requestID != "" {
-		inferenceReq.RequestID = requestID
-	}
 
 	result, err := g.executeNonStreamingInference(r.Context(), auth.KeyFromContext(r.Context()), inferenceReq)
 	if err != nil {
@@ -537,7 +534,9 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 	}
 
 	requestStart := time.Now()
-	requestID := strings.TrimSpace(r.Header.Get(HeaderRequestID))
+	inferenceReq := g.toInferenceRequest(r, req)
+	requestID := inferenceReq.RequestID
+	clientRequestID := inferenceReq.ClientRequestID
 	keyID := ""
 	workspaceID := ""
 	if record := auth.KeyFromContext(r.Context()); record != nil {
@@ -574,6 +573,7 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 			rec := audit.InferenceAuditRecord{
 				Timestamp:        requestStart.UTC(),
 				RequestID:        requestID,
+				ClientRequestID:  clientRequestID,
 				KeyID:            keyID,
 				WorkspaceID:      workspaceID,
 				Model:            req.Model,
@@ -601,11 +601,6 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 	ctx, cancel := context.WithTimeout(r.Context(), g.config.InferenceTimeout)
 	defer cancel()
 
-	inferenceReq := g.toInferenceRequest(r, req)
-	if requestID != "" {
-		inferenceReq.RequestID = requestID
-	}
-	requestID = inferenceReq.RequestID
 	if err := g.enforceWorkspaceQuotaForKey(auth.KeyFromContext(r.Context()), inferenceReq); err != nil {
 		auditStatus = "failed"
 		auditErrorCode = string(err.Code)
@@ -1250,6 +1245,8 @@ func (g *Gateway) errorCodeToStatus(code types.ErrorCode) int {
 		return http.StatusGatewayTimeout
 	case types.ErrorCode("quota_exceeded"):
 		return http.StatusForbidden
+	case types.ErrorCode("quota_unavailable"):
+		return http.StatusServiceUnavailable
 	case types.ErrorCode("no_workers"):
 		return http.StatusServiceUnavailable
 	case types.ErrorCode("worker_unavailable"):

@@ -13,6 +13,7 @@ const auditWriteTimeout = 2 * time.Second
 // for async event writes and usage queries.
 type auditUsageStore interface {
 	AppendInference(rec audit.InferenceAuditRecord) error
+	ReserveQuota(res audit.QuotaReservation) error
 	UsageSummary(q audit.UsageSummaryQuery) (*audit.UsageSummary, error)
 	UsageByKey(q audit.UsageQuery) ([]audit.UsageRow, error)
 }

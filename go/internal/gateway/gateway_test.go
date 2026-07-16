@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -781,5 +782,77 @@ func TestHandleChatCompletions_RejectsWhenWorkspaceQuotaExceeded(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "quota_exceeded") {
 		t.Fatalf("expected quota_exceeded body, got %s", rec.Body.String())
+	}
+}
+
+func TestWorkspaceQuotaAdmissionIsAtomicUnderConcurrency(t *testing.T) {
+	authStore, err := auth.NewStore(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatalf("auth.NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = authStore.Close() })
+	auditStore, err := audit.NewStore(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatalf("audit.NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+	workspace, err := authStore.CreateWorkspace("Concurrent Billing Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	requestLimit := int64(1)
+	if _, err := authStore.UpsertWorkspaceQuota(workspace.ID, &requestLimit, nil, true); err != nil {
+		t.Fatalf("UpsertWorkspaceQuota: %v", err)
+	}
+	rawKey, _, err := authStore.CreateKeyInWorkspace(workspace.ID, "workspace-admin", "admin")
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace: %v", err)
+	}
+	key, err := authStore.ValidateKey(rawKey)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+
+	g := New(DefaultConfig(), nil, nil)
+	g.SetAuthHandler(auth.NewHandler(authStore))
+	if unavailable := g.enforceWorkspaceQuotaForKey(key, types.NewInferenceRequest("model-1", nil)); unavailable == nil || unavailable.Code != types.ErrorCode("quota_unavailable") {
+		t.Fatalf("expected hard quota to fail closed without an accounting store, got %+v", unavailable)
+	}
+	g.SetAuditStore(auditStore)
+	t.Cleanup(func() {
+		if g.auditCh != nil {
+			close(g.auditCh)
+			g.auditWg.Wait()
+			g.auditCh = nil
+		}
+	})
+
+	start := make(chan struct{})
+	results := make(chan *types.InferaError, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			results <- g.enforceWorkspaceQuotaForKey(key, types.NewInferenceRequest("model-1", []types.Message{{Role: types.RoleUser, Content: "hello"}}))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var admitted, rejected int
+	for result := range results {
+		if result == nil {
+			admitted++
+			continue
+		}
+		if result.Code != types.ErrorCode("quota_exceeded") {
+			t.Fatalf("unexpected quota error: %+v", result)
+		}
+		rejected++
+	}
+	if admitted != 1 || rejected != 1 {
+		t.Fatalf("expected one admission and one rejection, got admitted=%d rejected=%d", admitted, rejected)
 	}
 }

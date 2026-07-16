@@ -133,6 +133,7 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 
 	requestStart := time.Now()
 	requestID := req.RequestID
+	clientRequestID := req.ClientRequestID
 	keyID := ""
 	workspaceID := ""
 	if key != nil {
@@ -169,6 +170,7 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 			rec := audit.InferenceAuditRecord{
 				Timestamp:        requestStart.UTC(),
 				RequestID:        requestID,
+				ClientRequestID:  clientRequestID,
 				KeyID:            keyID,
 				WorkspaceID:      workspaceID,
 				Model:            req.ModelID,
@@ -274,47 +276,59 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 }
 
 func (g *Gateway) enforceWorkspaceQuotaForKey(key *auth.KeyRecord, req *types.InferenceRequest) *types.InferaError {
-	if g.authHandler == nil || g.auditStore == nil || key == nil || strings.TrimSpace(key.WorkspaceID) == "" {
+	if g.authHandler == nil || key == nil || strings.TrimSpace(key.WorkspaceID) == "" {
 		return nil
 	}
 
-	quota, err := g.quotaCache.getWorkspaceQuota(key.WorkspaceID, g.authHandler.Store().GetWorkspaceQuota)
+	quota, err := g.authHandler.Store().GetWorkspaceQuota(key.WorkspaceID)
 	if err != nil {
 		g.log.Warn("workspace.quota_lookup_failed",
 			slog.String("workspace_id", key.WorkspaceID),
 			slog.String("error", err.Error()),
 		)
-		return nil
+		return types.NewInferaError(types.ErrorCode("quota_unavailable"), "Workspace quota accounting is temporarily unavailable")
 	}
 	if quota == nil || (!quota.EnforceHardLimits) || (quota.MonthlyRequestLimit == nil && quota.MonthlyTokenLimit == nil) {
 		return nil
 	}
+	if g.auditStore == nil {
+		g.log.Error("workspace.quota_store_unavailable", slog.String("workspace_id", key.WorkspaceID))
+		return types.NewInferaError(types.ErrorCode("quota_unavailable"), "Workspace quota accounting is temporarily unavailable")
+	}
 
 	now := time.Now().UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	usage, err := g.quotaCache.getWorkspaceUsageSummary(key.WorkspaceID, monthStart, g.auditStore.UsageSummary)
+	monthEnd := monthStart.AddDate(0, 1, 0)
+	reservedTokens := int64(req.TokenEstimate()) + int64(req.Parameters.MaxTokens)
+	if reservedTokens < 0 {
+		return types.NewInferaError(types.ErrorCodeInvalidRequest, "Token reservation cannot be negative")
+	}
+	ttl := g.config.InferenceTimeout
+	if ttl <= 0 {
+		ttl = DefaultConfig().InferenceTimeout
+	}
+	err = g.auditStore.ReserveQuota(audit.QuotaReservation{
+		ExecutionID:         req.RequestID,
+		WorkspaceID:         key.WorkspaceID,
+		PeriodStart:         monthStart,
+		PeriodEnd:           monthEnd,
+		ReservedRequests:    1,
+		ReservedTokens:      reservedTokens,
+		MonthlyRequestLimit: quota.MonthlyRequestLimit,
+		MonthlyTokenLimit:   quota.MonthlyTokenLimit,
+		ExpiresAt:           now.Add(ttl + auditWriteTimeout + time.Minute),
+	})
+	if errors.Is(err, audit.ErrQuotaExceeded) {
+		return types.NewInferaError(types.ErrorCode("quota_exceeded"),
+			fmt.Sprintf("Workspace request or token quota exceeded for %s.", key.WorkspaceName))
+	}
 	if err != nil {
-		g.log.Warn("workspace.quota_usage_failed",
+		g.log.Error("workspace.quota_reservation_failed",
 			slog.String("workspace_id", key.WorkspaceID),
+			slog.String("execution_id", req.RequestID),
 			slog.String("error", err.Error()),
 		)
-		return nil
-	}
-
-	var summary audit.UsageSummary
-	if usage != nil {
-		summary = *usage
-	}
-	projectedRequests := summary.RequestCount + 1
-	projectedTokens := summary.TokenCount + int64(req.TokenEstimate()+req.Parameters.MaxTokens)
-
-	if quota.MonthlyRequestLimit != nil && projectedRequests > *quota.MonthlyRequestLimit {
-		return types.NewInferaError(types.ErrorCode("quota_exceeded"),
-			fmt.Sprintf("Workspace request quota exceeded for %s. Limit: %d requests/month.", key.WorkspaceName, *quota.MonthlyRequestLimit))
-	}
-	if quota.MonthlyTokenLimit != nil && projectedTokens > *quota.MonthlyTokenLimit {
-		return types.NewInferaError(types.ErrorCode("quota_exceeded"),
-			fmt.Sprintf("Workspace token quota exceeded for %s. Limit: %d tokens/month.", key.WorkspaceName, *quota.MonthlyTokenLimit))
+		return types.NewInferaError(types.ErrorCode("quota_unavailable"), "Workspace quota accounting is temporarily unavailable")
 	}
 	return nil
 }
