@@ -172,7 +172,18 @@ func main() {
 	gw.SetVaultHandler(vault.NewHandler(vaultStore))
 
 	// Initialize auth (API key authentication)
-	authStore, err := auth.NewStore("data/auth.db")
+	providerCredentialEncryptionKey := strings.TrimSpace(os.Getenv("INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY"))
+	var authStore *auth.Store
+	if providerCredentialEncryptionKey == "" {
+		if os.Getenv("INFERA_DEV_MODE") != "1" {
+			log.Error("INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY is required outside development mode")
+			os.Exit(1)
+		}
+		log.Warn("workspace provider credential storage is disabled without INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY")
+		authStore, err = auth.NewStore("data/auth.db")
+	} else {
+		authStore, err = auth.NewStoreWithProviderCredentialEncryption("data/auth.db", providerCredentialEncryptionKey)
+	}
 	if err != nil {
 		log.Error("failed to initialize auth store", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -215,6 +226,28 @@ func main() {
 
 	authHandler := auth.NewHandler(authStore)
 	authHandler.SetSecure(os.Getenv("INFERA_DEV_MODE") != "1")
+	authHandler.SetProviderConfigValidator(func(ctx context.Context, config providers.ProviderConfig) error {
+		provider, err := providers.CreateProvider(config)
+		if err != nil {
+			return err
+		}
+		status, err := provider.GetStatus(ctx)
+		if err != nil {
+			return err
+		}
+		if status == nil || !status.Connected {
+			code := providers.ProviderErrorRequestFailed
+			if status != nil && status.ErrorCode != "" {
+				code = status.ErrorCode
+			}
+			return &providers.ProviderError{
+				Provider: config.Type,
+				Code:     code,
+				Message:  "provider did not confirm the supplied credentials",
+			}
+		}
+		return nil
+	})
 	gw.SetAuthHandler(authHandler)
 	instanceMgr.SetWorkspaceProviderConfigResolver(func(workspaceID string, providerType providers.ProviderType) (*providers.ProviderConfig, error) {
 		apiKey, apiSecret, endpoint, options, err := authStore.ResolveWorkspaceProviderConfig(workspaceID, string(providerType))

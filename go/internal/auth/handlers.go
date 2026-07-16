@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -167,6 +169,22 @@ func (h *Handler) handleWorkspaceProviderByID(w http.ResponseWriter, r *http.Req
 			writeInvalidRequestError(w, "Invalid JSON")
 			return
 		}
+		providerType := providers.ProviderType(providerName)
+		if h.providerConfigValidator != nil {
+			validationCtx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+			defer cancel()
+			err := h.providerConfigValidator(validationCtx, providers.ProviderConfig{
+				Type:        providerType,
+				APIKey:      strings.TrimSpace(req.APIKey),
+				APISecret:   strings.TrimSpace(req.APISecret),
+				Endpoint:    strings.TrimSpace(req.Endpoint),
+				DefaultOpts: req.Options,
+			})
+			if err != nil {
+				writeInvalidRequestError(w, providerConfigValidationMessage(err))
+				return
+			}
+		}
 		config, err := h.store.UpsertWorkspaceProviderConfig(workspaceID, providerName, req.APIKey, req.APISecret, req.Endpoint, req.Options)
 		if err != nil {
 			writeInvalidRequestError(w, err.Error())
@@ -182,6 +200,26 @@ func (h *Handler) handleWorkspaceProviderByID(w http.ResponseWriter, r *http.Req
 	default:
 		writeMethodNotAllowedError(w)
 	}
+}
+
+func providerConfigValidationMessage(err error) string {
+	var providerErr *providers.ProviderError
+	if errors.As(err, &providerErr) {
+		switch providerErr.Code {
+		case providers.ProviderErrorMissingAPIKey, providers.ProviderErrorAuthFailed:
+			return "Provider credentials were rejected. Check the API key and secret."
+		case providers.ProviderErrorRateLimited:
+			return "Provider credential validation was rate limited. Try again shortly."
+		case providers.ProviderErrorTimeout:
+			return "Provider credential validation timed out. Try again."
+		case providers.ProviderErrorServiceUnavailable, providers.ProviderErrorRequestFailed:
+			return "Provider is temporarily unavailable. Credentials were not saved."
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "Provider credential validation timed out. Try again."
+	}
+	return "Provider credentials could not be validated. Credentials were not saved."
 }
 
 func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
