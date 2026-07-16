@@ -23,6 +23,15 @@ type stubAuditUsageStore struct {
 	usageSummaryValue *audit.UsageSummary
 	appendFailures    int
 	appendCalls       int
+	reservations      []audit.QuotaReservation
+	reservationErr    error
+}
+
+func (s *stubAuditUsageStore) ReserveQuota(res audit.QuotaReservation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reservations = append(s.reservations, res)
+	return s.reservationErr
 }
 
 func (s *stubAuditUsageStore) AppendInference(rec audit.InferenceAuditRecord) error {

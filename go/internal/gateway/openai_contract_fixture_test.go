@@ -28,8 +28,8 @@ func TestToInferenceRequestMatchesSharedRequestFixture(t *testing.T) {
 	httpReq.Header.Set(HeaderRequestID, "req-openai-request-fixture")
 	inferenceReq := g.toInferenceRequest(httpReq, &req)
 
-	if inferenceReq.RequestID != "req-openai-request-fixture" {
-		t.Fatalf("expected request id from header, got %q", inferenceReq.RequestID)
+	if inferenceReq.RequestID == "req-openai-request-fixture" || inferenceReq.ClientRequestID != "req-openai-request-fixture" {
+		t.Fatalf("expected distinct execution and client request ids, got execution=%q client=%q", inferenceReq.RequestID, inferenceReq.ClientRequestID)
 	}
 	if inferenceReq.ModelID != "model-1" {
 		t.Fatalf("expected model-1, got %q", inferenceReq.ModelID)

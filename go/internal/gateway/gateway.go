@@ -505,9 +505,6 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	inferenceReq := g.toInferenceRequest(r, &req)
-	if requestID := strings.TrimSpace(r.Header.Get(HeaderRequestID)); requestID != "" {
-		inferenceReq.RequestID = requestID
-	}
 
 	result, err := g.executeNonStreamingInference(r.Context(), auth.KeyFromContext(r.Context()), inferenceReq)
 	if err != nil {
@@ -547,7 +544,9 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 	}
 
 	requestStart := time.Now()
-	requestID := strings.TrimSpace(r.Header.Get(HeaderRequestID))
+	inferenceReq := g.toInferenceRequest(r, req)
+	requestID := inferenceReq.RequestID
+	clientRequestID := inferenceReq.ClientRequestID
 	keyID := ""
 	workspaceID := ""
 	if record := auth.KeyFromContext(r.Context()); record != nil {
@@ -584,6 +583,7 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 			rec := audit.InferenceAuditRecord{
 				Timestamp:        requestStart.UTC(),
 				RequestID:        requestID,
+				ClientRequestID:  clientRequestID,
 				KeyID:            keyID,
 				WorkspaceID:      workspaceID,
 				Model:            req.Model,
@@ -611,11 +611,6 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 	ctx, cancel := context.WithTimeout(r.Context(), g.config.InferenceTimeout)
 	defer cancel()
 
-	inferenceReq := g.toInferenceRequest(r, req)
-	if requestID != "" {
-		inferenceReq.RequestID = requestID
-	}
-	requestID = inferenceReq.RequestID
 	if err := g.enforceWorkspaceQuotaForKey(auth.KeyFromContext(r.Context()), inferenceReq); err != nil {
 		auditStatus = "failed"
 		auditErrorCode = string(err.Code)
@@ -889,6 +884,11 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 		RegisteredAt:    time.Now(),
 		Tags:            req.Tags,
 	}
+	workerToken, err := g.workerCredentialForWorker(req.WorkerID)
+	if err != nil {
+		g.writeError(w, http.StatusForbidden, "worker_credential_unavailable", err.Error())
+		return
+	}
 
 	if err := g.router.RegisterWorker(workerInfo); err != nil {
 		g.writeError(w, http.StatusInternalServerError, "registration_failed", err.Error())
@@ -900,7 +900,7 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Register worker client
-	g.RegisterWorkerClient(req.WorkerID, req.Address)
+	g.registerWorkerClient(req.WorkerID, req.Address, workerToken)
 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":   true,
@@ -1284,16 +1284,44 @@ func (g *Gateway) getWorkerClient(workerID string) (*WorkerClient, error) {
 		return client, nil
 	}
 
-	client = NewWorkerClient(worker.Address)
+	workerToken, err := g.workerCredentialForWorker(workerID)
+	if err != nil {
+		return nil, err
+	}
+	client = newWorkerClient(worker.Address, workerToken)
 	g.workerClients[workerID] = client
 	return client, nil
 }
 
+func (g *Gateway) workerCredentialForWorker(workerID string) (string, error) {
+	if g.instanceManager == nil {
+		credential := strings.TrimSpace(g.config.WorkerSharedToken)
+		if credential == "" {
+			return "", errors.New("worker credential is not configured")
+		}
+		return credential, nil
+	}
+	credential, found := g.instanceManager.WorkerCredentialForWorker(workerID)
+	if !found {
+		return "", fmt.Errorf("deployment-bound credential for worker %s is unavailable", workerID)
+	}
+	return credential, nil
+}
+
 // RegisterWorkerClient registers a worker client (called when worker connects).
-func (g *Gateway) RegisterWorkerClient(workerID, address string) {
+func (g *Gateway) RegisterWorkerClient(workerID, address string) error {
+	workerToken, err := g.workerCredentialForWorker(workerID)
+	if err != nil {
+		return err
+	}
+	g.registerWorkerClient(workerID, address, workerToken)
+	return nil
+}
+
+func (g *Gateway) registerWorkerClient(workerID, address, workerToken string) {
 	g.workerClientsMu.Lock()
 	defer g.workerClientsMu.Unlock()
-	g.workerClients[workerID] = NewWorkerClient(address)
+	g.workerClients[workerID] = newWorkerClient(address, workerToken)
 }
 
 // RemoveWorkerClient removes a worker client.
@@ -1317,6 +1345,8 @@ func (g *Gateway) errorCodeToStatus(code types.ErrorCode) int {
 		return http.StatusGatewayTimeout
 	case types.ErrorCode("quota_exceeded"):
 		return http.StatusForbidden
+	case types.ErrorCode("quota_unavailable"):
+		return http.StatusServiceUnavailable
 	case types.ErrorCode("no_workers"):
 		return http.StatusServiceUnavailable
 	case types.ErrorCode("worker_unavailable"):

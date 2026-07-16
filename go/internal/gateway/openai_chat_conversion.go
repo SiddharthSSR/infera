@@ -69,17 +69,18 @@ func (g *Gateway) toInferenceRequest(r *http.Request, req *ChatCompletionRequest
 		workspaceID = normalizeWorkspaceIDForGateway(key.WorkspaceID)
 	}
 	return &types.InferenceRequest{
-		RequestID:   defaultRequestID(r),
-		ModelID:     req.Model,
-		Messages:    messages,
-		Parameters:  params,
-		Stream:      req.Stream,
-		Priority:    types.PriorityNormal,
-		Metadata:    buildAffinityMetadata(r, req),
-		CreatedAt:   time.Now(),
-		Tools:       convertToolDefinitions(req.Tools),
-		ToolChoice:  req.ToolChoice,
-		WorkspaceID: workspaceID,
+		RequestID:       uuid.New().String(),
+		ClientRequestID: clientRequestID(r),
+		ModelID:         req.Model,
+		Messages:        messages,
+		Parameters:      params,
+		Stream:          req.Stream,
+		Priority:        types.PriorityNormal,
+		Metadata:        buildAffinityMetadata(r, req),
+		CreatedAt:       time.Now(),
+		Tools:           convertToolDefinitions(req.Tools),
+		ToolChoice:      req.ToolChoice,
+		WorkspaceID:     workspaceID,
 	}
 }
 
@@ -143,11 +144,9 @@ func marshalToolCallChunkDeltas(deltas []types.ToolCallChunkDelta) []json.RawMes
 	return result
 }
 
-func defaultRequestID(r *http.Request) string {
+func clientRequestID(r *http.Request) string {
 	if r != nil {
-		if requestID := strings.TrimSpace(r.Header.Get(HeaderRequestID)); requestID != "" {
-			return requestID
-		}
+		return strings.TrimSpace(r.Header.Get(HeaderRequestID))
 	}
-	return uuid.New().String()
+	return ""
 }

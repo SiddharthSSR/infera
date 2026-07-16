@@ -131,7 +131,14 @@ HF_TOKEN=... # optional
 
 Notes:
 
-- Keep `INFERA_WORKER_SHARED_TOKEN` identical on gateway and workers.
+- Keep `INFERA_WORKER_SHARED_TOKEN` identical on gateway and workers. It now authenticates
+  traffic in both directions; workers deny every endpoint except `/health` when it is absent.
+- Worker model-load requests accept only an approved `model_id`. Provider-provisioned workers
+  bind `INFERA_ALLOWED_MODELS` to the deployment's requested models; custom worker deployments
+  default to `INFERA_PRELOAD_MODELS` and may set a different comma-separated or JSON allowlist.
+- `INFERA_TRUST_REMOTE_CODE` defaults to `false`. Enabling it is a privileged compatibility
+  opt-in for reviewed models and should not be combined with an unpinned model revision.
+- `INFERA_MODEL_CACHE_SIZE` defaults to `2` and is enforced for both startup and runtime loads.
 - Generate `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` with `openssl rand -base64 32`, store it in your secret manager, and back it up separately from the database. Losing it makes saved provider credentials unrecoverable.
 - Use a non-`latest` worker image tag or a full `@sha256:<64-hex-digest>` pin in production.
 - Validate required production env and the worker image pin before deploy:
@@ -366,6 +373,10 @@ Compatibility notes:
 | `INFERA_HTTP_PORT` | `8081` | Worker HTTP port |
 | `INFERA_ROUTER_ADDRESS` | — | Gateway address for registration |
 | `INFERA_PRELOAD_MODELS` | — | Models to load on startup |
+| `INFERA_ALLOWED_MODELS` | `INFERA_PRELOAD_MODELS` | Model IDs approved for authenticated `/models/load` requests |
+| `INFERA_MODEL_CACHE_SIZE` | `2` | Maximum concurrently loaded models; new loads fail at capacity |
+| `INFERA_TRUST_REMOTE_CODE` | `false` | Privileged opt-in for reviewed Hugging Face custom code |
+| `INFERA_WORKER_SHARED_TOKEN` | — | Required `X-Worker-Token` secret for every worker endpoint except `/health` |
 | `INFERA_LOG_LEVEL` | `INFO` | Log level |
 | `HF_TOKEN` | — | HuggingFace token |
 

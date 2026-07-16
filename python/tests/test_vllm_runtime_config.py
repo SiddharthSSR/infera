@@ -210,7 +210,7 @@ async def test_vllm_engine_defers_tokenizer_load_until_prompt_build(monkeypatch)
     class FakeAutoTokenizer:
         @staticmethod
         def from_pretrained(model_path, trust_remote_code):
-            assert trust_remote_code is True
+            assert trust_remote_code is False
             created_tokenizers.append(model_path)
             return FakeTokenizer()
 
@@ -389,7 +389,7 @@ async def test_vllm_engine_warm_model_runtime_loads_deferred_tokenizer(monkeypat
     class FakeAutoTokenizer:
         @staticmethod
         def from_pretrained(model_path, trust_remote_code):
-            assert trust_remote_code is True
+            assert trust_remote_code is False
             created_tokenizers.append(model_path)
             return object()
 

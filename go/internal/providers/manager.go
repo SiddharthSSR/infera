@@ -255,6 +255,10 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	if instance.Engine == "" {
 		instance.Engine = req.Engine
 	}
+	// Keep the deployment-bound credential available only in the internal
+	// instance record so the gateway can authenticate inference requests back
+	// to this worker. Both credential forms are excluded from JSON responses.
+	instance.WorkerCredential = req.WorkerToken
 	instance.WorkerCredentialHash = credentialHash
 
 	// Track instance and begin the worker-registration deadline.
@@ -649,6 +653,17 @@ func (m *Manager) UnlinkWorker(instanceID string) {
 // GetInstanceByWorker finds an instance by its linked worker ID.
 func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
 	return m.instances.findByWorker(workerID)
+}
+
+// WorkerCredentialForWorker returns the deployment-bound credential for a
+// linked worker. It intentionally fails closed for unknown or legacy records.
+func (m *Manager) WorkerCredentialForWorker(workerID string) (string, bool) {
+	instance, found := m.instances.findByWorker(workerID)
+	if !found {
+		return "", false
+	}
+	credential := strings.TrimSpace(instance.WorkerCredential)
+	return credential, credential != ""
 }
 
 // GetInstanceByProviderRef finds an instance by provider type and provider-native ID.

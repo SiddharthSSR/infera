@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -245,6 +246,23 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 	if linked.WorkerID != "w1" {
 		t.Fatalf("expected instance worker_id to be linked to w1, got %q", linked.WorkerID)
 	}
+	client, err := g.getWorkerClient("w1")
+	if err != nil {
+		t.Fatalf("getWorkerClient: %v", err)
+	}
+	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get("X-Worker-Token"); got != runpod.workerToken {
+			t.Fatalf("expected deployment-bound worker token, got %q", got)
+		}
+		return jsonHTTPResponse(http.StatusOK, `{"request_id":"req-1","model_id":"Qwen/Qwen2.5-7B-Instruct","choices":[],"usage":{},"latency":{}}`), nil
+	})
+	if _, err := client.InferWithContext(context.Background(), &types.InferenceRequest{
+		RequestID:  "req-1",
+		ModelID:    "Qwen/Qwen2.5-7B-Instruct",
+		Parameters: types.DefaultInferenceParameters(),
+	}); err != nil {
+		t.Fatalf("managed worker inference: %v", err)
+	}
 
 	replacement := httptest.NewRequest(http.MethodPost, "/api/workers/register", strings.NewReader(`{"worker_id":"w2","address":"uxh9he0pyoqpho-8081.proxy.runpod.net","status":"healthy"}`))
 	replacement.Header.Set("X-Worker-Token", runpod.workerToken)
@@ -365,6 +383,29 @@ func TestToInferenceRequestBuildsAPIKeyAffinityMetadata(t *testing.T) {
 	}
 	if got := inferenceReq.Metadata[types.MetadataAffinityKey]; !strings.Contains(got, "key:key-42") {
 		t.Fatalf("expected api-key affinity key, got %q", got)
+	}
+}
+
+func TestToInferenceRequestSeparatesExecutionIdentityFromTenantClientIdentity(t *testing.T) {
+	g := New(DefaultConfig(), nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set(HeaderRequestID, "client-retry-key")
+	req = req.WithContext(auth.ContextWithKey(req.Context(), &auth.KeyRecord{
+		ID:          "key-42",
+		WorkspaceID: "ws_alpha",
+	}))
+
+	first := g.toInferenceRequest(req, &ChatCompletionRequest{Model: "approved-model"})
+	second := g.toInferenceRequest(req, &ChatCompletionRequest{Model: "approved-model"})
+
+	if first.RequestID == "" || first.RequestID == second.RequestID {
+		t.Fatalf("expected unique server execution IDs, got %q and %q", first.RequestID, second.RequestID)
+	}
+	if first.RequestID == "client-retry-key" || first.ClientRequestID != "client-retry-key" {
+		t.Fatalf("expected separate server and client request IDs, got server=%q client=%q", first.RequestID, first.ClientRequestID)
+	}
+	if first.WorkspaceID != "ws_alpha" {
+		t.Fatalf("expected workspace-scoped routing identity, got %q", first.WorkspaceID)
 	}
 }
 
@@ -794,5 +835,77 @@ func TestHandleChatCompletions_RejectsWhenWorkspaceQuotaExceeded(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "quota_exceeded") {
 		t.Fatalf("expected quota_exceeded body, got %s", rec.Body.String())
+	}
+}
+
+func TestWorkspaceQuotaAdmissionIsAtomicUnderConcurrency(t *testing.T) {
+	authStore, err := auth.NewStore(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatalf("auth.NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = authStore.Close() })
+	auditStore, err := audit.NewStore(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatalf("audit.NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+	workspace, err := authStore.CreateWorkspace("Concurrent Billing Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	requestLimit := int64(1)
+	if _, err := authStore.UpsertWorkspaceQuota(workspace.ID, &requestLimit, nil, true); err != nil {
+		t.Fatalf("UpsertWorkspaceQuota: %v", err)
+	}
+	rawKey, _, err := authStore.CreateKeyInWorkspace(workspace.ID, "workspace-admin", "admin")
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace: %v", err)
+	}
+	key, err := authStore.ValidateKey(rawKey)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+
+	g := New(DefaultConfig(), nil, nil)
+	g.SetAuthHandler(auth.NewHandler(authStore))
+	if unavailable := g.enforceWorkspaceQuotaForKey(key, types.NewInferenceRequest("model-1", nil)); unavailable == nil || unavailable.Code != types.ErrorCode("quota_unavailable") {
+		t.Fatalf("expected hard quota to fail closed without an accounting store, got %+v", unavailable)
+	}
+	g.SetAuditStore(auditStore)
+	t.Cleanup(func() {
+		if g.auditCh != nil {
+			close(g.auditCh)
+			g.auditWg.Wait()
+			g.auditCh = nil
+		}
+	})
+
+	start := make(chan struct{})
+	results := make(chan *types.InferaError, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			results <- g.enforceWorkspaceQuotaForKey(key, types.NewInferenceRequest("model-1", []types.Message{{Role: types.RoleUser, Content: "hello"}}))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var admitted, rejected int
+	for result := range results {
+		if result == nil {
+			admitted++
+			continue
+		}
+		if result.Code != types.ErrorCode("quota_exceeded") {
+			t.Fatalf("unexpected quota error: %+v", result)
+		}
+		rejected++
+	}
+	if admitted != 1 || rejected != 1 {
+		t.Fatalf("expected one admission and one rejection, got admitted=%d rejected=%d", admitted, rejected)
 	}
 }

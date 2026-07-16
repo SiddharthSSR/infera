@@ -46,6 +46,8 @@ ENV INFERA_HTTP_PORT=8081
 ENV INFERA_GRPC_PORT=50051
 ENV INFERA_LOG_LEVEL=INFO
 ENV INFERA_LOG_FORMAT=json
+ENV INFERA_TRUST_REMOTE_CODE=false
+ENV INFERA_MODEL_CACHE_SIZE=2
 
 # Use a user-owned cache location by default. Deployments can still override
 # these paths when they intentionally mount a persistent writable volume.

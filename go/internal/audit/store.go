@@ -2,6 +2,7 @@ package audit
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -76,7 +77,31 @@ var auditMigrations = []migrate.Migration{
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_inference_audit_workspace_request
 			ON inference_audit(workspace_id, request_id);`,
 	},
+	{
+		Version:     4,
+		Description: "separate client correlation and add durable quota reservations",
+		SQL: `
+		ALTER TABLE inference_audit ADD COLUMN client_request_id TEXT NOT NULL DEFAULT '';
+		CREATE INDEX IF NOT EXISTS idx_inference_audit_workspace_client_request
+			ON inference_audit(workspace_id, client_request_id);
+		CREATE TABLE IF NOT EXISTS quota_reservations (
+			execution_id     TEXT PRIMARY KEY,
+			workspace_id     TEXT NOT NULL,
+			period_start_ms   INTEGER NOT NULL,
+			period_end_ms     INTEGER NOT NULL,
+			reserved_requests INTEGER NOT NULL,
+			reserved_tokens   INTEGER NOT NULL,
+			expires_at_ms     INTEGER NOT NULL,
+			created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_quota_reservations_workspace_period
+			ON quota_reservations(workspace_id, period_start_ms, period_end_ms);
+		CREATE INDEX IF NOT EXISTS idx_quota_reservations_expiry
+			ON quota_reservations(expires_at_ms);`,
+	},
 }
+
+var ErrQuotaExceeded = errors.New("workspace quota exceeded")
 
 type Store struct {
 	db *sql.DB
@@ -85,6 +110,7 @@ type Store struct {
 type InferenceAuditRecord struct {
 	Timestamp        time.Time
 	RequestID        string
+	ClientRequestID  string
 	KeyID            string
 	WorkspaceID      string
 	Model            string
@@ -100,6 +126,18 @@ type InferenceAuditRecord struct {
 	Status           string
 	ErrorCode        string
 	LatencyMS        int64
+}
+
+type QuotaReservation struct {
+	ExecutionID         string
+	WorkspaceID         string
+	PeriodStart         time.Time
+	PeriodEnd           time.Time
+	ReservedRequests    int64
+	ReservedTokens      int64
+	MonthlyRequestLimit *int64
+	MonthlyTokenLimit   *int64
+	ExpiresAt           time.Time
 }
 
 type UsageQuery struct {
@@ -145,7 +183,7 @@ type UsageSummary struct {
 }
 
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
@@ -216,13 +254,20 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 		billable = 1
 	}
 
-	_, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.Exec(
 		`INSERT INTO inference_audit
-		 (ts_unix_ms, request_id, key_id, workspace_id, model, worker_id, stream, message_count, prompt_tokens, completion_tokens, token_count, token_source, billable, prompt_hash, status, error_code, latency_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (ts_unix_ms, request_id, client_request_id, key_id, workspace_id, model, worker_id, stream, message_count, prompt_tokens, completion_tokens, token_count, token_source, billable, prompt_hash, status, error_code, latency_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(workspace_id, request_id) DO NOTHING`,
 		ts.UnixMilli(),
 		rec.RequestID,
+		strings.TrimSpace(rec.ClientRequestID),
 		keyID,
 		workspaceID,
 		rec.Model,
@@ -239,7 +284,159 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 		rec.ErrorCode,
 		rec.LatencyMS,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		var existing InferenceAuditRecord
+		var existingTimestampMS int64
+		var existingStream, existingBillable int
+		if err := tx.QueryRow(`
+			SELECT ts_unix_ms, client_request_id, key_id, model, worker_id, stream,
+			       message_count, prompt_tokens, completion_tokens, token_count,
+			       token_source, billable, prompt_hash, status, error_code, latency_ms
+			FROM inference_audit WHERE workspace_id = ? AND request_id = ?`,
+			workspaceID, rec.RequestID,
+		).Scan(
+			&existingTimestampMS, &existing.ClientRequestID, &existing.KeyID,
+			&existing.Model, &existing.WorkerID, &existingStream,
+			&existing.MessageCount, &existing.PromptTokens, &existing.CompletionTokens,
+			&existing.TokenCount, &existing.TokenSource, &existingBillable,
+			&existing.PromptHash, &existing.Status, &existing.ErrorCode, &existing.LatencyMS,
+		); err != nil {
+			return err
+		}
+		existing.Timestamp = time.UnixMilli(existingTimestampMS).UTC()
+		existing.RequestID = rec.RequestID
+		existing.WorkspaceID = workspaceID
+		existing.Stream = existingStream == 1
+		existing.Billable = existingBillable == 1
+		candidate := rec
+		candidate.Timestamp = ts.UTC().Truncate(time.Millisecond)
+		candidate.ClientRequestID = strings.TrimSpace(candidate.ClientRequestID)
+		candidate.KeyID = keyID
+		candidate.WorkspaceID = workspaceID
+		candidate.TokenCount = rec.TokenCount
+		candidate.TokenSource = tokenSource
+		candidate.Billable = billable == 1
+		if existing != candidate {
+			return fmt.Errorf("execution identity %q already records a different inference event", rec.RequestID)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM quota_reservations WHERE execution_id = ?`, rec.RequestID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ReserveQuota atomically accounts for committed and in-flight usage before dispatch.
+// Repeating the exact same execution identity is idempotent; conflicting reuse fails.
+func (s *Store) ReserveQuota(res QuotaReservation) error {
+	executionID := strings.TrimSpace(res.ExecutionID)
+	workspaceID := strings.TrimSpace(res.WorkspaceID)
+	if executionID == "" || workspaceID == "" {
+		return fmt.Errorf("execution_id and workspace_id are required")
+	}
+	start := res.PeriodStart.UTC()
+	end := res.PeriodEnd.UTC()
+	if start.IsZero() || !start.Before(end) {
+		return fmt.Errorf("invalid quota period")
+	}
+	if res.ReservedRequests < 0 || res.ReservedTokens < 0 {
+		return fmt.Errorf("quota reservation values cannot be negative")
+	}
+	expiresAt := res.ExpiresAt.UTC()
+	if expiresAt.IsZero() {
+		return fmt.Errorf("expires_at is required")
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	nowMS := time.Now().UTC().UnixMilli()
+	if _, err := tx.Exec(`DELETE FROM quota_reservations WHERE expires_at_ms <= ?`, nowMS); err != nil {
+		return err
+	}
+
+	var existingWorkspace string
+	var existingStart, existingEnd, existingRequests, existingTokens, existingExpiry int64
+	err = tx.QueryRow(`
+		SELECT workspace_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms
+		FROM quota_reservations WHERE execution_id = ?`, executionID,
+	).Scan(&existingWorkspace, &existingStart, &existingEnd, &existingRequests, &existingTokens, &existingExpiry)
+	switch {
+	case err == nil:
+		if existingWorkspace == workspaceID && existingStart == start.UnixMilli() &&
+			existingEnd == end.UnixMilli() && existingRequests == res.ReservedRequests &&
+			existingTokens == res.ReservedTokens {
+			if expiresAt.UnixMilli() > existingExpiry {
+				if _, err := tx.Exec(`UPDATE quota_reservations SET expires_at_ms = ? WHERE execution_id = ?`, expiresAt.UnixMilli(), executionID); err != nil {
+					return err
+				}
+			}
+			return tx.Commit()
+		}
+		return fmt.Errorf("execution identity %q already has a different quota reservation", executionID)
+	case !errors.Is(err, sql.ErrNoRows):
+		return err
+	}
+
+	var committedRequests, committedTokens int64
+	if err := tx.QueryRow(`
+		SELECT
+			COALESCE(SUM(CASE WHEN billable = 1 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN billable = 1 THEN token_count ELSE 0 END), 0)
+		FROM inference_audit
+		WHERE workspace_id = ? AND ts_unix_ms >= ? AND ts_unix_ms < ?`,
+		workspaceID, start.UnixMilli(), end.UnixMilli(),
+	).Scan(&committedRequests, &committedTokens); err != nil {
+		return err
+	}
+	var pendingRequests, pendingTokens int64
+	if err := tx.QueryRow(`
+		SELECT COALESCE(SUM(reserved_requests), 0), COALESCE(SUM(reserved_tokens), 0)
+		FROM quota_reservations
+		WHERE workspace_id = ? AND period_start_ms = ? AND period_end_ms = ? AND expires_at_ms > ?`,
+		workspaceID, start.UnixMilli(), end.UnixMilli(), nowMS,
+	).Scan(&pendingRequests, &pendingTokens); err != nil {
+		return err
+	}
+	if quotaWouldExceed(res.MonthlyRequestLimit, committedRequests, pendingRequests, res.ReservedRequests) {
+		return ErrQuotaExceeded
+	}
+	if quotaWouldExceed(res.MonthlyTokenLimit, committedTokens, pendingTokens, res.ReservedTokens) {
+		return ErrQuotaExceeded
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO quota_reservations
+		(execution_id, workspace_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		executionID, workspaceID, start.UnixMilli(), end.UnixMilli(),
+		res.ReservedRequests, res.ReservedTokens, expiresAt.UnixMilli(),
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func quotaWouldExceed(limit *int64, committed, pending, requested int64) bool {
+	if limit == nil {
+		return false
+	}
+	if *limit < 0 || committed < 0 || pending < 0 || requested < 0 || committed > *limit {
+		return true
+	}
+	remaining := *limit - committed
+	if pending > remaining {
+		return true
+	}
+	return requested > remaining-pending
 }
 
 func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {

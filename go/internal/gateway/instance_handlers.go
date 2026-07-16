@@ -297,6 +297,11 @@ func (h *InstanceHandlers) handleDeploymentByID(w http.ResponseWriter, r *http.R
 
 	attemptID := strings.TrimSpace(parts[0])
 	action := strings.TrimSpace(parts[1])
+	if r.Method == http.MethodPut && (action == "verification" || action == "auto-verification") {
+		if !requireGatewayPermission(w, r, auth.PermissionManageInfrastructure, "Infrastructure management access required") {
+			return
+		}
+	}
 	switch {
 	case r.Method == http.MethodPut && action == "verification":
 		var req struct {

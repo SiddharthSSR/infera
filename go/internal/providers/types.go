@@ -173,6 +173,7 @@ type Instance struct {
 
 	// Provider-specific metadata
 	Metadata             map[string]string `json:"metadata,omitempty"`
+	WorkerCredential     string            `json:"-"`
 	WorkerCredentialHash [sha256.Size]byte `json:"-"`
 
 	// Error info

@@ -1,6 +1,7 @@
 """HTTP server for Infera Worker - simpler than gRPC for vertical slice."""
 
 import asyncio
+import hmac
 import json
 import os
 import time
@@ -61,7 +62,7 @@ class HTTPServer:
     def __init__(self, worker: Worker, config: WorkerConfig) -> None:
         self.worker = worker
         self.config = config
-        self.app = web.Application()
+        self.app = web.Application(middlewares=[self._authenticate_request])
         self.runner: web.AppRunner | None = None
         self._gateway_client: httpx.AsyncClient | None = None
         self._registration_task: asyncio.Task | None = None
@@ -71,6 +72,27 @@ class HTTPServer:
         self._metrics_registry = CollectorRegistry()
         self._setup_metrics()
         self._setup_routes()
+
+    @web.middleware
+    async def _authenticate_request(
+        self, request: web.Request, handler: Any
+    ) -> web.StreamResponse:
+        """Authenticate worker operations before handlers read request bodies."""
+        if request.path == "/health":
+            return await handler(request)
+
+        expected = self.config.worker_shared_token
+        if not expected:
+            return web.json_response(
+                {"error": "Worker API authentication is not configured"},
+                status=503,
+            )
+
+        supplied = request.headers.get("X-Worker-Token", "")
+        if not supplied or not hmac.compare_digest(supplied, expected):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+
+        return await handler(request)
 
     def _setup_routes(self) -> None:
         """Set up HTTP routes."""
@@ -676,14 +698,27 @@ class HTTPServer:
         """Handle load model request."""
         try:
             data = await request.json()
-            model_config = ModelConfig(
-                model_id=data.get("model_id"),
-                model_path=data.get("model_path"),
-                revision=data.get("revision"),
-                quantization=data.get("quantization"),
-                max_batch_size=data.get("max_batch_size", 8),
-                max_sequence_length=data.get("max_sequence_length", 4096),
-            )
+            if not isinstance(data, dict):
+                raise ValueError("Request body must be a JSON object")
+
+            unsupported_fields = sorted(set(data) - {"model_id"})
+            if unsupported_fields:
+                raise ValueError(
+                    "Model load configuration must be provisioned locally; unsupported fields: "
+                    + ", ".join(unsupported_fields)
+                )
+
+            model_id = data.get("model_id")
+            if not isinstance(model_id, str) or not model_id.strip():
+                raise ValueError("model_id is required")
+            model_id = model_id.strip()
+            if not self.config.is_model_allowed(model_id):
+                return web.json_response(
+                    {"success": False, "error": "Model is not approved for this worker"},
+                    status=403,
+                )
+
+            model_config = ModelConfig(model_id=model_id)
 
             start_time = datetime.now()
             loaded = await self.worker.load_model(model_config)
