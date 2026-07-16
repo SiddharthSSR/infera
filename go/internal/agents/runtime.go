@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/infera/infera/go/internal/auth"
+	"github.com/infera/infera/go/internal/egress"
 	"github.com/infera/infera/go/pkg/types"
 )
 
@@ -27,8 +28,9 @@ const (
 )
 
 type Runtime struct {
-	store  *Store
-	runner ModelRunner
+	store         *Store
+	runner        ModelRunner
+	webhookClient *http.Client
 
 	mu          sync.RWMutex
 	definitions map[string]Definition
@@ -40,8 +42,12 @@ type Runtime struct {
 
 func NewRuntime(store *Store, runner ModelRunner) *Runtime {
 	return &Runtime{
-		store:       store,
-		runner:      runner,
+		store:  store,
+		runner: runner,
+		webhookClient: egress.NewPublicClient(egress.ClientOptions{
+			Timeout:        10 * time.Second,
+			AllowedSchemes: []string{"https"},
+		}),
 		definitions: make(map[string]Definition),
 		tools:       make(map[string]ToolDefinition),
 		cancels:     make(map[string]context.CancelFunc),
@@ -823,8 +829,7 @@ func (r *Runtime) deliverWebhook(wh *WebhookConfig, payload []byte) {
 		req.Header.Set("X-Infera-Signature", "sha256="+sig)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := r.webhookClient.Do(req)
 	if err != nil {
 		return
 	}
@@ -903,6 +908,9 @@ func validateWebhookURL(raw string) (string, error) {
 	}
 
 	parsed.Fragment = ""
+	if err := egress.ValidateURL(parsed, []string{"https"}); err != nil {
+		return "", fmt.Errorf("webhook url must target a public host: %w", err)
+	}
 	return parsed.String(), nil
 }
 

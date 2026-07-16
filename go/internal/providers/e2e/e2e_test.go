@@ -47,6 +47,27 @@ func TestNewRequiresAuthInputsAndOptions(t *testing.T) {
 	}
 }
 
+func TestNewRejectsUnsafeEndpoints(t *testing.T) {
+	options := map[string]string{optionActiveIAM: "iam", optionTeamID: "team", optionProjectID: "project"}
+	for _, endpoint := range []string{"http://api.example.com", "https://127.0.0.1", "https://169.254.169.254/latest"} {
+		if _, err := New(Config{APIKey: "key", AuthToken: "token", Options: options, Endpoint: endpoint}); err == nil {
+			t.Fatalf("expected endpoint %q to be rejected", endpoint)
+		}
+	}
+}
+
+func TestDoJSONRejectsOversizedResponse(t *testing.T) {
+	provider := newTestProvider(t)
+	provider.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusInternalServerError, strings.Repeat("x", int(providers.MaxProviderResponseBytes)+1)), nil
+	})
+	err := provider.doJSON(context.Background(), http.MethodGet, "/notebooks", nil, nil, nil)
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Code != providers.ProviderErrorResponseTooLarge {
+		t.Fatalf("expected response_too_large, got %v", err)
+	}
+}
+
 func TestListOfferingsDecodesPlans(t *testing.T) {
 	provider := newTestProvider(t)
 	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {

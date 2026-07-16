@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,6 +21,37 @@ type fakeRunner struct {
 	responses []string
 	errs      []error
 	block     chan struct{}
+}
+
+type webhookRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f webhookRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestDeliverWebhookPreservesPayloadAndSignature(t *testing.T) {
+	runtime := NewRuntime(nil, nil)
+	payload := []byte(`{"event":"succeeded","run":{"id":"run-1"}}`)
+	var gotBody []byte
+	var gotEvent, gotStatus, gotSignature string
+	runtime.webhookClient = &http.Client{Transport: webhookRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var err error
+		gotBody, err = io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		gotEvent = req.Header.Get("X-Infera-Event")
+		gotStatus = req.Header.Get("X-Infera-Run-Status")
+		gotSignature = req.Header.Get("X-Infera-Signature")
+		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+	})}
+	runtime.deliverWebhook(&WebhookConfig{URL: "https://hooks.example.com/events", Secret: "secret"}, payload)
+	if string(gotBody) != string(payload) || gotEvent != webhookEventRunComplete || gotStatus != "succeeded" {
+		t.Fatalf("webhook compatibility changed: body=%q event=%q status=%q", gotBody, gotEvent, gotStatus)
+	}
+	if !strings.HasPrefix(gotSignature, "sha256=") || len(gotSignature) != len("sha256=")+64 {
+		t.Fatalf("unexpected signature %q", gotSignature)
+	}
 }
 
 func (f *fakeRunner) Run(ctx context.Context, req ModelRunRequest) (*types.InferenceResponse, error) {

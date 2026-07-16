@@ -28,6 +28,32 @@ func TestNewRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewRejectsUnsafeEndpoints(t *testing.T) {
+	for _, endpoint := range []string{"http://api.example.com/graphql", "https://127.0.0.1/graphql", "https://169.254.169.254/latest"} {
+		if _, err := New(Config{APIKey: "key", Endpoint: endpoint}); err == nil {
+			t.Fatalf("expected endpoint %q to be rejected", endpoint)
+		}
+	}
+}
+
+func TestGraphQLPreservesPublicCustomEndpoint(t *testing.T) {
+	provider, err := New(Config{APIKey: "key", Endpoint: "https://provider.example.com/custom/graphql?region=us"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var gotURL, gotMethod string
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotURL, gotMethod = req.URL.String(), req.Method
+		return httpResponse(http.StatusOK, `{"data":{}}`), nil
+	})
+	if _, err := provider.graphQL(context.Background(), "query { myself { id } }", nil); err != nil {
+		t.Fatalf("graphQL: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotURL != "https://provider.example.com/custom/graphql?region=us" {
+		t.Fatalf("custom endpoint behavior changed: %s %s", gotMethod, gotURL)
+	}
+}
+
 func TestGraphQLMapsRateLimitToRetryableProviderError(t *testing.T) {
 	provider, err := New(Config{APIKey: "test-key"})
 	if err != nil {
@@ -77,6 +103,26 @@ func TestGraphQLMapsUnauthorizedToAuthFailed(t *testing.T) {
 	}
 	if strings.Contains(providerErr.Message, "sensitive upstream response") {
 		t.Fatalf("upstream response leaked through provider error: %q", providerErr.Message)
+	}
+}
+
+func TestGraphQLRejectsOversizedBodiesBeforeStatusOrJSON(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			provider, err := New(Config{APIKey: "test-key"})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			body := strings.Repeat("x", int(providers.MaxProviderResponseBytes)+1)
+			provider.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return httpResponse(status, body), nil
+			})
+			_, err = provider.graphQL(context.Background(), "query { myself { id } }", nil)
+			var providerErr *providers.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.Code != providers.ProviderErrorResponseTooLarge {
+				t.Fatalf("expected response_too_large, got %v", err)
+			}
+		})
 	}
 }
 
@@ -130,6 +176,7 @@ func TestGetInstanceReturnsNotFoundWhenPodMissing(t *testing.T) {
 func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	t.Setenv("INFERA_WORKER_SHARED_TOKEN", "worker-shared-token")
 	t.Setenv("INFERA_GATEWAY_ADDRESS", "https://inferai.co.in")
+	t.Setenv("HF_TOKEN", "platform-global-sentinel")
 
 	provider, err := New(Config{APIKey: "test-key"})
 	if err != nil {
@@ -187,6 +234,31 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	assertEnvContains(t, env, "XDG_CACHE_HOME", "/workspace/.cache")
 	assertEnvContains(t, env, "HF_HOME", "/workspace/.cache/huggingface")
 	assertEnvContains(t, env, "HUGGINGFACE_HUB_CACHE", "/workspace/.cache/huggingface/hub")
+	assertEnvMissing(t, env, "HF_TOKEN")
+	assertEnvMissing(t, env, "HUGGING_FACE_HUB_TOKEN")
+}
+
+func TestFactoryUsesWorkspaceSecretForHuggingFaceToken(t *testing.T) {
+	provider, err := Factory(providers.ProviderConfig{Type: providers.ProviderRunPod, APIKey: "key", APISecret: "workspace-hf-token"})
+	if err != nil {
+		t.Fatalf("Factory: %v", err)
+	}
+	if got := provider.(*Provider).hfToken; got != "workspace-hf-token" {
+		t.Fatalf("expected workspace secret, got %q", got)
+	}
+	env := appendHuggingFaceEnv(nil, provider.(*Provider).hfToken)
+	assertStringEnvContains(t, env, "HF_TOKEN", "workspace-hf-token")
+	assertStringEnvContains(t, env, "HUGGING_FACE_HUB_TOKEN", "workspace-hf-token")
+}
+
+func assertStringEnvContains(t *testing.T, env []map[string]string, key, want string) {
+	t.Helper()
+	for _, entry := range env {
+		if entry["key"] == key && entry["value"] == want {
+			return
+		}
+	}
+	t.Fatalf("expected env to contain %s=%q", key, want)
 }
 
 func TestProvisionIncludesAllowedCudaVersions(t *testing.T) {
@@ -509,4 +581,14 @@ func assertEnvContains(t *testing.T, env []interface{}, key, want string) {
 		}
 	}
 	t.Fatalf("expected env to contain %s", key)
+}
+
+func assertEnvMissing(t *testing.T, env []interface{}, key string) {
+	t.Helper()
+	for _, raw := range env {
+		entry, ok := raw.(map[string]interface{})
+		if ok && entry["key"] == key {
+			t.Fatalf("expected env to omit %s", key)
+		}
+	}
 }

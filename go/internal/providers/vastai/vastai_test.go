@@ -29,6 +29,33 @@ func TestNewRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewRejectsUnsafeEndpoints(t *testing.T) {
+	for _, endpoint := range []string{"http://api.example.com", "https://127.0.0.1", "https://169.254.169.254/latest"} {
+		if _, err := New(Config{APIKey: "key", Endpoint: endpoint}); err == nil {
+			t.Fatalf("expected endpoint %q to be rejected", endpoint)
+		}
+	}
+}
+
+func TestDoJSONPreservesPublicCustomEndpoint(t *testing.T) {
+	provider, err := New(Config{APIKey: "key", Endpoint: "https://provider.example.com/custom"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var gotURL, gotMethod string
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotURL, gotMethod = req.URL.String(), req.Method
+		return httpResponse(http.StatusOK, `[]`), nil
+	})
+	var out []any
+	if err := provider.doJSON(context.Background(), http.MethodGet, "/instances", nil, &out); err != nil {
+		t.Fatalf("doJSON: %v", err)
+	}
+	if gotMethod != http.MethodGet || gotURL != "https://provider.example.com/custom/instances" {
+		t.Fatalf("custom endpoint behavior changed: %s %s", gotMethod, gotURL)
+	}
+}
+
 func TestDoJSONMapsAuthFailure(t *testing.T) {
 	provider := newTestProvider(t)
 	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -46,6 +73,23 @@ func TestDoJSONMapsAuthFailure(t *testing.T) {
 	}
 	if providerErr.Code != providers.ProviderErrorAuthFailed {
 		t.Fatalf("expected auth_failed, got %q", providerErr.Code)
+	}
+}
+
+func TestDoJSONRejectsOversizedBodiesBeforeStatusOrJSON(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			provider := newTestProvider(t)
+			body := strings.Repeat("x", int(providers.MaxProviderResponseBytes)+1)
+			provider.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return httpResponse(status, body), nil
+			})
+			err := provider.doJSON(context.Background(), http.MethodGet, "/instances", nil, &map[string]any{})
+			var providerErr *providers.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.Code != providers.ProviderErrorResponseTooLarge {
+				t.Fatalf("expected response_too_large, got %v", err)
+			}
+		})
 	}
 }
 
@@ -71,6 +115,7 @@ func TestGetInstanceReturnsNotFoundWhenMissing(t *testing.T) {
 
 func TestProvisionUsesSelectedOfferAndEnv(t *testing.T) {
 	t.Setenv("INFERA_WORKER_SHARED_TOKEN", "shared-token")
+	t.Setenv("HF_TOKEN", "platform-global-sentinel")
 
 	provider := newTestProvider(t)
 	var captured map[string]any
@@ -121,6 +166,26 @@ func TestProvisionUsesSelectedOfferAndEnv(t *testing.T) {
 	}
 	if env["INFERA_WORKER_SHARED_TOKEN"] != "shared-token" {
 		t.Fatalf("expected worker token in env, got %#v", env["INFERA_WORKER_SHARED_TOKEN"])
+	}
+	if _, ok := env["HF_TOKEN"]; ok {
+		t.Fatal("tenant payload included platform-global HF_TOKEN")
+	}
+	if _, ok := env["HUGGING_FACE_HUB_TOKEN"]; ok {
+		t.Fatal("tenant payload included platform-global HUGGING_FACE_HUB_TOKEN")
+	}
+}
+
+func TestFactoryUsesWorkspaceSecretForHuggingFaceToken(t *testing.T) {
+	provider, err := Factory(providers.ProviderConfig{Type: providers.ProviderVastAI, APIKey: "key", APISecret: "workspace-hf-token"})
+	if err != nil {
+		t.Fatalf("Factory: %v", err)
+	}
+	if got := provider.(*Provider).hfToken; got != "workspace-hf-token" {
+		t.Fatalf("expected workspace secret, got %q", got)
+	}
+	env := provider.(*Provider).buildEnv(&providers.ProvisionRequest{})
+	if env["HF_TOKEN"] != "workspace-hf-token" || env["HUGGING_FACE_HUB_TOKEN"] != "workspace-hf-token" {
+		t.Fatalf("expected workspace token compatibility aliases, got %#v", env)
 	}
 }
 

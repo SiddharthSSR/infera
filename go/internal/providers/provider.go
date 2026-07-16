@@ -121,7 +121,7 @@ func (e *ProviderError) HTTPStatus(defaultStatus int) int {
 		return 429
 	case ProviderErrorMissingAPIKey, ProviderErrorAuthFailed, ProviderErrorInvalidConfig, ProviderErrorInvalidRequest:
 		return 400
-	case ProviderErrorServiceUnavailable, ProviderErrorRequestFailed, ProviderErrorTimeout, ProviderErrorAPIError, ProviderErrorGraphQLError, ProviderErrorInstanceError:
+	case ProviderErrorServiceUnavailable, ProviderErrorRequestFailed, ProviderErrorTimeout, ProviderErrorResponseTooLarge, ProviderErrorAPIError, ProviderErrorGraphQLError, ProviderErrorInstanceError:
 		return 503
 	case ProviderErrorNotImplemented:
 		return 501
@@ -140,7 +140,7 @@ func (e *ProviderError) APIErrorType() string {
 		return "provider_auth_failed"
 	case ProviderErrorInvalidConfig, ProviderErrorInvalidRequest:
 		return "provider_invalid_config"
-	case ProviderErrorServiceUnavailable, ProviderErrorRequestFailed:
+	case ProviderErrorServiceUnavailable, ProviderErrorRequestFailed, ProviderErrorResponseTooLarge:
 		return "provider_unavailable"
 	case ProviderErrorTimeout:
 		return "provider_timeout"
