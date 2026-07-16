@@ -117,6 +117,7 @@ INFERA_ADMIN_KEY=...
 INFERA_GATEWAY_ADDRESS=https://inferai.co.in
 INFERA_ALLOWED_ORIGINS=https://inferai.co.in
 INFERA_WORKER_SHARED_TOKEN=<long-random-token>
+INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY=<base64-encoded-32-byte-key>
 INFERA_WORKER_IMAGE=<registry>/infera-worker:<pinned-tag>
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD=<strong-password>
@@ -131,6 +132,7 @@ HF_TOKEN=... # optional
 Notes:
 
 - Keep `INFERA_WORKER_SHARED_TOKEN` identical on gateway and workers.
+- Generate `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` with `openssl rand -base64 32`, store it in your secret manager, and back it up separately from the database. Losing it makes saved provider credentials unrecoverable.
 - Use a non-`latest` worker image tag or a full `@sha256:<64-hex-digest>` pin in production.
 - Validate required production env and the worker image pin before deploy:
 
@@ -138,7 +140,6 @@ Notes:
 ./scripts/validate-prod-env.sh
 ./scripts/validate-worker-image-pin.sh
 ```
-
 - Alertmanager values in `docker-compose.prod.yml` are required in production; do not leave them as placeholders.
 
 ### 3. Deploy
@@ -351,6 +352,7 @@ Compatibility notes:
 | `INFERA_GATEWAY_ADDRESS` | — | Public gateway URL workers use for registration/heartbeat |
 | `INFERA_ALLOWED_ORIGINS` | `*` | CORS allowlist (comma-separated) |
 | `INFERA_WORKER_SHARED_TOKEN` | — | Shared secret required for worker register/heartbeat |
+| `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` | — | Base64-encoded 32-byte key used to encrypt workspace provider credentials; required outside development mode |
 | `INFERA_WORKER_IMAGE` | — | Custom worker Docker image pinned to a non-`latest` tag or full digest |
 | `INFERA_DEFAULT_MODEL` | `mistralai/Mistral-7B-Instruct-v0.2` | Default model to load |
 | `INFERA_GITHUB_REPO` | — | GitHub repo to install worker from |

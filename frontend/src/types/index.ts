@@ -1,4 +1,5 @@
 // API Types
+import type { GPUType, ProviderType } from './generated/infrastructure';
 
 export interface Worker {
   worker_id: string;
@@ -58,133 +59,167 @@ export interface Stats {
   uptime_seconds: number;
 }
 
-export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
+export type {
+  ChatCompletionChunk,
+  ChatCompletionChoice,
+  ChatCompletionDelta,
+  ChatCompletionError,
+  ChatCompletionErrorResponse,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ChatCompletionUsage,
+  ChatMessage,
+  ChatMessageRole,
+  ChatToolCall,
+  ChatToolChoice,
+  ChatToolChoiceObject,
+  ChatToolDefinition,
+  ChatToolFunction,
+} from './generated/openaiChat';
 
-export interface ChatCompletionRequest {
-  model: string;
-  messages: ChatMessage[];
-  temperature?: number;
-  max_tokens?: number;
-  stream?: boolean;
-}
+export type {
+  CostSummary,
+  GPUOffering,
+  GPUType,
+  Instance,
+  InstanceEngine,
+  InstanceStatus,
+  WorkerRegistrationStatus,
+  KnownGPUType,
+  OfferingsResponse,
+  ProviderCapabilities,
+  ProviderStatus,
+  ProvidersResponse,
+  ProviderType,
+  InstancesResponse,
+} from './generated/infrastructure';
 
-export interface ChatCompletionResponse {
-  id: string;
-  object: string;
-  created: number;
-  model: string;
-  choices: {
-    index: number;
-    message: ChatMessage;
-    finish_reason: string;
-  }[];
-  usage: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-}
+export type {
+  DeploymentAttemptOutcome,
+  DeploymentAttemptRecord,
+  DeploymentAttemptResponse,
+  DeploymentAttemptsResponse,
+  DeploymentAutoVerificationRequest,
+  DeploymentInferenceVerification,
+  DeploymentProvisionRequest,
+} from './generated/deploymentHistory';
 
-// GPU Provider Types
+export type {
+  ApiKeyCreateRequest,
+  ApiKeyCreateResponse,
+  ApiKeyListResponse,
+  ApiKeyRecord,
+  SessionCreateRequest,
+  SessionInfo,
+  SessionKeyInfo,
+  SessionMemberInfo,
+  SessionPayload,
+  SessionSwitchWorkspaceRequest,
+  SessionWorkspaceInfo,
+  WorkspacesResponse,
+  WorkspaceRecord,
+} from './generated/authAccess';
 
-export type ProviderType = 'runpod' | 'vastai' | 'lambda' | 'mock';
-export type KnownGPUType = 'RTX_4090' | 'RTX_4080' | 'A100_40GB' | 'A100_80GB' | 'H100' | 'L40S';
-export type GPUType = KnownGPUType | (string & {});
-export type InstanceStatus = 'pending' | 'provisioning' | 'running' | 'stopping' | 'stopped' | 'terminating' | 'terminated' | 'error';
-export type WorkerRegistrationStatus =
-  | 'pending'
-  | 'provider_running_no_network'
-  | 'provider_running_worker_unregistered'
-  | 'worker_unreachable'
-  | 'worker_health_unavailable'
-  | 'model_loading'
-  | 'model_load_failed'
-  | 'registration_failed'
-  | 'heartbeat_missing'
-  | 'registered_unhealthy'
-  | 'ready';
+export type {
+  WorkspaceInvitationAcceptRequest,
+  WorkspaceInvitationAcceptResponse,
+  WorkspaceInvitationAcceptedKeyRecord,
+  WorkspaceInvitationCreateRequest,
+  WorkspaceInvitationCreateResponse,
+  WorkspaceInvitationPreview,
+  WorkspaceInvitationPreviewResponse,
+  WorkspaceInvitationRecord,
+  WorkspaceInvitationsResponse,
+  WorkspaceMemberRecord,
+  WorkspaceMemberResponse,
+  WorkspaceMembersResponse,
+  WorkspaceMemberUpdateRequest,
+  WorkspaceProviderConfigRecord,
+  WorkspaceProviderConfigResponse,
+  WorkspaceProviderConfigUpsertRequest,
+  WorkspaceProviderConfigsResponse,
+  WorkspaceQuotaRecord,
+  WorkspaceQuotaResponse,
+  WorkspaceQuotaUpdateRequest,
+} from './generated/workspaceAdmin';
 
-export interface Instance {
-  id: string;
-  provider_id: string;
-  provider: ProviderType;
+export type PlaygroundMode = 'chat' | 'agent';
+export type AgentExecutionMode = 'operations' | 'research' | 'multimodal';
+export type AgentAnalysisDepth = 'standard' | 'deep';
+
+export interface AgentToolDescriptor {
   name: string;
-  status: InstanceStatus;
-  gpu_type: GPUType;
-  gpu_count: number;
-  vcpu: number;
-  memory_gb: number;
-  storage_gb: number;
-  public_ip?: string;
-  http_port?: number;
-  ssh_port?: number;
-  worker_id?: string;
-  models?: string[];
-  worker_registration_status?: WorkerRegistrationStatus;
-  worker_registration_deadline?: string;
-  last_worker_registration_error?: string;
-  last_worker_registration_check_at?: string;
-  worker_registered_at?: string;
-  worker_last_heartbeat_at?: string;
-  worker_health_url?: string;
-  provider_network_ready?: boolean;
-  provider_network_error?: string;
-  cost_per_hour: number;
-  spot_instance: boolean;
+  description: string;
+  modes?: AgentExecutionMode[];
+}
+
+export interface AgentDescriptor {
+  id: string;
+  name: string;
+  description: string;
+  default_max_steps: number;
+  tools: AgentToolDescriptor[];
+}
+
+export type AgentRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
+export type AgentRunStepType = 'tool_call' | 'tool_result' | 'final' | 'error';
+
+export interface AgentSource {
+  title: string;
+  url: string;
+  domain: string;
+  snippet?: string;
+}
+
+export interface AgentAttachment {
+  id: string;
+  workspace_id: string;
+  created_by_key_id?: string;
+  run_id?: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  width?: number;
+  height?: number;
+  sha256: string;
   created_at: string;
+}
+
+export interface AgentRun {
+  id: string;
+  workspace_id: string;
+  created_by_key_id?: string;
+  agent_id: string;
+  mode: AgentExecutionMode;
+  analysis_depth: AgentAnalysisDepth;
+  model: string;
+  input: string;
+  status: AgentRunStatus;
+  max_steps: number;
+  current_step: number;
+  final_output?: string;
+  failure_reason?: string;
+  created_at: string;
+  updated_at: string;
   started_at?: string;
-  stopped_at?: string;
-  error?: string;
+  finished_at?: string;
 }
 
-export interface GPUOffering {
-  provider: ProviderType;
-  gpu_type: GPUType;
-  display_name?: string;
-  provider_gpu_type_id?: string;
-  gpu_count: number;
-  vcpu: number;
-  memory_gb: number;
-  storage_gb: number;
-  cost_per_hour: number;
-  spot_price?: number;
-  region: string;
-  available: number;
+export interface AgentRunStep {
+  id: number;
+  run_id: string;
+  index: number;
+  type: AgentRunStepType;
+  tool_name?: string;
+  payload: unknown;
+  created_at: string;
 }
 
-export interface ProviderStatus {
-  provider: ProviderType;
-  connected: boolean;
-  account_id?: string;
-  balance?: number;
-  active_instances: number;
-  quota_limit?: number;
-  error?: string;
-  error_code?: string;
-  capabilities?: ProviderCapabilities;
-}
-
-export interface ProviderCapabilities {
-  supports_spot: boolean;
-  supports_custom_images: boolean;
-  supports_region_selection: boolean;
-  supports_public_ip: boolean;
-  supports_ssh_keys: boolean;
-  supports_start_stop: boolean;
-  startup_script_limit?: number;
-  known_regions?: string[];
-}
-
-export interface CostSummary {
-  current_hourly: number;
-  today_total: number;
-  month_total: number;
-  projected_month: number;
-  by_provider: Record<string, number>;
-  by_gpu: Record<string, number>;
+export interface AgentRunDetail {
+  run: AgentRun;
+  steps: AgentRunStep[];
+  attachments?: AgentAttachment[];
+  sources?: AgentSource[];
 }
 
 export interface ProvisionRequest {

@@ -1,0 +1,6 @@
+{
+  "error": {
+    "type": "authorization_error",
+    "message": "You cannot assign that role."
+  }
+}

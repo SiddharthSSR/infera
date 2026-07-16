@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,13 +14,42 @@ const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool"
 )
+
+// ToolCall represents a function call made by the model.
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall contains the function name and arguments.
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ToolDefinition describes a tool available to the model.
+type ToolDefinition struct {
+	Type     string         `json:"type"`
+	Function FunctionSchema `json:"function"`
+}
+
+// FunctionSchema describes a function's signature.
+type FunctionSchema struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	Parameters  interface{} `json:"parameters,omitempty"`
+}
 
 // Message represents a single message in a conversation.
 type Message struct {
-	Role    Role   `json:"role"`
-	Content string `json:"content"`
-	Name    string `json:"name,omitempty"`
+	Role       Role       `json:"role"`
+	Content    string     `json:"content"`
+	Name       string     `json:"name,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 // InferenceParameters controls generation behavior.
@@ -59,6 +89,8 @@ const (
 	MetadataExplicitAffinity = "explicit"
 	MetadataSessionAffinity  = "session_prefix"
 	MetadataAPIKeyAffinity   = "api_key_prefix"
+	MetadataAgentID          = "agent_id"
+	MetadataAgentRunID       = "agent_run_id"
 )
 
 // InferenceRequest represents a request for model inference.
@@ -72,6 +104,8 @@ type InferenceRequest struct {
 	Metadata   map[string]string   `json:"metadata,omitempty"`
 	CreatedAt  time.Time           `json:"created_at"`
 	APIKeyID   string              `json:"api_key_id,omitempty"`
+	Tools      []ToolDefinition    `json:"tools,omitempty"`
+	ToolChoice json.RawMessage     `json:"tool_choice,omitempty"`
 }
 
 // NewInferenceRequest creates a new request with generated ID.
@@ -99,9 +133,10 @@ func (r *InferenceRequest) TokenEstimate() int {
 type FinishReason string
 
 const (
-	FinishReasonStop   FinishReason = "stop"
-	FinishReasonLength FinishReason = "length"
-	FinishReasonError  FinishReason = "error"
+	FinishReasonStop      FinishReason = "stop"
+	FinishReasonLength    FinishReason = "length"
+	FinishReasonError     FinishReason = "error"
+	FinishReasonToolCalls FinishReason = "tool_calls"
 )
 
 // UsageStats tracks token usage.
@@ -136,14 +171,29 @@ type InferenceResponse struct {
 	CreatedAt time.Time    `json:"created_at"`
 }
 
+// ToolCallChunkDelta represents an incremental tool call update in a streaming chunk.
+type ToolCallChunkDelta struct {
+	Index    int           `json:"index"`
+	ID       string        `json:"id,omitempty"`
+	Type     string        `json:"type,omitempty"`
+	Function FunctionDelta `json:"function,omitempty"`
+}
+
+// FunctionDelta is the incremental function call content within a streaming chunk.
+type FunctionDelta struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
 // TokenChunk represents a streaming token.
 type TokenChunk struct {
-	RequestID    string        `json:"request_id"`
-	Index        int           `json:"index"`
-	Delta        string        `json:"delta"`
-	FinishReason *FinishReason `json:"finish_reason,omitempty"`
-	Usage        *UsageStats   `json:"usage,omitempty"`
-	CreatedAt    time.Time     `json:"created_at"`
+	RequestID    string               `json:"request_id"`
+	Index        int                  `json:"index"`
+	Delta        string               `json:"delta"`
+	FinishReason *FinishReason        `json:"finish_reason,omitempty"`
+	Usage        *UsageStats          `json:"usage,omitempty"`
+	CreatedAt    time.Time            `json:"created_at"`
+	ToolCalls    []ToolCallChunkDelta `json:"tool_calls,omitempty"`
 }
 
 // IsFinal returns true if this is the last chunk.

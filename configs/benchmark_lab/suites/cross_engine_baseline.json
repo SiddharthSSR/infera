@@ -1,0 +1,22 @@
+{
+  "suite_id": "cross-engine-baseline",
+  "description": "Config-driven baseline sweep across engines, hardware targets, models, and workloads.",
+  "matrix": {
+    "engines": ["vllm", "sglang", "tensorrt_llm"],
+    "hardware": ["a100_80gb"],
+    "gpu_counts": [1],
+    "models": ["Qwen/Qwen2.5-7B-Instruct"],
+    "workloads": ["mixed", "repeated_prefix"],
+    "benchmark_profiles": ["provision_full"],
+    "runtime_presets": ["baseline"]
+  },
+  "runtime_presets": [
+    {
+      "id": "baseline",
+      "display_name": "Baseline",
+      "description": "No explicit runtime overrides. Let the stack defaults or provider heuristics resolve the final config.",
+      "parameters": {}
+    }
+  ],
+  "output_root": "/tmp/infera-benchmark-lab"
+}

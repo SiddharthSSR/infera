@@ -1,8 +1,10 @@
+import type { CSSProperties } from 'react';
+
 import { cn } from '../lib/utils';
 
-export type StatusTone = 'success' | 'warning' | 'error' | 'neutral' | 'info';
+type StatusTone = 'success' | 'warning' | 'error' | 'neutral' | 'info';
 
-export function toneFromStatus(status: string): StatusTone {
+function toneFromStatus(status: string): StatusTone {
   const s = status.toLowerCase();
   if (['healthy', 'active', 'online', 'verified', 'serving_verified', 'connected', 'ready'].includes(s)) return 'success';
   if (['degraded', 'warning', 'slow', 'partial', 'serving_unverified', 'setup_in_progress'].includes(s)) return 'warning';
@@ -77,7 +79,7 @@ export function StatusBadge({ label, tone, status, dot = true, className }: Stat
 }
 
 // Helper to convert inline style string to React style object
-function parseStyleString(styleStr: string): React.CSSProperties {
+function parseStyleString(styleStr: string): CSSProperties {
   const result: Record<string, string> = {};
   styleStr.split(';').forEach((part) => {
     const [prop, val] = part.split(':').map((s) => s.trim());
@@ -86,5 +88,5 @@ function parseStyleString(styleStr: string): React.CSSProperties {
       result[camel] = val;
     }
   });
-  return result as React.CSSProperties;
+  return result as CSSProperties;
 }

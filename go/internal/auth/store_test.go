@@ -9,10 +9,12 @@ import (
 	"time"
 )
 
+const testProviderCredentialEncryptionKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dir := t.TempDir()
-	s, err := NewStore(filepath.Join(dir, "auth_test.db"))
+	s, err := NewStoreWithProviderCredentialEncryption(filepath.Join(dir, "auth_test.db"), testProviderCredentialEncryptionKey)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
@@ -106,8 +108,12 @@ func TestValidateKey_Revoked(t *testing.T) {
 
 func TestListKeys(t *testing.T) {
 	s := newTestStore(t)
-	s.CreateKey("a", "user")
-	s.CreateKey("b", "admin")
+	if _, _, err := s.CreateKey("a", "user"); err != nil {
+		t.Fatalf("CreateKey a: %v", err)
+	}
+	if _, _, err := s.CreateKey("b", "admin"); err != nil {
+		t.Fatalf("CreateKey b: %v", err)
+	}
 
 	keys, err := s.ListKeys()
 	if err != nil {
@@ -151,8 +157,12 @@ func TestCount(t *testing.T) {
 	if c != 0 {
 		t.Fatalf("expected 0, got %d", c)
 	}
-	s.CreateKey("a", "user")
-	s.CreateKey("b", "user")
+	if _, _, err := s.CreateKey("a", "user"); err != nil {
+		t.Fatalf("CreateKey a: %v", err)
+	}
+	if _, _, err := s.CreateKey("b", "user"); err != nil {
+		t.Fatalf("CreateKey b: %v", err)
+	}
 	c, _ = s.Count()
 	if c != 2 {
 		t.Fatalf("expected 2, got %d", c)
@@ -387,7 +397,9 @@ func TestWorkspaceProviderConfigLifecycle(t *testing.T) {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
 
-	config, err := s.UpsertWorkspaceProviderConfig(workspace.ID, "runpod", "rp_key", "", "https://api.runpod.io/graphql")
+	config, err := s.UpsertWorkspaceProviderConfig(workspace.ID, "runpod", "rp_key", "", "https://api.runpod.io/graphql", map[string]string{
+		"location": "us-east-1",
+	})
 	if err != nil {
 		t.Fatalf("UpsertWorkspaceProviderConfig: %v", err)
 	}
@@ -396,6 +408,9 @@ func TestWorkspaceProviderConfigLifecycle(t *testing.T) {
 	}
 	if config.Endpoint != "https://api.runpod.io/graphql" {
 		t.Fatalf("expected endpoint to round-trip, got %q", config.Endpoint)
+	}
+	if got := config.Options["location"]; got != "us-east-1" {
+		t.Fatalf("expected location option to round-trip, got %q", got)
 	}
 
 	listed, err := s.ListWorkspaceProviderConfigs(workspace.ID)
@@ -406,21 +421,109 @@ func TestWorkspaceProviderConfigLifecycle(t *testing.T) {
 		t.Fatalf("expected one runpod config, got %+v", listed)
 	}
 
-	apiKey, apiSecret, endpoint, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod")
+	apiKey, apiSecret, endpoint, options, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod")
 	if err != nil {
 		t.Fatalf("ResolveWorkspaceProviderConfig: %v", err)
 	}
 	if apiKey != "rp_key" || apiSecret != "" || endpoint != "https://api.runpod.io/graphql" {
 		t.Fatalf("unexpected resolved provider config: %q %q %q", apiKey, apiSecret, endpoint)
 	}
+	if got := options["location"]; got != "us-east-1" {
+		t.Fatalf("expected resolved location option, got %q", got)
+	}
+
+	var storedAPIKey string
+	if err := s.db.QueryRow(`
+		SELECT api_key FROM workspace_provider_configs
+		WHERE workspace_id = ? AND provider = ?`, workspace.ID, "runpod").Scan(&storedAPIKey); err != nil {
+		t.Fatalf("read stored provider API key: %v", err)
+	}
+	if storedAPIKey == "rp_key" || !strings.HasPrefix(storedAPIKey, providerCredentialCiphertextPrefix) {
+		t.Fatalf("expected encrypted provider API key at rest, got %q", storedAPIKey)
+	}
 
 	if err := s.DeleteWorkspaceProviderConfig(workspace.ID, "runpod"); err != nil {
 		t.Fatalf("DeleteWorkspaceProviderConfig: %v", err)
 	}
-	if _, _, _, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod"); err == nil {
+	if _, _, _, _, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod"); err == nil {
 		t.Fatal("expected resolve to fail after delete")
 	} else if !errors.Is(err, ErrWorkspaceProviderConfigNotFound) {
 		t.Fatalf("expected ErrWorkspaceProviderConfigNotFound, got %v", err)
+	}
+}
+
+func TestWorkspaceProviderConfigsRequireEncryption(t *testing.T) {
+	s, err := NewStore(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	if _, err := s.UpsertWorkspaceProviderConfig(DefaultWorkspaceID, "runpod", "rp_key", "", "", nil); err == nil || !strings.Contains(err.Error(), "encryption is not configured") {
+		t.Fatalf("expected missing encryption error, got %v", err)
+	}
+}
+
+func TestProviderCredentialEncryptionMigratesLegacyPlaintext(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "auth.db")
+	legacyStore, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := legacyStore.db.Exec(`
+		INSERT INTO workspace_provider_configs (workspace_id, provider, api_key, api_secret, endpoint, options_json)
+		VALUES (?, ?, ?, ?, ?, ?)`, DefaultWorkspaceID, "runpod", "legacy_key", "legacy_secret", "", "{}"); err != nil {
+		t.Fatalf("insert legacy provider config: %v", err)
+	}
+	if err := legacyStore.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	secureStore, err := NewStoreWithProviderCredentialEncryption(dbPath, testProviderCredentialEncryptionKey)
+	if err != nil {
+		t.Fatalf("open encrypted store: %v", err)
+	}
+	t.Cleanup(func() { _ = secureStore.Close() })
+	apiKey, apiSecret, _, _, err := secureStore.ResolveWorkspaceProviderConfig(DefaultWorkspaceID, "runpod")
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceProviderConfig: %v", err)
+	}
+	if apiKey != "legacy_key" || apiSecret != "legacy_secret" {
+		t.Fatalf("unexpected migrated credentials: %q %q", apiKey, apiSecret)
+	}
+	var storedAPIKey, storedAPISecret string
+	if err := secureStore.db.QueryRow(`
+		SELECT api_key, api_secret FROM workspace_provider_configs
+		WHERE workspace_id = ? AND provider = ?`, DefaultWorkspaceID, "runpod").Scan(&storedAPIKey, &storedAPISecret); err != nil {
+		t.Fatalf("read migrated provider config: %v", err)
+	}
+	if !strings.HasPrefix(storedAPIKey, providerCredentialCiphertextPrefix) || !strings.HasPrefix(storedAPISecret, providerCredentialCiphertextPrefix) {
+		t.Fatalf("expected legacy credentials to be encrypted, got %q %q", storedAPIKey, storedAPISecret)
+	}
+}
+
+func TestProviderCredentialEncryptionRejectsWrongKey(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "auth.db")
+	s, err := NewStoreWithProviderCredentialEncryption(dbPath, testProviderCredentialEncryptionKey)
+	if err != nil {
+		t.Fatalf("open encrypted store: %v", err)
+	}
+	if _, err := s.UpsertWorkspaceProviderConfig(DefaultWorkspaceID, "runpod", "rp_key", "", "", nil); err != nil {
+		t.Fatalf("UpsertWorkspaceProviderConfig: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close encrypted store: %v", err)
+	}
+
+	const wrongKey = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+	if _, err := NewStoreWithProviderCredentialEncryption(dbPath, wrongKey); err == nil || !strings.Contains(err.Error(), "could not be decrypted") {
+		t.Fatalf("expected wrong-key startup failure, got %v", err)
+	}
+}
+
+func TestProviderCredentialEncryptionRejectsInvalidKey(t *testing.T) {
+	if _, err := NewStoreWithProviderCredentialEncryption(filepath.Join(t.TempDir(), "auth.db"), "too-short"); err == nil {
+		t.Fatal("expected invalid encryption key to fail")
 	}
 }
 

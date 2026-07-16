@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, Cpu, DollarSign, Loader2, Box } from 'lucide-react';
 import type { GPUOffering, ProvisionRequest, ProviderType, GPUType, KnownGPUType } from '../types';
-import { useProvisionInstance } from '../hooks/useApi';
+import { useProvisionInstance } from '../hooks/useInfrastructureApi';
 
 interface ProvisionModalProps {
   isOpen: boolean;
@@ -19,6 +19,7 @@ const GPU_LABELS: Record<KnownGPUType, string> = {
 };
 
 const PROVIDER_LABELS: Record<ProviderType, string> = {
+  e2e: 'E2E TIR',
   runpod: 'RunPod',
   vastai: 'Vast.ai',
   lambda: 'Lambda',

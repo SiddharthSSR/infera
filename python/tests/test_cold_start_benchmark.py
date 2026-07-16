@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "cold-start-benchmark.py"
 
@@ -38,8 +40,85 @@ def test_parse_args_defaults(monkeypatch):
     args = module.parse_args()
     assert args.base_url == "https://inferai.co.in"
     assert args.provider == "runpod"
+    assert args.engine == "vllm"
     assert args.health_url_template == "https://{provider_id}-8081.proxy.runpod.net/health"
     assert args.gpu_count == 1
+    assert args.allowed_cuda_version == []
+
+
+def test_build_provision_payload_defaults_allowed_cuda_versions_for_tensorrt_runpod():
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "instance_name": "cold-start-bench",
+            "provider": "runpod",
+            "engine": "tensorrt_llm",
+            "gpu_type": "A100_80GB",
+            "gpu_count": 1,
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "provider_gpu_type_id": "NVIDIA A100 80GB PCIe",
+            "allowed_cuda_version": [],
+            "runtime_option": [],
+        },
+    )()
+
+    payload = module.build_provision_payload(args)
+
+    assert payload["allowed_cuda_versions"] == ["12.6", "12.7", "12.8"]
+
+
+def test_build_provision_payload_prefers_explicit_allowed_cuda_versions():
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "instance_name": "cold-start-bench",
+            "provider": "runpod",
+            "engine": "tensorrt_llm",
+            "gpu_type": "A100_80GB",
+            "gpu_count": 1,
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "provider_gpu_type_id": "",
+            "allowed_cuda_version": ["12.8", "12.8", "12.9"],
+            "runtime_option": [],
+        },
+    )()
+
+    payload = module.build_provision_payload(args)
+
+    assert payload["allowed_cuda_versions"] == ["12.8", "12.9"]
+
+
+def test_build_provision_payload_includes_runtime_options():
+    module = load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "instance_name": "cold-start-bench",
+            "provider": "runpod",
+            "engine": "vllm",
+            "gpu_type": "A100_80GB",
+            "gpu_count": 1,
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "provider_gpu_type_id": "",
+            "allowed_cuda_version": [],
+            "runtime_option": [
+                "INFERA_ENGINE=vllm",
+                "INFERA_VLLM_MAX_NUM_SEQS=32",
+            ],
+        },
+    )()
+
+    payload = module.build_provision_payload(args)
+
+    assert payload["options"] == {
+        "INFERA_ENGINE": "vllm",
+        "INFERA_VLLM_MAX_NUM_SEQS": "32",
+    }
 
 
 def test_format_health_url_uses_provider_id():
@@ -135,6 +214,48 @@ def test_compute_durations_omits_negative_running_to_server_started():
     }
 
 
+def test_fatal_health_payload_reason_reports_gpu_preflight_failure():
+    module = load_module()
+    payload = {
+        "state": "error",
+        "live": False,
+        "startup": {
+            "metadata": {
+                "gpu_preflight": {
+                    "status": "failed",
+                    "error_type": "RuntimeError",
+                    "error": "CUDA unknown error",
+                }
+            }
+        },
+    }
+
+    reason = module.fatal_health_payload_reason(payload)
+
+    assert reason == (
+        "worker entered error state during startup: gpu_preflight failed: "
+        "RuntimeError: CUDA unknown error"
+    )
+
+
+def test_wait_for_condition_aborts_on_fatal_reason():
+    module = load_module()
+    args = type("Args", (), {"quiet_progress": True})()
+
+    with pytest.raises(RuntimeError, match="gpu_preflight failed"):
+        module.wait_for_condition(
+            lambda: {"workers": [], "total": 0},
+            lambda _payload: False,
+            description="worker registration for instance test",
+            timeout_s=1,
+            poll_interval_ms=1,
+            args=args,
+            abort_fn=lambda: (
+                "worker entered error state during startup: gpu_preflight failed: RuntimeError: CUDA unknown error"
+            ),
+        )
+
+
 def test_build_report_serializes_probe():
     module = load_module()
     scenario = module.ScenarioResult(
@@ -162,6 +283,7 @@ def test_build_report_serializes_probe():
             {
                 "base_url": "https://inferai.co.in",
                 "provider": "runpod",
+                "engine": "vllm",
                 "gpu_type": "A100_80GB",
                 "provider_gpu_type_id": "NVIDIA A100 80GB PCIe",
                 "gpu_count": 1,
@@ -221,6 +343,20 @@ def test_fetch_health_falls_back_to_curl_on_1010(monkeypatch):
     assert payload == {"ready": True}
 
 
+def test_summarize_health_poll_error_classifies_bootstrap_failures():
+    module = load_module()
+
+    assert module.summarize_health_poll_error(
+        RuntimeError("GET /health failed with HTTP 404:")
+    ) == ("bootstrap in progress: worker health route not published yet (HTTP 404)")
+    assert module.summarize_health_poll_error(
+        RuntimeError("GET /health failed with HTTP 502: bad gateway")
+    ) == ("bootstrap in progress: proxy upstream not ready yet (HTTP 502)")
+    assert module.summarize_health_poll_error(RuntimeError("The read operation timed out")) == (
+        "bootstrap in progress: worker health endpoint not responding yet (timeout)"
+    )
+
+
 def test_run_ready_path_does_not_block_registration_or_probe_on_health(monkeypatch):
     module = load_module()
     call_order: list[str] = []
@@ -244,7 +380,10 @@ def test_run_ready_path_does_not_block_registration_or_probe_on_health(monkeypat
         call_order.append("registration")
         assert kwargs["scenario_start_ms"] == 1000
         assert kwargs["previous_worker_id"] is None
-        return 2400, {"total": 1, "workers": [{"worker_id": "worker-1", "address": "pod-1-8081.proxy.runpod.net"}]}
+        return 2400, {
+            "total": 1,
+            "workers": [{"worker_id": "worker-1", "address": "pod-1-8081.proxy.runpod.net"}],
+        }
 
     def fake_run_first_success_probe(*args, **kwargs):
         call_order.append("probe")

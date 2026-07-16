@@ -1,224 +1,228 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import type { GPUOffering, Model, ProviderStatus, Instance, Worker } from '../types';
-import { sendChatCompletion } from '../lib/api';
-import { ActionGroup } from '../components/ActionGroup';
-import { CollapsibleSection } from '../components/CollapsibleSection';
-import { MetadataList } from '../components/MetadataList';
-import { SectionHeader } from '../components/SectionHeader';
-import {
-  summarizeDeploymentAttempt,
-  type DeploymentAttemptRecord,
-  type DeploymentAttemptSummary,
-} from '../lib/deploymentHistory';
-import { getInstanceReadiness } from '../lib/instanceReadiness';
+import type { Model, Worker } from '../types';
+import { sendChatCompletion } from '../lib/chatClient';
+import { LabelText, Badge, ActionButton } from '../components/shared';
+import { ModelsSkeleton } from '../components/skeletons';
+import { ModelCatalogSection } from '../components/models/ModelCatalogSection';
+import { ModelsOverviewSection } from '../components/models/ModelsOverviewSection';
 import { deriveModelRuntimeDrilldown } from '../lib/modelRuntimeDrilldown';
-import { useDeploymentAttempts, useModels, useVaultModels, useRegisterVaultModel, useDeleteVaultModel, useOfferings, useProviders, useInstances, useUpdateDeploymentVerification, useWorkers } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { type ModelDeployReadiness, type ModelServingOverview, useModelsViewState } from '../hooks/useModelsViewState';
 import { useAuthSession } from '../lib/auth-context';
+import { useDeploymentAttempts, useUpdateDeploymentVerification } from '../hooks/useDeploymentApi';
+import { useInstances, useOfferings, useProviders } from '../hooks/useInfrastructureApi';
+import { useModels, useWorkers } from '../hooks/useRuntimeApi';
+import { useDeleteVaultModel, useRegisterVaultModel, useVaultModels } from '../hooks/useVaultApi';
 
 const FAMILY_OPTIONS = ['mistral', 'llama', 'qwen', 'phi', 'gemma', 'deepseek', 'falcon', 'mixtral', 'yi', 'command-r'];
 const QUANT_OPTIONS = ['none', 'GPTQ', 'AWQ', 'GGUF', 'FP8', 'INT8', 'INT4'];
-const CONFIGURABLE_PROVIDERS = ['runpod', 'vastai'] as const;
-const RECOMMENDED_MODEL_IDS = [
-  'Qwen/Qwen3-4B-Thinking-2507',
-  'moonshotai/Kimi-K2.5-Instruct',
-] as const;
 const RECOMMENDED_MODEL_LABELS: Record<string, string> = {
   'Qwen/Qwen3-4B-Thinking-2507': 'Budget Reasoning',
   'moonshotai/Kimi-K2.5-Instruct': 'High-Capacity',
 };
-const GPU_VRAM_GB: Record<string, number> = {
-  RTX_4090: 24,
-  RTX_4080: 16,
-  A100_40GB: 40,
-  A100_80GB: 80,
-  H100: 80,
-  L40S: 48,
+
+/* ------------------------------------------------------------------ */
+/*  Model slide-over panel                                             */
+/* ------------------------------------------------------------------ */
+
+type SlideOverModel = {
+  model: Model;
+  overview: ModelServingOverview;
+  runtime: ReturnType<typeof deriveModelRuntimeDrilldown>;
+  deployState: ModelDeployReadiness;
 };
 
-type ModelServingOverview = {
-  state: 'not_deployed' | 'runtime_pending' | 'serving_unverified' | 'serving_verified' | 'serving_failed' | 'degraded';
-  summary: string;
-  badgeLabel: string;
-  badgeTone: '' | 'warning' | 'error' | 'inactive';
-  activeInstances: number;
-  verifiedAt?: string;
-  latestVerificationError?: string;
-  latestVerificationLatencyMs?: number;
-  latestAttempt?: DeploymentAttemptSummary | null;
-};
+function ModelSlideOver({
+  data,
+  workers,
+  onClose,
+  onDelete,
+  onVerify,
+  verifying,
+}: {
+  data: SlideOverModel;
+  workers: Worker[] | undefined;
+  onClose: () => void;
+  onDelete: (modelId: string) => void;
+  onVerify: (model: Model) => void;
+  verifying: boolean;
+}) {
+  const navigate = useNavigate();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const { model, overview, runtime, deployState } = data;
 
-function describeDeployReadiness(model: Model, offerings: GPUOffering[], providers: ProviderStatus[]) {
-  const connectedProviders = providers.filter((provider) => provider.connected);
-  const requiredMB = model.vram_required || 0;
-  const compatibleOfferings = offerings.filter((offering) => {
-    if (!requiredMB) return true;
-    const vramGB = offering.memory_gb || GPU_VRAM_GB[offering.gpu_type] || 0;
-    return vramGB * 1024 >= requiredMB;
-  });
-  const cheapest = compatibleOfferings.reduce<GPUOffering | null>((best, offering) => {
-    if (!best || offering.cost_per_hour < best.cost_per_hour) return offering;
-    return best;
-  }, null);
-  const providerNames = [...new Set(compatibleOfferings.map((offering) => offering.provider))];
+  const shortName = model.id.split('/').pop() || model.id;
+  const provider = model.owned_by || model.family || '';
+  const isLoaded = model.loaded !== false;
+  const isDeploying = model.vault_status === 'testing';
+  const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying' : 'Available';
 
-  if (model.loaded !== false) {
-    return {
-      state: 'active' as const,
-      summary: 'Already loaded on active infrastructure.',
-      actionLabel: 'MANAGE',
-      actionTarget: '/instances',
-    };
-  }
+  // Serving workers for this model
+  const modelWorkers = (workers || []).filter(
+    (w) => w.models?.some((m) => m === model.id || m.endsWith(`/${shortName}`)),
+  );
 
-  if (model.vault_status === 'testing') {
-    return {
-      state: 'deploying' as const,
-      summary: 'Provisioning or model load is already in progress.',
-      actionLabel: 'VIEW NODES',
-      actionTarget: '/instances',
-    };
-  }
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
 
-  if (connectedProviders.length === 0) {
-    return {
-      state: 'setup' as const,
-      summary: 'No live provider is connected for this workspace yet.',
-      actionLabel: 'SETUP PROVIDER',
-      actionTarget: '/workspace',
-    };
-  }
+  const metaRows: { label: string; value: string; mono?: boolean }[] = [
+    { label: 'ID', value: model.id, mono: true },
+    { label: 'PROVIDER', value: provider || 'Unknown' },
+    { label: 'FAMILY', value: model.family || '-' },
+    { label: 'PARAMETERS', value: model.parameters || '-' },
+    { label: 'QUANTIZATION', value: model.quantization || 'FP16' },
+    { label: 'CONTEXT', value: model.max_context ? `${(model.max_context / 1000).toFixed(0)}k tokens` : 'N/A', mono: true },
+    { label: 'VRAM REQUIRED', value: model.vram_required ? `${Math.ceil(model.vram_required / 1024)} GB` : 'Not specified', mono: true },
+    { label: 'STATUS', value: statusLabel },
+  ];
 
-  if (compatibleOfferings.length === 0) {
-    return {
-      state: 'capacity' as const,
-      summary: requiredMB
-        ? `Needs about ${Math.ceil(requiredMB / 1024)}GB VRAM. No matching capacity is live right now.`
-        : 'Provider capacity is connected, but no compatible inventory is live right now.',
-      actionLabel: 'VIEW CAPACITY',
-      actionTarget: '/instances',
-    };
-  }
+  const deployRows: { label: string; value: string; mono?: boolean }[] = [
+    { label: 'ACTIVE NODES', value: String(runtime.activeNodes), mono: true },
+    { label: 'DEGRADED NODES', value: String(runtime.degradedNodes), mono: true },
+    { label: 'SERVING STATE', value: overview.badgeLabel },
+    { label: 'DEPLOY READINESS', value: deployState.summary },
+    { label: 'LATEST ISSUE', value: runtime.latestIssue || 'None' },
+  ];
 
-  return {
-    state: 'ready' as const,
-    summary: `Ready on ${compatibleOfferings.length} GPU config${compatibleOfferings.length === 1 ? '' : 's'} via ${providerNames.join(', ')}${cheapest ? ` from $${cheapest.cost_per_hour.toFixed(2)}/hr` : ''}.`,
-    actionLabel: 'DEPLOY',
-    actionTarget: `/instances?provision=true&model=${encodeURIComponent(model.id)}&from=models`,
-  };
-}
+  const verificationRows: { label: string; value: string }[] = [
+    { label: 'VERIFICATION', value: runtime.verificationLabel },
+    { label: 'LAST VERIFIED', value: overview.verifiedAt ? new Date(overview.verifiedAt).toLocaleString() : 'Never' },
+    { label: 'LATENCY', value: overview.latestVerificationLatencyMs != null ? `${overview.latestVerificationLatencyMs}ms` : '-' },
+    { label: 'LAST ERROR', value: overview.latestVerificationError || 'None' },
+  ];
 
-function formatVerificationMeta(verifiedAt?: string, latencyMs?: number) {
-  if (!verifiedAt) return null;
-  const label = new Date(verifiedAt).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-  if (latencyMs == null) return label;
-  return `${label} in ${latencyMs < 1000 ? `${latencyMs}ms` : `${(latencyMs / 1000).toFixed(2)}s`}`;
-}
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="slideover-backdrop"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      {/* Panel */}
+      <aside
+        className="slideover-panel"
+        role="dialog"
+        aria-label={`Manage ${shortName}`}
+      >
+        {/* Header */}
+        <div className="slideover-header">
+          <div>
+            <LabelText as="div">MODEL DETAILS</LabelText>
+            <div style={{ fontSize: '1.15rem', fontWeight: 600, marginTop: '0.4rem', lineHeight: 1.2 }}>
+              {shortName}
+            </div>
+            <div className="chip-row" style={{ marginTop: '0.5rem' }}>
+              <Badge tone={overview.badgeTone || undefined}>{overview.badgeLabel}</Badge>
+              {model.tags?.map((tag) => <Badge key={tag}>{tag}</Badge>)}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="slideover-close"
+            onClick={onClose}
+            aria-label="Close panel"
+          >
+            ×
+          </button>
+        </div>
 
-function verificationToneClass(freshness: 'fresh' | 'stale' | 'never' | 'recent') {
-  if (freshness === 'stale') return 'status-warning';
-  if (freshness === 'never') return 'status-inactive';
-  return '';
-}
+        {/* Scrollable body */}
+        <div className="slideover-body">
+          {/* Model metadata */}
+          <section className="slideover-section">
+            <LabelText as="div" style={{ marginBottom: '0.75rem' }}>REGISTRY METADATA</LabelText>
+            {metaRows.map((row) => (
+              <div key={row.label} className="slideover-row">
+                <span className="slideover-row-label">{row.label}</span>
+                <span className={row.mono ? 'mono' : ''} style={{ fontSize: '0.85rem' }}>{row.value}</span>
+              </div>
+            ))}
+          </section>
 
-function deriveModelServingOverview(
-  model: Model,
-  instances: Instance[],
-  workers: Worker[] | undefined,
-  deploymentAttempts: DeploymentAttemptRecord[],
-): ModelServingOverview {
-  const relatedInstances = instances.filter((instance) => (instance.models || []).includes(model.id));
-  const relatedAttempts = deploymentAttempts
-    .filter((attempt) =>
-      (attempt.request.models || []).includes(model.id)
-      || attempt.inference_verification?.model === model.id,
-    )
-    .map((attempt) => summarizeDeploymentAttempt(attempt, instances, workers));
-  const latestAttempt = relatedAttempts[0] || null;
-  const readinessList = relatedInstances.map((instance) => getInstanceReadiness(instance, workers));
-  const anyServing = readinessList.some((readiness) => readiness.serving);
-  const allServingVerified = readinessList.length > 0 && readinessList.every((readiness) => readiness.verified && readiness.serving);
-  const latestVerification = latestAttempt?.attempt.inference_verification;
+          {/* Deployment / resource usage */}
+          <section className="slideover-section">
+            <LabelText as="div" style={{ marginBottom: '0.75rem' }}>RESOURCE USAGE</LabelText>
+            {deployRows.map((row) => (
+              <div key={row.label} className="slideover-row">
+                <span className="slideover-row-label">{row.label}</span>
+                <span className={row.mono ? 'mono' : ''} style={{ fontSize: '0.85rem' }}>{row.value}</span>
+              </div>
+            ))}
+            {modelWorkers.length > 0 && (
+              <div style={{ marginTop: '0.75rem' }}>
+                <LabelText as="div" style={{ marginBottom: '0.5rem' }}>SERVING WORKERS</LabelText>
+                {modelWorkers.slice(0, 4).map((w) => (
+                  <div key={w.worker_id} className="slideover-row" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>
+                    <span>{w.worker_id.slice(0, 12)}</span>
+                    <span>GPU {w.gpu_utilization}% · {((w.memory_used / (w.memory_total || 1)) * 100).toFixed(0)}% mem</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
 
-  if (relatedInstances.length === 0) {
-    return {
-      state: 'not_deployed',
-      summary: latestAttempt?.readiness.label === 'REQUEST FAILED'
-        ? latestAttempt.readiness.detail
-        : 'No live deployment is currently serving this model.',
-      badgeLabel: latestAttempt?.readiness.label === 'REQUEST FAILED' ? 'DEPLOY FAILED' : 'NOT DEPLOYED',
-      badgeTone: latestAttempt?.readiness.label === 'REQUEST FAILED' ? 'error' : 'inactive',
-      activeInstances: 0,
-      latestAttempt,
-      latestVerificationError: latestVerification?.error,
-      verifiedAt: latestVerification?.verified_at,
-      latestVerificationLatencyMs: latestVerification?.latency_ms,
-    };
-  }
+          {/* Verification history */}
+          <section className="slideover-section">
+            <LabelText as="div" style={{ marginBottom: '0.75rem' }}>VERIFICATION HISTORY</LabelText>
+            {verificationRows.map((row) => (
+              <div key={row.label} className="slideover-row">
+                <span className="slideover-row-label">{row.label}</span>
+                <span style={{ fontSize: '0.85rem' }}>{row.value}</span>
+              </div>
+            ))}
+          </section>
 
-  if (latestVerification?.status === 'passed' && anyServing) {
-    return {
-      state: 'serving_verified',
-      summary: `${relatedInstances.length} instance${relatedInstances.length === 1 ? '' : 's'} currently host this model and the latest live inference check passed.`,
-      badgeLabel: 'SERVING VERIFIED',
-      badgeTone: '',
-      activeInstances: relatedInstances.length,
-      latestAttempt,
-      verifiedAt: latestVerification.verified_at,
-      latestVerificationLatencyMs: latestVerification.latency_ms,
-    };
-  }
+          {/* Actions */}
+          <section className="slideover-section slideover-actions">
+            <ActionButton onClick={() => navigate(`/instances?model=${encodeURIComponent(model.id)}`)}>
+              VIEW DEPLOYMENTS
+            </ActionButton>
+            {isLoaded && (
+              <ActionButton
+                disabled={verifying}
+                onClick={() => onVerify(model)}
+              >
+                {verifying ? 'VERIFYING...' : 'VERIFY SERVING'}
+              </ActionButton>
+            )}
+            <ActionButton onClick={() => navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}&from=models`)}>
+              DEPLOY MORE
+            </ActionButton>
+          </section>
 
-  if (latestVerification?.status === 'failed' && anyServing) {
-    return {
-      state: 'serving_failed',
-      summary: latestVerification.error || 'Runtime looks healthy, but the latest live inference check failed.',
-      badgeLabel: 'INFERENCE FAILED',
-      badgeTone: 'error',
-      activeInstances: relatedInstances.length,
-      latestAttempt,
-      verifiedAt: latestVerification.verified_at,
-      latestVerificationError: latestVerification.error,
-    };
-  }
-
-  if (allServingVerified) {
-    return {
-      state: 'serving_unverified',
-      summary: `${relatedInstances.length} instance${relatedInstances.length === 1 ? '' : 's'} are runtime-ready for this model. Run or wait for inference verification.`,
-      badgeLabel: 'SERVING UNVERIFIED',
-      badgeTone: 'warning',
-      activeInstances: relatedInstances.length,
-      latestAttempt,
-    };
-  }
-
-  if (anyServing || readinessList.some((readiness) => readiness.label === 'MODEL LOADING' || readiness.label === 'PARTIAL READY')) {
-    return {
-      state: 'runtime_pending',
-      summary: latestAttempt?.readiness.detail || 'Runtime is still converging for this model.',
-      badgeLabel: 'RUNTIME PENDING',
-      badgeTone: 'warning',
-      activeInstances: relatedInstances.length,
-      latestAttempt,
-    };
-  }
-
-  return {
-    state: 'degraded',
-    summary: latestAttempt?.readiness.detail || 'This model is assigned to infrastructure, but it is not currently healthy enough to serve.',
-    badgeLabel: 'DEGRADED',
-    badgeTone: 'error',
-    activeInstances: relatedInstances.length,
-    latestAttempt,
-  };
+          {/* Delete */}
+          <section className="slideover-section slideover-danger-zone">
+            <LabelText as="div" style={{ marginBottom: '0.5rem' }}>DANGER ZONE</LabelText>
+            {!confirmDelete ? (
+              <ActionButton variant="destructive" onClick={() => setConfirmDelete(true)}>
+                DELETE MODEL
+              </ActionButton>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--color-error)', lineHeight: 1.5 }}>
+                  This will remove <strong>{shortName}</strong> from the registry. Active deployments will not be terminated but the model will no longer appear in the catalog.
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <ActionButton variant="destructive" onClick={() => { onDelete(model.id); onClose(); }}>
+                    CONFIRM DELETE
+                  </ActionButton>
+                  <ActionButton onClick={() => setConfirmDelete(false)}>CANCEL</ActionButton>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      </aside>
+    </>
+  );
 }
 
 function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
@@ -299,7 +303,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
       }}>
         {/* Header */}
         <div style={{ padding: '2rem 2rem 1.5rem', borderBottom: 'var(--grid-line)' }}>
-          <div className="label-text" style={{ marginBottom: '0.5rem' }}>REGISTER MODEL</div>
+          <LabelText as="div" style={{ marginBottom: '0.5rem' }}>REGISTER MODEL</LabelText>
           <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             Add a HuggingFace model to the registry
           </div>
@@ -309,7 +313,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
         <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }}>
           {/* Source URI - primary field */}
           <div style={{ marginBottom: '1.75rem' }}>
-            <div className="label-text" style={{ marginBottom: '0.5rem' }}>HUGGINGFACE MODEL ID *</div>
+            <LabelText as="div" style={{ marginBottom: '0.5rem' }}>HUGGINGFACE MODEL ID *</LabelText>
             <input
               type="text"
               value={form.source_uri}
@@ -324,7 +328,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 
           {/* Name */}
           <div style={{ marginBottom: '1.75rem' }}>
-            <div className="label-text" style={{ marginBottom: '0.5rem' }}>DISPLAY NAME *</div>
+            <LabelText as="div" style={{ marginBottom: '0.5rem' }}>DISPLAY NAME *</LabelText>
             <input
               type="text"
               value={form.name}
@@ -337,7 +341,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           {/* Two-column row */}
           <div className="modal-two-col-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.75rem' }}>
             <div>
-              <div className="label-text" style={{ marginBottom: '0.5rem' }}>FAMILY</div>
+              <LabelText as="div" style={{ marginBottom: '0.5rem' }}>FAMILY</LabelText>
               <select
                 value={form.family}
                 onChange={e => set('family', e.target.value)}
@@ -350,7 +354,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
               </select>
             </div>
             <div>
-              <div className="label-text" style={{ marginBottom: '0.5rem' }}>PARAMETERS</div>
+              <LabelText as="div" style={{ marginBottom: '0.5rem' }}>PARAMETERS</LabelText>
               <input
                 type="text"
                 value={form.parameters}
@@ -364,7 +368,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           {/* Two-column row */}
           <div className="modal-two-col-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.75rem' }}>
             <div>
-              <div className="label-text" style={{ marginBottom: '0.5rem' }}>QUANTIZATION</div>
+              <LabelText as="div" style={{ marginBottom: '0.5rem' }}>QUANTIZATION</LabelText>
               <select
                 value={form.quantization}
                 onChange={e => set('quantization', e.target.value)}
@@ -376,7 +380,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
               </select>
             </div>
             <div>
-              <div className="label-text" style={{ marginBottom: '0.5rem' }}>MAX CONTEXT</div>
+              <LabelText as="div" style={{ marginBottom: '0.5rem' }}>MAX CONTEXT</LabelText>
               <input
                 type="number"
                 value={form.max_context}
@@ -389,7 +393,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 
           {/* VRAM */}
           <div style={{ marginBottom: '1.75rem' }}>
-            <div className="label-text" style={{ marginBottom: '0.5rem' }}>VRAM REQUIRED (MB)</div>
+            <LabelText as="div" style={{ marginBottom: '0.5rem' }}>VRAM REQUIRED (MB)</LabelText>
             <input
               type="number"
               value={form.vram_required || ''}
@@ -404,7 +408,7 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 
           {/* Tags */}
           <div style={{ marginBottom: '1rem' }}>
-            <div className="label-text" style={{ marginBottom: '0.5rem' }}>TAGS</div>
+            <LabelText as="div" style={{ marginBottom: '0.5rem' }}>TAGS</LabelText>
             <input
               type="text"
               value={form.tags}
@@ -423,14 +427,14 @@ function RegisterModelModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           padding: '1.5rem 2rem', borderTop: 'var(--grid-line)',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
-          <button className="action-btn" onClick={onClose}>CANCEL</button>
-          <button
-            className="btn-primary"
+          <ActionButton onClick={onClose}>CANCEL</ActionButton>
+          <ActionButton
+            variant="primary"
             onClick={handleSubmit}
             disabled={registerMutation.isPending || !form.source_uri.trim() || !form.name.trim()}
           >
             {registerMutation.isPending ? 'REGISTERING...' : 'REGISTER MODEL'}
-          </button>
+          </ActionButton>
         </div>
       </div>
     </>
@@ -442,7 +446,7 @@ export function Models() {
   const isMobile = useIsMobile(900);
   const { session } = useAuthSession();
   const workspaceID = session?.workspace?.id;
-  const { data: models } = useModels();
+  const { data: models, isLoading: modelsLoading } = useModels();
   const { data: vaultData } = useVaultModels({});
   const { data: offerings } = useOfferings();
   const { data: providers } = useProviders();
@@ -450,8 +454,20 @@ export function Models() {
   const { data: workers } = useWorkers(workspaceID);
   const deleteMutation = useDeleteVaultModel();
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredQuery = useDebouncedValue(searchQuery, 200);
+  const isSearchStale = searchQuery !== deferredQuery;
+  const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [verifyingModelID, setVerifyingModelID] = useState<string | null>(null);
+  const [slideOverModelId, setSlideOverModelId] = useState<string | null>(null);
+
+  const handleOpenSlideOver = useCallback((modelId: string) => {
+    setSlideOverModelId(modelId);
+  }, []);
+
+  const handleCloseSlideOver = useCallback(() => {
+    setSlideOverModelId(null);
+  }, []);
   const { data: deploymentAttempts = [] } = useDeploymentAttempts(workspaceID);
   const updateDeploymentVerification = useUpdateDeploymentVerification(workspaceID);
 
@@ -478,43 +494,27 @@ export function Models() {
     vault_status: vm.status,
   }));
 
-  const filtered = displayModels.filter(m => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return m.id.toLowerCase().includes(q) || m.family?.toLowerCase().includes(q) || m.owned_by?.toLowerCase().includes(q);
+  const {
+    allTags,
+    filtered,
+    getDeployState,
+    getOverview,
+    getRuntime,
+    readyCount,
+    activeCount,
+    servingVerifiedCount,
+    recommendedModels,
+    connectedProviderCount,
+  } = useModelsViewState({
+    displayModels,
+    offerings,
+    providers,
+    liveInstances,
+    workers,
+    deploymentAttempts,
+    deferredQuery,
+    activeTagFilter,
   });
-
-  const visibleProviders = useMemo(
-    () => (providers || []).filter((provider) => CONFIGURABLE_PROVIDERS.includes(provider.provider as typeof CONFIGURABLE_PROVIDERS[number])),
-    [providers],
-  );
-  const visibleOfferings = useMemo(
-    () => (offerings || []).filter((offering) => CONFIGURABLE_PROVIDERS.includes(offering.provider as typeof CONFIGURABLE_PROVIDERS[number])),
-    [offerings],
-  );
-  const modelOverviewByID = useMemo(() => {
-    const map = new Map<string, ModelServingOverview>();
-    for (const model of displayModels) {
-      map.set(model.id, deriveModelServingOverview(model, liveInstances, workers, deploymentAttempts));
-    }
-    return map;
-  }, [deploymentAttempts, displayModels, liveInstances, workers]);
-  const modelRuntimeByID = useMemo(() => {
-    const map = new Map<string, ReturnType<typeof deriveModelRuntimeDrilldown>>();
-    for (const model of displayModels) {
-      map.set(model.id, deriveModelRuntimeDrilldown(model.id, liveInstances, workers, deploymentAttempts));
-    }
-    return map;
-  }, [deploymentAttempts, displayModels, liveInstances, workers]);
-  const readyCount = filtered.filter((model) => describeDeployReadiness(model, visibleOfferings, visibleProviders).state === 'ready').length;
-  const activeCount = filtered.filter((model) => (modelOverviewByID.get(model.id)?.activeInstances || 0) > 0).length;
-  const servingVerifiedCount = filtered.filter((model) => modelOverviewByID.get(model.id)?.state === 'serving_verified').length;
-  const recommendedModels = useMemo(
-    () => RECOMMENDED_MODEL_IDS
-      .map((id) => displayModels.find((model) => model.id === id))
-      .filter((model): model is Model => Boolean(model)),
-    [displayModels],
-  );
 
   const handleRemove = async (modelId: string) => {
     const vaultId = vaultIdByUri.get(modelId);
@@ -532,7 +532,7 @@ export function Models() {
   };
 
   const handleVerifyServing = async (model: Model) => {
-    const overview = modelOverviewByID.get(model.id);
+    const overview = getOverview(model.id);
     const attempt = overview?.latestAttempt?.attempt;
 
     setVerifyingModelID(model.id);
@@ -583,421 +583,79 @@ export function Models() {
     }
   };
 
+  if (modelsLoading) return <ModelsSkeleton />;
+
   return (
-    <div className="animate-fade-in">
-      <div style={{
-        padding: isMobile ? '0.95rem 1rem' : '1rem 2rem',
-        display: 'flex',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '1rem',
-        alignItems: 'center',
-        borderBottom: 'var(--grid-line)',
-      }}>
-        <div style={{ display: 'grid', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Filter by model name or provider..."
-              style={{
-                background: 'transparent', border: 'none', fontFamily: 'var(--font-main)',
-                fontSize: '0.9rem', width: isMobile ? 'min(100%, 92vw)' : 'min(320px, 70vw)', outline: 'none', color: 'var(--text-primary)',
-              }}
-            />
-          </div>
-          <div className="chip-row">
-            <span className="badge">{displayModels.length} REGISTRY MODELS</span>
-            <span className="badge">{activeCount} ACTIVE</span>
-            <span className="badge">{readyCount} READY TO DEPLOY</span>
-            <span className="badge">{servingVerifiedCount} SERVING VERIFIED</span>
-          </div>
-        </div>
-        <ActionGroup compact>
-          <button className="btn-primary" onClick={() => setShowRegisterModal(true)}>
-            ADD MODEL
-          </button>
-        </ActionGroup>
-      </div>
+    <div className="models-page animate-fade-in">
+      <ModelsOverviewSection
+        searchQuery={searchQuery}
+        onSearchQueryChange={setSearchQuery}
+        onClearSearch={() => setSearchQuery('')}
+        displayModelCount={displayModels.length}
+        activeCount={activeCount}
+        readyCount={readyCount}
+        servingVerifiedCount={servingVerifiedCount}
+        showFilteredCount={Boolean(deferredQuery || activeTagFilter)}
+        isSearchStale={isSearchStale}
+        filteredCount={filtered.length}
+        allTags={allTags}
+        activeTagFilter={activeTagFilter}
+        onToggleTagFilter={(tag) => setActiveTagFilter(activeTagFilter === tag ? null : tag)}
+        onClearTagFilter={() => setActiveTagFilter(null)}
+        onOpenRegister={() => setShowRegisterModal(true)}
+        onOpenNodes={() => navigate('/instances')}
+        onOpenDocs={() => navigate('/docs')}
+        recommendedModels={recommendedModels}
+        getDeployState={getDeployState}
+        getOverview={getOverview}
+        recommendedLabels={RECOMMENDED_MODEL_LABELS}
+        onNavigate={navigate}
+        onFilterToModel={setSearchQuery}
+        connectedProviderCount={connectedProviderCount}
+      />
 
-      <div className="grid-row">
-        <div className="cell" style={{ gridColumn: 'span 4' }}>
-          <div className="help-callout" style={{ padding: '1rem 1.25rem' }}>
-            <SectionHeader
-              eyebrow="MODEL STATUS GUIDE"
-              title="Registry first, runtime detail on demand"
-              description={(
-                <>
-                  <strong>Serving verified</strong> means a live inference check passed for this model. <strong>Fresh verify</strong> means that proof is recent enough to trust immediately. <strong>Stale verify</strong> means the model was verified before, but the proof is old. Use <strong>View deployments</strong> or <strong>Open degraded nodes</strong> for node-level recovery and <strong>Verify now</strong> when you want a new explicit inference check from the registry.
-                </>
-              )}
-              actions={(
-                <ActionGroup compact>
-                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
-                  <button className="action-btn" onClick={() => navigate('/docs')}>READ API DOCS</button>
-                </ActionGroup>
-              )}
-            />
-          </div>
-        </div>
-      </div>
-
-      {recommendedModels.length > 0 && (
-        <div className="grid-row">
-          <div className="cell" style={{ gridColumn: 'span 4' }}>
-            <div className="help-callout" style={{ padding: '1rem 1.25rem' }}>
-              <SectionHeader
-                eyebrow="RECOMMENDED NOW"
-                title="Fast-start picks"
-                description="Curated picks from the expanded catalog. Qwen is the lighter reasoning option to trial quickly; Kimi is the high-capacity frontier candidate and will usually need larger infrastructure than the current default fleet."
-              />
-              <div className="panel-grid columns-2" style={{ marginTop: '1rem' }}>
-                {recommendedModels.map((model) => {
-                  const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
-                  const overview = modelOverviewByID.get(model.id);
-                  return (
-                    <div key={model.id} className="overview-card accent">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
-                        <div>
-                          <div style={{ fontSize: '1rem', fontWeight: 600 }}>{model.id.split('/').pop() || model.id}</div>
-                          <div className="mono" style={{ marginTop: '0.3rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                            {model.parameters || 'N/A'} · {model.family || model.owned_by || 'model'}
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          {RECOMMENDED_MODEL_LABELS[model.id] ? <span className="badge">{RECOMMENDED_MODEL_LABELS[model.id]}</span> : null}
-                          {overview ? <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span> : null}
-                        </div>
-                      </div>
-                      <div style={{ marginTop: '0.8rem', color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.6 }}>
-                        {deployState.summary}
-                      </div>
-                      <div className="action-group compact" style={{ marginTop: '0.9rem' }}>
-                        <button className="action-btn" onClick={() => navigate(deployState.actionTarget)}>
-                          {deployState.actionLabel}
-                        </button>
-                        <button className="action-btn" onClick={() => setSearchQuery(model.id.split('/').pop() || model.id)}>
-                          FILTER
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isMobile ? (
-        <div className="mobile-data-list" style={{ padding: '1rem' }}>
-          {filtered.length === 0 ? (
-            <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
-              {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
-              {!searchQuery && (
-                <div className="help-actions" style={{ justifyContent: 'center' }}>
-                  <button className="action-btn" onClick={() => setShowRegisterModal(true)}>ADD MODEL</button>
-                  <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
-                  <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
-                </div>
-              )}
-            </div>
-          ) : (
-            filtered.map(model => {
-              const isLoaded = model.loaded !== false;
-              const isDeploying = model.vault_status === 'testing';
-              const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
-              const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
-              const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
-              const overview = modelOverviewByID.get(model.id)!;
-              const runtime = modelRuntimeByID.get(model.id)!;
-              const shortName = model.id.split('/').pop() || model.id;
-              const provider = model.owned_by || model.family || '';
-              const hasVaultEntry = vaultIdByUri.has(model.id);
-              const deploymentsTarget = `/instances?model=${encodeURIComponent(model.id)}`;
-              const degradedTarget = `/instances?model=${encodeURIComponent(model.id)}&focus=degraded`;
-
-              return (
-                <div key={model.id} className="mobile-data-card">
-                  <div className="mobile-data-card-header">
-                    <div>
-                      <div className="mobile-data-title">{shortName}</div>
-                      <div className="mobile-data-subtitle mono">
-                        {model.parameters && `${model.parameters} — `}{provider}
-                      </div>
-                      <div className="mobile-card-chip-row">
-                        <span className="mobile-status-inline">
-                          <span className={`status-dot ${statusDotClass}`} />
-                          {statusLabel}
-                        </span>
-                        <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                      <span className="badge mono">{runtime.activeNodes} node{runtime.activeNodes === 1 ? '' : 's'}</span>
-                    </div>
-                  </div>
-
-                  <div className="mobile-data-meta">
-                    <div><span className="label-text">DEPLOYMENTS</span> <span className="mono">{runtime.activeNodes}</span></div>
-                    <div><span className="label-text">VERIFY</span> <span className={`badge ${verificationToneClass(runtime.verificationFreshness)}`}>{runtime.verificationLabel}</span></div>
-                    {runtime.degradedNodes > 0 && (
-                      <div><span className="label-text">DEGRADED</span> <span className="mono">{runtime.degradedNodes} node{runtime.degradedNodes === 1 ? '' : 's'}</span></div>
-                    )}
-                    <div><span className="label-text">DEPLOY</span> <span>{deployState.summary}</span></div>
-                    <div><span className="label-text">STATUS</span> <span>{overview.summary}</span></div>
-                  </div>
-
-                  <div className="mobile-data-actions">
-                    <button
-                      type="button"
-                      className="mobile-data-action"
-                      onClick={() => navigate(runtime.activeNodes > 0 ? deploymentsTarget : deployState.actionTarget)}
-                    >
-                      {runtime.activeNodes > 0 ? 'VIEW DEPLOYMENTS' : deployState.actionLabel}
-                    </button>
-                    {runtime.activeNodes > 0 ? (
-                      <button
-                        type="button"
-                        className={`mobile-data-action${overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? ' muted' : ''}`}
-                        disabled={verifyingModelID === model.id}
-                        onClick={() => overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh'
-                          ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}&from=models`)
-                          : handleVerifyServing(model)}
-                      >
-                        {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? 'DEPLOY MORE' : 'VERIFY NOW'}
-                      </button>
-                    ) : null}
-                    {runtime.degradedNodes > 0 && (
-                      <button
-                        type="button"
-                        className="mobile-data-action muted"
-                        onClick={() => navigate(degradedTarget)}
-                      >
-                        OPEN DEGRADED NODES
-                      </button>
-                    )}
-                    {hasVaultEntry && !isLoaded && !isDeploying && (
-                      <button
-                        type="button"
-                        className="mobile-data-action danger"
-                        onClick={() => handleRemove(model.id)}
-                      >
-                        REMOVE
-                      </button>
-                    )}
-                  </div>
-
-                  <div style={{ marginTop: '1rem' }}>
-                    <CollapsibleSection
-                      title="SHOW DETAILS"
-                      description="Secondary runtime, verification, and registry metadata."
-                    >
-                      <MetadataList
-                        items={[
-                          { label: 'QUANT', value: model.quantization || 'FP16' },
-                          { label: 'CONTEXT', value: model.max_context ? model.max_context.toLocaleString() : 'N/A', mono: true },
-                          { label: 'LAST VERIFY', value: formatVerificationMeta(overview.verifiedAt, overview.latestVerificationLatencyMs) || 'Never' },
-                          { label: 'SERVING', value: overview.summary },
-                          { label: 'DEPLOY', value: deployState.summary },
-                          { label: 'LATEST ISSUE', value: runtime.latestIssue || 'None' },
-                        ]}
-                        columns={1}
-                      />
-                    </CollapsibleSection>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      ) : (
-        <div style={{ padding: '1rem 1.25rem 1.25rem' }}>
-          <div className="stack-list">
-            {filtered.length === 0 ? (
-              <div className="stack-item" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
-                {searchQuery ? 'No models match your search.' : 'No models in registry. Add one to get started.'}
-                {!searchQuery && (
-                  <div className="help-actions" style={{ justifyContent: 'center' }}>
-                    <button className="action-btn" onClick={() => setShowRegisterModal(true)}>ADD MODEL</button>
-                    <button className="action-btn" onClick={() => navigate('/instances')}>OPEN NODES</button>
-                    <button className="action-btn" onClick={() => navigate('/getting-started')}>OPEN QUICKSTART</button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              filtered.map(model => {
-                const isLoaded = model.loaded !== false;
-                const isDeploying = model.vault_status === 'testing';
-                const statusDotClass = isLoaded ? '' : isDeploying ? 'warning' : 'inactive';
-                const statusLabel = isLoaded ? 'Active' : isDeploying ? 'Deploying...' : 'Available';
-                const deployState = describeDeployReadiness(model, visibleOfferings, visibleProviders);
-                const overview = modelOverviewByID.get(model.id)!;
-                const runtime = modelRuntimeByID.get(model.id)!;
-                const shortName = model.id.split('/').pop() || model.id;
-                const provider = model.owned_by || model.family || '';
-                const hasVaultEntry = vaultIdByUri.has(model.id);
-                const deploymentsTarget = `/instances?model=${encodeURIComponent(model.id)}`;
-                const degradedTarget = `/instances?model=${encodeURIComponent(model.id)}&focus=degraded`;
-
-                return (
-                  <div key={model.id} className="stack-item" data-testid="model-row-card">
-                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '1rem', alignItems: 'start' }}>
-                      <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                          <div>
-                            <div style={{ fontSize: '1.15rem', fontWeight: 600 }}>{shortName}</div>
-                            <div className="mono" style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                              {model.parameters && `${model.parameters} — `}{provider}
-                            </div>
-                          </div>
-                          <div className="chip-row">
-                            <span className={`badge ${overview.badgeTone ? `status-${overview.badgeTone}` : ''}`}>{overview.badgeLabel}</span>
-                            {runtime.activeNodes > 0 && <span className="badge">{runtime.activeNodes} DEPLOYMENT{runtime.activeNodes === 1 ? '' : 'S'}</span>}
-                            <span className={`badge ${verificationToneClass(runtime.verificationFreshness)}`}>{runtime.verificationLabel}</span>
-                            {runtime.degradedNodes > 0 && <span className="badge status-error">{runtime.degradedNodes} DEGRADED NODE{runtime.degradedNodes === 1 ? '' : 'S'}</span>}
-                          </div>
-                        </div>
-                        <div style={{ marginTop: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
-                          <span className={`status-dot ${statusDotClass}`} />
-                          {statusLabel}
-                        </div>
-                        <div style={{ marginTop: '0.6rem', fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                          {overview.summary}
-                        </div>
-                        <div style={{ marginTop: '0.85rem' }}>
-                          <MetadataList
-                            items={[
-                              { label: 'QUANTIZATION', value: model.quantization || 'FP16' },
-                              { label: 'CONTEXT', value: model.max_context ? model.max_context.toLocaleString() : 'N/A', mono: true },
-                              { label: 'DEPLOY', value: deployState.summary },
-                              { label: 'SERVING', value: statusLabel },
-                            ]}
-                            columns={2}
-                          />
-                        </div>
-                      </div>
-                      <div style={{ display: 'grid', gap: '0.55rem', justifyItems: 'end' }}>
-                        <button
-                          type="button"
-                          className="action-link"
-                          onClick={() => navigate(runtime.activeNodes > 0 ? deploymentsTarget : deployState.actionTarget)}
-                        >
-                          {runtime.activeNodes > 0 ? 'VIEW DEPLOYMENTS' : deployState.actionLabel}
-                        </button>
-                        {runtime.activeNodes > 0 ? (
-                          <button
-                            type="button"
-                            className={`action-link${overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? ' muted' : ''}`}
-                            disabled={verifyingModelID === model.id}
-                            onClick={() => overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh'
-                              ? navigate(`/instances?provision=true&model=${encodeURIComponent(model.id)}&from=models`)
-                              : handleVerifyServing(model)}
-                          >
-                            {verifyingModelID === model.id ? 'VERIFYING...' : overview.state === 'serving_verified' && runtime.degradedNodes === 0 && runtime.verificationFreshness === 'fresh' ? 'DEPLOY MORE' : 'VERIFY NOW'}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className={`action-link${deployState.state === 'capacity' ? ' muted' : ''}`}
-                            onClick={() => navigate('/instances')}
-                          >
-                            OPEN NODES
-                          </button>
-                        )}
-                        {runtime.degradedNodes > 0 && (
-                          <button
-                            type="button"
-                            className="action-link danger"
-                            onClick={() => navigate(degradedTarget)}
-                          >
-                            OPEN DEGRADED NODES
-                          </button>
-                        )}
-                        {hasVaultEntry && !isLoaded && !isDeploying && (
-                          <button
-                            type="button"
-                            className="action-link danger"
-                            onClick={() => handleRemove(model.id)}
-                          >
-                            REMOVE
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: '1rem' }}>
-                      <CollapsibleSection
-                        title="SHOW DETAILS"
-                        description="Verification freshness, runtime issues, and extra registry metadata."
-                      >
-                        <MetadataList
-                          items={[
-                            { label: 'LAST VERIFY', value: formatVerificationMeta(overview.verifiedAt, overview.latestVerificationLatencyMs) || 'Never' },
-                            { label: 'VRAM NEED', value: model.vram_required ? `${Math.ceil(model.vram_required / 1024)}GB` : 'Not specified' },
-                            { label: 'LATEST ISSUE', value: runtime.latestIssue || 'None' },
-                            { label: 'PROVIDER', value: provider || 'Unknown' },
-                          ]}
-                          columns={2}
-                        />
-                        {model.tags && model.tags.length > 0 ? (
-                          <div className="chip-row" style={{ marginTop: '0.9rem' }}>
-                            {model.tags.map((tag) => (
-                              <span key={tag} className="tag">{tag}</span>
-                            ))}
-                          </div>
-                        ) : null}
-                      </CollapsibleSection>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-
-      <div className="grid-row" style={{ backgroundColor: 'var(--bg-accent)' }}>
-        <div className="cell">
-          <div className="label-text">REGISTRY MODELS</div>
-          <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-            {displayModels.length}
-          </div>
-        </div>
-        <div className="cell">
-          <div className="label-text">ACTIVE</div>
-          <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-            {activeCount}
-          </div>
-        </div>
-        <div className="cell">
-          <div className="label-text">READY TO DEPLOY</div>
-          <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-            {readyCount}
-          </div>
-        </div>
-        <div className="cell">
-          <div className="label-text">SERVING VERIFIED</div>
-          <div className="mono" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-            {servingVerifiedCount}
-          </div>
-        </div>
-        <div className="cell">
-          <div className="label-text">DEPLOYMENT SIGNAL</div>
-          <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span className={`status-dot ${visibleProviders.some((provider) => provider.connected) ? '' : 'inactive'}`} />
-            {visibleProviders.some((provider) => provider.connected)
-              ? `${visibleProviders.filter((provider) => provider.connected).length} provider${visibleProviders.filter((provider) => provider.connected).length === 1 ? '' : 's'} live.`
-              : 'No live provider is currently connected for deployments.'}
-          </div>
-        </div>
-      </div>
+      <ModelCatalogSection
+        isMobile={isMobile}
+        filtered={filtered}
+        searchQuery={searchQuery}
+        deferredQuery={deferredQuery}
+        activeTagFilter={activeTagFilter}
+        onClearSearch={() => setSearchQuery('')}
+        onClearTagFilter={() => setActiveTagFilter(null)}
+        onOpenRegister={() => setShowRegisterModal(true)}
+        onOpenNodes={() => navigate('/instances')}
+        onOpenQuickstart={() => navigate('/getting-started')}
+        getOverview={getOverview}
+        getRuntime={getRuntime}
+        getDeployState={getDeployState}
+        verifyingModelID={verifyingModelID}
+        onOpenSlideOver={handleOpenSlideOver}
+        onNavigate={navigate}
+        onVerifyServing={handleVerifyServing}
+        hasVaultEntry={(modelId) => vaultIdByUri.has(modelId)}
+        onRemove={handleRemove}
+      />
 
       <RegisterModelModal isOpen={showRegisterModal} onClose={() => setShowRegisterModal(false)} />
+
+      {slideOverModelId && (() => {
+        const model = displayModels.find((m) => m.id === slideOverModelId);
+        if (!model) return null;
+        const overview = getOverview(model.id);
+        if (!overview) return null;
+        const runtime = getRuntime(model.id);
+        const deployState = getDeployState(model);
+        return (
+          <ModelSlideOver
+            data={{ model, overview, runtime, deployState }}
+            workers={workers}
+            onClose={handleCloseSlideOver}
+            onDelete={handleRemove}
+            onVerify={handleVerifyServing}
+            verifying={verifyingModelID === slideOverModelId}
+          />
+        );
+      })()}
     </div>
   );
 }

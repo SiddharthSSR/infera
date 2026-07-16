@@ -13,6 +13,7 @@ bin/
 *.test
 /go/gateway
 /go/*.test
+go/data/
 go.work
 go/vendor/
 

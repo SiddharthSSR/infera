@@ -1,0 +1,31 @@
+{
+  "id": "chatcmpl-req-openai-fixture",
+  "object": "chat.completion",
+  "created": 0,
+  "model": "model-1",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+              "name": "web_search",
+              "arguments": "{\"query\":\"Go scheduler\"}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 5,
+    "completion_tokens": 1,
+    "total_tokens": 6
+  }
+}

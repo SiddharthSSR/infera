@@ -31,13 +31,19 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
-vi.mock('../hooks/useApi', () => ({
+vi.mock('../hooks/useRuntimeApi', () => ({
   useWorkers: () => mocks.workers,
   useStats: () => mocks.stats,
+  useModels: () => mocks.models,
+}))
+
+vi.mock('../hooks/useInfrastructureApi', () => ({
   useInstances: () => mocks.instances,
   useCosts: () => mocks.costs,
-  useModels: () => mocks.models,
   useProviders: () => mocks.providers,
+}))
+
+vi.mock('../hooks/useDeploymentApi', () => ({
   useDeploymentAttempts: () => mocks.deploymentAttempts,
 }))
 
@@ -45,16 +51,19 @@ vi.mock('../lib/auth-context', () => ({
   useAuthSession: () => ({ session: { workspace: { id: 'ws_test' }, key: { role: 'admin' } } }),
 }))
 
-vi.mock('../lib/api', async () => {
-  const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api')
-  return {
-    ...actual,
-    fetchApiKeys: mocks.fetchApiKeys,
-    fetchWorkspaceQuota: mocks.fetchWorkspaceQuota,
-    fetchAuditUsage: mocks.fetchAuditUsage,
-    fetchWorkspaceInvites: mocks.fetchWorkspaceInvites,
-  }
-})
+vi.mock('../lib/authAccessClient', () => ({
+  fetchApiKeys: mocks.fetchApiKeys,
+}))
+
+vi.mock('../lib/workspaceAdminClient', () => ({
+  fetchWorkspaceQuota: mocks.fetchWorkspaceQuota,
+  fetchAuditUsage: mocks.fetchAuditUsage,
+  fetchWorkspaceInvites: mocks.fetchWorkspaceInvites,
+}))
+
+vi.mock('../hooks/useCountUp', () => ({
+  useCountUp: (target: number) => target,
+}))
 
 describe('Dashboard', () => {
   beforeEach(() => {
@@ -91,7 +100,7 @@ describe('Dashboard', () => {
     expect(screen.queryByText('TOTAL REQUESTS')).not.toBeInTheDocument()
   })
 
-  it('renders core pipeline metrics from API data', () => {
+  it('renders core pipeline metrics from API data', async () => {
     mocks.workers = {
       data: [
         { worker_id: 'w1', status: 'healthy', gpu_utilization: 70, memory_used: 4, memory_total: 8, models: ['meta/model-a'] },
@@ -141,9 +150,9 @@ describe('Dashboard', () => {
 
     render(<Dashboard />)
 
-    expect(screen.getByText('8640.0K')).toBeInTheDocument()
-    expect(screen.getByText('124ms')).toBeInTheDocument()
-    expect(screen.getByText('100.0 r/s')).toBeInTheDocument()
+    expect(await screen.findByText('8.6M', {}, { timeout: 2000 })).toBeInTheDocument()
+    expect(await screen.findByText('124ms', {}, { timeout: 2000 })).toBeInTheDocument()
+    expect(await screen.findByText('100.0 r/s', {}, { timeout: 2000 })).toBeInTheDocument()
     expect(screen.getByText('2 / 3')).toBeInTheDocument()
     expect(screen.getByText('$3.21')).toBeInTheDocument()
     expect(screen.getByText('TODAY TOTAL')).toBeInTheDocument()

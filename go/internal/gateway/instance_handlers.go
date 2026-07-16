@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,15 +17,19 @@ import (
 )
 
 type InstanceHandlers struct {
-	manager         *providers.Manager
-	deploymentStore *deployments.Store
+	manager          *providers.Manager
+	deploymentStore  deploymentHistoryStore
+	benchmarkService BenchmarkService
 }
 
 func NewInstanceHandlers(manager *providers.Manager) *InstanceHandlers {
-	return &InstanceHandlers{manager: manager}
+	return &InstanceHandlers{
+		manager:          manager,
+		benchmarkService: defaultBenchmarkService{},
+	}
 }
 
-func (h *InstanceHandlers) SetDeploymentStore(store *deployments.Store) {
+func (h *InstanceHandlers) SetDeploymentStore(store deploymentHistoryStore) {
 	h.deploymentStore = store
 }
 
@@ -31,6 +37,9 @@ func (h *InstanceHandlers) RegisterRoutes(mux *http.ServeMux, corsHandler func(h
 	mux.HandleFunc("/api/instances", corsHandler(h.handleInstances))
 	mux.HandleFunc("/api/instances/", corsHandler(h.handleInstanceByID))
 	mux.HandleFunc("/api/instances/provision", corsHandler(h.handleProvision))
+	mux.HandleFunc("/api/benchmarks/catalog", corsHandler(h.handleBenchmarkCatalog))
+	mux.HandleFunc("/api/benchmarks/validate", corsHandler(h.handleBenchmarkValidate))
+	mux.HandleFunc("/api/benchmarks/compare", corsHandler(h.handleBenchmarkCompare))
 	mux.HandleFunc("/api/deployments", corsHandler(h.handleDeployments))
 	mux.HandleFunc("/api/deployments/", corsHandler(h.handleDeploymentByID))
 	mux.HandleFunc("/api/offerings", corsHandler(h.handleOfferings))
@@ -47,15 +56,7 @@ func (h *InstanceHandlers) handleInstances(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	current := auth.KeyFromContext(r.Context())
-	instances := h.manager.ListInstances()
-	if current != nil && effectiveWorkspaceID(current) != auth.DefaultWorkspaceID {
-		instances = h.manager.ListInstancesByWorkspace(effectiveWorkspaceID(current))
-	}
-	response := make([]map[string]interface{}, 0, len(instances))
-	for _, inst := range instances {
-		response = append(response, instanceToMap(inst))
-	}
+	response := h.listInstanceEntriesForWorkspace(currentWorkspaceID(r))
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"instances": response, "total": len(response)})
 }
@@ -151,17 +152,20 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req struct {
-		Name              string   `json:"name"`
-		Provider          string   `json:"provider"`
-		GPUType           string   `json:"gpu_type"`
-		ProviderGPUTypeID string   `json:"provider_gpu_type_id"`
-		GPUCount          int      `json:"gpu_count"`
-		Region            string   `json:"region"`
-		SpotInstance      bool     `json:"spot_instance"`
-		MaxCostHour       float64  `json:"max_cost_hour"`
-		Models            []string `json:"models"`
-		SelectedModelName string   `json:"selected_model_name"`
-		GatewayAddress    string   `json:"gateway_address"`
+		Name                string            `json:"name"`
+		Provider            string            `json:"provider"`
+		Engine              string            `json:"engine"`
+		GPUType             string            `json:"gpu_type"`
+		ProviderGPUTypeID   string            `json:"provider_gpu_type_id"`
+		GPUCount            int               `json:"gpu_count"`
+		AllowedCudaVersions []string          `json:"allowed_cuda_versions"`
+		Options             map[string]string `json:"options"`
+		Region              string            `json:"region"`
+		SpotInstance        bool              `json:"spot_instance"`
+		MaxCostHour         float64           `json:"max_cost_hour"`
+		Models              []string          `json:"models"`
+		SelectedModelName   string            `json:"selected_model_name"`
+		GatewayAddress      string            `json:"gateway_address"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -174,6 +178,15 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid_request", "gpu_type is required")
 		return
 	}
+	engine := providers.NormalizeInferenceEngine(req.Engine)
+	if !engine.Valid() {
+		writeError(w, http.StatusBadRequest, "invalid_request", "engine must be one of: vllm, sglang, tensorrt_llm, mock")
+		return
+	}
+	if err := providers.ValidateRuntimeOptions(engine, req.Options); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 
 	// Get gateway address from request, env, or default
 	gatewayAddress := req.GatewayAddress
@@ -182,17 +195,20 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 	}
 
 	provisionReq := &providers.ProvisionRequest{
-		Name:              req.Name,
-		Provider:          providers.ProviderType(req.Provider),
-		WorkspaceID:       currentWorkspaceID(r),
-		GPUType:           providers.GPUType(req.GPUType),
-		ProviderGPUTypeID: strings.TrimSpace(req.ProviderGPUTypeID),
-		GPUCount:          req.GPUCount,
-		Region:            req.Region,
-		SpotInstance:      req.SpotInstance,
-		MaxCostHour:       req.MaxCostHour,
-		Models:            req.Models,
-		GatewayAddress:    gatewayAddress,
+		Name:                req.Name,
+		Provider:            providers.ProviderType(req.Provider),
+		WorkspaceID:         currentWorkspaceID(r),
+		GPUType:             providers.GPUType(req.GPUType),
+		ProviderGPUTypeID:   strings.TrimSpace(req.ProviderGPUTypeID),
+		GPUCount:            req.GPUCount,
+		AllowedCudaVersions: slices.Clone(req.AllowedCudaVersions),
+		Options:             cloneStringMap(req.Options),
+		Region:              req.Region,
+		SpotInstance:        req.SpotInstance,
+		MaxCostHour:         req.MaxCostHour,
+		Models:              req.Models,
+		Engine:              engine,
+		GatewayAddress:      gatewayAddress,
 	}
 
 	if provisionReq.Name == "" {
@@ -205,32 +221,47 @@ func (h *InstanceHandlers) handleProvision(w http.ResponseWriter, r *http.Reques
 	instance, err := h.manager.Provision(r.Context(), provisionReq)
 	if err != nil {
 		if h.deploymentStore != nil {
-			_, _ = h.deploymentStore.RecordFailedAttempt(
+			if _, storeErr := h.deploymentStore.RecordFailedAttempt(
 				currentWorkspaceID(r),
 				currentKeyID(r),
 				*provisionReq,
 				req.SelectedModelName,
 				deploymentFailureReason(err),
-			)
+			); storeErr != nil {
+				slog.Warn("deployments.record_failed_attempt_failed", slog.String("error", storeErr.Error()))
+			}
 		}
 		writeProviderActionError(w, "provision_failed", err)
 		return
 	}
 
 	if h.deploymentStore != nil {
-		_, _ = h.deploymentStore.RecordProvisionedAttempt(
+		if _, storeErr := h.deploymentStore.RecordProvisionedAttempt(
 			currentWorkspaceID(r),
 			currentKeyID(r),
 			*provisionReq,
 			req.SelectedModelName,
 			instance,
-		)
+		); storeErr != nil {
+			slog.Warn("deployments.record_provisioned_attempt_failed", slog.String("error", storeErr.Error()))
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"success":  true,
 		"instance": instanceToMap(instance),
 	})
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (h *InstanceHandlers) handleDeployments(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +277,7 @@ func (h *InstanceHandlers) handleDeployments(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	attempts, err := h.deploymentStore.ListAttempts(currentWorkspaceID(r), 25)
+	attempts, err := h.listDeploymentEntries(currentWorkspaceID(r), 25)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "deployment_history_failed", "Failed to load deployment history")
 		return
@@ -392,18 +423,7 @@ func (h *InstanceHandlers) handleProviders(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	statuses := h.manager.GetProviderStatusForWorkspace(r.Context(), currentWorkspaceID(r))
-
-	response := make([]map[string]interface{}, 0, len(statuses))
-	for _, s := range statuses {
-		response = append(response, map[string]interface{}{
-			"provider": s.Provider, "connected": s.Connected, "account_id": s.AccountID,
-			"balance": s.Balance, "active_instances": s.ActiveCount,
-			"quota_limit": s.QuotaLimit, "error": s.ErrorMessage, "error_code": s.ErrorCode,
-			"capabilities": s.Capabilities,
-		})
-	}
-
+	response := h.listProviderEntries(r.Context(), currentWorkspaceID(r))
 	writeJSON(w, http.StatusOK, map[string]interface{}{"providers": response})
 }
 
@@ -436,7 +456,7 @@ func instanceToMap(inst *providers.Instance) map[string]interface{} {
 		"gpu_count": inst.GPUCount, "vcpu": inst.VCPU, "memory_gb": inst.MemoryGB,
 		"storage_gb": inst.StorageGB, "public_ip": inst.PublicIP,
 		"http_port": inst.HTTPPort, "ssh_port": inst.SSHPort,
-		"worker_id": inst.WorkerID, "models": inst.Models,
+		"worker_id": inst.WorkerID, "models": inst.Models, "engine": inst.Engine,
 		"worker_registration_status":     inst.WorkerRegistrationStatus,
 		"last_worker_registration_error": inst.LastWorkerRegistrationError,
 		"worker_health_url":              inst.WorkerHealthURL,
@@ -495,16 +515,6 @@ func deploymentFailureReason(err error) string {
 		return providerErr.Message
 	}
 	return err.Error()
-}
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
-}
-
-func writeError(w http.ResponseWriter, status int, errType, message string) {
-	writeJSON(w, status, map[string]interface{}{"error": map[string]interface{}{"type": errType, "message": message}})
 }
 
 func writeProviderActionError(w http.ResponseWriter, fallbackType string, err error) {

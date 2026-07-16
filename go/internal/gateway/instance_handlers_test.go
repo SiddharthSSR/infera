@@ -41,6 +41,7 @@ func newTestDeploymentStore(t *testing.T) *deployments.Store {
 type failingProvider struct {
 	provisionErr      error
 	provisionInstance *providers.Instance
+	lastReq           *providers.ProvisionRequest
 	startErr          error
 	stopErr           error
 	terminateErr      error
@@ -53,10 +54,11 @@ func (p *failingProvider) Provision(ctx context.Context, req *providers.Provisio
 	if p.provisionErr != nil {
 		return nil, p.provisionErr
 	}
+	p.lastReq = req
 	if p.provisionInstance != nil {
 		inst := *p.provisionInstance
 		inst.Models = append([]string(nil), p.provisionInstance.Models...)
-		inst.Metadata = map[string]string{}
+		inst.Metadata = make(map[string]string, len(p.provisionInstance.Metadata))
 		for key, value := range p.provisionInstance.Metadata {
 			inst.Metadata[key] = value
 		}
@@ -145,7 +147,9 @@ func TestHandleInstances(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		instances := resp["instances"].([]interface{})
 		if len(instances) != 0 {
@@ -169,11 +173,25 @@ func TestHandleProvision(t *testing.T) {
 	h := setupTestHandlers(t)
 
 	t.Run("Successful provision", func(t *testing.T) {
+		provider := &failingProvider{}
+		mgr, err := providers.NewManager(providers.ManagerConfig{
+			DefaultProvider: providers.ProviderMock,
+		})
+		if err != nil {
+			t.Fatalf("failed to create manager: %v", err)
+		}
+		mgr.RegisterProvider(provider)
+		h := NewInstanceHandlers(mgr)
+
 		body := map[string]interface{}{
 			"name":      "test-worker",
 			"provider":  "mock",
+			"engine":    "sglang",
 			"gpu_type":  "RTX_4090",
 			"gpu_count": 1,
+			"options": map[string]string{
+				"INFERA_SGLANG_MAX_RUNNING_REQUESTS": "32",
+			},
 		}
 		bodyBytes, _ := json.Marshal(body)
 
@@ -188,13 +206,91 @@ func TestHandleProvision(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		if resp["success"] != true {
 			t.Error("expected success to be true")
 		}
 		if resp["instance"] == nil {
 			t.Error("expected instance in response")
+		}
+		instance := resp["instance"].(map[string]interface{})
+		if instance["engine"] != string(providers.EngineSGLang) {
+			t.Fatalf("expected engine sglang, got %v", instance["engine"])
+		}
+		if provider.lastReq == nil {
+			t.Fatal("expected provider provision request to be recorded")
+		}
+		if provider.lastReq.Options["INFERA_SGLANG_MAX_RUNNING_REQUESTS"] != "32" {
+			t.Fatalf("expected runtime option to be preserved, got %#v", provider.lastReq.Options)
+		}
+	})
+
+	t.Run("Invalid engine", func(t *testing.T) {
+		body := map[string]interface{}{
+			"name":     "test-worker",
+			"provider": "mock",
+			"engine":   "unsupported",
+			"gpu_type": "RTX_4090",
+		}
+		bodyBytes, _ := json.Marshal(body)
+
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		h.handleProvision(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("Rejects unsupported runtime option", func(t *testing.T) {
+		body := map[string]interface{}{
+			"name":     "test-worker",
+			"provider": "mock",
+			"engine":   "vllm",
+			"gpu_type": "RTX_4090",
+			"options": map[string]string{
+				"UNEXPECTED_ENV": "1",
+			},
+		}
+		bodyBytes, _ := json.Marshal(body)
+
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		h.handleProvision(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("Rejects invalid runtime option value", func(t *testing.T) {
+		body := map[string]interface{}{
+			"name":     "test-worker",
+			"provider": "mock",
+			"engine":   "vllm",
+			"gpu_type": "RTX_4090",
+			"options": map[string]string{
+				"INFERA_VLLM_GPU_MEMORY_UTILIZATION": "1.5",
+			},
+		}
+		bodyBytes, _ := json.Marshal(body)
+
+		req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		h.handleProvision(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
 		}
 	})
 
@@ -257,7 +353,9 @@ func TestHandleInstanceByID(t *testing.T) {
 	h.handleProvision(provW, provReq)
 
 	var provResp map[string]interface{}
-	json.Unmarshal(provW.Body.Bytes(), &provResp)
+	if err := json.Unmarshal(provW.Body.Bytes(), &provResp); err != nil {
+		t.Fatalf("json.Unmarshal provision response: %v", err)
+	}
 	instance := provResp["instance"].(map[string]interface{})
 	instanceID := instance["id"].(string)
 
@@ -272,7 +370,9 @@ func TestHandleInstanceByID(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		if resp["id"] != instanceID {
 			t.Errorf("expected %s, got %s", instanceID, resp["id"])
@@ -301,7 +401,9 @@ func TestHandleInstanceByID(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		if resp["success"] != true {
 			t.Error("expected success to be true")
@@ -326,7 +428,9 @@ func TestHandleStartStop(t *testing.T) {
 	h.handleProvision(provW, provReq)
 
 	var provResp map[string]interface{}
-	json.Unmarshal(provW.Body.Bytes(), &provResp)
+	if err := json.Unmarshal(provW.Body.Bytes(), &provResp); err != nil {
+		t.Fatalf("json.Unmarshal provision response: %v", err)
+	}
 	instance := provResp["instance"].(map[string]interface{})
 	instanceID := instance["id"].(string)
 
@@ -378,7 +482,9 @@ func TestHandleOfferings(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		offerings := resp["offerings"].([]interface{})
 		if len(offerings) == 0 {
@@ -420,7 +526,9 @@ func TestHandleProviders(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		providers := resp["providers"].([]interface{})
 		if len(providers) == 0 {
@@ -472,7 +580,9 @@ func TestWorkspaceScopedInstanceIsolation(t *testing.T) {
 	}
 
 	var provResp map[string]interface{}
-	json.Unmarshal(provW.Body.Bytes(), &provResp)
+	if err := json.Unmarshal(provW.Body.Bytes(), &provResp); err != nil {
+		t.Fatalf("json.Unmarshal provision response: %v", err)
+	}
 	instance := provResp["instance"].(map[string]interface{})
 	instanceID := instance["id"].(string)
 
@@ -483,7 +593,9 @@ func TestWorkspaceScopedInstanceIsolation(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", listW.Code, listW.Body.String())
 	}
 	var listResp map[string]interface{}
-	json.Unmarshal(listW.Body.Bytes(), &listResp)
+	if err := json.Unmarshal(listW.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("json.Unmarshal list response: %v", err)
+	}
 	if got := len(listResp["instances"].([]interface{})); got != 0 {
 		t.Fatalf("expected 0 instances for unrelated workspace, got %d", got)
 	}
@@ -732,7 +844,9 @@ func TestHandleCosts(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		if resp["current_hourly"].(float64) != 0 {
 			t.Errorf("expected 0 hourly cost with no instances, got %f", resp["current_hourly"])
@@ -764,7 +878,9 @@ func TestHandleCosts(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
 
 		if resp["current_hourly"].(float64) <= 0 {
 			t.Error("expected positive hourly cost with running instance")
@@ -801,6 +917,7 @@ func TestInstanceToMap(t *testing.T) {
 		SSHPort:      22,
 		WorkerID:     "worker-123",
 		Models:       []string{"llama-3-8b"},
+		Engine:       providers.EngineTensorRTLLM,
 		CostPerHour:  0.80,
 		SpotInstance: true,
 		CreatedAt:    now,
@@ -827,6 +944,7 @@ func TestInstanceToMap(t *testing.T) {
 		{"http_port", 8080},
 		{"ssh_port", 22},
 		{"worker_id", "worker-123"},
+		{"engine", providers.EngineTensorRTLLM},
 		{"cost_per_hour", 0.80},
 		{"spot_instance", true},
 	}

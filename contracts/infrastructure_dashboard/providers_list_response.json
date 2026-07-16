@@ -1,0 +1,26 @@
+{
+  "providers": [
+    {
+      "provider": "runpod",
+      "connected": true,
+      "account_id": "acct_fixture",
+      "balance": 42.5,
+      "active_instances": 1,
+      "quota_limit": 8,
+      "error": "",
+      "error_code": "",
+      "capabilities": {
+        "supports_spot": true,
+        "supports_custom_images": true,
+        "supports_region_selection": true,
+        "supports_public_ip": true,
+        "supports_ssh_keys": false,
+        "supports_start_stop": true,
+        "startup_script_limit": 16384,
+        "known_regions": [
+          "us-east-1"
+        ]
+      }
+    }
+  ]
+}

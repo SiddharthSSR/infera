@@ -17,14 +17,14 @@ vi.mock('./pages/PublicApiDocs', () => ({ PublicApiDocs: () => <div className="t
 vi.mock('./pages/GettingStarted', () => ({ GettingStarted: () => <div className="top-nav">GETTING STARTED PAGE</div> }));
 vi.mock('./hooks/useIsMobile', () => ({ useIsMobile: vi.fn(() => false) }));
 
-vi.mock('./lib/api', () => ({
+vi.mock('./lib/authAccessClient', () => ({
   getSession: vi.fn(),
   destroySession: vi.fn(),
   fetchWorkspaces: vi.fn(),
   switchSessionWorkspace: vi.fn(),
 }));
 
-import { fetchWorkspaces, getSession, switchSessionWorkspace } from './lib/api';
+import { fetchWorkspaces, getSession, switchSessionWorkspace } from './lib/authAccessClient';
 import { useIsMobile } from './hooks/useIsMobile';
 
 const mockGetSession = vi.mocked(getSession);
@@ -157,12 +157,12 @@ describe('App workspace switcher', () => {
     const openButton = await screen.findByLabelText('Open navigation');
     fireEvent.click(openButton);
 
-    expect(screen.getByRole('link', { name: 'MODELS' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Models' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText('Close navigation'));
 
     await waitFor(() => {
-      expect(screen.queryByRole('link', { name: 'MODELS' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'Models' })).not.toBeInTheDocument();
     });
   });
 

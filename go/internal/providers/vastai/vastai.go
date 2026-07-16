@@ -356,7 +356,7 @@ func chooseOffering(offers []vastOffer, req *providers.ProvisionRequest) (*vastO
 
 func (p *Provider) buildEnv(req *providers.ProvisionRequest) map[string]string {
 	env := map[string]string{
-		"INFERA_ENGINE":    "vllm",
+		"INFERA_ENGINE":    string(req.Engine.OrDefault()),
 		"INFERA_HTTP_PORT": "8081",
 		"INFERA_LOG_LEVEL": "INFO",
 	}

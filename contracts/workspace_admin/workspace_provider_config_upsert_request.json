@@ -1,0 +1,9 @@
+{
+  "api_key": "rp_key",
+  "api_secret": "rp_secret",
+  "endpoint": "https://api.runpod.io/graphql",
+  "options": {
+    "location": "us-east-1",
+    "note": "primary"
+  }
+}

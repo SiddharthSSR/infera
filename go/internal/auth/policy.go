@@ -20,6 +20,7 @@ const (
 	PermissionManageKeys            = "manage_keys"
 	PermissionManageMemberships     = "manage_memberships"
 	PermissionManageWorkspaces      = "manage_workspaces"
+	PermissionManageAgents          = "manage_agents"
 	PermissionManageProviderConfigs = "manage_provider_configs"
 	PermissionManageQuotas          = "manage_quotas"
 	PermissionViewUsage             = "view_usage"
@@ -59,6 +60,8 @@ func HasPermission(record *KeyRecord, permission string) bool {
 	case PermissionManageMemberships:
 		return record.Role == RoleOwner || record.Role == RoleAdmin
 	case PermissionManageWorkspaces:
+		return record.Role == RoleOwner || record.Role == RoleAdmin
+	case PermissionManageAgents:
 		return record.Role == RoleOwner || record.Role == RoleAdmin
 	case PermissionManageProviderConfigs:
 		return record.Role == RoleOwner || record.Role == RoleAdmin

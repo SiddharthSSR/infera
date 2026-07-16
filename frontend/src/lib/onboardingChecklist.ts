@@ -22,10 +22,10 @@ export function buildFirstWorkspaceChecklist(input: {
       id: 'provider',
       label: 'Add provider access',
       detail: input.providerConnected
-        ? 'A workspace provider is configured and returning live status.'
+        ? 'A live inventory source is connected and returning current capacity.'
         : input.providerReady
-          ? 'Provider config exists, but the workspace still needs a healthy live connection.'
-          : 'Save RunPod or Vast.ai credentials in Workspace before trying to deploy.',
+          ? 'A provider path exists, but the workspace still needs a healthy live connection.'
+          : 'Connect RunPod, Vast.ai, or a local inventory source before trying to deploy.',
       done: input.providerConnected,
       actionLabel: 'OPEN WORKSPACE',
       action: 'open_workspace',
@@ -45,9 +45,9 @@ export function buildFirstWorkspaceChecklist(input: {
       label: 'Provision first node',
       detail: input.nodeReady
         ? 'The workspace has at least one node in inventory.'
-        : 'Provision a node from Clusters after provider access and a model are ready.',
+        : 'Provision a node from Nodes after provider access and a model are ready.',
       done: input.nodeReady,
-      actionLabel: 'OPEN CLUSTERS',
+      actionLabel: 'OPEN NODES',
       action: 'open_clusters',
     },
     {
@@ -57,7 +57,7 @@ export function buildFirstWorkspaceChecklist(input: {
         ? 'A real chat-completions request already passed for this workspace.'
         : 'Run or wait for the first inference verification after a deployment becomes ready.',
       done: input.inferenceVerified,
-      actionLabel: 'OPEN CLUSTERS',
+      actionLabel: 'OPEN NODES',
       action: 'open_clusters',
     },
     {

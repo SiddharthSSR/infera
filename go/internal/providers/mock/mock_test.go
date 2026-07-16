@@ -277,7 +277,9 @@ func TestListInstances(t *testing.T) {
 			Name:    "list-test",
 			GPUType: providers.GPURTX4090,
 		}
-		p.Provision(ctx, req)
+		if _, err := p.Provision(ctx, req); err != nil {
+			t.Fatalf("Provision %d: %v", i, err)
+		}
 	}
 
 	t.Run("List all", func(t *testing.T) {
@@ -344,7 +346,9 @@ func TestGetStatus(t *testing.T) {
 	// Create some instances
 	for i := 0; i < 2; i++ {
 		req := &providers.ProvisionRequest{Name: "status-test", GPUType: providers.GPURTX4090}
-		p.Provision(ctx, req)
+		if _, err := p.Provision(ctx, req); err != nil {
+			t.Fatalf("Provision %d: %v", i, err)
+		}
 	}
 
 	t.Run("With active instances", func(t *testing.T) {

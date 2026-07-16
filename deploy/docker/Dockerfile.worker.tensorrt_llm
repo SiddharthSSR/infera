@@ -1,0 +1,69 @@
+# Infera Worker - TensorRT-LLM worker image
+#
+# TensorRT-LLM depends on a tightly matched CUDA/cuBLAS/TensorRT userspace.
+# For older TRT-LLM releases, use NVIDIA's Triton TRT-LLM Python image as the
+# base instead of layering the Python wheel onto a generic PyTorch runtime.
+
+ARG TENSORRT_LLM_BASE_IMAGE=nvcr.io/nvidia/tritonserver:24.08-trtllm-python-py3
+FROM --platform=linux/amd64 ${TENSORRT_LLM_BASE_IMAGE}
+
+WORKDIR /app
+
+# Install only the extra utilities and Python package metadata needed by the
+# Infera worker. TensorRT-LLM itself must come from the base image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir "setuptools>=77.0.1,<80" wheel
+
+COPY python/pyproject.toml .
+COPY python/README.md .
+COPY python/src/ ./src/
+
+# Install the worker package and verify TensorRT-LLM package-level wiring.
+# Avoid importing TensorRT-LLM or the worker's TensorRT engine module during
+# docker build because older TRT-LLM releases initialize NVML immediately, and
+# the full NVIDIA driver runtime is only present on the GPU host.
+RUN pip install --no-cache-dir --no-build-isolation -e . && \
+    echo "=== Verifying installation ===" && \
+    python3 -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.version.cuda}')" && \
+    python3 -c "import transformers; print(f'Transformers {transformers.__version__}')" && \
+    pip show tensorrt_llm && \
+    python3 -c "import importlib.util; assert importlib.util.find_spec('tensorrt_llm') is not None; print('TensorRT-LLM package present')" && \
+    python3 -c "import importlib.util; assert importlib.util.find_spec('infera_worker.engines.tensorrt_llm_engine') is not None; print('TensorRT engine adapter module present')" && \
+    echo "TensorRT-LLM model/runtime smoke must run on a GPU host after image build."
+
+RUN groupadd --gid 10001 infera && \
+    useradd --uid 10001 --gid 10001 --create-home --home-dir /home/infera --shell /usr/sbin/nologin infera && \
+    mkdir -p /home/infera/.cache/huggingface/hub /home/infera/.cache/torch && \
+    chown -R infera:infera /app /home/infera
+
+ENV INFERA_ENGINE=tensorrt_llm
+ENV INFERA_HTTP_PORT=8081
+ENV INFERA_GRPC_PORT=50051
+ENV INFERA_LOG_LEVEL=INFO
+ENV INFERA_LOG_FORMAT=json
+
+# Use a user-owned cache location by default. Deployments can still override
+# these paths when they intentionally mount a persistent writable volume.
+ENV HOME=/home/infera
+ENV XDG_CACHE_HOME=/home/infera/.cache
+ENV HF_HOME=/home/infera/.cache/huggingface
+ENV HUGGINGFACE_HUB_CACHE=/home/infera/.cache/huggingface/hub
+ENV TRANSFORMERS_CACHE=/home/infera/.cache/huggingface/hub
+ENV TORCH_HOME=/home/infera/.cache/torch
+
+ENV INFERA_ROUTER_ADDRESS=""
+ENV INFERA_PRELOAD_MODELS=""
+
+EXPOSE 8081 50051
+
+USER infera
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
+    CMD curl -f http://localhost:8081/health || exit 1
+
+CMD ["python3", "-m", "infera_worker.cli"]

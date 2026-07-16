@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -95,15 +94,6 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 		w.Header().Set(HeaderRequestID, reqID)
 		next.ServeHTTP(w, r)
 	})
-}
-
-// timeoutMiddleware applies a deadline to non-streaming requests.
-// Streaming endpoints (/v1/chat/completions with stream=true) set their own
-// timeout inside the handler, so this is a safety net for everything else.
-func timeoutMiddleware(timeout time.Duration) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.TimeoutHandler(next, timeout, `{"error":{"type":"timeout","message":"Request timed out"}}`)
-	}
 }
 
 // bodySizeLimitMiddleware restricts the request body to maxBytes.

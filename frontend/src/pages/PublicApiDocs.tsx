@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { CodeExample } from '../components/CodeExample';
+import { LabelText, Badge, AppShell, PublicNav } from '../components/shared';
 
 const BASE_URL = typeof window !== 'undefined' ? window.location.origin : 'https://inferai.co.in';
 
@@ -123,19 +124,8 @@ for await (const chunk of resp) {
 
 export function PublicApiDocs() {
   return (
-    <div className="docs-page">
-      <div className="app-shell docs-shell">
-        <header className="top-nav docs-header">
-          <div>
-            <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
-            <div className="label-text" style={{ marginTop: '0.5rem' }}>PUBLIC API DOCS</div>
-          </div>
-          <div className="nav-group" style={{ gap: '1rem' }}>
-            <Link className="nav-link" to="/getting-started">GETTING STARTED</Link>
-            <Link className="nav-link" to="/accept-invite">ACCEPT INVITE</Link>
-            <Link className="nav-link" to="/">LOGIN</Link>
-          </div>
-        </header>
+    <AppShell variant="public">
+        <PublicNav title="PUBLIC API DOCS" />
 
         <section className="docs-hero">
           <div className="docs-kicker">OpenAI-compatible gateway</div>
@@ -160,7 +150,7 @@ export function PublicApiDocs() {
             <div className="docs-summary">
               {summaryCards.map((card) => (
                 <div key={card.label} className="docs-summary-card">
-                  <div className="label-text">{card.label}</div>
+                  <LabelText as="div">{card.label}</LabelText>
                   <div className={`docs-summary-value ${card.tone === 'code' ? 'docs-summary-code' : ''}`}>{card.value}</div>
                 </div>
               ))}
@@ -170,7 +160,7 @@ export function PublicApiDocs() {
 
         <div className="docs-layout">
           <aside className="docs-sidebar">
-            <div className="label-text">ON THIS PAGE</div>
+            <LabelText as="div">ON THIS PAGE</LabelText>
             <nav className="docs-sidebar-nav">
               <a className="docs-sidebar-link" href="#quickstart">Quickstart flow</a>
               <a className="docs-sidebar-link" href="#endpoints">Endpoints</a>
@@ -179,7 +169,7 @@ export function PublicApiDocs() {
               <a className="docs-sidebar-link" href="#examples">Examples</a>
             </nav>
             <div className="docs-sidebar-card">
-              <div className="label-text">START HERE</div>
+              <LabelText as="div">START HERE</LabelText>
               <div style={{ marginTop: '0.7rem', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.65 }}>
                 If this is your first call, do not start here. Use the quickstart first, then come back for the surface details.
               </div>
@@ -190,7 +180,7 @@ export function PublicApiDocs() {
             <section className="docs-section" id="quickstart">
               <div className="docs-section-head">
                 <div>
-                  <div className="label-text">QUICKSTART FLOW</div>
+                  <LabelText as="div">QUICKSTART FLOW</LabelText>
                   <h2 className="docs-section-title">Four moves to the first working request.</h2>
                 </div>
                 <div className="docs-section-copy">
@@ -211,7 +201,7 @@ export function PublicApiDocs() {
             <section className="docs-section tone" id="endpoints">
               <div className="docs-section-head">
                 <div>
-                  <div className="label-text">ENDPOINT SURFACE</div>
+                  <LabelText as="div">ENDPOINT SURFACE</LabelText>
                   <h2 className="docs-section-title">Small surface area, explicit behavior.</h2>
                 </div>
                 <div className="docs-section-copy">
@@ -230,11 +220,11 @@ export function PublicApiDocs() {
                   </p>
                   <div className="docs-meta-list">
                     <div className="docs-meta-row">
-                      <span className="label-text">REQUEST</span>
+                      <LabelText>REQUEST</LabelText>
                       <span>{endpoint.request}</span>
                     </div>
                     <div className="docs-meta-row">
-                      <span className="label-text">RESPONSE</span>
+                      <LabelText>RESPONSE</LabelText>
                       <span>{endpoint.response}</span>
                     </div>
                   </div>
@@ -245,7 +235,7 @@ export function PublicApiDocs() {
             <section className="docs-section" id="authentication">
               <div className="docs-section-head">
                 <div>
-                  <div className="label-text">AUTHENTICATION</div>
+                  <LabelText as="div">AUTHENTICATION</LabelText>
                   <h2 className="docs-section-title">Bearer token in, request out.</h2>
                 </div>
                 <div className="docs-section-copy">
@@ -254,11 +244,11 @@ export function PublicApiDocs() {
               </div>
               <div className="docs-card-grid">
                 <div className="docs-card">
-                  <div className="label-text">HEADER</div>
+                  <LabelText as="div">HEADER</LabelText>
                   <CodeExample code={'Authorization: Bearer inf_...'} language="text" style={{ marginTop: '1rem' }} />
                 </div>
                 <div className="docs-card">
-                  <div className="label-text">IMPORTANT</div>
+                  <LabelText as="div">IMPORTANT</LabelText>
                   <div className="docs-list">
                     <div>Use the model id returned by <span className="docs-inline-code">/v1/models</span>.</div>
                     <div>Dashboard login and public API auth are separate concerns.</div>
@@ -271,7 +261,7 @@ export function PublicApiDocs() {
             <section className="docs-section tone" id="compatibility">
               <div className="docs-section-head">
                 <div>
-                  <div className="label-text">COMPATIBILITY NOTES</div>
+                  <LabelText as="div">COMPATIBILITY NOTES</LabelText>
                   <h2 className="docs-section-title">Compatible where it matters, explicit where it differs.</h2>
                 </div>
                 <div className="docs-section-copy">
@@ -281,7 +271,7 @@ export function PublicApiDocs() {
               <div className="docs-card-grid">
                 {compatibilityCards.map((card) => (
                   <div key={card.label} className="docs-card">
-                    <div className="label-text">{card.label}</div>
+                    <LabelText as="div">{card.label}</LabelText>
                     <div style={{ marginTop: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.65 }}>{card.value}</div>
                   </div>
                 ))}
@@ -291,7 +281,7 @@ export function PublicApiDocs() {
             <section className="docs-section" id="examples">
               <div className="docs-section-head">
                 <div>
-                  <div className="label-text">EXAMPLES</div>
+                  <LabelText as="div">EXAMPLES</LabelText>
                   <h2 className="docs-section-title">Copy, run, adapt.</h2>
                 </div>
                 <div className="docs-section-copy">
@@ -301,22 +291,22 @@ export function PublicApiDocs() {
               <div className="docs-code-grid">
                 <div className="docs-code-panel">
                   <div className="docs-code-toolbar">
-                    <div className="label-text">CURL</div>
-                    <span className="badge">UNARY</span>
+                    <LabelText as="div">CURL</LabelText>
+                    <Badge>UNARY</Badge>
                   </div>
                   <CodeExample code={curlExample} language="shell" />
                 </div>
                 <div className="docs-code-panel">
                   <div className="docs-code-toolbar">
-                    <div className="label-text">PYTHON SDK</div>
-                    <span className="badge">OPENAI CLIENT</span>
+                    <LabelText as="div">PYTHON SDK</LabelText>
+                    <Badge>OPENAI CLIENT</Badge>
                   </div>
                   <CodeExample code={pythonExample} language="python" />
                 </div>
                 <div className="docs-code-panel" style={{ gridColumn: '1 / -1' }}>
                   <div className="docs-code-toolbar">
-                    <div className="label-text">TYPESCRIPT SDK</div>
-                    <span className="badge">STREAMING</span>
+                    <LabelText as="div">TYPESCRIPT SDK</LabelText>
+                    <Badge>STREAMING</Badge>
                   </div>
                   <CodeExample code={typescriptExample} language="typescript" />
                 </div>
@@ -327,7 +317,6 @@ export function PublicApiDocs() {
             </section>
           </main>
         </div>
-      </div>
-    </div>
+    </AppShell>
   );
 }

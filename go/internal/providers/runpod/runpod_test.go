@@ -54,6 +54,53 @@ func TestGraphQLMapsRateLimitToRetryableProviderError(t *testing.T) {
 	}
 }
 
+func TestGraphQLMapsUnauthorizedToAuthFailed(t *testing.T) {
+	provider, err := New(Config{APIKey: "invalid-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusUnauthorized, `{"error":"sensitive upstream response"}`), nil
+	})
+
+	_, err = provider.graphQL(context.Background(), "query { myself { id } }", nil)
+	if err == nil {
+		t.Fatal("expected auth_failed error")
+	}
+
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != providers.ProviderErrorAuthFailed {
+		t.Fatalf("expected auth_failed, got %q", providerErr.Code)
+	}
+	if strings.Contains(providerErr.Message, "sensitive upstream response") {
+		t.Fatalf("upstream response leaked through provider error: %q", providerErr.Message)
+	}
+}
+
+func TestGetStatusPreservesProviderErrorCode(t *testing.T) {
+	provider, err := New(Config{APIKey: "invalid-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusUnauthorized, `{}`), nil
+	})
+
+	status, err := provider.GetStatus(context.Background())
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if status.Connected {
+		t.Fatal("expected disconnected status")
+	}
+	if status.ErrorCode != providers.ProviderErrorAuthFailed {
+		t.Fatalf("expected auth_failed status, got %q", status.ErrorCode)
+	}
+}
+
 func TestGetInstanceReturnsNotFoundWhenPodMissing(t *testing.T) {
 	provider, err := New(Config{APIKey: "test-key"})
 	if err != nil {
@@ -140,6 +187,51 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	assertEnvContains(t, env, "XDG_CACHE_HOME", "/workspace/.cache")
 	assertEnvContains(t, env, "HF_HOME", "/workspace/.cache/huggingface")
 	assertEnvContains(t, env, "HUGGINGFACE_HUB_CACHE", "/workspace/.cache/huggingface/hub")
+}
+
+func TestProvisionIncludesAllowedCudaVersions(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var captured graphQLRequest
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA A100 80GB PCIe"}}}}`), nil
+	})
+
+	instance, err := provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:                "worker",
+		GPUType:             providers.GPUA100_80,
+		GPUCount:            1,
+		DockerImage:         "custom/worker:v1",
+		AllowedCudaVersions: []string{"12.6", "12.7", "12.7", "12.8"},
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	input, ok := captured.Variables["input"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graphql input variables, got %#v", captured.Variables)
+	}
+	allowed, ok := input["allowedCudaVersions"].([]interface{})
+	if !ok {
+		t.Fatalf("expected allowedCudaVersions array, got %#v", input["allowedCudaVersions"])
+	}
+	if len(allowed) != 3 || allowed[0] != "12.6" || allowed[1] != "12.7" || allowed[2] != "12.8" {
+		t.Fatalf("unexpected allowedCudaVersions payload: %#v", allowed)
+	}
+	if got := instance.Metadata[metadataAllowedCudaVersions]; got != "12.6,12.7,12.8" {
+		t.Fatalf("expected metadata to persist CUDA versions, got %q", got)
+	}
 }
 
 func TestProvisionAddsRuntimeEnvOverridesForKnownModel(t *testing.T) {
@@ -346,6 +438,45 @@ func TestProvisionPassesThroughUnknownLiveGPUDisplayName(t *testing.T) {
 	}
 	if got := input["gpuTypeId"]; got != "H200 SXM" {
 		t.Fatalf("expected raw gpuTypeId passthrough, got %#v", got)
+	}
+}
+
+func TestStartWithInstanceOmitsAllowedCudaVersionsOnResume(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var captured graphQLRequest
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		return httpResponse(http.StatusOK, `{"data":{"podResume":{"id":"pod-123","desiredStatus":"RUNNING"}}}`), nil
+	})
+
+	err = provider.StartWithInstance(context.Background(), &providers.Instance{
+		ID:         "inst-1",
+		ProviderID: "pod-123",
+		GPUCount:   1,
+		Metadata: map[string]string{
+			metadataAllowedCudaVersions: "12.6,12.7,12.8",
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartWithInstance: %v", err)
+	}
+
+	input, ok := captured.Variables["input"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graphql input variables, got %#v", captured.Variables)
+	}
+	if _, exists := input["allowedCudaVersions"]; exists {
+		t.Fatalf("expected resume payload to omit allowedCudaVersions, got %#v", input["allowedCudaVersions"])
 	}
 }
 

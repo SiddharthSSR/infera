@@ -1,25 +1,15 @@
-"""Inference engine interface and implementations."""
+"""Inference engine interface, registry, and factory."""
 
-import asyncio
-import random
+from __future__ import annotations
+
+import importlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Callable
-from datetime import datetime
+from dataclasses import dataclass, field
 from typing import Any
 
-from .config import ModelConfig, WorkerConfig
-from .types import (
-    Choice,
-    FinishReason,
-    InferenceRequest,
-    InferenceResponse,
-    LatencyStats,
-    LoadedModel,
-    Message,
-    Role,
-    TokenChunk,
-    UsageStats,
-)
+from .config import ModelConfig, WorkerConfig, normalize_engine_name
+from .types import InferenceRequest, InferenceResponse, LoadedModel, TokenChunk
 
 
 class InferenceEngine(ABC):
@@ -76,114 +66,80 @@ class InferenceEngine(ABC):
         pass
 
 
-class MockEngine(InferenceEngine):
-    """Mock inference engine for testing."""
+class EngineError(RuntimeError):
+    """Base class for inference-engine lifecycle and selection errors."""
 
-    def __init__(self, config: WorkerConfig) -> None:
-        self.config = config
-        self.loaded_models: dict[str, LoadedModel] = {}
-        self.active_requests: set[str] = set()
-        self._cancelled: set[str] = set()
 
-    async def load_model(self, config: ModelConfig) -> LoadedModel:
-        await asyncio.sleep(0.1)
-        model = LoadedModel(
-            model_id=config.model_id,
-            version="1.0.0",
-            loaded_at=datetime.now(),
-            memory_bytes=8 * 1024 * 1024 * 1024,
-            max_batch_size=config.max_batch_size,
-            max_sequence_length=config.max_sequence_length,
-        )
-        self.loaded_models[config.model_id] = model
-        return model
+class EngineNotFoundError(EngineError):
+    """Raised when an unknown engine ID is requested."""
 
-    async def unload_model(self, model_id: str) -> bool:
-        if model_id in self.loaded_models:
-            del self.loaded_models[model_id]
-            return True
-        return False
 
-    def is_model_loaded(self, model_id: str) -> bool:
-        return model_id in self.loaded_models
+class EngineDependencyError(EngineError):
+    """Raised when an engine's optional runtime dependency is not installed."""
 
-    def get_loaded_models(self) -> list[LoadedModel]:
-        return list(self.loaded_models.values())
 
-    async def infer(self, request: InferenceRequest) -> InferenceResponse:
-        start_time = datetime.now()
-        self.active_requests.add(request.request_id)
+@dataclass(frozen=True, slots=True)
+class EngineCapabilities:
+    """Static feature metadata for an inference engine implementation."""
 
-        try:
-            await asyncio.sleep(0.05 + random.random() * 0.1)
+    supports_streaming: bool = True
+    supports_cancellation: bool = True
+    supports_dynamic_model_loading: bool = True
+    supports_runtime_warmup: bool = True
 
-            response_text = f"Mock response to: {request.messages[-1].content}"
-            prompt_tokens = request.token_estimate()
-            completion_tokens = len(response_text) // 4
 
-            end_time = datetime.now()
-            latency_ms = int((end_time - start_time).total_seconds() * 1000)
+@dataclass(frozen=True, slots=True)
+class EngineDefinition:
+    """Registry entry for a loadable inference engine."""
 
-            return InferenceResponse(
-                request_id=request.request_id,
-                model_id=request.model_id,
-                choices=[Choice(
-                    index=0,
-                    message=Message(role=Role.ASSISTANT, content=response_text),
-                    finish_reason=FinishReason.STOP,
-                )],
-                usage=UsageStats(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                ),
-                latency=LatencyStats(
-                    queue_ms=0,
-                    inference_ms=latency_ms,
-                    total_ms=latency_ms,
-                    time_to_first_token_ms=latency_ms // 2,
-                ),
-            )
-        finally:
-            self.active_requests.discard(request.request_id)
+    engine_id: str
+    display_name: str
+    create: Callable[[WorkerConfig], InferenceEngine]
+    optional_dependency: str | None = None
+    capabilities: EngineCapabilities = field(default_factory=EngineCapabilities)
 
-    async def infer_stream(self, request: InferenceRequest) -> AsyncGenerator[TokenChunk, None]:
-        self.active_requests.add(request.request_id)
 
-        try:
-            response_text = f"Mock streaming response to: {request.messages[-1].content}"
-            tokens = response_text.split()
-            prompt_tokens = request.token_estimate()
+_REGISTRY: dict[str, EngineDefinition] = {}
+_BUILTIN_ENGINE_MODULES = {
+    "mock": "infera_worker.engines.mock_engine",
+    "vllm": "infera_worker.engines.vllm_engine",
+    "sglang": "infera_worker.engines.sglang_engine",
+    "tensorrt_llm": "infera_worker.engines.tensorrt_llm_engine",
+}
 
-            for i, token in enumerate(tokens):
-                await asyncio.sleep(0.02)
-                is_last = i == len(tokens) - 1
-                yield TokenChunk(
-                    request_id=request.request_id,
-                    index=i,
-                    delta=token + " ",
-                    finish_reason=FinishReason.STOP if is_last else None,
-                    usage=UsageStats(prompt_tokens, i + 1, prompt_tokens + i + 1) if is_last else None,
-                )
-        finally:
-            self.active_requests.discard(request.request_id)
 
-    async def cancel(self, request_id: str) -> bool:
-        if request_id in self.active_requests:
-            self._cancelled.add(request_id)
-            return True
-        return False
+def register_engine(definition: EngineDefinition) -> None:
+    """Register a concrete inference engine definition."""
+    _REGISTRY[definition.engine_id] = definition
 
-    def get_memory_usage(self) -> tuple[int, int]:
-        used = sum(m.memory_bytes for m in self.loaded_models.values())
-        return used, 16 * 1024 * 1024 * 1024
+
+def _ensure_engine_registered(engine_id: str) -> None:
+    if engine_id in _REGISTRY:
+        return
+
+    module_path = _BUILTIN_ENGINE_MODULES.get(engine_id)
+    if module_path is None:
+        raise EngineNotFoundError(f"Unknown inference engine: {engine_id}")
+    importlib.import_module(module_path)
+
+    if engine_id not in _REGISTRY:
+        raise EngineNotFoundError(f"Inference engine {engine_id} failed to register")
+
+
+def get_engine_definition(engine_id: str) -> EngineDefinition:
+    normalized = normalize_engine_name(engine_id)
+    _ensure_engine_registered(normalized)
+    return _REGISTRY[normalized]
+
+
+def list_engine_definitions() -> list[EngineDefinition]:
+    """Return all builtin engine definitions."""
+    for engine_id in _BUILTIN_ENGINE_MODULES:
+        _ensure_engine_registered(engine_id)
+    return [_REGISTRY[engine_id] for engine_id in sorted(_REGISTRY)]
 
 
 def create_engine(config: WorkerConfig) -> InferenceEngine:
-    if config.engine == "mock":
-        return MockEngine(config)
-    elif config.engine == "vllm":
-        from .engines.vllm_engine import VLLMEngine
-        return VLLMEngine(config)
-    else:
-        raise ValueError(f"Unknown engine: {config.engine}")
+    """Create an inference engine instance from normalized worker config."""
+    definition = get_engine_definition(config.engine)
+    return definition.create(config)

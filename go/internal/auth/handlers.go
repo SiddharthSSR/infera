@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -29,9 +31,7 @@ func (h *Handler) handleKeys(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		h.handleCreateKey(w, r)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 	}
 }
 
@@ -39,9 +39,7 @@ func (h *Handler) handleKeyByID(w http.ResponseWriter, r *http.Request) {
 	// Extract ID from /api/auth/keys/{id}
 	path := strings.TrimPrefix(r.URL.Path, "/api/auth/keys/")
 	if path == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "Key ID required"},
-		})
+		writeInvalidRequestError(w, "Key ID required")
 		return
 	}
 
@@ -49,9 +47,7 @@ func (h *Handler) handleKeyByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		h.handleRevokeKey(w, r, path)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 	}
 }
 
@@ -62,32 +58,24 @@ func (h *Handler) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		h.handleCreateWorkspace(w, r)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 	}
 }
 
 func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/auth/workspaces/")
 	if path == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "Workspace path required"},
-		})
+		writeInvalidRequestError(w, "Workspace path required")
 		return
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 2 {
-		writeJSON(w, http.StatusNotFound, map[string]interface{}{
-			"error": map[string]string{"message": "Not found"},
-		})
+		writeNotFoundError(w, "Not found")
 		return
 	}
 	workspaceID := strings.TrimSpace(parts[0])
 	if workspaceID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "Workspace ID required"},
-		})
+		writeInvalidRequestError(w, "Workspace ID required")
 		return
 	}
 
@@ -99,9 +87,7 @@ func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPut:
 			h.handlePutWorkspaceQuota(w, r, workspaceID)
 		default:
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-				"error": map[string]string{"message": "Method not allowed"},
-			})
+			writeMethodNotAllowedError(w)
 		}
 	case "members":
 		if len(parts) == 2 {
@@ -122,17 +108,13 @@ func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 		}
 		h.handleWorkspaceProviderByID(w, r, workspaceID, parts[2])
 	default:
-		writeJSON(w, http.StatusNotFound, map[string]interface{}{
-			"error": map[string]string{"message": "Not found"},
-		})
+		writeNotFoundError(w, "Not found")
 	}
 }
 
 func (h *Handler) handleWorkspaceProviders(w http.ResponseWriter, r *http.Request, workspaceID string) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 		return
 	}
 	if !h.requirePermission(w, r, PermissionManageProviderConfigs, "Provider configuration access required.") {
@@ -145,9 +127,7 @@ func (h *Handler) handleWorkspaceProviders(w http.ResponseWriter, r *http.Reques
 	}
 	configs, err := h.store.ListWorkspaceProviderConfigs(workspaceID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeInvalidRequestError(w, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -158,9 +138,7 @@ func (h *Handler) handleWorkspaceProviders(w http.ResponseWriter, r *http.Reques
 
 func (h *Handler) handleWorkspaceProviderByID(w http.ResponseWriter, r *http.Request, workspaceID, providerName string) {
 	if !providers.IsRegisteredProviderType(providers.ProviderType(providerName)) {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "Unknown provider"},
-		})
+		writeInvalidRequestError(w, "Unknown provider")
 		return
 	}
 	if !h.requirePermission(w, r, PermissionManageProviderConfigs, "Provider configuration access required.") {
@@ -176,45 +154,72 @@ func (h *Handler) handleWorkspaceProviderByID(w http.ResponseWriter, r *http.Req
 	case http.MethodGet:
 		config, err := h.store.GetWorkspaceProviderConfig(workspaceID, providerName)
 		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]interface{}{
-				"error": map[string]string{"message": err.Error()},
-			})
+			writeNotFoundError(w, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"provider": config})
 	case http.MethodPut:
 		var req struct {
-			APIKey    string `json:"api_key"`
-			APISecret string `json:"api_secret"`
-			Endpoint  string `json:"endpoint"`
+			APIKey    string            `json:"api_key"`
+			APISecret string            `json:"api_secret"`
+			Endpoint  string            `json:"endpoint"`
+			Options   map[string]string `json:"options"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-				"error": map[string]string{"message": "Invalid JSON"},
-			})
+			writeInvalidRequestError(w, "Invalid JSON")
 			return
 		}
-		config, err := h.store.UpsertWorkspaceProviderConfig(workspaceID, providerName, req.APIKey, req.APISecret, req.Endpoint)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-				"error": map[string]string{"message": err.Error()},
+		providerType := providers.ProviderType(providerName)
+		if h.providerConfigValidator != nil {
+			validationCtx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+			defer cancel()
+			err := h.providerConfigValidator(validationCtx, providers.ProviderConfig{
+				Type:        providerType,
+				APIKey:      strings.TrimSpace(req.APIKey),
+				APISecret:   strings.TrimSpace(req.APISecret),
+				Endpoint:    strings.TrimSpace(req.Endpoint),
+				DefaultOpts: req.Options,
 			})
+			if err != nil {
+				writeInvalidRequestError(w, providerConfigValidationMessage(err))
+				return
+			}
+		}
+		config, err := h.store.UpsertWorkspaceProviderConfig(workspaceID, providerName, req.APIKey, req.APISecret, req.Endpoint, req.Options)
+		if err != nil {
+			writeInvalidRequestError(w, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"provider": config})
 	case http.MethodDelete:
 		if err := h.store.DeleteWorkspaceProviderConfig(workspaceID, providerName); err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]interface{}{
-				"error": map[string]string{"message": err.Error()},
-			})
+			writeNotFoundError(w, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 	}
+}
+
+func providerConfigValidationMessage(err error) string {
+	var providerErr *providers.ProviderError
+	if errors.As(err, &providerErr) {
+		switch providerErr.Code {
+		case providers.ProviderErrorMissingAPIKey, providers.ProviderErrorAuthFailed:
+			return "Provider credentials were rejected. Check the API key and secret."
+		case providers.ProviderErrorRateLimited:
+			return "Provider credential validation was rate limited. Try again shortly."
+		case providers.ProviderErrorTimeout:
+			return "Provider credential validation timed out. Try again."
+		case providers.ProviderErrorServiceUnavailable, providers.ProviderErrorRequestFailed:
+			return "Provider is temporarily unavailable. Credentials were not saved."
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "Provider credential validation timed out. Try again."
+	}
+	return "Provider credentials could not be validated. Credentials were not saved."
 }
 
 func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
@@ -233,9 +238,7 @@ func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 
 	keys, err := h.store.ListKeysByWorkspace(workspaceID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-			"error": map[string]string{"message": "Failed to list keys: " + err.Error()},
-		})
+		writeInternalError(w, "Failed to list keys: "+err.Error())
 		return
 	}
 
@@ -253,9 +256,7 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID   string `json:"workspace_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "Invalid JSON"},
-		})
+		writeInvalidRequestError(w, "Invalid JSON")
 		return
 	}
 
@@ -286,9 +287,7 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 
 	fullKey, record, err := h.store.CreateKeyWithPrincipalInWorkspace(workspaceID, req.Name, req.Role, req.PrincipalType)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeInvalidRequestError(w, err.Error())
 		return
 	}
 
@@ -308,9 +307,7 @@ func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request, id str
 		workspaceID = current.WorkspaceID
 	}
 	if err := h.store.RevokeKeyInWorkspace(id, workspaceID); err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeNotFoundError(w, err.Error())
 		return
 	}
 
@@ -328,9 +325,7 @@ func (h *Handler) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	}
 	workspaces, err := h.store.ListAccessibleWorkspaces(current)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-			"error": map[string]string{"message": "Failed to list workspaces: " + err.Error()},
-		})
+		writeInternalError(w, "Failed to list workspaces: "+err.Error())
 		return
 	}
 
@@ -354,17 +349,13 @@ func (h *Handler) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) 
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "Invalid JSON"},
-		})
+		writeInvalidRequestError(w, "Invalid JSON")
 		return
 	}
 
 	workspace, err := h.store.CreateWorkspace(req.Name)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeInvalidRequestError(w, err.Error())
 		return
 	}
 
@@ -385,9 +376,7 @@ func (h *Handler) handleGetWorkspaceQuota(w http.ResponseWriter, r *http.Request
 
 	quota, err := h.store.GetWorkspaceQuota(workspaceID)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeNotFoundError(w, err.Error())
 		return
 	}
 
@@ -412,9 +401,7 @@ func (h *Handler) handlePutWorkspaceQuota(w http.ResponseWriter, r *http.Request
 		EnforceHardLimits   *bool  `json:"enforce_hard_limits"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "Invalid JSON"},
-		})
+		writeInvalidRequestError(w, "Invalid JSON")
 		return
 	}
 
@@ -424,9 +411,7 @@ func (h *Handler) handlePutWorkspaceQuota(w http.ResponseWriter, r *http.Request
 	}
 	quota, err := h.store.UpsertWorkspaceQuota(workspaceID, req.MonthlyRequestLimit, req.MonthlyTokenLimit, enforceHardLimits)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeInvalidRequestError(w, err.Error())
 		return
 	}
 
@@ -437,9 +422,7 @@ func (h *Handler) handlePutWorkspaceQuota(w http.ResponseWriter, r *http.Request
 
 func (h *Handler) handleWorkspaceMembers(w http.ResponseWriter, r *http.Request, workspaceID string) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 		return
 	}
 	if !h.requirePermission(w, r, PermissionManageMemberships, "Membership management access required.") {
@@ -452,9 +435,7 @@ func (h *Handler) handleWorkspaceMembers(w http.ResponseWriter, r *http.Request,
 	}
 	members, err := h.store.ListWorkspaceMemberships(workspaceID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeInvalidRequestError(w, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -479,15 +460,11 @@ func (h *Handler) handleWorkspaceMemberByID(w http.ResponseWriter, r *http.Reque
 			Role string `json:"role"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-				"error": map[string]string{"message": "Invalid JSON"},
-			})
+			writeInvalidRequestError(w, "Invalid JSON")
 			return
 		}
 		if req.Role == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-				"error": map[string]string{"message": "role is required"},
-			})
+			writeInvalidRequestError(w, "role is required")
 			return
 		}
 		if current != nil && !CanAssignRole(current, req.Role) {
@@ -500,9 +477,7 @@ func (h *Handler) handleWorkspaceMemberByID(w http.ResponseWriter, r *http.Reque
 		}
 		member, err := h.store.UpdateWorkspaceMembershipRole(workspaceID, membershipID, req.Role)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-				"error": map[string]string{"message": err.Error()},
-			})
+			writeInvalidRequestError(w, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"member": member})
@@ -512,16 +487,12 @@ func (h *Handler) handleWorkspaceMemberByID(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if err := h.store.RemoveWorkspaceMembership(workspaceID, membershipID); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-				"error": map[string]string{"message": err.Error()},
-			})
+			writeInvalidRequestError(w, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 	}
 }
 
@@ -532,17 +503,13 @@ func (h *Handler) handleWorkspaceInvites(w http.ResponseWriter, r *http.Request,
 	case http.MethodPost:
 		h.handleCreateWorkspaceInvite(w, r, workspaceID)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 	}
 }
 
 func (h *Handler) handleWorkspaceInviteByID(w http.ResponseWriter, r *http.Request, workspaceID, inviteID string) {
 	if r.Method != http.MethodDelete {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 		return
 	}
 	if !h.requirePermission(w, r, PermissionManageMemberships, "Membership management access required.") {
@@ -554,9 +521,7 @@ func (h *Handler) handleWorkspaceInviteByID(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := h.store.RevokeWorkspaceInvitation(workspaceID, inviteID); err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeNotFoundError(w, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
@@ -573,9 +538,7 @@ func (h *Handler) handleListWorkspaceInvites(w http.ResponseWriter, r *http.Requ
 	}
 	invitations, err := h.store.ListWorkspaceInvitations(workspaceID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeInvalidRequestError(w, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -600,9 +563,7 @@ func (h *Handler) handleCreateWorkspaceInvite(w http.ResponseWriter, r *http.Req
 		Role        string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "Invalid JSON"},
-		})
+		writeInvalidRequestError(w, "Invalid JSON")
 		return
 	}
 	if req.Role == "" {
@@ -615,9 +576,7 @@ func (h *Handler) handleCreateWorkspaceInvite(w http.ResponseWriter, r *http.Req
 
 	token, invitation, err := h.store.CreateWorkspaceInvitation(workspaceID, req.Email, req.DisplayName, req.Role, current.ID, time.Now().Add(7*24*time.Hour))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeInvalidRequestError(w, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
@@ -628,25 +587,19 @@ func (h *Handler) handleCreateWorkspaceInvite(w http.ResponseWriter, r *http.Req
 
 func (h *Handler) handlePreviewInvitation(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 		return
 	}
 
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
 	if token == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "token is required"},
-		})
+		writeInvalidRequestError(w, "token is required")
 		return
 	}
 
 	preview, err := h.store.GetWorkspaceInvitationPreview(token)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeInvalidRequestError(w, err.Error())
 		return
 	}
 
@@ -657,9 +610,7 @@ func (h *Handler) handlePreviewInvitation(w http.ResponseWriter, r *http.Request
 
 func (h *Handler) handleAcceptInvitation(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 		return
 	}
 
@@ -668,16 +619,12 @@ func (h *Handler) handleAcceptInvitation(w http.ResponseWriter, r *http.Request)
 		DisplayName     string `json:"display_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "Invalid JSON"},
-		})
+		writeInvalidRequestError(w, "Invalid JSON")
 		return
 	}
 	membership, fullKey, record, err := h.store.AcceptWorkspaceInvitation(req.InvitationToken, req.DisplayName)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": err.Error()},
-		})
+		writeInvalidRequestError(w, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
@@ -698,9 +645,7 @@ func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
 	case http.MethodOptions:
 		w.WriteHeader(http.StatusOK)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 	}
 }
 
@@ -709,9 +654,7 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		APIKey string `json:"api_key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.APIKey == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "api_key is required"},
-		})
+		writeInvalidRequestError(w, "api_key is required")
 		return
 	}
 
@@ -735,9 +678,7 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	// Create session
 	rawToken, session, err := h.store.CreateSession(keyRecord.ID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-			"error": map[string]string{"message": "Failed to create session"},
-		})
+		writeInternalError(w, "Failed to create session")
 		return
 	}
 
@@ -776,9 +717,7 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleSwitchSessionWorkspace(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
-			"error": map[string]string{"message": "Method not allowed"},
-		})
+		writeMethodNotAllowedError(w)
 		return
 	}
 
@@ -798,9 +737,7 @@ func (h *Handler) handleSwitchSessionWorkspace(w http.ResponseWriter, r *http.Re
 		WorkspaceID string `json:"workspace_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.WorkspaceID) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error": map[string]string{"message": "workspace_id is required"},
-		})
+		writeInvalidRequestError(w, "workspace_id is required")
 		return
 	}
 
@@ -816,7 +753,9 @@ func (h *Handler) handleSwitchSessionWorkspace(w http.ResponseWriter, r *http.Re
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		http.Error(w, `{"error":{"type":"encode_error","message":"Failed to encode JSON response"}}`, http.StatusInternalServerError)
+	}
 }
 
 func (h *Handler) requirePermission(w http.ResponseWriter, r *http.Request, permission, message string) bool {

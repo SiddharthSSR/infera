@@ -48,16 +48,18 @@ func TestHandleChatCompletionsReturnsOpenAICompatibleResponse(t *testing.T) {
 			Choices: []struct {
 				Index   int `json:"index"`
 				Message struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
+					Role      string           `json:"role"`
+					Content   string           `json:"content"`
+					ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 				} `json:"message"`
 				FinishReason string `json:"finish_reason"`
 			}{
 				{
 					Index: 0,
 					Message: struct {
-						Role    string `json:"role"`
-						Content string `json:"content"`
+						Role      string           `json:"role"`
+						Content   string           `json:"content"`
+						ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 					}{
 						Role:    "assistant",
 						Content: "hello from worker",
@@ -99,8 +101,8 @@ func TestHandleChatCompletionsReturnsOpenAICompatibleResponse(t *testing.T) {
 	if !strings.HasPrefix(resp.ID, "chatcmpl-") {
 		t.Fatalf("expected chat completion id, got %q", resp.ID)
 	}
-	if resp.Object != "chat.completion" {
-		t.Fatalf("expected chat.completion object, got %q", resp.Object)
+	if resp.Object != OpenAIChatCompletionObject {
+		t.Fatalf("expected %s object, got %q", OpenAIChatCompletionObject, resp.Object)
 	}
 	if resp.Model != modelID {
 		t.Fatalf("expected model %q, got %q", modelID, resp.Model)
@@ -161,16 +163,18 @@ func TestHandleChatCompletionsPassesOpenAIParametersToWorker(t *testing.T) {
 			Choices: []struct {
 				Index   int `json:"index"`
 				Message struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
+					Role      string           `json:"role"`
+					Content   string           `json:"content"`
+					ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 				} `json:"message"`
 				FinishReason string `json:"finish_reason"`
 			}{
 				{
 					Index: 0,
 					Message: struct {
-						Role    string `json:"role"`
-						Content string `json:"content"`
+						Role      string           `json:"role"`
+						Content   string           `json:"content"`
+						ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 					}{Role: "assistant", Content: "ok"},
 					FinishReason: "stop",
 				},
@@ -206,16 +210,18 @@ func TestHandleChatCompletionsRecordsBatchAndLatencyMetrics(t *testing.T) {
 			Choices: []struct {
 				Index   int `json:"index"`
 				Message struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
+					Role      string           `json:"role"`
+					Content   string           `json:"content"`
+					ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 				} `json:"message"`
 				FinishReason string `json:"finish_reason"`
 			}{
 				{
 					Index: 0,
 					Message: struct {
-						Role    string `json:"role"`
-						Content string `json:"content"`
+						Role      string           `json:"role"`
+						Content   string           `json:"content"`
+						ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 					}{Role: "assistant", Content: "hello from metrics"},
 					FinishReason: "stop",
 				},
@@ -521,7 +527,7 @@ func TestHandleChatCompletionsStreamingReturnsSSEChunksAndDone(t *testing.T) {
 	if err := json.Unmarshal([]byte(events[0]), &initial); err != nil {
 		t.Fatalf("decode initial chunk: %v", err)
 	}
-	if initial.Object != "chat.completion.chunk" {
+	if initial.Object != OpenAIChatCompletionChunkObject {
 		t.Fatalf("expected chunk object, got %q", initial.Object)
 	}
 	if initial.Choices[0].Delta.Role != "assistant" {
@@ -686,8 +692,8 @@ func TestHandleChatCompletionsRejectsInvalidStopType(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode error payload: %v", err)
 	}
-	if payload["error"]["type"] != "invalid_request" {
-		t.Fatalf("expected invalid_request type, got %#v", payload)
+	if payload["error"]["type"] != OpenAIChatErrorTypeInvalidRequest {
+		t.Fatalf("expected %s type, got %#v", OpenAIChatErrorTypeInvalidRequest, payload)
 	}
 	if !strings.Contains(payload["error"]["message"], "stop") {
 		t.Fatalf("expected stop-related message, got %#v", payload)
@@ -801,8 +807,8 @@ func TestHandleChatCompletionsStreamingWorkerErrorBeforeCommitReturnsJSONError(t
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-	if resp["error"]["type"] != "inference_error" {
-		t.Fatalf("expected inference_error type, got %#v", resp)
+	if resp["error"]["type"] != OpenAIChatErrorTypeInferenceError {
+		t.Fatalf("expected %s type, got %#v", OpenAIChatErrorTypeInferenceError, resp)
 	}
 	if strings.Contains(rec.Body.String(), "[DONE]") {
 		t.Fatalf("expected no SSE trailer in json error response")

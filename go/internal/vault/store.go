@@ -340,11 +340,6 @@ func (s *Store) Count() (int, error) {
 	return count, err
 }
 
-// scanner interface for *sql.Row and *sql.Rows
-type scanner interface {
-	Scan(dest ...interface{}) error
-}
-
 func scanModel(row *sql.Row) (*Model, error) {
 	m := &Model{}
 	var tagsJSON, metaJSON string

@@ -337,25 +337,6 @@ func TestReadStreamMeasuresTTFTAndRequiresDone(t *testing.T) {
 	}
 }
 
-func writeTestWorkload(t *testing.T, dir string) string {
-	t.Helper()
-	path := filepath.Join(dir, "workload.yaml")
-	data := []byte(`
-prompts:
-  - id: hello
-    messages:
-      - role: user
-        content: Say hello.
-    max_tokens: 8
-    temperature: 0.1
-    tags: [short]
-`)
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 func nowForTest() time.Time {
 	return time.Now().Add(-time.Millisecond)
 }

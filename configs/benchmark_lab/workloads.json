@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "workloads": [
+    {
+      "id": "latency_sensitive_chat",
+      "display_name": "Latency-Sensitive Chat",
+      "description": "Small conversational workload optimized around low TTFT and low tail latency.",
+      "prompt_text": "You are assisting an inference platform team. Explain in under 120 words how to reduce TTFT for an interactive chat application without changing model quality.",
+      "concurrency": 2,
+      "warmup_runs": 2,
+      "measured_runs": 3,
+      "max_tokens": 128,
+      "temperature": 0.2,
+      "cache_reuse_modes": ["none", "affinity"],
+      "session_pattern": "chat"
+    },
+    {
+      "id": "throughput_high_concurrency",
+      "display_name": "Throughput High Concurrency",
+      "description": "Multi-client chat workload intended to stress batching and decode throughput.",
+      "prompt_text": "Summarize five practical operational improvements for a multi-tenant inference service that is CPU-light but GPU-bound under high concurrency. Keep the answer under 180 words.",
+      "concurrency": 16,
+      "warmup_runs": 2,
+      "measured_runs": 3,
+      "max_tokens": 192,
+      "temperature": 0.2,
+      "cache_reuse_modes": ["none"]
+    },
+    {
+      "id": "long_context",
+      "display_name": "Long Context",
+      "description": "Repeated long-prefix context used to test prefill behavior and context scaling.",
+      "prompt_text": "You are given repeated context about a distributed inference platform. The platform provisions GPU workers, tracks queue depth, emits health metrics, and routes repeated chat sessions for cache locality. The platform provisions GPU workers, tracks queue depth, emits health metrics, and routes repeated chat sessions for cache locality. The platform provisions GPU workers, tracks queue depth, emits health metrics, and routes repeated chat sessions for cache locality. The platform provisions GPU workers, tracks queue depth, emits health metrics, and routes repeated chat sessions for cache locality. Summarize the top three optimization priorities in under 140 words.",
+      "concurrency": 4,
+      "warmup_runs": 1,
+      "measured_runs": 3,
+      "max_tokens": 160,
+      "temperature": 0.2,
+      "cache_reuse_modes": ["none", "affinity"],
+      "session_pattern": "long_context"
+    },
+    {
+      "id": "repeated_prefix",
+      "display_name": "Repeated Prefix",
+      "description": "Session-sticky chat workload used to test prefix caching and affinity routing.",
+      "prompt_text": "System context: You are assisting an inference-platform team that is optimizing TTFT, decode throughput, batching, cache locality, and warm-start behavior. The platform provisions GPU workers, routes OpenAI-compatible chat requests, tracks worker queue depth, and wants session affinity for cache reuse. The same users ask follow-up questions over the same shared context. Based on this context, give three practical next steps to improve latency without changing hardware. Keep it under 150 words.",
+      "concurrency": 4,
+      "warmup_runs": 2,
+      "measured_runs": 3,
+      "max_tokens": 160,
+      "temperature": 0.2,
+      "cache_reuse_modes": ["affinity"],
+      "session_pattern": "sticky"
+    },
+    {
+      "id": "decode_heavy",
+      "display_name": "Decode Heavy",
+      "description": "Output-heavy request shape used to measure sustained decode rate and TPOT.",
+      "prompt_text": "Write a detailed but concise numbered plan with ten items for scaling an inference platform from one benchmark node to a production fleet, including rollout safety, health checks, routing, cost tracking, observability, caching, and failure handling.",
+      "concurrency": 4,
+      "warmup_runs": 1,
+      "measured_runs": 3,
+      "max_tokens": 384,
+      "temperature": 0.1,
+      "cache_reuse_modes": ["none"]
+    },
+    {
+      "id": "mixed",
+      "display_name": "Mixed Workload",
+      "description": "Balanced chat workload intended as a generic serving baseline.",
+      "prompt_text": "Compare the tradeoffs between low TTFT, high throughput, and low cost for a general-purpose LLM serving platform. Provide a short answer with actionable guidance for an engineering team deciding how to benchmark and tune their stack.",
+      "concurrency": 4,
+      "warmup_runs": 2,
+      "measured_runs": 3,
+      "max_tokens": 196,
+      "temperature": 0.2,
+      "cache_reuse_modes": ["none", "affinity"]
+    }
+  ]
+}

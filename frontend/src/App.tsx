@@ -4,25 +4,28 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { toast } from 'sonner';
 import { cn } from './lib/utils';
-import { destroySession, fetchWorkspaces, getSession, switchSessionWorkspace, type SessionInfo, type WorkspaceRecord } from './lib/api';
+import { destroySession, fetchWorkspaces, getSession, switchSessionWorkspace } from './lib/authAccessClient';
 import { AuthContext, useAuthSession } from './lib/auth-context';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ChatContext, type ChatContextType, type Message, type PlaygroundHistoryEntry } from './lib/chat-context';
 import { lazyWithRetry } from './lib/lazyWithRetry';
 import { useIsMobile } from './hooks/useIsMobile';
-
-import { Dashboard } from './pages/Dashboard';
-import { Playground } from './pages/Playground';
-import { Instances } from './pages/Instances';
-import { Logs } from './pages/Logs';
-import { Models } from './pages/Models';
-import { ApiKeys } from './pages/ApiKeys';
-import { WorkspaceAdmin } from './pages/WorkspaceAdmin';
+import type { AgentAnalysisDepth, AgentExecutionMode, PlaygroundMode, SessionInfo, WorkspaceRecord } from './types';
+import { AppShell, PageHeader } from './components/shared';
+import { CommandPalette } from './components/CommandPalette';
+import { PageTransition } from './components/PageTransition';
 
 const Login = lazyWithRetry(() => import('./pages/Login').then((module) => ({ default: module.Login })), 'login');
 const PublicApiDocs = lazyWithRetry(() => import('./pages/PublicApiDocs').then((module) => ({ default: module.PublicApiDocs })), 'docs');
 const GettingStarted = lazyWithRetry(() => import('./pages/GettingStarted').then((module) => ({ default: module.GettingStarted })), 'getting-started');
 const AcceptInvitation = lazyWithRetry(() => import('./pages/AcceptInvitation').then((module) => ({ default: module.AcceptInvitation })), 'accept-invite');
+const Dashboard = lazyWithRetry(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })), 'dashboard');
+const Playground = lazyWithRetry(() => import('./pages/Playground').then((module) => ({ default: module.Playground })), 'playground');
+const Instances = lazyWithRetry(() => import('./pages/Instances').then((module) => ({ default: module.Instances })), 'instances');
+const Logs = lazyWithRetry(() => import('./pages/Logs').then((module) => ({ default: module.Logs })), 'logs');
+const Models = lazyWithRetry(() => import('./pages/Models').then((module) => ({ default: module.Models })), 'models');
+const ApiKeys = lazyWithRetry(() => import('./pages/ApiKeys').then((module) => ({ default: module.ApiKeys })), 'api-keys');
+const WorkspaceAdmin = lazyWithRetry(() => import('./pages/WorkspaceAdmin').then((module) => ({ default: module.WorkspaceAdmin })), 'workspace');
 const workspacePreferenceKeyPrefix = 'infera:last-workspace:';
 
 // Query Client
@@ -31,34 +34,74 @@ const queryClient = new QueryClient({
     queries: {
       retry: 1,
       staleTime: 2000,
-      refetchInterval: 5000,
     },
   },
 });
 
 // Navigation items — primary (always visible) and secondary (utility)
 const primaryNavItems = [
-  { path: '/', label: 'DASHBOARD' },
-  { path: '/models', label: 'MODELS' },
-  { path: '/instances', label: 'NODES' },
-  { path: '/playground', label: 'PLAYGROUND' },
+  { path: '/', label: 'Dashboard' },
+  { path: '/models', label: 'Models' },
+  { path: '/instances', label: 'Nodes' },
+  { path: '/playground', label: 'Playground' },
 ];
 
 const secondaryNavItems = [
-  { path: '/logs', label: 'LOGS' },
-  { path: '/api-keys', label: 'API KEYS' },
-  { path: '/workspace', label: 'SETTINGS' },
+  { path: '/logs', label: 'Logs' },
+  { path: '/api-keys', label: 'API Keys' },
+  { path: '/workspace', label: 'Settings' },
 ];
 
-// Page display titles
-const pageTitles: Record<string, string> = {
-  '/': 'INFERENCE',
-  '/models': 'MODELS',
-  '/instances': 'NODES',
-  '/playground': 'PLAYGROUND',
-  '/logs': 'LOGS',
-  '/api-keys': 'API KEYS',
-  '/workspace': 'SETTINGS',
+type PageMeta = {
+  title: string;
+  navLabel: string;
+  eyebrow: string;
+  description: string;
+};
+
+const pageMeta: Record<string, PageMeta> = {
+  '/': {
+    title: 'Inference',
+    navLabel: 'Inference',
+    eyebrow: 'Workspace command center',
+    description: 'Track deployment readiness, serving health, usage, and the next action for the active workspace.',
+  },
+  '/models': {
+    title: 'Models',
+    navLabel: 'Models',
+    eyebrow: 'Registry and serving state',
+    description: 'Curate the model catalog, inspect verification freshness, and move from registry to live serving without losing runtime context.',
+  },
+  '/instances': {
+    title: 'Nodes',
+    navLabel: 'Nodes',
+    eyebrow: 'Infrastructure operations',
+    description: 'Provision, inspect, and recover the infrastructure that runs your serving workloads.',
+  },
+  '/playground': {
+    title: 'Playground',
+    navLabel: 'Playground',
+    eyebrow: 'Live request testing',
+    description: 'Run real requests against the workspace and inspect output behavior, latency, and model response quality.',
+  },
+  '/logs': {
+    title: 'Logs',
+    navLabel: 'Logs',
+    eyebrow: 'Operational history',
+    description: 'Review runtime events, request traces, and recent operational signals without leaving the control surface.',
+  },
+  '/api-keys': {
+    title: 'API Keys',
+    navLabel: 'API Keys',
+    eyebrow: 'Access and automation',
+    description: 'Manage access keys for people, services, and integrations while keeping scope and ownership clear.',
+  },
+  '/workspace': {
+    title: 'Workspace',
+    navLabel: 'Settings',
+    eyebrow: 'Admin and configuration',
+    description: 'Configure providers, quota, memberships, and invitations for the active workspace.',
+  },
 };
 
 // Top Navigation
@@ -67,6 +110,7 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
   const isMobile = useIsMobile(900);
   const { session, availableWorkspaces, switchWorkspace, switchingWorkspace } = useAuthSession();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const currentPage = pageMeta[location.pathname];
   const workspaceNavLabel = session?.workspace?.slug
     ? session.workspace.slug.replace(/[-_]+/g, ' ').toUpperCase()
     : session?.workspace?.name?.toUpperCase();
@@ -156,10 +200,8 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
       <nav className="top-nav top-nav-mobile">
         <div className="top-nav-mobile-bar">
           <div className="nav-brand-block">
-            <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
-            <div className="nav-mobile-route-label">
-              {(pageTitles[location.pathname] || 'INFERA').replace(/_/g, ' ')}
-            </div>
+            <div className="nav-brand-mark">INFERA.AI</div>
+            <div className="nav-mobile-route-label">{currentPage?.navLabel || 'Infera'}</div>
           </div>
           <div className="nav-mobile-utility">
             <div className="nav-group nav-auth-group nav-auth-group-mobile">
@@ -188,7 +230,10 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
 
   return (
     <nav className="top-nav">
-      <div style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>INFERA.AI</div>
+      <div className="nav-brand-block nav-brand-block-desktop">
+        <div className="nav-brand-mark">INFERA.AI</div>
+        <div className="nav-brand-caption">Inference control plane</div>
+      </div>
       <div className="nav-group nav-links-group">
         {primaryNavItems.map((item, i) => (
           <span key={item.path} className="contents">
@@ -218,7 +263,7 @@ function TopNav({ onLogout }: { onLogout: () => void }) {
           ))}
         </span>
       </div>
-      <div className="nav-group nav-auth-group" style={{ gap: '1rem' }}>
+      <div className="nav-group nav-auth-group">
         {workspaceUtility}
       </div>
     </nav>
@@ -254,6 +299,11 @@ function AppContent() {
   // Chat state - persisted across page switches
   const [messages, setMessages] = useState<Message[]>([]);
   const [history, setHistory] = useState<PlaygroundHistoryEntry[]>([]);
+  const [playgroundMode, setPlaygroundMode] = useState<PlaygroundMode>('chat');
+  const [selectedAgentID, setSelectedAgentID] = useState('');
+  const [agentMaxSteps, setAgentMaxSteps] = useState(8);
+  const [agentExecutionMode, setAgentExecutionMode] = useState<AgentExecutionMode>('operations');
+  const [agentAnalysisDepth, setAgentAnalysisDepth] = useState<AgentAnalysisDepth>('standard');
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
@@ -290,6 +340,11 @@ function AppContent() {
   const handleLogout = useCallback(() => {
     setMessages([]);
     setHistory([]);
+    setPlaygroundMode('chat');
+    setSelectedAgentID('');
+    setAgentMaxSteps(8);
+    setAgentExecutionMode('operations');
+    setAgentAnalysisDepth('standard');
     setSelectedModel('');
     setTemperature(0.7);
     setMaxTokens(2048);
@@ -304,6 +359,21 @@ function AppContent() {
     if (!email) return null;
     return `${workspacePreferenceKeyPrefix}${email}`;
   }, [session?.member?.email]);
+  const sessionKeyID = session?.key?.id ?? '';
+  const workspaceID = session?.workspace?.id ?? '';
+  const workspaceSlug = session?.workspace?.slug ?? '';
+  const workspaceName = session?.workspace?.name ?? '';
+  const fallbackWorkspaces = useMemo(() => (
+    workspaceID
+      ? [{
+        id: workspaceID,
+        slug: workspaceSlug,
+        name: workspaceName,
+        created_at: '',
+        status: 'active',
+      }]
+      : []
+  ), [workspaceID, workspaceName, workspaceSlug]);
 
   const handleWorkspaceSwitch = useCallback(async (workspaceId: string) => {
     if (!session?.workspace?.id || workspaceId === session.workspace.id) {
@@ -318,6 +388,11 @@ function AppContent() {
       }
       setMessages([]);
       setHistory([]);
+      setPlaygroundMode('chat');
+      setSelectedAgentID('');
+      setAgentMaxSteps(8);
+      setAgentExecutionMode('operations');
+      setAgentAnalysisDepth('standard');
       setSelectedModel('');
       setTemperature(0.7);
       setMaxTokens(2048);
@@ -332,7 +407,7 @@ function AppContent() {
   }, [session?.workspace?.id, workspacePreferenceKey, setHistory, setMaxTokens, setMessages, setSelectedModel, setTemperature]);
 
   useEffect(() => {
-    if (!session) {
+    if (!sessionKeyID) {
       return;
     }
 
@@ -344,19 +419,13 @@ function AppContent() {
       })
       .catch(() => {
         if (!active) return;
-        setAvailableWorkspaces(session.workspace ? [{
-          id: session.workspace.id,
-          slug: session.workspace.slug,
-          name: session.workspace.name,
-          created_at: '',
-          status: 'active',
-        }] : []);
+        setAvailableWorkspaces(fallbackWorkspaces);
       });
 
     return () => {
       active = false;
     };
-  }, [session?.key?.id, session?.workspace?.id, session?.workspace?.name, session?.workspace?.slug]);
+  }, [fallbackWorkspaces, sessionKeyID]);
 
   useEffect(() => {
     if (!session?.session?.id || !session.workspace?.id || !workspacePreferenceKey) {
@@ -387,7 +456,7 @@ function AppContent() {
     }
   }, [session?.workspace?.id, workspacePreferenceKey]);
 
-  // Listen for auth-expired events from api.ts
+  // Listen for auth-expired events from authenticated client requests.
   useEffect(() => {
     const handler = () => handleLogout();
     window.addEventListener('auth-expired', handler);
@@ -424,7 +493,12 @@ function AppContent() {
     );
   }
 
-  const pageTitle = pageTitles[location.pathname] || 'INFERA';
+  const currentPage = pageMeta[location.pathname] ?? {
+    title: 'Infera',
+    navLabel: 'Infera',
+    eyebrow: 'Workspace console',
+    description: 'Monitor the platform, operating state, and user-facing surfaces from one place.',
+  };
   const docsRoutes = ['/docs', '/getting-started'];
   const hideAppChrome = docsRoutes.includes(location.pathname);
   const hideDisplayHeader = hideAppChrome || location.pathname === '/playground';
@@ -434,6 +508,16 @@ function AppContent() {
     setMessages,
     history,
     setHistory,
+    playgroundMode,
+    setPlaygroundMode,
+    selectedAgentID,
+    setSelectedAgentID,
+    agentMaxSteps,
+    setAgentMaxSteps,
+    agentExecutionMode,
+    setAgentExecutionMode,
+    agentAnalysisDepth,
+    setAgentAnalysisDepth,
     selectedModel,
     setSelectedModel,
     temperature,
@@ -454,27 +538,34 @@ function AppContent() {
       }}
     >
     <ChatContext.Provider value={chatContextValue}>
-      <div className="app-shell app-shell-auth">
+      <AppShell variant="auth">
         {!hideAppChrome && <TopNav onLogout={handleLogout} />}
         {!hideDisplayHeader && (
-          <header className="display-text">{pageTitle}</header>
+          <PageHeader
+            eyebrow={currentPage.eyebrow}
+            title={currentPage.title}
+            description={currentPage.description}
+          />
         )}
         <Suspense fallback={<RouteLoader />}>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/playground" element={<Playground />} />
-            <Route path="/models" element={<Models />} />
-            <Route path="/instances" element={<Instances />} />
-            <Route path="/logs" element={<Logs />} />
-            <Route path="/api-keys" element={<ApiKeys />} />
-            <Route path="/workspace" element={<WorkspaceAdmin />} />
-            <Route path="/docs" element={<PublicApiDocs />} />
-            <Route path="/getting-started" element={<GettingStarted />} />
-            <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <PageTransition>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/playground" element={<Playground />} />
+              <Route path="/models" element={<Models />} />
+              <Route path="/instances" element={<Instances />} />
+              <Route path="/logs" element={<Logs />} />
+              <Route path="/api-keys" element={<ApiKeys />} />
+              <Route path="/workspace" element={<WorkspaceAdmin />} />
+              <Route path="/docs" element={<PublicApiDocs />} />
+              <Route path="/getting-started" element={<GettingStarted />} />
+              <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </PageTransition>
         </Suspense>
-      </div>
+        <CommandPalette />
+      </AppShell>
     </ChatContext.Provider>
     </AuthContext.Provider>
   );

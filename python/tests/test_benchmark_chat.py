@@ -28,6 +28,9 @@ def test_parse_args_defaults_to_inferai(monkeypatch):
     monkeypatch.setattr("sys.argv", ["benchmark-chat.py", "--model", "Qwen/Qwen2.5-7B-Instruct"])
     args = module.parse_args()
     assert args.base_url == "https://inferai.co.in"
+    assert args.engine_label == ""
+    assert args.provider_label == ""
+    assert args.gpu_label == ""
     assert args.preset == "all"
     assert args.concurrency == 1
     assert args.warmup == 0
@@ -136,9 +139,24 @@ def test_build_result_row_computes_cost_and_throughput():
 def test_summarize_rows_handles_decode_percentiles():
     module = load_benchmark_chat_module()
     rows = [
-        {"ttft_ms": 400.0, "stream_total_ms": 2500.0, "non_stream_total_ms": 3000.0, "decode_tok_s": 50.0},
-        {"ttft_ms": 600.0, "stream_total_ms": 2700.0, "non_stream_total_ms": 3200.0, "decode_tok_s": 60.0},
-        {"ttft_ms": 800.0, "stream_total_ms": 2900.0, "non_stream_total_ms": 3400.0, "decode_tok_s": 0.0},
+        {
+            "ttft_ms": 400.0,
+            "stream_total_ms": 2500.0,
+            "non_stream_total_ms": 3000.0,
+            "decode_tok_s": 50.0,
+        },
+        {
+            "ttft_ms": 600.0,
+            "stream_total_ms": 2700.0,
+            "non_stream_total_ms": 3200.0,
+            "decode_tok_s": 60.0,
+        },
+        {
+            "ttft_ms": 800.0,
+            "stream_total_ms": 2900.0,
+            "non_stream_total_ms": 3400.0,
+            "decode_tok_s": 0.0,
+        },
     ]
 
     summary = module.summarize_rows(rows)
@@ -259,6 +277,9 @@ def test_write_json_output_creates_parent_directories(tmp_path):
     payload = module.build_output_payload(
         "https://inferai.co.in",
         "Qwen/Qwen2.5-7B-Instruct",
+        "vllm",
+        "runpod",
+        "A100_80GB",
         3,
         4,
         2,
@@ -272,4 +293,7 @@ def test_write_json_output_creates_parent_directories(tmp_path):
 
     assert written_path == output
     assert output.exists()
+    assert payload["engine"] == "vllm"
+    assert payload["provider"] == "runpod"
+    assert payload["gpu_type"] == "A100_80GB"
     assert json.loads(output.read_text(encoding="utf-8")) == payload

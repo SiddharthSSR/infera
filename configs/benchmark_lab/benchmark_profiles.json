@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "benchmark_profiles": [
+    {
+      "id": "provision_full",
+      "display_name": "Provision Full Lifecycle",
+      "description": "Provision a fresh worker, capture startup, and then run warm measurements.",
+      "execution_mode": "provision",
+      "stages": ["cold_start", "startup_health", "warm_none", "warm_affinity"],
+      "health_sample_interval_ms": 5000,
+      "warm_ready_timeout_s": 180,
+      "objective_weights": {
+        "max_throughput": {"throughput": 1.0},
+        "lowest_ttft": {"ttft": 1.0},
+        "best_tpot": {"tpot": 1.0},
+        "balanced": {"throughput": 0.45, "ttft": 0.35, "tpot": 0.1, "startup": 0.1}
+      }
+    },
+    {
+      "id": "attach_warm_only",
+      "display_name": "Attach Warm Only",
+      "description": "Run warm measurements against an already deployed fleet.",
+      "execution_mode": "attach",
+      "stages": ["warm_none", "warm_affinity"],
+      "health_sample_interval_ms": 5000,
+      "warm_ready_timeout_s": 60,
+      "objective_weights": {
+        "max_throughput": {"throughput": 1.0},
+        "lowest_ttft": {"ttft": 1.0},
+        "best_tpot": {"tpot": 1.0},
+        "balanced": {"throughput": 0.5, "ttft": 0.4, "tpot": 0.1}
+      }
+    },
+    {
+      "id": "provision_tuning",
+      "display_name": "Provision Warm Tuning",
+      "description": "Provision a fresh worker, verify cold-start viability, and run warm measurements without the extra startup-health pass.",
+      "execution_mode": "provision",
+      "stages": ["cold_start", "warm_none", "warm_affinity"],
+      "lifecycle_timeout_s": 300,
+      "health_sample_interval_ms": 5000,
+      "warm_ready_timeout_s": 180,
+      "registry_drain_timeout_s": 90,
+      "registry_drain_poll_interval_ms": 2000,
+      "objective_weights": {
+        "max_throughput": {"throughput": 1.0},
+        "lowest_ttft": {"ttft": 1.0},
+        "best_tpot": {"tpot": 1.0},
+        "balanced": {"throughput": 0.5, "ttft": 0.4, "tpot": 0.1}
+      }
+    }
+  ]
+}
