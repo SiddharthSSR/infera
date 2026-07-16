@@ -23,6 +23,12 @@ type fakeRunner struct {
 	block     chan struct{}
 }
 
+type modelRunnerFunc func(context.Context, ModelRunRequest) (*types.InferenceResponse, error)
+
+func (f modelRunnerFunc) Run(ctx context.Context, req ModelRunRequest) (*types.InferenceResponse, error) {
+	return f(ctx, req)
+}
+
 type webhookRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f webhookRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -191,6 +197,50 @@ func TestRuntimeHappyPath(t *testing.T) {
 	if detail.Steps[0].Type != StepTypeToolCall || detail.Steps[1].Type != StepTypeToolResult || detail.Steps[2].Type != StepTypeFinal {
 		t.Fatalf("unexpected step order: %+v", detail.Steps)
 	}
+}
+
+func TestCreateRunReturnsSerializableQueuedSnapshot(t *testing.T) {
+	executionStarted := make(chan *Run, 1)
+	releaseExecution := make(chan struct{})
+	runtime := newTestRuntime(t, modelRunnerFunc(func(ctx context.Context, req ModelRunRequest) (*types.InferenceResponse, error) {
+		executionStarted <- req.Run
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-releaseExecution:
+		}
+		return &types.InferenceResponse{
+			Choices: []types.Choice{{
+				Message: types.Message{Role: types.RoleAssistant, Content: `{"type":"final","message":"done"}`},
+			}},
+		}, nil
+	}))
+	actor := &auth.KeyRecord{ID: "key-1", WorkspaceID: "ws_alpha", Role: auth.RoleOwner, PrincipalType: auth.PrincipalHuman, Status: "active"}
+
+	run, err := runtime.CreateRun(context.Background(), actor, nil, CreateRunRequest{
+		Model: "model-a",
+		Input: "inspect",
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	executionRun := <-executionStarted
+	if executionRun == run {
+		t.Fatal("background execution and response serialization must not share run ownership")
+	}
+	if executionRun.Status != StatusRunning || executionRun.StartedAt == nil {
+		t.Fatalf("expected running execution state, got status=%s started_at=%v", executionRun.Status, executionRun.StartedAt)
+	}
+	if run.Status != StatusQueued || run.StartedAt != nil {
+		t.Fatalf("expected immutable queued response snapshot, got status=%s started_at=%v", run.Status, run.StartedAt)
+	}
+	if _, err := json.Marshal(run); err != nil {
+		t.Fatalf("marshal queued response snapshot: %v", err)
+	}
+
+	close(releaseExecution)
+	waitForStatus(t, runtime, "ws_alpha", run.ID, StatusSucceeded)
 }
 
 func TestRuntimeFinalWithTopLevelSourcesSucceeds(t *testing.T) {
