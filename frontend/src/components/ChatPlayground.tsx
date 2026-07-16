@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, User, Bot, Settings2 } from 'lucide-react';
-import { streamChatCompletion } from '../lib/api';
+import { streamChatCompletion } from '../lib/chatClient';
 import type { ChatMessage, Model } from '../types';
 
 interface ChatPlaygroundProps {

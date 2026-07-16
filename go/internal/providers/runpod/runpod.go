@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,10 +19,11 @@ import (
 )
 
 const (
-	defaultEndpoint    = "https://api.runpod.io/graphql"
-	pollInterval       = 5 * time.Second
-	readyTimeout       = 10 * time.Minute
-	workspaceMountPath = "/workspace"
+	defaultEndpoint             = "https://api.runpod.io/graphql"
+	pollInterval                = 5 * time.Second
+	readyTimeout                = 10 * time.Minute
+	workspaceMountPath          = "/workspace"
+	metadataAllowedCudaVersions = "allowed_cuda_versions"
 )
 
 // Provider implements the RunPod GPU provider.
@@ -115,7 +117,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 
 	// Build environment variables
 	env := []map[string]string{
-		{"key": "INFERA_ENGINE", "value": "vllm"},
+		{"key": "INFERA_ENGINE", "value": string(req.Engine.OrDefault())},
 		{"key": "INFERA_HTTP_PORT", "value": "8081"},
 		{"key": "INFERA_LOG_LEVEL", "value": "INFO"},
 		{"key": "XDG_CACHE_HOME", "value": workspaceMountPath + "/.cache"},
@@ -220,6 +222,10 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		"env":               env,
 		"supportPublicIp":   true, // Ensure we get a public IP for worker registration
 	}
+	allowedCudaVersions := sanitizeAllowedCudaVersions(req.AllowedCudaVersions)
+	if len(allowedCudaVersions) > 0 {
+		input["allowedCudaVersions"] = allowedCudaVersions
+	}
 
 	// Log the request for debugging
 	logInput := make(map[string]interface{}, len(input))
@@ -272,6 +278,15 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		}
 		models = []string{defaultModel}
 	}
+	metadata := map[string]string{
+		"machine_id":      pod.MachineID,
+		"image":           pod.ImageName,
+		"workspace_mount": workspaceMountPath,
+		"volume_gb":       fmt.Sprintf("%d", volumeSize),
+	}
+	if len(allowedCudaVersions) > 0 {
+		metadata[metadataAllowedCudaVersions] = strings.Join(allowedCudaVersions, ",")
+	}
 
 	return &providers.Instance{
 		ID:           podID, // Use full ID, not truncated
@@ -285,13 +300,25 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		SpotInstance: req.SpotInstance,
 		Models:       models,
 		CreatedAt:    time.Now(),
-		Metadata: map[string]string{
-			"machine_id":      pod.MachineID,
-			"image":           pod.ImageName,
-			"workspace_mount": workspaceMountPath,
-			"volume_gb":       fmt.Sprintf("%d", volumeSize),
-		},
+		Metadata:     metadata,
 	}, nil
+}
+
+func sanitizeAllowedCudaVersions(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 func redactEnvForLog(env []map[string]string) []map[string]string {
@@ -351,6 +378,35 @@ func (p *Provider) Start(ctx context.Context, instanceID string) error {
 		gpuCount = instance.GPUCount
 	}
 
+	return p.resumePod(ctx, instanceID, gpuCount)
+}
+
+func (p *Provider) StartWithInstance(ctx context.Context, instance *providers.Instance) error {
+	if instance == nil {
+		return &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorInvalidRequest,
+			Message:  "instance metadata is required",
+		}
+	}
+	instanceID := instance.ProviderID
+	if instanceID == "" {
+		instanceID = instance.ID
+	}
+	gpuCount := instance.GPUCount
+	if gpuCount <= 0 {
+		refreshed, err := p.GetInstance(ctx, instanceID)
+		if err == nil && refreshed.GPUCount > 0 {
+			gpuCount = refreshed.GPUCount
+		}
+	}
+	if gpuCount <= 0 {
+		gpuCount = 1
+	}
+	return p.resumePod(ctx, instanceID, gpuCount)
+}
+
+func (p *Provider) resumePod(ctx context.Context, instanceID string, gpuCount int) error {
 	query := `
 		mutation ResumePod($input: PodResumeInput!) {
 			podResume(input: $input) {
@@ -367,7 +423,7 @@ func (p *Provider) Start(ctx context.Context, instanceID string) error {
 		},
 	}
 
-	_, err = p.graphQL(ctx, query, variables)
+	_, err := p.graphQL(ctx, query, variables)
 	return err
 }
 
@@ -738,11 +794,16 @@ func (p *Provider) GetStatus(ctx context.Context) (*providers.ProviderStatus, er
 
 	resp, err := p.graphQL(ctx, query, nil)
 	if err != nil {
-		return &providers.ProviderStatus{
+		status := &providers.ProviderStatus{
 			Provider:     providers.ProviderRunPod,
 			Connected:    false,
 			ErrorMessage: err.Error(),
-		}, nil
+		}
+		var providerErr *providers.ProviderError
+		if errors.As(err, &providerErr) {
+			status.ErrorCode = providerErr.Code
+		}
+		return status, nil
 	}
 
 	var result struct {
@@ -866,6 +927,15 @@ func (p *Provider) graphQL(ctx context.Context, query string, variables map[stri
 		}
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, &providers.ProviderError{
+			Provider:   providers.ProviderRunPod,
+			Code:       providers.ProviderErrorAuthFailed,
+			Message:    "RunPod rejected the supplied API key",
+			StatusCode: resp.StatusCode,
+		}
+	}
+
 	if resp.StatusCode != 200 {
 		return nil, &providers.ProviderError{
 			Provider:   providers.ProviderRunPod,
@@ -945,18 +1015,6 @@ func (p *Provider) convertPod(pod *runpodPod) *providers.Instance {
 	}
 
 	return instance
-}
-
-func usesFloatingImageRef(image string) bool {
-	if strings.Contains(image, "@sha256:") {
-		return false
-	}
-	lastSlash := strings.LastIndex(image, "/")
-	lastColon := strings.LastIndex(image, ":")
-	if lastColon <= lastSlash {
-		return true
-	}
-	return strings.EqualFold(image[lastColon+1:], "latest")
 }
 
 func mapStatus(status string) providers.InstanceStatus {

@@ -1,0 +1,5 @@
+{
+  "name": "CI Bot",
+  "role": "operator",
+  "principal_type": "service_account"
+}

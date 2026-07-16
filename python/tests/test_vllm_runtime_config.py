@@ -9,6 +9,7 @@ import pytest
 
 from infera_worker.config import ModelConfig, WorkerConfig
 from infera_worker.engines import vllm_engine as vllm_module
+from infera_worker.types import FunctionCall, Message, Role, ToolCall, ToolDefinition
 
 
 class FakeAsyncEngineArgs:
@@ -153,6 +154,20 @@ async def test_vllm_engine_passes_runtime_tuning_knobs(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vllm_engine_can_disable_trust_remote_code(monkeypatch):
+    monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
+    monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgs)
+    monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
+
+    engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm", trust_remote_code=False))
+
+    await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
+
+    assert FakeAsyncEngineArgs.last_kwargs is not None
+    assert FakeAsyncEngineArgs.last_kwargs["trust_remote_code"] is False
+
+
+@pytest.mark.asyncio
 async def test_vllm_engine_skips_unsupported_optional_knobs(monkeypatch):
     monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
     monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgsWithoutScheduler)
@@ -199,7 +214,9 @@ async def test_vllm_engine_defers_tokenizer_load_until_prompt_build(monkeypatch)
             created_tokenizers.append(model_path)
             return FakeTokenizer()
 
-    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer))
+    monkeypatch.setitem(
+        sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer)
+    )
 
     config = WorkerConfig(engine="vllm")
     engine = vllm_module.VLLMEngine(config)
@@ -214,6 +231,132 @@ async def test_vllm_engine_defers_tokenizer_load_until_prompt_build(monkeypatch)
         )
     )
     assert created_tokenizers == ["Qwen/Qwen2.5-7B-Instruct"]
+    assert prompt == "templated:Hello"
+
+
+@pytest.mark.asyncio
+async def test_vllm_prompt_builder_preserves_tool_call_messages(monkeypatch):
+    monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
+    monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgs)
+    monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
+
+    observed: dict[str, object] = {}
+
+    class FakeTokenizer:
+        def apply_chat_template(
+            self, messages, *, tokenize, add_generation_prompt, tools=None, tool_choice=None
+        ):
+            observed["messages"] = messages
+            observed["tools"] = tools
+            observed["tool_choice"] = tool_choice
+            return "templated:tools"
+
+    class FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model_path, trust_remote_code):
+            del model_path, trust_remote_code
+            return FakeTokenizer()
+
+    monkeypatch.setitem(
+        sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer)
+    )
+
+    engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm"))
+    await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
+
+    prompt = engine._build_prompt_with_tools(
+        SimpleNamespace(
+            model_id="Qwen/Qwen2.5-7B-Instruct",
+            messages=[
+                Message(
+                    role=Role.ASSISTANT,
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            type="function",
+                            function=FunctionCall(name="get_weather", arguments='{"city":"SF"}'),
+                        )
+                    ],
+                ),
+                Message(
+                    role=Role.TOOL,
+                    content='{"temp":72}',
+                    tool_call_id="call_1",
+                ),
+            ],
+            tools=[
+                ToolDefinition(
+                    type="function",
+                    function={"name": "get_weather", "parameters": {"type": "object"}},
+                )
+            ],
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+    )
+
+    assert prompt == "templated:tools"
+    assert observed["messages"] == [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"city":"SF"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": '{"temp":72}',
+            "tool_call_id": "call_1",
+        },
+    ]
+    assert observed["tools"] == [
+        {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+    ]
+    assert observed["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
+
+
+@pytest.mark.asyncio
+async def test_vllm_tokenizer_respects_trust_remote_code_setting(monkeypatch):
+    monkeypatch.setattr(vllm_module, "VLLM_AVAILABLE", True)
+    monkeypatch.setattr(vllm_module, "AsyncEngineArgs", FakeAsyncEngineArgs)
+    monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
+
+    observed_values: list[bool] = []
+
+    class FakeTokenizer:
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+            return f"templated:{messages[-1]['content']}"
+
+    class FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model_path, trust_remote_code):
+            del model_path
+            observed_values.append(trust_remote_code)
+            return FakeTokenizer()
+
+    monkeypatch.setitem(
+        sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer)
+    )
+
+    engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm", trust_remote_code=False))
+    await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
+
+    prompt = engine._build_prompt(
+        SimpleNamespace(
+            model_id="Qwen/Qwen2.5-7B-Instruct",
+            messages=[SimpleNamespace(role=SimpleNamespace(value="user"), content="Hello")],
+        )
+    )
+
+    assert observed_values == [False]
     assert prompt == "templated:Hello"
 
 
@@ -250,7 +393,9 @@ async def test_vllm_engine_warm_model_runtime_loads_deferred_tokenizer(monkeypat
             created_tokenizers.append(model_path)
             return object()
 
-    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer))
+    monkeypatch.setitem(
+        sys.modules, "transformers", SimpleNamespace(AutoTokenizer=FakeAutoTokenizer)
+    )
 
     engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm"))
     engine.set_startup_stage_recorder(recorded_stages.append)
@@ -270,12 +415,7 @@ async def test_vllm_engine_records_cache_probe_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(vllm_module, "AsyncLLMEngine", FakeAsyncLLMEngine)
 
     hub_cache = tmp_path / "huggingface" / "hub"
-    snapshot_dir = (
-        hub_cache
-        / "models--Qwen--Qwen2.5-7B-Instruct"
-        / "snapshots"
-        / "snapshot-1"
-    )
+    snapshot_dir = hub_cache / "models--Qwen--Qwen2.5-7B-Instruct" / "snapshots" / "snapshot-1"
     snapshot_dir.mkdir(parents=True)
     (snapshot_dir / "config.json").write_text("{}", encoding="utf-8")
     (snapshot_dir / "tokenizer_config.json").write_text("{}", encoding="utf-8")
@@ -287,7 +427,9 @@ async def test_vllm_engine_records_cache_probe_metadata(monkeypatch, tmp_path):
 
     recorded_metadata: list[tuple[str, dict[str, object]]] = []
     engine = vllm_module.VLLMEngine(WorkerConfig(engine="vllm"))
-    engine.set_startup_metadata_recorder(lambda key, payload: recorded_metadata.append((key, payload)))
+    engine.set_startup_metadata_recorder(
+        lambda key, payload: recorded_metadata.append((key, payload))
+    )
 
     await engine.load_model(ModelConfig(model_id="Qwen/Qwen2.5-7B-Instruct"))
 

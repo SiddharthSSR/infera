@@ -87,7 +87,9 @@ func TestDeregister(t *testing.T) {
 
 	t.Run("deregisters worker", func(t *testing.T) {
 		w := makeWorker("w1", "localhost:8001", types.WorkerStatusHealthy, []string{"llama-8b"})
-		r.Register(w)
+		if err := r.Register(w); err != nil {
+			t.Fatalf("Register failed: %v", err)
+		}
 
 		if err := r.Deregister("w1"); err != nil {
 			t.Fatalf("Deregister failed: %v", err)
@@ -99,8 +101,12 @@ func TestDeregister(t *testing.T) {
 
 	t.Run("removes from model index", func(t *testing.T) {
 		w := makeWorker("w2", "localhost:8002", types.WorkerStatusHealthy, []string{"llama-8b"})
-		r.Register(w)
-		r.Deregister("w2")
+		if err := r.Register(w); err != nil {
+			t.Fatalf("Register failed: %v", err)
+		}
+		if err := r.Deregister("w2"); err != nil {
+			t.Fatalf("Deregister failed: %v", err)
+		}
 
 		workers := r.GetWorkersForModel("llama-8b")
 		if len(workers) != 0 {
@@ -119,7 +125,9 @@ func TestDeregister(t *testing.T) {
 func TestGet(t *testing.T) {
 	r := newTestRegistry()
 	w := makeWorker("w1", "localhost:8001", types.WorkerStatusHealthy, []string{"llama-8b"})
-	r.Register(w)
+	if err := r.Register(w); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
 
 	t.Run("returns clone, not reference", func(t *testing.T) {
 		got, found := r.Get("w1")
@@ -148,9 +156,15 @@ func TestGet(t *testing.T) {
 func TestGetWorkersForModel(t *testing.T) {
 	r := newTestRegistry()
 
-	r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, []string{"llama-8b", "mistral-7b"}))
-	r.Register(makeWorker("w2", "a:2", types.WorkerStatusHealthy, []string{"llama-8b"}))
-	r.Register(makeWorker("w3", "a:3", types.WorkerStatusHealthy, []string{"mistral-7b"}))
+	if err := r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, []string{"llama-8b", "mistral-7b"})); err != nil {
+		t.Fatalf("Register w1 failed: %v", err)
+	}
+	if err := r.Register(makeWorker("w2", "a:2", types.WorkerStatusHealthy, []string{"llama-8b"})); err != nil {
+		t.Fatalf("Register w2 failed: %v", err)
+	}
+	if err := r.Register(makeWorker("w3", "a:3", types.WorkerStatusHealthy, []string{"mistral-7b"})); err != nil {
+		t.Fatalf("Register w3 failed: %v", err)
+	}
 
 	t.Run("returns workers with model", func(t *testing.T) {
 		workers := r.GetWorkersForModel("llama-8b")
@@ -176,9 +190,15 @@ func TestGetHealthyWorkersForModel(t *testing.T) {
 	overloaded.Stats.GPUUtilization = 1.0
 	overloaded.Stats.ErrorRate = 0.2
 
-	r.Register(healthy)
-	r.Register(unhealthy)
-	r.Register(overloaded)
+	if err := r.Register(healthy); err != nil {
+		t.Fatalf("Register healthy failed: %v", err)
+	}
+	if err := r.Register(unhealthy); err != nil {
+		t.Fatalf("Register unhealthy failed: %v", err)
+	}
+	if err := r.Register(overloaded); err != nil {
+		t.Fatalf("Register overloaded failed: %v", err)
+	}
 
 	workers := r.GetHealthyWorkersForModel("llama-8b")
 	if len(workers) != 1 {
@@ -191,7 +211,9 @@ func TestGetHealthyWorkersForModel(t *testing.T) {
 
 func TestUpdateWorkerStats(t *testing.T) {
 	r := newTestRegistry()
-	r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, nil))
+	if err := r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, nil)); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
 
 	stats := types.WorkerStats{
 		GPUUtilization:    0.75,
@@ -218,7 +240,9 @@ func TestUpdateWorkerStats(t *testing.T) {
 
 func TestUpdateWorkerModels(t *testing.T) {
 	r := newTestRegistry()
-	r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, []string{"old-model"}))
+	if err := r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, []string{"old-model"})); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
 
 	newModels := []types.LoadedModel{
 		{ModelID: "new-model-a", LoadedAt: time.Now()},
@@ -252,7 +276,9 @@ func TestHealthChecker(t *testing.T) {
 	// Register with stale heartbeat
 	w := makeWorker("stale", "a:1", types.WorkerStatusHealthy, []string{"model"})
 	w.LastHealthCheck = time.Now().Add(-200 * time.Millisecond)
-	r.Register(w)
+	if err := r.Register(w); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go r.StartHealthChecker(ctx)
@@ -278,7 +304,9 @@ func TestHealthTransitionCallback(t *testing.T) {
 		r := NewWorkerRegistry(cfg)
 		w := makeWorker("stale-unhealthy", "a:1", types.WorkerStatusHealthy, []string{"model"})
 		w.LastHealthCheck = time.Now().Add(-75 * time.Millisecond)
-		r.Register(w)
+		if err := r.Register(w); err != nil {
+			t.Fatalf("register worker: %v", err)
+		}
 
 		var transitions []HealthTransition
 		r.OnHealthTransition(func(transition HealthTransition) {
@@ -302,7 +330,9 @@ func TestHealthTransitionCallback(t *testing.T) {
 		r := NewWorkerRegistry(cfg)
 		w := makeWorker("stale-removed", "a:1", types.WorkerStatusUnhealthy, []string{"model"})
 		w.LastHealthCheck = time.Now().Add(-150 * time.Millisecond)
-		r.Register(w)
+		if err := r.Register(w); err != nil {
+			t.Fatalf("register worker: %v", err)
+		}
 
 		var transitions []HealthTransition
 		r.OnHealthTransition(func(transition HealthTransition) {
@@ -328,8 +358,12 @@ func TestHealthTransitionCallback(t *testing.T) {
 
 func TestGetAllWorkers(t *testing.T) {
 	r := newTestRegistry()
-	r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, nil))
-	r.Register(makeWorker("w2", "a:2", types.WorkerStatusUnhealthy, nil))
+	if err := r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, nil)); err != nil {
+		t.Fatalf("Register w1 failed: %v", err)
+	}
+	if err := r.Register(makeWorker("w2", "a:2", types.WorkerStatusUnhealthy, nil)); err != nil {
+		t.Fatalf("Register w2 failed: %v", err)
+	}
 
 	all := r.GetAllWorkers()
 	if len(all) != 2 {
@@ -339,9 +373,15 @@ func TestGetAllWorkers(t *testing.T) {
 
 func TestGetHealthyWorkers(t *testing.T) {
 	r := newTestRegistry()
-	r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, nil))
-	r.Register(makeWorker("w2", "a:2", types.WorkerStatusDegraded, nil))
-	r.Register(makeWorker("w3", "a:3", types.WorkerStatusUnhealthy, nil))
+	if err := r.Register(makeWorker("w1", "a:1", types.WorkerStatusHealthy, nil)); err != nil {
+		t.Fatalf("Register w1 failed: %v", err)
+	}
+	if err := r.Register(makeWorker("w2", "a:2", types.WorkerStatusDegraded, nil)); err != nil {
+		t.Fatalf("Register w2 failed: %v", err)
+	}
+	if err := r.Register(makeWorker("w3", "a:3", types.WorkerStatusUnhealthy, nil)); err != nil {
+		t.Fatalf("Register w3 failed: %v", err)
+	}
 
 	healthy := r.GetHealthyWorkers()
 	if len(healthy) != 2 {

@@ -1,0 +1,120 @@
+{
+  "suite_id": "vllm-a100-sxm4-qwen25-tuning",
+  "description": "Focused vLLM tuning sweep for Qwen2.5 7B on A100 SXM4 80GB across the winning baseline workloads.",
+  "matrix": {
+    "engines": ["vllm"],
+    "hardware": ["a100_sxm4_80gb"],
+    "gpu_counts": [1],
+    "models": ["Qwen/Qwen2.5-7B-Instruct"],
+    "workloads": ["mixed", "repeated_prefix"],
+    "benchmark_profiles": ["provision_tuning"],
+    "runtime_presets": [
+      "baseline",
+      "explicit_conservative",
+      "scheduler_4",
+      "prefill_4096_scheduler_4",
+      "concurrency_64_scheduler_4",
+      "concurrency_32_scheduler_4",
+      "memory_095_concurrency_64"
+    ]
+  },
+  "runtime_presets": [
+    {
+      "id": "baseline",
+      "display_name": "Baseline",
+      "description": "Current default path with no explicit runtime overrides.",
+      "parameters": {}
+    },
+    {
+      "id": "explicit_conservative",
+      "display_name": "Explicit Conservative",
+      "description": "Make the current A100 80GB conservative envelope explicit in the suite.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48,
+        "scheduler_steps": 6
+      }
+    },
+    {
+      "id": "scheduler_4",
+      "display_name": "Scheduler 4",
+      "description": "Reduce scheduler steps while keeping the same queue envelope.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48,
+        "scheduler_steps": 4
+      }
+    },
+    {
+      "id": "prefill_4096_scheduler_4",
+      "display_name": "Prefill 4096 Scheduler 4",
+      "description": "Lower the prefill batch budget to test whether latency improves without collapsing throughput.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 4096,
+        "max_concurrency": 48,
+        "scheduler_steps": 4
+      }
+    },
+    {
+      "id": "concurrency_64_scheduler_4",
+      "display_name": "Concurrency 64 Scheduler 4",
+      "description": "Raise active sequences to probe whether SXM bandwidth helps throughput at the same external concurrency.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 8192,
+        "max_concurrency": 64,
+        "scheduler_steps": 4
+      }
+    },
+    {
+      "id": "concurrency_32_scheduler_4",
+      "display_name": "Concurrency 32 Scheduler 4",
+      "description": "Tighten active sequences to test whether lower queue depth improves TTFT tails.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.94,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 8192,
+        "max_concurrency": 32,
+        "scheduler_steps": 4
+      }
+    },
+    {
+      "id": "memory_095_concurrency_64",
+      "display_name": "Memory 0.95 Concurrency 64",
+      "description": "Probe a slightly denser memory envelope alongside the higher queue target.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 32768,
+        "gpu_memory_utilization": 0.95,
+        "prefix_caching": true,
+        "chunked_prefill": true,
+        "batch_token_budget": 8192,
+        "max_concurrency": 64,
+        "scheduler_steps": 4
+      }
+    }
+  ],
+  "output_root": "/tmp/infera-benchmark-lab"
+}

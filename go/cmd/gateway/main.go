@@ -15,11 +15,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/infera/infera/go/internal/agents"
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/gateway"
 	"github.com/infera/infera/go/internal/providers"
+	_ "github.com/infera/infera/go/internal/providers/e2e"
 	"github.com/infera/infera/go/internal/providers/mock"
 	_ "github.com/infera/infera/go/internal/providers/runpod"
 	_ "github.com/infera/infera/go/internal/providers/vastai"
@@ -66,10 +68,16 @@ func main() {
 	r := router.New(routerConfig)
 
 	// Create instance manager
-	// Prefer an explicitly pinned worker image for reproducible warm restarts.
+	// Prefer explicitly pinned worker images for reproducible warm restarts.
 	workerImage := strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE"))
-	if workerImage == "" {
-		log.Warn("INFERA_WORKER_IMAGE is not set; non-mock provisioning will fail until a pinned worker image tag or digest is configured")
+	workerImages := map[providers.InferenceEngine]string{
+		providers.EngineVLLM:        strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE_VLLM")),
+		providers.EngineSGLang:      strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE_SGLANG")),
+		providers.EngineTensorRTLLM: strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE_TENSORRT_LLM")),
+		providers.EngineMock:        strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE_MOCK")),
+	}
+	if workerImage == "" && allWorkerImagesEmpty(workerImages) {
+		log.Warn("no worker image is configured; set INFERA_WORKER_IMAGE or engine-specific INFERA_WORKER_IMAGE_<ENGINE> values before non-mock provisioning")
 	}
 	enableMockProvider := os.Getenv("INFERA_DEV_MODE") == "1" || os.Getenv("INFERA_ENABLE_MOCK_PROVIDER") == "1"
 	gatewayAddress := strings.TrimSpace(os.Getenv("INFERA_GATEWAY_ADDRESS"))
@@ -84,6 +92,7 @@ func main() {
 	instanceMgr, err := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider:           providers.ProviderMock,
 		WorkerImage:               workerImage,
+		WorkerImages:              workerImages,
 		GatewayAddress:            gatewayAddress,
 		CostDBPath:                "data/costs.db",
 		WorkerRegistrationTimeout: parseDurationEnv("INFERA_WORKER_REGISTRATION_TIMEOUT", 10*time.Minute),
@@ -165,7 +174,18 @@ func main() {
 	gw.SetVaultHandler(vault.NewHandler(vaultStore))
 
 	// Initialize auth (API key authentication)
-	authStore, err := auth.NewStore("data/auth.db")
+	providerCredentialEncryptionKey := strings.TrimSpace(os.Getenv("INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY"))
+	var authStore *auth.Store
+	if providerCredentialEncryptionKey == "" {
+		if os.Getenv("INFERA_DEV_MODE") != "1" {
+			log.Error("INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY is required outside development mode")
+			os.Exit(1)
+		}
+		log.Warn("workspace provider credential storage is disabled without INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY")
+		authStore, err = auth.NewStore("data/auth.db")
+	} else {
+		authStore, err = auth.NewStoreWithProviderCredentialEncryption("data/auth.db", providerCredentialEncryptionKey)
+	}
 	if err != nil {
 		log.Error("failed to initialize auth store", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -208,9 +228,31 @@ func main() {
 
 	authHandler := auth.NewHandler(authStore)
 	authHandler.SetSecure(os.Getenv("INFERA_DEV_MODE") != "1")
+	authHandler.SetProviderConfigValidator(func(ctx context.Context, config providers.ProviderConfig) error {
+		provider, err := providers.CreateProvider(config)
+		if err != nil {
+			return err
+		}
+		status, err := provider.GetStatus(ctx)
+		if err != nil {
+			return err
+		}
+		if status == nil || !status.Connected {
+			code := providers.ProviderErrorRequestFailed
+			if status != nil && status.ErrorCode != "" {
+				code = status.ErrorCode
+			}
+			return &providers.ProviderError{
+				Provider: config.Type,
+				Code:     code,
+				Message:  "provider did not confirm the supplied credentials",
+			}
+		}
+		return nil
+	})
 	gw.SetAuthHandler(authHandler)
 	instanceMgr.SetWorkspaceProviderConfigResolver(func(workspaceID string, providerType providers.ProviderType) (*providers.ProviderConfig, error) {
-		apiKey, apiSecret, endpoint, err := authStore.ResolveWorkspaceProviderConfig(workspaceID, string(providerType))
+		apiKey, apiSecret, endpoint, options, err := authStore.ResolveWorkspaceProviderConfig(workspaceID, string(providerType))
 		if err != nil {
 			if errors.Is(err, auth.ErrWorkspaceProviderConfigNotFound) {
 				return nil, nil
@@ -218,10 +260,11 @@ func main() {
 			return nil, err
 		}
 		return &providers.ProviderConfig{
-			Type:      providerType,
-			APIKey:    apiKey,
-			APISecret: apiSecret,
-			Endpoint:  endpoint,
+			Type:        providerType,
+			APIKey:      apiKey,
+			APISecret:   apiSecret,
+			Endpoint:    endpoint,
+			DefaultOpts: options,
 		}, nil
 	})
 
@@ -240,6 +283,19 @@ func main() {
 	} else {
 		defer deploymentStore.Close()
 		gw.SetDeploymentStore(deploymentStore)
+	}
+
+	agentStore, err := agents.NewStore("data/agents.db")
+	if err != nil {
+		log.Warn("failed to initialize agents store", slog.String("error", err.Error()))
+	} else {
+		defer agentStore.Close()
+		agentRuntime, err := gw.NewAgentsRuntime(agentStore)
+		if err != nil {
+			log.Warn("failed to initialize agents runtime", slog.String("error", err.Error()))
+		} else {
+			gw.SetAgentRuntime(agentRuntime)
+		}
 	}
 
 	// Handle shutdown
@@ -305,6 +361,15 @@ func parseAllowedOrigins(raw string) []string {
 		}
 	}
 	return out
+}
+
+func allWorkerImagesEmpty(images map[providers.InferenceEngine]string) bool {
+	for _, image := range images {
+		if strings.TrimSpace(image) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func parseBoolEnv(raw string, fallback bool) bool {

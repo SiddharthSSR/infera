@@ -1,0 +1,65 @@
+{
+  "model": "model-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search for Go scheduler trade-offs"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_1",
+          "type": "function",
+          "function": {
+            "name": "web_search",
+            "arguments": "{\"query\":\"Go scheduler trade-offs\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "{\"results\":[\"example\"]}",
+      "tool_call_id": "call_1"
+    }
+  ],
+  "temperature": 0.25,
+  "top_p": 0.9,
+  "max_tokens": 128,
+  "stop": [
+    "<END>",
+    "</tool>"
+  ],
+  "stream": false,
+  "seed": 42,
+  "presence_penalty": 0.4,
+  "frequency_penalty": 0.3,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "description": "Search the web for recent results.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    }
+  ],
+  "tool_choice": {
+    "type": "function",
+    "function": {
+      "name": "web_search"
+    }
+  }
+}

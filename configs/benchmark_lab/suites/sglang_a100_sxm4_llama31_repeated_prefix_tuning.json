@@ -1,0 +1,102 @@
+{
+  "suite_id": "sglang-a100-sxm4-llama31-repeated-prefix-tuning",
+  "description": "Focused SGLang tuning sweep for Llama 3.1 8B repeated-prefix on A100 SXM4 80GB.",
+  "matrix": {
+    "engines": ["sglang"],
+    "hardware": ["a100_sxm4_80gb"],
+    "gpu_counts": [1],
+    "models": ["meta-llama/Meta-Llama-3.1-8B-Instruct"],
+    "workloads": ["repeated_prefix"],
+    "benchmark_profiles": ["provision_tuning"],
+    "runtime_presets": [
+      "baseline",
+      "explicit_conservative",
+      "chunked_prefill_4096",
+      "running_requests_32",
+      "running_requests_64",
+      "memory_fraction_090",
+      "memory_fraction_096"
+    ]
+  },
+  "runtime_presets": [
+    {
+      "id": "baseline",
+      "display_name": "Baseline",
+      "description": "Current default path with no explicit runtime overrides.",
+      "parameters": {}
+    },
+    {
+      "id": "explicit_conservative",
+      "display_name": "Explicit Conservative",
+      "description": "Use the current conservative SGLang envelope with an explicit long-context cap.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48
+      }
+    },
+    {
+      "id": "chunked_prefill_4096",
+      "display_name": "Chunked Prefill 4096",
+      "description": "Lower prefill chunk size to probe TTFT improvements on repeated-prefix traffic.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 4096,
+        "max_concurrency": 48
+      }
+    },
+    {
+      "id": "running_requests_32",
+      "display_name": "Running Requests 32",
+      "description": "Reduce active running requests to test cache-local latency tails.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 8192,
+        "max_concurrency": 32
+      }
+    },
+    {
+      "id": "running_requests_64",
+      "display_name": "Running Requests 64",
+      "description": "Increase active running requests to test whether throughput wins outweigh queueing cost.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.94,
+        "batch_token_budget": 8192,
+        "max_concurrency": 64
+      }
+    },
+    {
+      "id": "memory_fraction_090",
+      "display_name": "Memory Fraction 0.90",
+      "description": "Reduce memory fraction to recover headroom for a long-context model.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.90,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48
+      }
+    },
+    {
+      "id": "memory_fraction_096",
+      "display_name": "Memory Fraction 0.96",
+      "description": "Increase memory fraction to probe higher steady-state throughput on A100 SXM.",
+      "parameters": {
+        "tensor_parallelism": 1,
+        "context_length": 65536,
+        "gpu_memory_utilization": 0.96,
+        "batch_token_budget": 8192,
+        "max_concurrency": 48
+      }
+    }
+  ],
+  "output_root": "/tmp/infera-benchmark-lab"
+}

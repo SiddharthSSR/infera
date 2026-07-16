@@ -1,0 +1,26 @@
+{
+  "suite_id": "sglang-a100-sxm4-model-sweep",
+  "description": "Config-driven model sweep for SGLang on RunPod A100 SXM4 80GB.",
+  "matrix": {
+    "engines": ["sglang"],
+    "hardware": ["a100_sxm4_80gb"],
+    "gpu_counts": [1],
+    "models": [
+      "Qwen/Qwen2.5-7B-Instruct",
+      "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "mistralai/Mistral-7B-Instruct-v0.3"
+    ],
+    "workloads": ["mixed", "repeated_prefix"],
+    "benchmark_profiles": ["provision_full"],
+    "runtime_presets": ["baseline"]
+  },
+  "runtime_presets": [
+    {
+      "id": "baseline",
+      "display_name": "Baseline",
+      "description": "No explicit runtime overrides. Resolve via provider and runtime defaults.",
+      "parameters": {}
+    }
+  ],
+  "output_root": "/tmp/infera-benchmark-lab"
+}

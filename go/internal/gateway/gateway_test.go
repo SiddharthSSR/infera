@@ -16,10 +16,88 @@ import (
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/providers"
-	mockprovider "github.com/infera/infera/go/internal/providers/mock"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/pkg/types"
 )
+
+type runPodLinkTestProvider struct {
+	instances map[string]*providers.Instance
+}
+
+func newRunPodLinkTestProvider() *runPodLinkTestProvider {
+	return &runPodLinkTestProvider{
+		instances: make(map[string]*providers.Instance),
+	}
+}
+
+func (p *runPodLinkTestProvider) Name() providers.ProviderType {
+	return providers.ProviderRunPod
+}
+
+func (p *runPodLinkTestProvider) Provision(ctx context.Context, req *providers.ProvisionRequest) (*providers.Instance, error) {
+	instance := &providers.Instance{
+		ID:         "inst-runpod-link",
+		ProviderID: "uxh9he0pyoqpho",
+		Provider:   providers.ProviderRunPod,
+		Name:       req.Name,
+		Status:     providers.InstanceStatusRunning,
+		GPUType:    req.GPUType,
+		GPUCount:   req.GPUCount,
+		Models:     append([]string(nil), req.Models...),
+		Engine:     req.Engine,
+		CreatedAt:  time.Now().UTC(),
+	}
+	p.instances[instance.ID] = instance
+	return instance, nil
+}
+
+func (p *runPodLinkTestProvider) Terminate(ctx context.Context, instanceID string) error {
+	return nil
+}
+
+func (p *runPodLinkTestProvider) Start(ctx context.Context, instanceID string) error {
+	return nil
+}
+
+func (p *runPodLinkTestProvider) Stop(ctx context.Context, instanceID string) error {
+	return nil
+}
+
+func (p *runPodLinkTestProvider) GetInstance(ctx context.Context, instanceID string) (*providers.Instance, error) {
+	for _, instance := range p.instances {
+		if instance.ID == instanceID || instance.ProviderID == instanceID {
+			return instance, nil
+		}
+	}
+	return nil, &providers.ProviderError{
+		Provider: providers.ProviderRunPod,
+		Code:     providers.ProviderErrorNotFound,
+		Message:  "instance not found",
+	}
+}
+
+func (p *runPodLinkTestProvider) ListInstances(ctx context.Context) ([]*providers.Instance, error) {
+	instances := make([]*providers.Instance, 0, len(p.instances))
+	for _, instance := range p.instances {
+		instances = append(instances, instance)
+	}
+	return instances, nil
+}
+
+func (p *runPodLinkTestProvider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering, error) {
+	return nil, nil
+}
+
+func (p *runPodLinkTestProvider) GetStatus(ctx context.Context) (*providers.ProviderStatus, error) {
+	return &providers.ProviderStatus{
+		Provider:  providers.ProviderRunPod,
+		Connected: true,
+	}, nil
+}
+
+func (p *runPodLinkTestProvider) WaitForReady(ctx context.Context, instanceID string) error {
+	return nil
+}
 
 func TestHandleCORSAllowedOrigin(t *testing.T) {
 	g := New(Config{
@@ -124,18 +202,19 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 
 	manager, err := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider: providers.ProviderMock,
+		WorkerImage:     "ghcr.io/infera/infera-worker:v1.0.0",
 	})
 	if err != nil {
 		t.Fatalf("providers.NewManager: %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 
-	runpod := mockprovider.New()
+	runpod := newRunPodLinkTestProvider()
 	manager.RegisterProvider(runpod)
 
 	instance, err := manager.Provision(context.Background(), &providers.ProvisionRequest{
 		Name:     "runpod-like-instance",
-		Provider: providers.ProviderMock,
+		Provider: providers.ProviderRunPod,
 		GPUType:  providers.GPUL40S,
 		GPUCount: 1,
 		Models:   []string{"Qwen/Qwen2.5-7B-Instruct"},
@@ -143,10 +222,6 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manager.Provision: %v", err)
 	}
-
-	// Re-shape the mock instance so it looks like a RunPod-managed pod.
-	instance.Provider = providers.ProviderRunPod
-	instance.ProviderID = "uxh9he0pyoqpho"
 
 	g := New(Config{WorkerSharedToken: "secret-token"}, r, manager)
 	handler := g.requireWorkerToken(g.handleRegisterWorker)
@@ -176,18 +251,19 @@ func TestHandleWorkerHeartbeatRepairsMissingInstanceLink(t *testing.T) {
 
 	manager, err := providers.NewManager(providers.ManagerConfig{
 		DefaultProvider: providers.ProviderMock,
+		WorkerImage:     "ghcr.io/infera/infera-worker:v1.0.0",
 	})
 	if err != nil {
 		t.Fatalf("providers.NewManager: %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 
-	runpod := mockprovider.New()
+	runpod := newRunPodLinkTestProvider()
 	manager.RegisterProvider(runpod)
 
 	instance, err := manager.Provision(context.Background(), &providers.ProvisionRequest{
 		Name:     "heartbeat-link-instance",
-		Provider: providers.ProviderMock,
+		Provider: providers.ProviderRunPod,
 		GPUType:  providers.GPUL40S,
 		GPUCount: 1,
 		Models:   []string{"Qwen/Qwen2.5-7B-Instruct"},
@@ -195,10 +271,6 @@ func TestHandleWorkerHeartbeatRepairsMissingInstanceLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manager.Provision: %v", err)
 	}
-
-	instance.Provider = providers.ProviderRunPod
-	instance.ProviderID = "uxh9he0pyoqpho"
-	instance.WorkerID = ""
 
 	if err := r.RegisterWorker(&types.WorkerInfo{
 		WorkerID: "w1",
@@ -476,6 +548,167 @@ func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *
 	}
 	if tokenCount != 7 {
 		t.Fatalf("expected recomputed token count 7, got %d", tokenCount)
+	}
+}
+
+func TestWorkerClientInferWithContextForwardsAndDecodesToolCalls(t *testing.T) {
+	client := NewWorkerClient("worker.test:8081")
+	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/infer" {
+			t.Fatalf("expected /infer request, got %s", r.URL.Path)
+		}
+		var payload WorkerInferRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(payload.Tools) != 1 || payload.Tools[0].Function.Name != "web_search" {
+			t.Fatalf("expected forwarded tools, got %+v", payload.Tools)
+		}
+		if string(payload.ToolChoice) != `{"type":"function","function":{"name":"web_search"}}` {
+			t.Fatalf("expected forwarded tool_choice, got %s", string(payload.ToolChoice))
+		}
+		if len(payload.Messages) != 3 || len(payload.Messages[1].ToolCalls) != 1 || payload.Messages[2].ToolCallID != "call_1" {
+			t.Fatalf("expected tool-call message history, got %+v", payload.Messages)
+		}
+
+		return jsonHTTPResponse(http.StatusOK, `{
+			"request_id":"req-1",
+			"model_id":"model-1",
+			"choices":[{
+				"index":0,
+				"message":{
+					"role":"assistant",
+					"content":"",
+					"tool_calls":[{
+						"id":"call_2",
+						"type":"function",
+						"function":{"name":"web_search","arguments":"{\"query\":\"rust\"}"}
+					}]
+				},
+				"finish_reason":"tool_calls"
+			}],
+			"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6},
+			"latency":{"queue_ms":1,"inference_ms":2,"total_ms":3,"time_to_first_token_ms":1}
+		}`), nil
+	})
+
+	resp, err := client.InferWithContext(context.Background(), &types.InferenceRequest{
+		RequestID: "req-1",
+		ModelID:   "model-1",
+		Messages: []types.Message{
+			{Role: types.RoleUser, Content: "search for go vs rust"},
+			{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{
+				ID:   "call_1",
+				Type: "function",
+				Function: types.FunctionCall{
+					Name:      "web_search",
+					Arguments: `{"query":"go"}`,
+				},
+			}}},
+			{Role: types.RoleTool, Content: `{"ok":true}`, ToolCallID: "call_1"},
+		},
+		Parameters: types.DefaultInferenceParameters(),
+		Tools: []types.ToolDefinition{{
+			Type: "function",
+			Function: types.FunctionSchema{
+				Name: "web_search",
+			},
+		}},
+		ToolChoice: json.RawMessage(`{"type":"function","function":{"name":"web_search"}}`),
+	})
+	if err != nil {
+		t.Fatalf("InferWithContext: %v", err)
+	}
+	if len(resp.Choices) != 1 || len(resp.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("expected tool calls in response, got %+v", resp.Choices)
+	}
+	if resp.Choices[0].Message.ToolCalls[0].Function.Name != "web_search" {
+		t.Fatalf("expected decoded tool call, got %+v", resp.Choices[0].Message.ToolCalls[0])
+	}
+}
+
+func TestWorkerClientInferStreamForwardsAndDecodesToolCallChunks(t *testing.T) {
+	client := NewWorkerClient("worker.test:8081")
+	client.streamingHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/infer/stream" {
+			t.Fatalf("expected /infer/stream request, got %s", r.URL.Path)
+		}
+		var payload WorkerInferRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(payload.Tools) != 1 || payload.Tools[0].Function.Name != "web_search" {
+			t.Fatalf("expected forwarded tools, got %+v", payload.Tools)
+		}
+		if len(payload.Messages) != 1 || len(payload.Messages[0].ToolCalls) != 1 {
+			t.Fatalf("expected forwarded tool-call messages, got %+v", payload.Messages)
+		}
+
+		var builder strings.Builder
+		encoder := json.NewEncoder(&builder)
+		if err := encoder.Encode(map[string]any{
+			"delta": "",
+			"tool_calls": []map[string]any{
+				{
+					"index": 0,
+					"id":    "call_1",
+					"type":  "function",
+					"function": map[string]any{
+						"name":      "web_search",
+						"arguments": `{"query":"go"}`,
+					},
+				},
+			},
+			"finish_reason": "tool_calls",
+			"usage": map[string]int{
+				"prompt_tokens":     5,
+				"completion_tokens": 1,
+				"total_tokens":      6,
+			},
+		}); err != nil {
+			t.Fatalf("encode chunk: %v", err)
+		}
+		return jsonHTTPResponse(http.StatusOK, builder.String()), nil
+	})
+
+	chunks, err := client.InferStream(context.Background(), &types.InferenceRequest{
+		RequestID: "req-1",
+		ModelID:   "model-1",
+		Messages: []types.Message{
+			{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{
+				ID:   "call_0",
+				Type: "function",
+				Function: types.FunctionCall{
+					Name:      "web_search",
+					Arguments: `{"query":"rust"}`,
+				},
+			}}},
+		},
+		Parameters: types.DefaultInferenceParameters(),
+		Tools: []types.ToolDefinition{{
+			Type: "function",
+			Function: types.FunctionSchema{
+				Name: "web_search",
+			},
+		}},
+		ToolChoice: json.RawMessage(`{"type":"function","function":{"name":"web_search"}}`),
+	})
+	if err != nil {
+		t.Fatalf("InferStream: %v", err)
+	}
+
+	var got []*types.TokenChunk
+	for chunk := range chunks {
+		got = append(got, chunk)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected one chunk, got %d", len(got))
+	}
+	if len(got[0].ToolCalls) != 1 || got[0].ToolCalls[0].Function.Name != "web_search" {
+		t.Fatalf("expected decoded tool-call deltas, got %+v", got[0].ToolCalls)
+	}
+	if got[0].FinishReason == nil || *got[0].FinishReason != types.FinishReasonToolCalls {
+		t.Fatalf("expected tool_calls finish reason, got %+v", got[0].FinishReason)
 	}
 }
 

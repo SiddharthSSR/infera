@@ -1,0 +1,19 @@
+{
+  "offerings": [
+    {
+      "provider": "runpod",
+      "gpu_type": "H100",
+      "display_name": "NVIDIA H100 SXM",
+      "provider_gpu_type_id": "h100-sxm",
+      "gpu_count": 1,
+      "vcpu": 32,
+      "memory_gb": 80,
+      "storage_gb": 500,
+      "cost_per_hour": 3.5,
+      "spot_price": 2.75,
+      "region": "us-east-1",
+      "available": 3
+    }
+  ],
+  "total": 1
+}

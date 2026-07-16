@@ -65,6 +65,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		CostPerHour:  costPerHour,
 		SpotInstance: req.SpotInstance,
 		Models:       req.Models,
+		Engine:       req.Engine.OrDefault(),
 		CreatedAt:    now,
 		StartedAt:    &now,
 	}

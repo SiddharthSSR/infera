@@ -1,0 +1,40 @@
+{
+  "instances": [
+    {
+      "id": "inst_fixture_1",
+      "provider_id": "runpod-fixture-1",
+      "provider": "runpod",
+      "workspace_id": "ws_alpha",
+      "name": "Fixture Worker",
+      "status": "running",
+      "gpu_type": "H100",
+      "gpu_count": 1,
+      "vcpu": 32,
+      "memory_gb": 80,
+      "storage_gb": 500,
+      "public_ip": "203.0.113.10",
+      "http_port": 8081,
+      "ssh_port": 22,
+      "worker_id": "worker-fixture-1",
+      "models": [
+        "Qwen/Qwen2.5-7B-Instruct"
+      ],
+      "engine": "sglang",
+      "worker_registration_status": "ready",
+      "worker_registration_deadline": "2026-04-10T00:15:00Z",
+      "last_worker_registration_error": "",
+      "last_worker_registration_check_at": "2026-04-10T00:05:00Z",
+      "worker_registered_at": "2026-04-10T00:05:00Z",
+      "worker_last_heartbeat_at": "2026-04-10T00:05:00Z",
+      "worker_health_url": "http://203.0.113.10:8081/health",
+      "provider_network_ready": true,
+      "provider_network_error": "",
+      "cost_per_hour": 3.5,
+      "spot_instance": false,
+      "created_at": "2026-04-10T00:00:00Z",
+      "started_at": "2026-04-10T00:05:00Z",
+      "error": ""
+    }
+  ],
+  "total": 1
+}

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infera/infera/go/internal/providers"
+	_ "github.com/infera/infera/go/internal/providers/e2e"
 	_ "github.com/infera/infera/go/internal/providers/mock"
 	_ "github.com/infera/infera/go/internal/providers/runpod"
 )
@@ -16,7 +19,7 @@ import (
 func newTestHandlerWithRoutes(t *testing.T) (*Handler, *Store, *http.ServeMux) {
 	t.Helper()
 	dir := t.TempDir()
-	s, err := NewStore(filepath.Join(dir, "auth_test.db"))
+	s, err := NewStoreWithProviderCredentialEncryption(filepath.Join(dir, "auth_test.db"), testProviderCredentialEncryptionKey)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
@@ -48,7 +51,9 @@ func TestHandleCreateKey(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
 	if resp["key"] == nil {
 		t.Error("expected key in response")
 	}
@@ -210,7 +215,7 @@ func TestHandleWorkspaceProviderConfig(t *testing.T) {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
 
-	putBody := `{"api_key":"rp_key","endpoint":"https://api.runpod.io/graphql"}`
+	putBody := `{"api_key":"rp_key","endpoint":"https://api.runpod.io/graphql","options":{"location":"us-east-1"}}`
 	putReq := httptest.NewRequest("PUT", "/api/auth/workspaces/"+workspace.ID+"/providers/runpod", strings.NewReader(putBody))
 	putReq.Header.Set("Content-Type", "application/json")
 	putReq.Header.Set("Authorization", "Bearer "+adminKey)
@@ -242,6 +247,73 @@ func TestHandleWorkspaceProviderConfig(t *testing.T) {
 	mux.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+}
+
+func TestHandleWorkspaceProviderConfigValidatesBeforeSaving(t *testing.T) {
+	h, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, _, _ := s.CreateKey("admin", "admin")
+	workspace, err := s.CreateWorkspace("Validated Infra Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	validated := false
+	h.SetProviderConfigValidator(func(ctx context.Context, config providers.ProviderConfig) error {
+		validated = true
+		if config.Type != providers.ProviderRunPod || config.APIKey != "rp_valid" {
+			t.Fatalf("unexpected provider config: %+v", config)
+		}
+		return nil
+	})
+
+	body := `{"api_key":"rp_valid","endpoint":"https://api.runpod.io/graphql"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/auth/workspaces/"+workspace.ID+"/providers/runpod", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !validated {
+		t.Fatal("expected provider config validator to run")
+	}
+	if _, _, _, _, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod"); err != nil {
+		t.Fatalf("expected validated config to be saved: %v", err)
+	}
+}
+
+func TestHandleWorkspaceProviderConfigRejectsInvalidCredentialsWithoutSaving(t *testing.T) {
+	h, s, mux := newTestHandlerWithRoutes(t)
+	adminKey, _, _ := s.CreateKey("admin", "admin")
+	workspace, err := s.CreateWorkspace("Rejected Infra Team")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	h.SetProviderConfigValidator(func(ctx context.Context, config providers.ProviderConfig) error {
+		return &providers.ProviderError{
+			Provider: config.Type,
+			Code:     providers.ProviderErrorAuthFailed,
+			Message:  "upstream response containing sensitive details",
+		}
+	})
+
+	body := `{"api_key":"rp_invalid","endpoint":"https://api.runpod.io/graphql"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/auth/workspaces/"+workspace.ID+"/providers/runpod", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "sensitive details") {
+		t.Fatalf("provider error details leaked in response: %s", rec.Body.String())
+	}
+	if _, _, _, _, err := s.ResolveWorkspaceProviderConfig(workspace.ID, "runpod"); err == nil {
+		t.Fatal("invalid provider credentials must not be saved")
 	}
 }
 
@@ -650,7 +722,9 @@ func TestHandleGetSession_Valid(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
 	if resp["session"] == nil || resp["key"] == nil {
 		t.Error("expected session and key in response")
 	}

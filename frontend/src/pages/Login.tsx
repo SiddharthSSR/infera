@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
-import { createSession, type SessionInfo } from '../lib/api';
+import { createSession } from '../lib/authAccessClient';
+import { LabelText, StatusDot, ControlInput, ActionButton } from '../components/shared';
+import type { SessionInfo } from '../types';
 
 interface LoginProps {
   onAuthenticated: (session: SessionInfo) => void;
@@ -16,11 +18,26 @@ interface HealthData {
   healthy_workers?: number;
 }
 
+function formatUptime(uptimeSeconds?: number) {
+  if (uptimeSeconds == null || !Number.isFinite(uptimeSeconds)) return 'Awaiting';
+
+  const totalMinutes = Math.max(0, Math.floor(uptimeSeconds / 60));
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return '<1m';
+}
+
 export function Login({ onAuthenticated }: LoginProps) {
   const [key, setKey] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [showKey, setShowKey] = useState(false);
   const [health, setHealth] = useState<HealthState>('checking');
   const [healthData, setHealthData] = useState<HealthData | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -81,171 +98,234 @@ export function Login({ onAuthenticated }: LoginProps) {
     }
   };
 
+  const featureHighlights = [
+    {
+      index: '01',
+      label: 'OPEN SOURCE',
+      desc: 'Run anywhere: cloud, bare metal, or hybrid. Keep the control plane in your hands.',
+      meta: 'Own the control surface',
+    },
+    {
+      index: '02',
+      label: 'OPENAI COMPATIBLE',
+      desc: 'Point existing clients at your Infera base URL and keep the rest of the integration surface familiar.',
+      meta: 'Drop-in client adoption',
+    },
+    {
+      index: '03',
+      label: 'MULTI-PROVIDER',
+      desc: 'Provision across provider backends while keeping one workspace-level operator experience.',
+      meta: 'One workspace, multiple runtimes',
+    },
+  ];
+
+  const gatewayTone = health === 'offline' ? 'offline' : health === 'checking' ? 'checking' : 'online';
+  const gatewayStatus = health === 'online' ? 'Online' : health === 'checking' ? 'Probing' : 'Offline';
+  const workerCount = healthData?.workers ?? 0;
+  const workerSummary = healthData?.healthy_workers != null && healthData?.workers != null
+    ? `${healthData.healthy_workers}/${healthData.workers} healthy`
+    : workerCount > 0
+      ? `${workerCount} connected`
+      : 'Waiting for workers';
+  const runtimeBrief = [
+    {
+      label: 'Gateway',
+      value: gatewayStatus,
+      detail: health === 'online' ? 'Health endpoint responding' : health === 'checking' ? 'Polling /health' : 'No control-plane response',
+      tone: gatewayTone,
+    },
+    {
+      label: 'Workers',
+      value: String(workerCount),
+      detail: workerSummary,
+      tone: workerCount > 0 ? 'online' : 'checking',
+    },
+    {
+      label: 'Uptime',
+      value: formatUptime(healthData?.uptime_seconds),
+      detail: healthData?.version ? `Gateway ${healthData.version}` : 'Awaiting runtime metadata',
+      tone: health === 'offline' ? 'offline' : 'checking',
+    },
+  ];
+  const sessionNotes = [
+    {
+      label: 'Auth boundary',
+      value: 'Admin only',
+      detail: 'Full operator access only.',
+    },
+    {
+      label: 'Session mode',
+      value: 'Server-side',
+      detail: 'Cookie issued after validation.',
+    },
+    {
+      label: 'Workspace scope',
+      value: 'Attached',
+      detail: 'Bound to the key workspace.',
+    },
+  ];
+
   return (
     <div className="login-page">
       <div className="login-shell animate-fade-in">
-      {/* Left Panel — Branding */}
-      <div className="login-brand-panel" style={{
-        backgroundColor: 'var(--bg-accent)',
-        borderRight: 'var(--grid-line)',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'space-between',
-        padding: '3rem',
-      }}>
-        <div>
-          <div className="display-text" style={{
-            fontSize: '7rem',
-            textAlign: 'left',
-            border: 'none',
-            padding: 0,
-            lineHeight: 0.85,
-          }}>
-            INFERA
-          </div>
-          <div style={{
-            fontSize: '1.05rem',
-            color: 'var(--text-secondary)',
-            marginTop: '1.5rem',
-            fontWeight: 400,
-            letterSpacing: '-0.01em',
-          }}>
-            Self-hosted inference at scale
-          </div>
-        </div>
-
-        {/* Feature highlights */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {[
-            { label: 'OPEN SOURCE', desc: 'Run anywhere — cloud, on-prem, or hybrid. No vendor lock-in.' },
-            { label: 'OPENAI COMPATIBLE', desc: 'Drop-in replacement. Change base_url and use your inf_ key.' },
-            { label: 'MULTI-PROVIDER', desc: 'Provision workers across RunPod, Lambda, and bare metal.' },
-          ].map((f, i) => (
-            <div key={f.label} style={{
-              padding: '1.25rem 0',
-              borderTop: i > 0 ? 'var(--grid-line)' : 'none',
-            }}>
-              <div className="label-text" style={{ marginBottom: '0.4rem' }}>{f.label}</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{f.desc}</div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-        }}>
-          <span className="label-text mono" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }}>
-            {healthData?.version ? `v${healthData.version}` : 'v0.1.0'}
-          </span>
-          <span className="label-text" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }}>
-            OPEN SOURCE INFERENCE GATEWAY
-          </span>
-        </div>
-      </div>
-
-      {/* Right Panel — Connect Form */}
-      <div className="login-form-panel" style={{
-        backgroundColor: 'var(--bg-paper)',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        padding: '3rem',
-      }}>
-        <div style={{ maxWidth: 380, width: '100%', margin: '0 auto' }}>
-          {/* Gateway Status */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            marginBottom: '3rem',
-          }}>
-            <span
-              className={health === 'offline' ? 'status-dot inactive' : 'status-dot'}
-              style={health === 'checking' ? {
-                animation: 'skeleton-pulse 1.5s ease-in-out infinite',
-              } : undefined}
-            />
-            <span className="mono" style={{
-              fontSize: '0.75rem',
-              color: 'var(--text-secondary)',
-            }}>
-              {health === 'checking' && 'Checking gateway...'}
-              {health === 'online' && (
-                <>
-                  Gateway online
-                  {healthData?.workers != null && (
-                    <>
-                      <span style={{ color: 'var(--border-color)', margin: '0 6px' }}>·</span>
-                      {healthData.workers} worker{healthData.workers !== 1 ? 's' : ''} connected
-                    </>
-                  )}
-                </>
-              )}
-              {health === 'offline' && 'Gateway unreachable'}
-            </span>
-          </div>
-
-          {/* Section Header */}
-          <div className="label-text" style={{ marginBottom: '2rem' }}>
-            CONNECT
-          </div>
-
-          {/* Form */}
-          <form onSubmit={handleSubmit}>
-            <div className="label-text" style={{ marginBottom: '0.75rem' }}>API KEY</div>
-            <input
-              type="password"
-              className="control-input"
-              placeholder="inf_..."
-              value={key}
-              onChange={e => { setKey(e.target.value); setError(''); }}
-              autoFocus
-              style={{ marginBottom: '1.5rem' }}
-            />
-
-            {error && (
-              <div style={{
-                color: 'var(--color-error)',
-                fontSize: '0.85rem',
-                marginBottom: '1.5rem',
-              }}>
-                {error}
+        <section className="login-brand-panel">
+          <div className="login-brand-content">
+            <div className="login-kicker login-stagger login-stagger-1">Inference control plane</div>
+            <div className="login-brand-grid">
+              <div className="login-brand-hero">
+                <div className="login-brand-principle login-stagger login-stagger-2">Technical. Minimal. Precise.</div>
+                <h1 className="login-brand-title">INFERA</h1>
+                <p className="login-brand-subtitle login-stagger login-stagger-3">
+                  Self-hosted inference infrastructure with a product-grade operator surface.
+                </p>
               </div>
-            )}
 
-            <button
-              className="btn-primary"
-              type="submit"
-              disabled={loading || connected}
-              style={{ width: '100%', padding: '0.8rem' }}
-            >
-              {connected ? (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                  <span className="status-dot" style={{ width: 6, height: 6 }} />
-                  CONNECTED
-                </span>
-              ) : loading ? 'CONNECTING...' : 'CONNECT'}
-            </button>
-          </form>
-
-          {/* Help Text */}
-          <div style={{
-            marginTop: '3rem',
-            fontSize: '0.8rem',
-            color: 'var(--text-secondary)',
-            lineHeight: 1.6,
-          }}>
-            Enter your API key to access the dashboard. Keys are generated by your gateway admin.
-            <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-              <Link className="nav-link" to="/docs">API DOCS</Link>
-              <Link className="nav-link" to="/getting-started">GETTING STARTED</Link>
+              <div className="login-runtime-board">
+                <div className="login-runtime-header">
+                  <div className="label-text">Gateway signal</div>
+                  <div className="mono login-runtime-endpoint">/health</div>
+                </div>
+                <div className="login-runtime-grid">
+                  {runtimeBrief.map((item, i) => (
+                    <div key={item.label} className={`login-runtime-card login-stagger login-stagger-${i + 4}`}>
+                      <div className="login-runtime-label-row">
+                        <span className="label-text">{item.label}</span>
+                        <span className={`status-dot ${item.tone === 'online' ? '' : item.tone === 'offline' ? 'error' : 'neutral'}`} />
+                      </div>
+                      <div className="login-runtime-value">{item.value}</div>
+                      <div className="login-runtime-detail">{item.detail}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
+          <div className="login-feature-list">
+            {featureHighlights.map((feature, i) => (
+              <div key={feature.label} className={`login-feature-item login-stagger login-stagger-${i + 5}`}>
+                <div className="login-feature-meta">
+                  <span className="login-feature-index mono">{feature.index}</span>
+                  <div className="login-feature-title">{feature.label}</div>
+                </div>
+                <div className="login-feature-copy">{feature.desc}</div>
+                <div className="login-feature-signal">{feature.meta}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="login-brand-footer login-stagger login-stagger-8">
+            <LabelText className="mono">
+            {healthData?.version ? `v${healthData.version}` : 'v0.1.0'}
+            </LabelText>
+            <LabelText>Open source inference gateway</LabelText>
+          </div>
+        </section>
+
+        <section className="login-form-panel">
+          <div className="login-form-card">
+            <div className="login-status-row login-stagger login-stagger-1">
+              <StatusDot
+                tone={health === 'offline' ? 'error' : health === 'checking' ? 'neutral' : 'success'}
+                className={health === 'online' ? 'online-pulse' : undefined}
+                style={health === 'checking' ? {
+                  animation: 'skeleton-pulse 1.5s ease-in-out infinite',
+                } : undefined}
+              />
+              <span className="mono login-status-copy">
+                {health === 'checking' && 'Checking gateway...'}
+                {health === 'online' && (
+                  <>
+                    Gateway online
+                    {healthData?.workers != null && (
+                      <>
+                        <span style={{ color: 'var(--border-color)', margin: '0 6px' }}>·</span>
+                        {healthData.workers} worker{healthData.workers !== 1 ? 's' : ''} connected
+                      </>
+                    )}
+                  </>
+                )}
+                {health === 'offline' && 'Gateway unreachable'}
+              </span>
+            </div>
+
+            <div className="login-form-copy login-stagger login-stagger-2">
+              <LabelText as="div">Connect</LabelText>
+              <h2 className="login-form-title">Sign in with an admin key</h2>
+              <p className="login-form-description">
+                Enter a valid admin key to open the workspace console and manage models, nodes, access, and usage.
+              </p>
+            </div>
+
+            <div className="login-session-grid login-stagger login-stagger-3">
+              {sessionNotes.map((note) => (
+                <div key={note.label} className="login-session-card">
+                  <div className="label-text">{note.label}</div>
+                  <div className="login-session-value">{note.value}</div>
+                  <p>{note.detail}</p>
+                </div>
+              ))}
+            </div>
+
+            <form onSubmit={handleSubmit} className="login-form-fields login-stagger login-stagger-4">
+              <div className="login-field">
+                <div className="login-field-header">
+                  <LabelText as="label" htmlFor="login-api-key">API key</LabelText>
+                  <div className="mono login-field-meta">POST /api/auth/session</div>
+                </div>
+                <div className="login-input-shell">
+                  <ControlInput
+                    id="login-api-key"
+                    type={showKey ? 'text' : 'password'}
+                    className="login-key-input"
+                    placeholder="inf_..."
+                    value={key}
+                    onChange={e => { setKey(e.target.value); setError(''); }}
+                    autoFocus
+                    autoComplete="current-password"
+                    aria-invalid={error ? 'true' : 'false'}
+                  />
+                  <button
+                    type="button"
+                    className="login-visibility-toggle"
+                    onClick={() => setShowKey((visible) => !visible)}
+                    aria-label={showKey ? 'Hide API key' : 'Show API key'}
+                  >
+                    {showKey ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+              </div>
+
+              {error && (
+                <div className="login-error" role="alert">{error}</div>
+              )}
+
+              <ActionButton
+                variant="primary"
+                className="login-submit"
+                type="submit"
+                disabled={loading || connected}
+              >
+                {connected ? (
+                  <span className="login-submit-state">
+                    <StatusDot tone="success" />
+                    Connected
+                  </span>
+                ) : loading ? 'Connecting...' : 'Connect'}
+              </ActionButton>
+            </form>
+
+            <div className="login-help login-stagger login-stagger-5">
+              <div className="login-help-note">
+                Keys are generated by your gateway admin. The session is stored server-side and scoped to the workspace attached to the key you use.
+              </div>
+              <div className="login-help-links">
+                <Link className="nav-link" to="/docs">API Docs</Link>
+                <Link className="nav-link" to="/getting-started">Getting Started</Link>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   );

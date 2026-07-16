@@ -109,7 +109,7 @@ export function buildWorkspaceMaturity(input: {
       detail: input.servingUnverifiedCount > 0
         ? `${input.servingUnverifiedCount} model${input.servingUnverifiedCount === 1 ? '' : 's'} still need inference verification.`
         : `${input.pendingDeploymentCount} deployment${input.pendingDeploymentCount === 1 ? '' : 's'} are still moving through provisioning or model loading.`,
-      actionLabel: input.servingUnverifiedCount > 0 ? 'VERIFY NOW' : 'OPEN CLUSTERS',
+      actionLabel: input.servingUnverifiedCount > 0 ? 'VERIFY NOW' : 'OPEN NODES',
       action: input.servingUnverifiedCount > 0 ? 'verify_now' : 'open_clusters',
     };
   }
@@ -119,7 +119,7 @@ export function buildWorkspaceMaturity(input: {
     label: 'SETUP IN PROGRESS',
     tone: 'inactive',
     headline: 'The workspace has partial infrastructure state, but the next step is still operational setup.',
-    detail: 'Review models, clusters, and workspace configuration to finish turning the workspace into a serving environment.',
+    detail: 'Review models, nodes, and workspace configuration to finish turning the workspace into a serving environment.',
     actionLabel: 'OPEN MODELS',
     action: 'open_models',
   };

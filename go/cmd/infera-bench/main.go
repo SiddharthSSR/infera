@@ -806,13 +806,6 @@ func ratio(n int, d float64) float64 {
 	return float64(n) / d
 }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func formatMetric(m metricSummary) string {
 	return fmt.Sprintf("%.1f / %.1f / %.1f", m.P50, m.P95, m.P99)
 }

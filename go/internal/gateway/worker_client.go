@@ -70,13 +70,17 @@ type WorkerInferRequest struct {
 	Messages   []WorkerMessage           `json:"messages"`
 	Parameters types.InferenceParameters `json:"parameters"`
 	Stream     bool                      `json:"stream"`
+	Tools      []types.ToolDefinition    `json:"tools,omitempty"`
+	ToolChoice json.RawMessage           `json:"tool_choice,omitempty"`
 }
 
 // WorkerMessage is a message for the worker.
 type WorkerMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-	Name    string `json:"name,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	Name       string           `json:"name,omitempty"`
+	ToolCalls  []types.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 // WorkerInferResponse is the response from the worker.
@@ -86,8 +90,9 @@ type WorkerInferResponse struct {
 	Choices   []struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role      string           `json:"role"`
+			Content   string           `json:"content"`
+			ToolCalls []types.ToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -122,13 +127,17 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 		Messages:   make([]WorkerMessage, len(req.Messages)),
 		Parameters: req.Parameters,
 		Stream:     false,
+		Tools:      req.Tools,
+		ToolChoice: req.ToolChoice,
 	}
 
 	for i, msg := range req.Messages {
 		workerReq.Messages[i] = WorkerMessage{
-			Role:    string(msg.Role),
-			Content: msg.Content,
-			Name:    msg.Name,
+			Role:       string(msg.Role),
+			Content:    msg.Content,
+			Name:       msg.Name,
+			ToolCalls:  msg.ToolCalls,
+			ToolCallID: msg.ToolCallID,
 		}
 	}
 
@@ -185,8 +194,9 @@ func (c *WorkerClient) InferWithContext(ctx context.Context, req *types.Inferenc
 		choices[i] = types.Choice{
 			Index: c.Index,
 			Message: types.Message{
-				Role:    types.Role(c.Message.Role),
-				Content: c.Message.Content,
+				Role:      types.Role(c.Message.Role),
+				Content:   c.Message.Content,
+				ToolCalls: c.Message.ToolCalls,
 			},
 			FinishReason: types.FinishReason(c.FinishReason),
 		}
@@ -224,13 +234,17 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 		Messages:   make([]WorkerMessage, len(req.Messages)),
 		Parameters: req.Parameters,
 		Stream:     true,
+		Tools:      req.Tools,
+		ToolChoice: req.ToolChoice,
 	}
 
 	for i, msg := range req.Messages {
 		workerReq.Messages[i] = WorkerMessage{
-			Role:    string(msg.Role),
-			Content: msg.Content,
-			Name:    msg.Name,
+			Role:       string(msg.Role),
+			Content:    msg.Content,
+			Name:       msg.Name,
+			ToolCalls:  msg.ToolCalls,
+			ToolCallID: msg.ToolCallID,
 		}
 	}
 
@@ -290,8 +304,9 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 				return
 			default:
 				var chunk struct {
-					Delta        string  `json:"delta"`
-					FinishReason *string `json:"finish_reason"`
+					Delta        string                     `json:"delta"`
+					FinishReason *string                    `json:"finish_reason"`
+					ToolCalls    []types.ToolCallChunkDelta `json:"tool_calls,omitempty"`
 					Usage        *struct {
 						PromptTokens     int `json:"prompt_tokens"`
 						CompletionTokens int `json:"completion_tokens"`
@@ -334,6 +349,7 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 					RequestID: req.RequestID,
 					Index:     index,
 					Delta:     chunk.Delta,
+					ToolCalls: chunk.ToolCalls,
 					CreatedAt: time.Now(),
 				}
 
@@ -354,7 +370,6 @@ func (c *WorkerClient) InferStream(ctx context.Context, req *types.InferenceRequ
 				index++
 
 				if chunk.FinishReason != nil {
-					streamCompleted = true
 					return
 				}
 			}

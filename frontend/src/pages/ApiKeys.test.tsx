@@ -29,7 +29,7 @@ vi.mock('../lib/auth-context', () => ({
   }),
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/authAccessClient', () => ({
   fetchApiKeys: apiMocks.fetchApiKeys,
   createApiKey: apiMocks.createApiKey,
   revokeApiKey: apiMocks.revokeApiKey,

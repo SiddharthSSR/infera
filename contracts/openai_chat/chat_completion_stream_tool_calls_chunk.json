@@ -1,0 +1,25 @@
+{
+  "id": "chatcmpl-req-openai-fixture",
+  "object": "chat.completion.chunk",
+  "created": 0,
+  "model": "model-1",
+  "choices": [
+    {
+      "index": 0,
+      "delta": {
+        "tool_calls": [
+          {
+            "index": 0,
+            "id": "call_1",
+            "type": "function",
+            "function": {
+              "name": "web_search",
+              "arguments": "{\"query\":\"Go scheduler\"}"
+            }
+          }
+        ]
+      },
+      "finish_reason": null
+    }
+  ]
+}
