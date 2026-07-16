@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/infera/infera/go/internal/providers"
 )
 
 type contextKey string
@@ -37,9 +39,15 @@ func ContextWithKey(ctx context.Context, record *KeyRecord) context.Context {
 
 // Handler wraps the auth store and provides middleware.
 type Handler struct {
-	store  *Store
-	secure bool // true = Secure flag on cookies (HTTPS only)
+	store                   *Store
+	secure                  bool // true = Secure flag on cookies (HTTPS only)
+	providerConfigValidator ProviderConfigValidator
 }
+
+// ProviderConfigValidator verifies draft provider credentials before they are
+// persisted. Production wiring uses a live provider status request; tests may
+// inject a deterministic validator.
+type ProviderConfigValidator func(context.Context, providers.ProviderConfig) error
 
 // NewHandler creates a new auth handler.
 func NewHandler(store *Store) *Handler {
@@ -50,6 +58,13 @@ func NewHandler(store *Store) *Handler {
 // Set to false for local development (HTTP).
 func (h *Handler) SetSecure(secure bool) {
 	h.secure = secure
+}
+
+// SetProviderConfigValidator installs validation for workspace provider
+// credentials. A nil validator preserves store-only behavior for callers that
+// do not manage live providers.
+func (h *Handler) SetProviderConfigValidator(validator ProviderConfigValidator) {
+	h.providerConfigValidator = validator
 }
 
 // Store returns the underlying store.

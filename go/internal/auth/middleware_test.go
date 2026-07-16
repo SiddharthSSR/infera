@@ -11,7 +11,7 @@ import (
 func newTestHandler(t *testing.T) (*Handler, *Store) {
 	t.Helper()
 	dir := t.TempDir()
-	s, err := NewStore(filepath.Join(dir, "auth_test.db"))
+	s, err := NewStoreWithProviderCredentialEncryption(filepath.Join(dir, "auth_test.db"), testProviderCredentialEncryptionKey)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
