@@ -231,6 +231,7 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	}
 	assertEnvContains(t, env, "INFERA_ROUTER_ADDRESS", "https://gateway.example.com")
 	assertEnvContains(t, env, "INFERA_WORKER_SHARED_TOKEN", "worker-shared-token")
+	assertEnvContains(t, env, "INFERA_ALLOWED_MODELS", `["meta-llama/Meta-Llama-3.1-8B-Instruct"]`)
 	assertEnvContains(t, env, "XDG_CACHE_HOME", "/workspace/.cache")
 	assertEnvContains(t, env, "HF_HOME", "/workspace/.cache/huggingface")
 	assertEnvContains(t, env, "HUGGINGFACE_HUB_CACHE", "/workspace/.cache/huggingface/hub")

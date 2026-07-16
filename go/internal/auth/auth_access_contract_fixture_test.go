@@ -173,7 +173,7 @@ func TestHandleSwitchSessionWorkspaceMatchesSharedFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorkspaceInvitation beta: %v", err)
 	}
-	if _, _, _, err := store.AcceptWorkspaceInvitation(tokenBeta, "Joined Member"); err != nil {
+	if _, _, _, err := store.AcceptWorkspaceInvitationForIdentity(tokenBeta, "Joined Member", alphaRecord); err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation beta: %v", err)
 	}
 
@@ -218,7 +218,7 @@ func TestHandleListAccessibleWorkspacesMatchesSharedFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorkspaceInvitation alpha: %v", err)
 	}
-	_, fullKey, _, err := store.AcceptWorkspaceInvitation(tokenAlpha, "Joined Member")
+	_, fullKey, alphaRecord, err := store.AcceptWorkspaceInvitation(tokenAlpha, "Joined Member")
 	if err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation alpha: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestHandleListAccessibleWorkspacesMatchesSharedFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorkspaceInvitation beta: %v", err)
 	}
-	if _, _, _, err := store.AcceptWorkspaceInvitation(tokenBeta, "Joined Member"); err != nil {
+	if _, _, _, err := store.AcceptWorkspaceInvitationForIdentity(tokenBeta, "Joined Member", alphaRecord); err != nil {
 		t.Fatalf("AcceptWorkspaceInvitation beta: %v", err)
 	}
 

@@ -160,6 +160,9 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 			env = append(env, map[string]string{
 				"key": "INFERA_PRELOAD_MODELS", "value": string(modelsJSON),
 			})
+			env = append(env, map[string]string{
+				"key": "INFERA_ALLOWED_MODELS", "value": string(modelsJSON),
+			})
 		}
 	} else {
 		// Default model if none specified
@@ -169,6 +172,9 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		}
 		env = append(env, map[string]string{
 			"key": "INFERA_PRELOAD_MODELS", "value": defaultModel,
+		})
+		env = append(env, map[string]string{
+			"key": "INFERA_ALLOWED_MODELS", "value": defaultModel,
 		})
 	}
 
