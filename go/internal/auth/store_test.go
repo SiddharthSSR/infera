@@ -64,6 +64,53 @@ func TestHumanIdentityMigrationDoesNotMergeLegacyMembershipsByEmail(t *testing.T
 	}
 }
 
+func TestHumanIdentityIndexMigrationScopesUniquenessToActiveMemberships(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "auth_v9.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if err := migrate.Run(db, authMigrations[:9]); err != nil {
+		t.Fatalf("migrate v9 schema: %v", err)
+	}
+	if _, err := db.Exec(`
+		DROP INDEX idx_workspace_memberships_identity;
+		CREATE UNIQUE INDEX idx_workspace_memberships_identity
+		ON workspace_memberships(workspace_id, human_identity_id)`); err != nil {
+		t.Fatalf("restore original v9 identity index: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO workspaces (id, slug, name) VALUES ('ws_identity', 'identity', 'Identity')`); err != nil {
+		t.Fatalf("insert workspace: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO workspace_memberships
+			(id, workspace_id, human_identity_id, email, display_name, role, status)
+		VALUES ('mbr_removed', 'ws_identity', 'usr_identity', 'old@example.com', 'Old', 'developer', 'removed')`); err != nil {
+		t.Fatalf("insert removed membership: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v9 database: %v", err)
+	}
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore after index migration: %v", err)
+	}
+	defer store.Close()
+	if _, err := store.db.Exec(`
+		INSERT INTO workspace_memberships
+			(id, workspace_id, human_identity_id, email, display_name, role, status)
+		VALUES ('mbr_active', 'ws_identity', 'usr_identity', 'new@example.com', 'New', 'developer', 'active')`); err != nil {
+		t.Fatalf("active membership should coexist with removed history: %v", err)
+	}
+	if _, err := store.db.Exec(`
+		INSERT INTO workspace_memberships
+			(id, workspace_id, human_identity_id, email, display_name, role, status)
+		VALUES ('mbr_duplicate', 'ws_identity', 'usr_identity', 'other@example.com', 'Other', 'developer', 'active')`); err == nil {
+		t.Fatal("expected duplicate active identity membership to be rejected")
+	}
+}
+
 // ---------- Key CRUD ----------
 
 func TestCreateKey(t *testing.T) {
@@ -883,6 +930,102 @@ func TestWorkspaceMembershipRoleUpdateAndRemoval(t *testing.T) {
 	}
 	if _, err := s.ValidateKey(fullKey); err == nil {
 		t.Fatal("expected membership-linked key to be revoked")
+	}
+}
+
+func TestAcceptWorkspaceInvitationReactivatesRemovedIdentityMembership(t *testing.T) {
+	s := newTestStore(t)
+	_, adminRec, err := s.CreateKey("admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey admin: %v", err)
+	}
+	workspaceA, err := s.CreateWorkspace("Identity Home")
+	if err != nil {
+		t.Fatalf("CreateWorkspace A: %v", err)
+	}
+	workspaceB, err := s.CreateWorkspace("Identity Rejoin")
+	if err != nil {
+		t.Fatalf("CreateWorkspace B: %v", err)
+	}
+	workspaceC, err := s.CreateWorkspace("Different Identity")
+	if err != nil {
+		t.Fatalf("CreateWorkspace C: %v", err)
+	}
+	tokenA, _, err := s.CreateWorkspaceInvitation(workspaceA.ID, "member@example.com", "Member", RoleOperator, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation A: %v", err)
+	}
+	_, _, identityRecord, err := s.AcceptWorkspaceInvitation(tokenA, "Member")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation A: %v", err)
+	}
+	tokenB, _, err := s.CreateWorkspaceInvitation(workspaceB.ID, "old@example.com", "Old Name", RoleDeveloper, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation B: %v", err)
+	}
+	removedMembership, oldKey, _, err := s.AcceptWorkspaceInvitationForIdentity(tokenB, "Old Name", identityRecord)
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitationForIdentity B: %v", err)
+	}
+	if err := s.RemoveWorkspaceMembership(workspaceB.ID, removedMembership.ID); err != nil {
+		t.Fatalf("RemoveWorkspaceMembership: %v", err)
+	}
+	otherIdentityInvite, _, err := s.CreateWorkspaceInvitation(workspaceC.ID, "other@example.com", "Other", RoleOperator, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation C: %v", err)
+	}
+	_, _, otherIdentity, err := s.AcceptWorkspaceInvitation(otherIdentityInvite, "Other")
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation C: %v", err)
+	}
+	conflictingInvite, _, err := s.CreateWorkspaceInvitation(workspaceB.ID, "old@example.com", "Impostor", RoleOperator, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation conflicting identity: %v", err)
+	}
+	if _, _, _, err := s.AcceptWorkspaceInvitationForIdentity(conflictingInvite, "Impostor", otherIdentity); err == nil || !strings.Contains(err.Error(), "belongs to another identity") {
+		t.Fatalf("expected deterministic identity conflict, got %v", err)
+	}
+	stillRemoved, err := s.GetWorkspaceMembership(workspaceB.ID, removedMembership.ID)
+	if err != nil {
+		t.Fatalf("GetWorkspaceMembership after conflict: %v", err)
+	}
+	if stillRemoved.Status != "removed" || stillRemoved.HumanIdentityID != *identityRecord.HumanIdentityID {
+		t.Fatalf("identity conflict must preserve removed membership: %+v", stillRemoved)
+	}
+
+	reinvite, _, err := s.CreateWorkspaceInvitation(workspaceB.ID, "new@example.com", "New Name", RoleOperator, adminRec.ID, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation rejoin: %v", err)
+	}
+	reactivated, newKey, newRecord, err := s.AcceptWorkspaceInvitationForIdentity(reinvite, "New Name", identityRecord)
+	if err != nil {
+		t.Fatalf("AcceptWorkspaceInvitationForIdentity rejoin: %v", err)
+	}
+	if reactivated.ID != removedMembership.ID {
+		t.Fatalf("expected membership %q to be reactivated, got %q", removedMembership.ID, reactivated.ID)
+	}
+	if reactivated.Status != "active" || reactivated.Email != "new@example.com" || reactivated.DisplayName != "New Name" || reactivated.Role != RoleOperator {
+		t.Fatalf("unexpected reactivated membership: %+v", reactivated)
+	}
+	if newRecord.HumanIdentityID == nil || *newRecord.HumanIdentityID != *identityRecord.HumanIdentityID {
+		t.Fatalf("expected reactivated identity %v, got %v", identityRecord.HumanIdentityID, newRecord.HumanIdentityID)
+	}
+	if _, err := s.ValidateKey(oldKey); err == nil {
+		t.Fatal("expected removed membership key to remain revoked")
+	}
+	if _, err := s.ValidateKey(newKey); err != nil {
+		t.Fatalf("expected reactivated membership key to validate: %v", err)
+	}
+	var activeCount int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(1) FROM workspace_memberships
+		WHERE workspace_id = ? AND human_identity_id = ? AND status = 'active'`,
+		workspaceB.ID, *identityRecord.HumanIdentityID,
+	).Scan(&activeCount); err != nil {
+		t.Fatalf("count active memberships: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("expected exactly one active identity membership, got %d", activeCount)
 	}
 }
 

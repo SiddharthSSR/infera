@@ -164,7 +164,17 @@ var authMigrations = []migrate.Migration{
 		SET human_identity_id = 'legacy:' || id
 		WHERE human_identity_id IS NULL OR human_identity_id = '';
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_memberships_identity
-		ON workspace_memberships(workspace_id, human_identity_id);`,
+		ON workspace_memberships(workspace_id, human_identity_id)
+		WHERE status = 'active';`,
+	},
+	{
+		Version:     10,
+		Description: "scope membership identity uniqueness to active rows",
+		SQL: `
+		DROP INDEX IF EXISTS idx_workspace_memberships_identity;
+		CREATE UNIQUE INDEX idx_workspace_memberships_identity
+		ON workspace_memberships(workspace_id, human_identity_id)
+		WHERE status = 'active';`,
 	},
 }
 
@@ -1633,13 +1643,76 @@ func (s *Store) acceptWorkspaceInvitation(rawToken, displayName, humanIdentityID
 		return nil, "", nil, fmt.Errorf("membership for %s already exists", invite.Email)
 	}
 
-	membershipID := "mbr_" + uuid.New().String()
-	if _, err := tx.Exec(`
-		INSERT INTO workspace_memberships (id, workspace_id, human_identity_id, email, display_name, role, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
-		membershipID, invite.WorkspaceID, humanIdentityID, invite.Email, displayName, invite.Role, now,
-	); err != nil {
-		return nil, "", nil, fmt.Errorf("failed to create membership: %w", err)
+	membershipID := ""
+	membershipCreatedAt := now
+	var inactiveStatus string
+	err = tx.QueryRow(`
+		SELECT id, status, created_at
+		FROM workspace_memberships
+		WHERE workspace_id = ? AND human_identity_id = ?
+		ORDER BY created_at ASC
+		LIMIT 1`,
+		invite.WorkspaceID, humanIdentityID,
+	).Scan(&membershipID, &inactiveStatus, &membershipCreatedAt)
+	switch {
+	case err == nil:
+		if inactiveStatus != "removed" {
+			return nil, "", nil, fmt.Errorf("membership identity is not eligible for reactivation")
+		}
+		var conflictingEmail int
+		if err := tx.QueryRow(`
+			SELECT COUNT(1)
+			FROM workspace_memberships
+			WHERE workspace_id = ? AND email = ? AND id != ?`,
+			invite.WorkspaceID, invite.Email, membershipID,
+		).Scan(&conflictingEmail); err != nil {
+			return nil, "", nil, fmt.Errorf("failed to check reactivation email: %w", err)
+		}
+		if conflictingEmail > 0 {
+			return nil, "", nil, fmt.Errorf("membership for %s belongs to another identity", invite.Email)
+		}
+		result, err := tx.Exec(`
+			UPDATE workspace_memberships
+			SET email = ?, display_name = ?, role = ?, status = 'active'
+			WHERE workspace_id = ? AND id = ? AND status = 'removed'`,
+			invite.Email, displayName, invite.Role, invite.WorkspaceID, membershipID,
+		)
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("failed to reactivate membership: %w", err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("failed to confirm membership reactivation: %w", err)
+		}
+		if rows != 1 {
+			return nil, "", nil, fmt.Errorf("membership is no longer eligible for reactivation")
+		}
+	case errors.Is(err, sql.ErrNoRows):
+		var conflictingMembershipID string
+		err := tx.QueryRow(`
+			SELECT id
+			FROM workspace_memberships
+			WHERE workspace_id = ? AND email = ?
+			LIMIT 1`,
+			invite.WorkspaceID, invite.Email,
+		).Scan(&conflictingMembershipID)
+		if err == nil {
+			return nil, "", nil, fmt.Errorf("membership for %s belongs to another identity", invite.Email)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, "", nil, fmt.Errorf("failed to check inactive membership email: %w", err)
+		}
+
+		membershipID = "mbr_" + uuid.New().String()
+		if _, err := tx.Exec(`
+			INSERT INTO workspace_memberships (id, workspace_id, human_identity_id, email, display_name, role, status, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
+			membershipID, invite.WorkspaceID, humanIdentityID, invite.Email, displayName, invite.Role, now,
+		); err != nil {
+			return nil, "", nil, fmt.Errorf("failed to create membership: %w", err)
+		}
+	default:
+		return nil, "", nil, fmt.Errorf("failed to check inactive identity membership: %w", err)
 	}
 
 	rawKeyBytes := make([]byte, 24)
@@ -1675,7 +1748,7 @@ func (s *Store) acceptWorkspaceInvitation(rawToken, displayName, humanIdentityID
 		DisplayName:     displayName,
 		Role:            invite.Role,
 		Status:          "active",
-		CreatedAt:       now,
+		CreatedAt:       membershipCreatedAt,
 	}
 	keyRecord := &KeyRecord{
 		ID:              keyID,
