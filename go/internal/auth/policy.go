@@ -74,7 +74,7 @@ func HasPermission(record *KeyRecord, permission string) bool {
 	case PermissionManageInfrastructure:
 		return record.Role == RoleOwner || record.Role == RoleAdmin || record.Role == RoleOperator
 	case PermissionManageVault:
-		return record.Role == RoleOwner || record.Role == RoleAdmin
+		return record.WorkspaceID == DefaultWorkspaceID && (record.Role == RoleOwner || record.Role == RoleAdmin)
 	default:
 		return false
 	}

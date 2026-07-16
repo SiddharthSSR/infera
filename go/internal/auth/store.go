@@ -155,24 +155,46 @@ var authMigrations = []migrate.Migration{
 		SQL: `
 		ALTER TABLE workspace_provider_configs ADD COLUMN options_json TEXT NOT NULL DEFAULT '{}';`,
 	},
+	{
+		Version:     9,
+		Description: "bind workspace memberships to immutable human identities",
+		SQL: `
+		ALTER TABLE workspace_memberships ADD COLUMN human_identity_id TEXT;
+		UPDATE workspace_memberships
+		SET human_identity_id = 'legacy:' || id
+		WHERE human_identity_id IS NULL OR human_identity_id = '';
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_memberships_identity
+		ON workspace_memberships(workspace_id, human_identity_id)
+		WHERE status = 'active';`,
+	},
+	{
+		Version:     10,
+		Description: "scope membership identity uniqueness to active rows",
+		SQL: `
+		DROP INDEX IF EXISTS idx_workspace_memberships_identity;
+		CREATE UNIQUE INDEX idx_workspace_memberships_identity
+		ON workspace_memberships(workspace_id, human_identity_id)
+		WHERE status = 'active';`,
+	},
 }
 
 // KeyRecord represents a stored API key.
 type KeyRecord struct {
-	ID            string     `json:"id"`
-	WorkspaceID   string     `json:"workspace_id"`
-	WorkspaceSlug string     `json:"workspace_slug"`
-	WorkspaceName string     `json:"workspace_name"`
-	KeyPrefix     string     `json:"key_prefix"`
-	Name          string     `json:"name"`
-	Role          string     `json:"role"`
-	PrincipalType string     `json:"principal_type"`
-	MembershipID  *string    `json:"membership_id,omitempty"`
-	MemberEmail   *string    `json:"member_email,omitempty"`
-	MemberName    *string    `json:"member_name,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	LastUsed      *time.Time `json:"last_used,omitempty"`
-	Status        string     `json:"status"`
+	ID              string     `json:"id"`
+	WorkspaceID     string     `json:"workspace_id"`
+	WorkspaceSlug   string     `json:"workspace_slug"`
+	WorkspaceName   string     `json:"workspace_name"`
+	KeyPrefix       string     `json:"key_prefix"`
+	Name            string     `json:"name"`
+	Role            string     `json:"role"`
+	PrincipalType   string     `json:"principal_type"`
+	MembershipID    *string    `json:"membership_id,omitempty"`
+	HumanIdentityID *string    `json:"-"`
+	MemberEmail     *string    `json:"member_email,omitempty"`
+	MemberName      *string    `json:"member_name,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	LastUsed        *time.Time `json:"last_used,omitempty"`
+	Status          string     `json:"status"`
 }
 
 type WorkspaceRecord struct {
@@ -192,13 +214,14 @@ type WorkspaceQuotaRecord struct {
 }
 
 type WorkspaceMembershipRecord struct {
-	ID          string    `json:"id"`
-	WorkspaceID string    `json:"workspace_id"`
-	Email       string    `json:"email"`
-	DisplayName string    `json:"display_name"`
-	Role        string    `json:"role"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	WorkspaceID     string    `json:"workspace_id"`
+	HumanIdentityID string    `json:"-"`
+	Email           string    `json:"email"`
+	DisplayName     string    `json:"display_name"`
+	Role            string    `json:"role"`
+	Status          string    `json:"status"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type WorkspaceInvitationRecord struct {
@@ -406,7 +429,7 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 
 	row := s.db.QueryRow(`
 		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name,
-		       COALESCE(m.role, k.role), k.principal_type, k.membership_id, m.email, m.display_name,
+		       COALESCE(m.role, k.role), k.principal_type, k.membership_id, m.human_identity_id, m.email, m.display_name,
 		       k.created_at, k.last_used, k.status
 		FROM api_keys k
 		JOIN workspaces w ON w.id = k.workspace_id
@@ -418,7 +441,7 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 	record := &KeyRecord{}
 	err := row.Scan(
 		&record.ID, &record.WorkspaceID, &record.WorkspaceSlug, &record.WorkspaceName,
-		&record.KeyPrefix, &record.Name, &record.Role, &record.PrincipalType, &record.MembershipID, &record.MemberEmail, &record.MemberName,
+		&record.KeyPrefix, &record.Name, &record.Role, &record.PrincipalType, &record.MembershipID, &record.HumanIdentityID, &record.MemberEmail, &record.MemberName,
 		&record.CreatedAt, &record.LastUsed, &record.Status,
 	)
 	if err != nil {
@@ -452,7 +475,7 @@ func (s *Store) ListKeysByWorkspace(workspaceID string) ([]*KeyRecord, error) {
 func (s *Store) listKeys(workspaceID string) ([]*KeyRecord, error) {
 	query := `
 		SELECT k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name,
-		       COALESCE(m.role, k.role), k.principal_type, k.membership_id, m.email, m.display_name,
+		       COALESCE(m.role, k.role), k.principal_type, k.membership_id, m.human_identity_id, m.email, m.display_name,
 		       k.created_at, k.last_used, k.status
 		FROM api_keys k
 		JOIN workspaces w ON w.id = k.workspace_id
@@ -483,6 +506,7 @@ func (s *Store) listKeys(workspaceID string) ([]*KeyRecord, error) {
 			&k.Role,
 			&k.PrincipalType,
 			&k.MembershipID,
+			&k.HumanIdentityID,
 			&k.MemberEmail,
 			&k.MemberName,
 			&k.CreatedAt,
@@ -670,7 +694,7 @@ func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, er
 	row := s.db.QueryRow(`
 		SELECT s.id, s.key_id, s.created_at, s.expires_at, s.last_seen,
 		       k.id, k.workspace_id, w.slug, w.name, k.key_prefix, k.name,
-		       COALESCE(m.role, k.role), k.principal_type, k.membership_id, m.email, m.display_name,
+		       COALESCE(m.role, k.role), k.principal_type, k.membership_id, m.human_identity_id, m.email, m.display_name,
 		       k.created_at, k.last_used, k.status
 		FROM sessions s
 		JOIN api_keys k ON s.key_id = k.id
@@ -684,7 +708,7 @@ func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, er
 	key := &KeyRecord{}
 	err := row.Scan(
 		&session.ID, &session.KeyID, &session.CreatedAt, &session.ExpiresAt, &session.LastSeen,
-		&key.ID, &key.WorkspaceID, &key.WorkspaceSlug, &key.WorkspaceName, &key.KeyPrefix, &key.Name, &key.Role, &key.PrincipalType, &key.MembershipID, &key.MemberEmail, &key.MemberName, &key.CreatedAt, &key.LastUsed, &key.Status,
+		&key.ID, &key.WorkspaceID, &key.WorkspaceSlug, &key.WorkspaceName, &key.KeyPrefix, &key.Name, &key.Role, &key.PrincipalType, &key.MembershipID, &key.HumanIdentityID, &key.MemberEmail, &key.MemberName, &key.CreatedAt, &key.LastUsed, &key.Status,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -793,20 +817,20 @@ func (s *Store) ListAccessibleWorkspaces(record *KeyRecord) ([]*WorkspaceRecord,
 		return nil, fmt.Errorf("active key record is required")
 	}
 
-	if record.PrincipalType == PrincipalHuman && record.MemberEmail != nil {
-		email := strings.ToLower(strings.TrimSpace(*record.MemberEmail))
-		if email != "" {
+	if record.PrincipalType == PrincipalHuman && record.HumanIdentityID != nil {
+		identityID := strings.TrimSpace(*record.HumanIdentityID)
+		if identityID != "" {
 			rows, err := s.db.Query(`
 				SELECT DISTINCT w.id, w.slug, w.name, w.created_at, w.status
 				FROM workspace_memberships m
 				JOIN workspaces w ON w.id = m.workspace_id
 				JOIN api_keys k ON k.membership_id = m.id
-				WHERE lower(m.email) = ?
+				WHERE m.human_identity_id = ?
 				  AND m.status = 'active'
 				  AND k.status = 'active'
 				  AND k.principal_type = ?
 				ORDER BY w.created_at ASC`,
-				email, PrincipalHuman,
+				identityID, PrincipalHuman,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("failed to list accessible workspaces: %w", err)
@@ -871,11 +895,11 @@ func (s *Store) SwitchSessionWorkspace(rawToken, workspaceID string) (*SessionRe
 	if currentKey.PrincipalType != PrincipalHuman {
 		return nil, nil, fmt.Errorf("workspace switching is only available for human sessions")
 	}
-	if currentKey.MemberEmail == nil || strings.TrimSpace(*currentKey.MemberEmail) == "" {
+	if currentKey.HumanIdentityID == nil || strings.TrimSpace(*currentKey.HumanIdentityID) == "" {
 		return nil, nil, fmt.Errorf("workspace switching is unavailable for this session")
 	}
 
-	targetKeyID, err := s.findSwitchableWorkspaceKeyID(*currentKey.MemberEmail, workspaceID)
+	targetKeyID, err := s.findSwitchableWorkspaceKeyID(*currentKey.HumanIdentityID, workspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -887,11 +911,11 @@ func (s *Store) SwitchSessionWorkspace(rawToken, workspaceID string) (*SessionRe
 	return s.ValidateSession(rawToken)
 }
 
-func (s *Store) findSwitchableWorkspaceKeyID(email, workspaceID string) (string, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
+func (s *Store) findSwitchableWorkspaceKeyID(identityID, workspaceID string) (string, error) {
+	identityID = strings.TrimSpace(identityID)
 	workspaceID = strings.TrimSpace(workspaceID)
-	if email == "" || workspaceID == "" {
-		return "", fmt.Errorf("email and workspace id are required")
+	if identityID == "" || workspaceID == "" {
+		return "", fmt.Errorf("human identity and workspace id are required")
 	}
 
 	var keyID string
@@ -900,13 +924,13 @@ func (s *Store) findSwitchableWorkspaceKeyID(email, workspaceID string) (string,
 		FROM workspace_memberships m
 		JOIN api_keys k ON k.membership_id = m.id
 		WHERE m.workspace_id = ?
-		  AND lower(m.email) = ?
+		  AND m.human_identity_id = ?
 		  AND m.status = 'active'
 		  AND k.status = 'active'
 		  AND k.principal_type = ?
 		ORDER BY k.created_at ASC
 		LIMIT 1`,
-		workspaceID, email, PrincipalHuman,
+		workspaceID, identityID, PrincipalHuman,
 	).Scan(&keyID)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -1211,7 +1235,7 @@ func (s *Store) ListWorkspaceMemberships(workspaceID string) ([]*WorkspaceMember
 		return nil, fmt.Errorf("workspace id is required")
 	}
 	rows, err := s.db.Query(`
-		SELECT id, workspace_id, email, display_name, role, status, created_at
+		SELECT id, workspace_id, human_identity_id, email, display_name, role, status, created_at
 		FROM workspace_memberships
 		WHERE workspace_id = ?
 		ORDER BY created_at ASC`, workspaceID)
@@ -1223,7 +1247,7 @@ func (s *Store) ListWorkspaceMemberships(workspaceID string) ([]*WorkspaceMember
 	var out []*WorkspaceMembershipRecord
 	for rows.Next() {
 		m := &WorkspaceMembershipRecord{}
-		if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.Email, &m.DisplayName, &m.Role, &m.Status, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.HumanIdentityID, &m.Email, &m.DisplayName, &m.Role, &m.Status, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -1242,14 +1266,14 @@ func (s *Store) GetWorkspaceMembership(workspaceID, membershipID string) (*Works
 	}
 
 	row := s.db.QueryRow(`
-		SELECT id, workspace_id, email, display_name, role, status, created_at
+		SELECT id, workspace_id, human_identity_id, email, display_name, role, status, created_at
 		FROM workspace_memberships
 		WHERE workspace_id = ? AND id = ?`,
 		workspaceID, membershipID,
 	)
 
 	m := &WorkspaceMembershipRecord{}
-	if err := row.Scan(&m.ID, &m.WorkspaceID, &m.Email, &m.DisplayName, &m.Role, &m.Status, &m.CreatedAt); err != nil {
+	if err := row.Scan(&m.ID, &m.WorkspaceID, &m.HumanIdentityID, &m.Email, &m.DisplayName, &m.Role, &m.Status, &m.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("membership not found")
 		}
@@ -1536,8 +1560,30 @@ func (s *Store) GetWorkspaceInvitationPreview(rawToken string) (*WorkspaceInvita
 }
 
 func (s *Store) AcceptWorkspaceInvitation(rawToken, displayName string) (*WorkspaceMembershipRecord, string, *KeyRecord, error) {
+	return s.acceptWorkspaceInvitation(rawToken, displayName, "")
+}
+
+// AcceptWorkspaceInvitationForIdentity accepts an invitation on behalf of an
+// already-authenticated human identity. The identity value must come from a
+// validated key or session, never from invitation input.
+func (s *Store) AcceptWorkspaceInvitationForIdentity(rawToken, displayName string, identity *KeyRecord) (*WorkspaceMembershipRecord, string, *KeyRecord, error) {
+	if identity == nil || identity.Status != "active" || identity.PrincipalType != PrincipalHuman || identity.HumanIdentityID == nil {
+		return nil, "", nil, fmt.Errorf("verified human identity is required")
+	}
+	humanIdentityID := strings.TrimSpace(*identity.HumanIdentityID)
+	if humanIdentityID == "" {
+		return nil, "", nil, fmt.Errorf("verified human identity is required")
+	}
+	return s.acceptWorkspaceInvitation(rawToken, displayName, humanIdentityID)
+}
+
+func (s *Store) acceptWorkspaceInvitation(rawToken, displayName, humanIdentityID string) (*WorkspaceMembershipRecord, string, *KeyRecord, error) {
 	tokenHash := hashKey(strings.TrimSpace(rawToken))
 	displayName = strings.TrimSpace(displayName)
+	humanIdentityID = strings.TrimSpace(humanIdentityID)
+	if humanIdentityID == "" {
+		humanIdentityID = "usr_" + uuid.New().String()
+	}
 	now := time.Now()
 
 	type inviteRow struct {
@@ -1590,20 +1636,83 @@ func (s *Store) AcceptWorkspaceInvitation(rawToken, displayName string) (*Worksp
 	}()
 
 	var existing int
-	if err := tx.QueryRow(`SELECT COUNT(1) FROM workspace_memberships WHERE workspace_id = ? AND email = ? AND status = 'active'`, invite.WorkspaceID, invite.Email).Scan(&existing); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(1) FROM workspace_memberships WHERE workspace_id = ? AND (email = ? OR human_identity_id = ?) AND status = 'active'`, invite.WorkspaceID, invite.Email, humanIdentityID).Scan(&existing); err != nil {
 		return nil, "", nil, fmt.Errorf("failed to check existing membership: %w", err)
 	}
 	if existing > 0 {
 		return nil, "", nil, fmt.Errorf("membership for %s already exists", invite.Email)
 	}
 
-	membershipID := "mbr_" + uuid.New().String()
-	if _, err := tx.Exec(`
-		INSERT INTO workspace_memberships (id, workspace_id, email, display_name, role, status, created_at)
-		VALUES (?, ?, ?, ?, ?, 'active', ?)`,
-		membershipID, invite.WorkspaceID, invite.Email, displayName, invite.Role, now,
-	); err != nil {
-		return nil, "", nil, fmt.Errorf("failed to create membership: %w", err)
+	membershipID := ""
+	membershipCreatedAt := now
+	var inactiveStatus string
+	err = tx.QueryRow(`
+		SELECT id, status, created_at
+		FROM workspace_memberships
+		WHERE workspace_id = ? AND human_identity_id = ?
+		ORDER BY created_at ASC
+		LIMIT 1`,
+		invite.WorkspaceID, humanIdentityID,
+	).Scan(&membershipID, &inactiveStatus, &membershipCreatedAt)
+	switch {
+	case err == nil:
+		if inactiveStatus != "removed" {
+			return nil, "", nil, fmt.Errorf("membership identity is not eligible for reactivation")
+		}
+		var conflictingEmail int
+		if err := tx.QueryRow(`
+			SELECT COUNT(1)
+			FROM workspace_memberships
+			WHERE workspace_id = ? AND email = ? AND id != ?`,
+			invite.WorkspaceID, invite.Email, membershipID,
+		).Scan(&conflictingEmail); err != nil {
+			return nil, "", nil, fmt.Errorf("failed to check reactivation email: %w", err)
+		}
+		if conflictingEmail > 0 {
+			return nil, "", nil, fmt.Errorf("membership for %s belongs to another identity", invite.Email)
+		}
+		result, err := tx.Exec(`
+			UPDATE workspace_memberships
+			SET email = ?, display_name = ?, role = ?, status = 'active'
+			WHERE workspace_id = ? AND id = ? AND status = 'removed'`,
+			invite.Email, displayName, invite.Role, invite.WorkspaceID, membershipID,
+		)
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("failed to reactivate membership: %w", err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("failed to confirm membership reactivation: %w", err)
+		}
+		if rows != 1 {
+			return nil, "", nil, fmt.Errorf("membership is no longer eligible for reactivation")
+		}
+	case errors.Is(err, sql.ErrNoRows):
+		var conflictingMembershipID string
+		err := tx.QueryRow(`
+			SELECT id
+			FROM workspace_memberships
+			WHERE workspace_id = ? AND email = ?
+			LIMIT 1`,
+			invite.WorkspaceID, invite.Email,
+		).Scan(&conflictingMembershipID)
+		if err == nil {
+			return nil, "", nil, fmt.Errorf("membership for %s belongs to another identity", invite.Email)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, "", nil, fmt.Errorf("failed to check inactive membership email: %w", err)
+		}
+
+		membershipID = "mbr_" + uuid.New().String()
+		if _, err := tx.Exec(`
+			INSERT INTO workspace_memberships (id, workspace_id, human_identity_id, email, display_name, role, status, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
+			membershipID, invite.WorkspaceID, humanIdentityID, invite.Email, displayName, invite.Role, now,
+		); err != nil {
+			return nil, "", nil, fmt.Errorf("failed to create membership: %w", err)
+		}
+	default:
+		return nil, "", nil, fmt.Errorf("failed to check inactive identity membership: %w", err)
 	}
 
 	rawKeyBytes := make([]byte, 24)
@@ -1632,28 +1741,30 @@ func (s *Store) AcceptWorkspaceInvitation(rawToken, displayName string) (*Worksp
 	tx = nil
 
 	membership := &WorkspaceMembershipRecord{
-		ID:          membershipID,
-		WorkspaceID: invite.WorkspaceID,
-		Email:       invite.Email,
-		DisplayName: displayName,
-		Role:        invite.Role,
-		Status:      "active",
-		CreatedAt:   now,
+		ID:              membershipID,
+		WorkspaceID:     invite.WorkspaceID,
+		HumanIdentityID: humanIdentityID,
+		Email:           invite.Email,
+		DisplayName:     displayName,
+		Role:            invite.Role,
+		Status:          "active",
+		CreatedAt:       membershipCreatedAt,
 	}
 	keyRecord := &KeyRecord{
-		ID:            keyID,
-		WorkspaceID:   invite.WorkspaceID,
-		WorkspaceSlug: workspace.Slug,
-		WorkspaceName: workspace.Name,
-		KeyPrefix:     prefix,
-		Name:          displayName,
-		Role:          invite.Role,
-		PrincipalType: PrincipalHuman,
-		MembershipID:  &membershipID,
-		MemberEmail:   &membership.Email,
-		MemberName:    &membership.DisplayName,
-		CreatedAt:     now,
-		Status:        "active",
+		ID:              keyID,
+		WorkspaceID:     invite.WorkspaceID,
+		WorkspaceSlug:   workspace.Slug,
+		WorkspaceName:   workspace.Name,
+		KeyPrefix:       prefix,
+		Name:            displayName,
+		Role:            invite.Role,
+		PrincipalType:   PrincipalHuman,
+		MembershipID:    &membershipID,
+		HumanIdentityID: &membership.HumanIdentityID,
+		MemberEmail:     &membership.Email,
+		MemberName:      &membership.DisplayName,
+		CreatedAt:       now,
+		Status:          "active",
 	}
 	return membership, fullKey, keyRecord, nil
 }

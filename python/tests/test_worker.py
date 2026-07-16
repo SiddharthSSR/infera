@@ -260,6 +260,15 @@ class TestWorker:
         assert worker.engine.calls == 1
 
     @pytest.mark.asyncio
+    async def test_load_model_enforces_model_cache_size(self):
+        worker = Worker(WorkerConfig(engine="mock", model_cache_size=1))
+        await worker.start()
+        await worker.load_model(ModelConfig(model_id="model-1"))
+
+        with pytest.raises(RuntimeError, match="model cache capacity reached"):
+            await worker.load_model(ModelConfig(model_id="model-2"))
+
+    @pytest.mark.asyncio
     async def test_unload_model_waits_for_inflight_requests(self):
         class FakeEngine:
             def __init__(self):

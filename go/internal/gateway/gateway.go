@@ -1212,7 +1212,7 @@ func (g *Gateway) getWorkerClient(workerID string) (*WorkerClient, error) {
 		return client, nil
 	}
 
-	client = NewWorkerClient(worker.Address)
+	client = newWorkerClient(worker.Address, g.config.WorkerSharedToken)
 	g.workerClients[workerID] = client
 	return client, nil
 }
@@ -1221,7 +1221,7 @@ func (g *Gateway) getWorkerClient(workerID string) (*WorkerClient, error) {
 func (g *Gateway) RegisterWorkerClient(workerID, address string) {
 	g.workerClientsMu.Lock()
 	defer g.workerClientsMu.Unlock()
-	g.workerClients[workerID] = NewWorkerClient(address)
+	g.workerClients[workerID] = newWorkerClient(address, g.config.WorkerSharedToken)
 }
 
 // RemoveWorkerClient removes a worker client.

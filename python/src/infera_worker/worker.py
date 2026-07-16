@@ -194,6 +194,11 @@ class Worker:
                         logger.info("Model already loaded", model_id=config.model_id)
                         return loaded
 
+            if len(self.engine.get_loaded_models()) >= self.config.model_cache_size:
+                raise RuntimeError(
+                    f"model cache capacity reached ({self.config.model_cache_size})"
+                )
+
             logger.info("Loading model", model_id=config.model_id)
             model = await self.engine.load_model(config)
             logger.info("Model loaded", model_id=config.model_id, memory_bytes=model.memory_bytes)
