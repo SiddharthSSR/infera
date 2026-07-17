@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
+import math
 from pathlib import Path
 import ssl
 import statistics
@@ -33,6 +34,21 @@ DEFAULT_CONCURRENCY = 1
 DEFAULT_WARMUP = 0
 DEFAULT_MAX_TOKENS = 256
 DEFAULT_TEMPERATURE = 0.2
+
+
+def positive_finite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be finite and greater than zero")
+    return parsed
+
+
+def valid_cost_per_hour(value: float | None) -> bool:
+    return value is not None and math.isfinite(value) and value > 0
+
+
+def estimate_tokens_from_text(text: str) -> int:
+    return max(1, len(text) // 4) if text else 0
 
 PROMPTS = {
     "short": "What is the capital of France? Answer in one short sentence.",
@@ -235,7 +251,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--cost-per-hour",
-        type=float,
+        type=positive_finite_float,
         default=None,
         help="Optional active-instance price in USD/hour for amortized cost metrics",
     )
@@ -572,14 +588,19 @@ def build_result_row(
         "tpot_ms": round(tpot_ms, 4),
         "itl_ms": round(itl_ms, 4),
         "stream_event_count": len(stream.event_intervals_ms) + (1 if stream.content else 0),
+        "stream_prompt_tokens_for_cost": non_stream.prompt_tokens,
+        "stream_completion_tokens_for_cost": estimate_tokens_from_text(stream.content),
     }
-    if cost_per_hour is not None:
+    row["stream_total_tokens_for_cost"] = int(row["stream_prompt_tokens_for_cost"]) + int(
+        row["stream_completion_tokens_for_cost"]
+    )
+    if valid_cost_per_hour(cost_per_hour):
         row["cost_accuracy"] = "estimated"
         row["cost_attribution_method"] = "active_instance_group_time_share_v1"
         row["price_currency"] = "USD"
         row["price_time_unit"] = "hour"
         row["price_amount"] = cost_per_hour
-        row["decode_tok_s_per_dollar_hour"] = round(decode_tok_s / cost_per_hour, 4) if cost_per_hour > 0 else 0.0
+        row["decode_tok_s_per_dollar_hour"] = round(decode_tok_s / cost_per_hour, 4)
     else:
         row["cost_accuracy"] = "unavailable"
     return row
@@ -631,6 +652,7 @@ def annotate_group_metrics(
     rows: list[dict[str, float | int | str]],
     health_summary: HealthSamplingSummary | None,
     cost_per_hour: float | None = None,
+    group_wall_ms: float | None = None,
 ) -> None:
     if not rows:
         return
@@ -645,24 +667,57 @@ def annotate_group_metrics(
     group_cost_usd = 0.0
     cost_per_request_usd = 0.0
     cost_per_token_usd = 0.0
-    if cost_per_hour is not None and cost_per_hour >= 0:
-        # Concurrent requests share one active instance. Charge the group once
-        # for its wall-clock window, then amortize evenly across requests.
-        group_window_s = max(float(row["non_stream_total_ms"]) for row in rows) / 1000.0
-        group_cost_usd = cost_per_hour * group_window_s / 3600.0
-        cost_per_request_usd = group_cost_usd / len(rows)
-        total_tokens = sum(int(row["total_tokens"]) for row in rows)
+    cost_available = (
+        valid_cost_per_hour(cost_per_hour)
+        and group_wall_ms is not None
+        and math.isfinite(group_wall_ms)
+        and group_wall_ms > 0
+    )
+    physical_request_count = len(rows) * 2
+    paired_sample_count = len(rows)
+    total_tokens = sum(
+        int(row["total_tokens"]) + int(row["stream_total_tokens_for_cost"])
+        for row in rows
+    )
+    cost_per_paired_sample_usd = 0.0
+    if cost_available:
+        # A row is one paired benchmark sample: one non-stream and one stream
+        # inference request. Charge their actual combined group wall time once.
+        group_cost_usd = float(cost_per_hour) * (float(group_wall_ms) / 1000.0) / 3600.0
+        cost_available = math.isfinite(group_cost_usd)
+    if cost_available:
+        cost_per_request_usd = group_cost_usd / physical_request_count
+        cost_per_paired_sample_usd = group_cost_usd / paired_sample_count
         cost_per_token_usd = group_cost_usd / total_tokens if total_tokens > 0 else 0.0
     for row in rows:
         row["aggregate_decode_tok_s"] = round(aggregate_decode_tok_s, 4)
         row["aggregate_total_tok_s"] = round(aggregate_total_tok_s, 4)
         row["contention_ratio"] = round(contention_ratio, 4)
-        if cost_per_hour is not None:
-            row["cost_query_usd"] = round(cost_per_request_usd, 9)
+        if cost_available:
+            row["cost_per_request_usd"] = round(cost_per_request_usd, 9)
+            # Deprecated compatibility alias. It has the same physical-request
+            # denominator as cost_per_request_usd.
+            row["cost_query_usd"] = row["cost_per_request_usd"]
+            row["cost_per_paired_sample_usd"] = round(cost_per_paired_sample_usd, 9)
             row["cost_per_token_usd"] = round(cost_per_token_usd, 12)
             row["cost_per_1m_tokens_usd"] = round(cost_per_token_usd * 1_000_000, 6)
             row["cost_group_usd"] = round(group_cost_usd, 9)
+            row["cost_group_wall_ms"] = round(group_wall_ms, 3)
+            row["cost_group_physical_request_count"] = physical_request_count
+            row["cost_group_paired_sample_count"] = paired_sample_count
+            row["cost_token_denominator"] = total_tokens
+            row["cost_token_accuracy"] = "estimated"
             row["cost_observed_concurrency"] = len(rows)
+        else:
+            row["cost_accuracy"] = "unavailable"
+            for field in (
+                "cost_attribution_method",
+                "price_currency",
+                "price_time_unit",
+                "price_amount",
+                "decode_tok_s_per_dollar_hour",
+            ):
+                row.pop(field, None)
         if health_summary is not None:
             row["peak_memory_used_bytes"] = health_summary.peak_memory_used_bytes
             row["health_sample_count"] = health_summary.sample_count
@@ -698,6 +753,7 @@ def run_benchmark_group(
             interval_ms=health_sample_interval_ms,
         )
         sampler.start()
+    group_started = time.perf_counter()
     non_stream_results = _run_phase_concurrently(
         run_non_stream,
         concurrency,
@@ -728,6 +784,7 @@ def run_benchmark_group(
         cache_key_prefix,
         preset,
     )
+    group_wall_ms = (time.perf_counter() - group_started) * 1000.0
     stream_by_client = {client_index: result for client_index, result in stream_results}
     rows = [
         build_result_row(
@@ -741,7 +798,7 @@ def run_benchmark_group(
         for client_index, non_stream_result in non_stream_results
     ]
     health_summary = sampler.stop() if sampler is not None else HealthSamplingSummary()
-    annotate_group_metrics(rows, health_summary, cost_per_hour)
+    annotate_group_metrics(rows, health_summary, cost_per_hour, group_wall_ms)
     if return_health_summary:
         return rows, health_summary
     return rows
@@ -761,6 +818,7 @@ def build_output_payload(
     cost_per_hour: float | None,
     health_sampling: dict[str, int] | None = None,
 ) -> dict[str, object]:
+    normalized_cost_per_hour = cost_per_hour if valid_cost_per_hour(cost_per_hour) else None
     return {
         "base_url": base_url,
         "model": model,
@@ -772,15 +830,15 @@ def build_output_payload(
         "warmup": warmup,
         "cache_reuse_mode": cache_reuse_mode,
         "presets": results,
-        "cost_per_hour": cost_per_hour,
+        "cost_per_hour": normalized_cost_per_hour,
         "price_snapshot": ({
             "version": "benchmark-cli-hourly-v1",
-            "amount": cost_per_hour,
+            "amount": normalized_cost_per_hour,
             "currency": "USD",
             "time_unit": "hour",
             "accuracy": "estimated",
             "attribution_method": "active_instance_group_time_share_v1",
-        } if cost_per_hour is not None else {
+        } if normalized_cost_per_hour is not None else {
             "accuracy": "unavailable",
         }),
         "health_sampling": health_sampling or {},

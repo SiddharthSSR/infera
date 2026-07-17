@@ -15,7 +15,16 @@ Infera records request cost in the durable inference audit ledger. The immutable
 
 `instance_price_per_hour × request_elapsed_ms ÷ 3,600,000 ÷ observed_active_concurrency`
 
-The router reports active requests before dispatch, so the current execution adds one. The concurrency observation is persisted with the price and result. Benchmark groups use the analogous `active_instance_group_time_share_v1`: the instance is charged once for the concurrent group's wall-clock window and divided across the group's requests, avoiding the previous sum-of-overlapping-latencies double count.
+The router reports active requests before dispatch, so the current execution adds one. The concurrency observation is persisted with the price and result. Prices and arithmetic that are non-finite, non-positive, or outside the durable integer nano-USD range fail closed as `unavailable`; cost multiplication and half-up rounding use checked integer arithmetic.
+
+Benchmark groups use the analogous `active_instance_group_time_share_v1`. A benchmark row is one paired sample containing two physical inference requests: its non-stream request followed by its stream request. The benchmark measures wall time around both complete concurrent phases, charges the active instance once for that combined window, and reports:
+
+- `cost_per_request_usd`: group cost divided by the number of physical inference requests (`2 × row count`);
+- `cost_per_paired_sample_usd`: group cost divided by row count;
+- `cost_query_usd`: a deprecated compatibility alias for `cost_per_request_usd`;
+- `cost_per_token_usd`: group cost divided by tokens from both requests. Non-stream usage is provider-reported; because the stream response has no final usage in this benchmark protocol, its prompt count reuses the paired non-stream prompt count and its completion count is estimated from delivered characters. `cost_token_accuracy` is therefore `estimated`.
+
+The artifact also records the measured group wall milliseconds, physical request count, paired sample count, and token denominator. It never reconstructs the billed group window from a maximum per-request latency. A CLI price must be finite and strictly positive; invalid programmatic inputs or invalid group timing emit `cost_accuracy: unavailable` and no cost metrics.
 
 This is an allocation estimate, not a provider invoice. Stale worker concurrency, idle time outside request windows, autoscaling overlap, startup time, storage, network charges, taxes, discounts, and provider billing granularity are not included.
 

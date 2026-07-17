@@ -125,7 +125,7 @@ def test_build_result_row_computes_cost_and_throughput():
 
     row = module.build_result_row(2, 3, 4, stream, non_stream, 0.79)
     rows = [dict(row, client_index=index) for index in range(1, 5)]
-    module.annotate_group_metrics(rows, None, 0.79)
+    module.annotate_group_metrics(rows, None, 0.79, 6000.0)
     row = rows[2]
 
     assert row["run"] == 2
@@ -135,9 +135,15 @@ def test_build_result_row_computes_cost_and_throughput():
     assert row["ttft_ms"] == 500.0
     assert row["decode_tok_s"] == 50.0
     assert row["total_tok_s"] == 50.0
-    assert row["cost_query_usd"] > 0
+    assert row["cost_per_request_usd"] == pytest.approx(0.000164583, abs=1e-12)
+    assert row["cost_per_paired_sample_usd"] == pytest.approx(0.000329167, abs=1e-12)
     assert row["cost_accuracy"] == "estimated"
     assert row["cost_observed_concurrency"] == 4
+    assert row["cost_group_physical_request_count"] == 8
+    assert row["cost_group_paired_sample_count"] == 4
+    assert row["cost_group_wall_ms"] == 6000.0
+    assert row["cost_token_denominator"] == 804
+    assert row["cost_token_accuracy"] == "estimated"
     assert row["cost_per_token_usd"] > 0
     assert row["cost_per_1m_tokens_usd"] == row["cost_per_token_usd"] * 1_000_000
     assert row["decode_tok_s_per_dollar_hour"] > 0
@@ -246,6 +252,8 @@ def test_run_benchmark_group_annotates_concurrent_group_metrics(monkeypatch):
 
     monkeypatch.setattr(module, "run_non_stream", fake_run_non_stream)
     monkeypatch.setattr(module, "run_stream", fake_run_stream)
+    clock = iter([100.0, 110.0])
+    monkeypatch.setattr(module.time, "perf_counter", lambda: next(clock))
 
     rows = module.run_benchmark_group(
         2,
@@ -261,7 +269,7 @@ def test_run_benchmark_group_annotates_concurrent_group_metrics(monkeypatch):
         "affinity",
         "benchmark",
         "conversation",
-        None,
+        3.6,
     )
 
     assert len(rows) == 2
@@ -270,6 +278,13 @@ def test_run_benchmark_group_annotates_concurrent_group_metrics(monkeypatch):
     assert rows[0]["aggregate_decode_tok_s"] == 80.0
     assert rows[0]["aggregate_total_tok_s"] == 180.0
     assert rows[0]["contention_ratio"] == 1.0
+    assert rows[0]["cost_group_wall_ms"] == 10_000.0
+    assert rows[0]["cost_group_usd"] == 0.01
+    assert rows[0]["cost_group_physical_request_count"] == 4
+    assert rows[0]["cost_group_paired_sample_count"] == 2
+    assert rows[0]["cost_per_request_usd"] == 0.0025
+    assert rows[0]["cost_per_paired_sample_usd"] == 0.005
+    assert rows[0]["cost_token_denominator"] == 562
     assert rows[1]["client_index"] == 2
     assert seen_headers == [
         {"X-Infera-Affinity-Key": "benchmark:conversation:client-1"},
@@ -277,6 +292,67 @@ def test_run_benchmark_group_annotates_concurrent_group_metrics(monkeypatch):
         {"X-Infera-Affinity-Key": "benchmark:conversation:client-1"},
         {"X-Infera-Affinity-Key": "benchmark:conversation:client-2"},
     ]
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf"), float("-inf")])
+def test_invalid_cost_per_hour_is_unavailable(value):
+    module = load_benchmark_chat_module()
+    stream = module.StreamResult(ttft_ms=10.0, total_ms=20.0, content="stream")
+    non_stream = module.NonStreamResult(
+        total_ms=20.0,
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        content="non-stream",
+    )
+    row = module.build_result_row(1, 1, 1, stream, non_stream, value)
+    module.annotate_group_metrics([row], None, value, 40.0)
+
+    assert row["cost_accuracy"] == "unavailable"
+    assert "cost_per_request_usd" not in row
+    assert "cost_per_token_usd" not in row
+    payload = module.build_output_payload(
+        "https://inferai.co.in",
+        "model",
+        "",
+        "",
+        "",
+        1,
+        1,
+        0,
+        "none",
+        {"short": [row]},
+        value,
+    )
+    assert payload["cost_per_hour"] is None
+    assert payload["price_snapshot"] == {"accuracy": "unavailable"}
+
+
+@pytest.mark.parametrize("group_wall_ms", [0.0, -1.0, float("nan"), float("inf")])
+def test_invalid_group_timing_suppresses_cost_evidence(group_wall_ms):
+    module = load_benchmark_chat_module()
+    stream = module.StreamResult(ttft_ms=10.0, total_ms=20.0, content="stream")
+    non_stream = module.NonStreamResult(
+        total_ms=20.0,
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        content="non-stream",
+    )
+    row = module.build_result_row(1, 1, 1, stream, non_stream, 1.0)
+    module.annotate_group_metrics([row], None, 1.0, group_wall_ms)
+
+    assert row["cost_accuracy"] == "unavailable"
+    assert "price_amount" not in row
+    assert "cost_per_request_usd" not in row
+    assert "cost_per_token_usd" not in row
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "-inf"])
+def test_cli_rejects_invalid_cost_per_hour(value):
+    module = load_benchmark_chat_module()
+    with pytest.raises(module.argparse.ArgumentTypeError):
+        module.positive_finite_float(value)
 
 
 def test_write_json_output_creates_parent_directories(tmp_path):

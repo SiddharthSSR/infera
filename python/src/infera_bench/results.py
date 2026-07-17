@@ -75,7 +75,10 @@ def summarize_warm_output(path: Path, cache_reuse_mode: str) -> WarmMetricSummar
         float(row.get("itl_ms", 0.0)) for row in rows if float(row.get("itl_ms", 0.0)) > 0
     ]
     failures = sum(1 for row in rows if row.get("status") == "failed")
-    request_costs = [float(row.get("cost_query_usd", 0.0)) for row in rows]
+    request_costs = [
+        float(row.get("cost_per_request_usd", row.get("cost_query_usd", 0.0))) for row in rows
+    ]
+    paired_sample_costs = [float(row.get("cost_per_paired_sample_usd", 0.0)) for row in rows]
     token_costs = [float(row.get("cost_per_token_usd", 0.0)) for row in rows]
     million_token_costs = [float(row.get("cost_per_1m_tokens_usd", 0.0)) for row in rows]
     cost_accuracies = {str(row.get("cost_accuracy") or "unavailable") for row in rows}
@@ -87,6 +90,13 @@ def summarize_warm_output(path: Path, cache_reuse_mode: str) -> WarmMetricSummar
         cost_accuracy = "mixed"
     cost_methods = {str(row.get("cost_attribution_method") or "") for row in rows}
     cost_attribution_method = next(iter(cost_methods)) if len(cost_methods) == 1 else "mixed"
+    cost_token_accuracies = {str(row.get("cost_token_accuracy") or "unavailable") for row in rows}
+    if not cost_token_accuracies:
+        cost_token_accuracy = "unavailable"
+    elif len(cost_token_accuracies) == 1:
+        cost_token_accuracy = next(iter(cost_token_accuracies))
+    else:
+        cost_token_accuracy = "mixed"
     health_sampling = payload.get("health_sampling") or {}
     request_throughput_rps = 0.0
     if rows:
@@ -110,9 +120,11 @@ def summarize_warm_output(path: Path, cache_reuse_mode: str) -> WarmMetricSummar
         health_sample_count=int(health_sampling.get("sample_count") or 0),
         failures=failures,
         cost_per_request_usd=median(request_costs),
+        cost_per_paired_sample_usd=median(paired_sample_costs),
         cost_per_token_usd=median(token_costs),
         cost_per_1m_tokens_usd=median(million_token_costs),
         cost_accuracy=cost_accuracy,
+        cost_token_accuracy=cost_token_accuracy,
         cost_attribution_method=cost_attribution_method,
         source_path=str(path),
     )

@@ -82,10 +82,13 @@ def test_warm_summary_exposes_cost_units_and_accuracy(tmp_path) -> None:
                             "ttft_ms": 10,
                             "stream_total_ms": 20,
                             "non_stream_total_ms": 30,
-                            "cost_query_usd": 0.002,
+                            "cost_per_request_usd": 0.002,
+                            "cost_query_usd": 99.0,
+                            "cost_per_paired_sample_usd": 0.004,
                             "cost_per_token_usd": 0.00001,
                             "cost_per_1m_tokens_usd": 10.0,
                             "cost_accuracy": "estimated",
+                            "cost_token_accuracy": "estimated",
                             "cost_attribution_method": "active_instance_group_time_share_v1",
                         }
                     ]
@@ -98,9 +101,21 @@ def test_warm_summary_exposes_cost_units_and_accuracy(tmp_path) -> None:
     summary = summarize_warm_output(path, "none")
 
     assert summary.cost_per_request_usd == 0.002
+    assert summary.cost_per_paired_sample_usd == 0.004
     assert summary.cost_per_token_usd == 0.00001
     assert summary.cost_per_1m_tokens_usd == 10.0
     assert summary.cost_accuracy == "estimated"
+    assert summary.cost_token_accuracy == "estimated"
+
+
+def test_warm_summary_reads_legacy_cost_query_alias(tmp_path) -> None:
+    path = tmp_path / "legacy-warm.json"
+    path.write_text(
+        json.dumps({"presets": {"short": [{"cost_query_usd": 0.003}]}}),
+        encoding="utf-8",
+    )
+
+    assert summarize_warm_output(path, "none").cost_per_request_usd == 0.003
 
 
 def test_format_comparison_markdown_includes_ranking_and_group_winners() -> None:

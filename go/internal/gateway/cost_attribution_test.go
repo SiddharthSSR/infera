@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -47,5 +48,32 @@ func TestRequestCostAttributionMarksMissingPriceUnavailable(t *testing.T) {
 	got := gateway.requestCostAttribution("worker-without-instance", types.RoutingDecision{}, time.Second)
 	if got.CostAccuracy != audit.CostAccuracyUnavailable || got.CostNano != 0 {
 		t.Fatalf("missing price must be unavailable, got %+v", got)
+	}
+}
+
+func TestAttributedCostNanoUsesDeterministicHalfUpRounding(t *testing.T) {
+	got, ok := attributedCostNano(1, millisecondsPerHour/2, 1)
+	if !ok || got != 1 {
+		t.Fatalf("expected exact half nano-USD to round up, got %d, ok=%v", got, ok)
+	}
+}
+
+func TestAttributedCostNanoRejectsInvalidAndOverflowingInputs(t *testing.T) {
+	tests := []struct {
+		name                   string
+		price, elapsed, active int64
+	}{
+		{name: "zero price", elapsed: 1, active: 1},
+		{name: "negative price", price: -1, elapsed: 1, active: 1},
+		{name: "negative elapsed", price: 1, elapsed: -1, active: 1},
+		{name: "zero concurrency", price: 1, elapsed: 1},
+		{name: "result overflow", price: math.MaxInt64, elapsed: time.Duration(math.MaxInt64).Milliseconds(), active: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got, ok := attributedCostNano(test.price, test.elapsed, test.active); ok {
+				t.Fatalf("expected unavailable result, got %d", got)
+			}
+		})
 	}
 }

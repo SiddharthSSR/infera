@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -669,10 +670,10 @@ func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
 // this snapshot.
 func (m *Manager) GetPriceSnapshotForWorker(workerID string) (PriceSnapshot, bool) {
 	instance, found := m.instances.findByWorker(workerID)
-	if !found || instance == nil || instance.CostPerHour <= 0 {
+	if !found || instance == nil || !validHourlyPrice(instance.CostPerHour) {
 		return PriceSnapshot{}, false
 	}
-	amountNano := int64(instance.CostPerHour*1_000_000_000 + 0.5)
+	amountNano := int64(math.Round(instance.CostPerHour * 1_000_000_000))
 	if amountNano <= 0 {
 		return PriceSnapshot{}, false
 	}
@@ -689,6 +690,16 @@ func (m *Manager) GetPriceSnapshotForWorker(workerID string) (PriceSnapshot, boo
 		TimeUnit:   PriceTimeUnitHour,
 		CapturedAt: capturedAt,
 	}, true
+}
+
+func validHourlyPrice(price float64) bool {
+	if math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
+		return false
+	}
+	scaled := price * 1_000_000_000
+	// float64(math.MaxInt64) rounds up to 1<<63, which cannot be converted
+	// safely to int64. Reject that boundary and anything larger.
+	return !math.IsInf(scaled, 0) && scaled < float64(math.MaxInt64)
 }
 
 // WorkerCredentialForWorker returns the deployment-bound credential for a

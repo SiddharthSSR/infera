@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 )
@@ -135,6 +136,45 @@ func TestManagerPriceSnapshotIsVersionedAndDefensive(t *testing.T) {
 	again, ok := mgr.GetPriceSnapshotForWorker("priced-worker")
 	if !ok || again.AmountNano != 1_000_000_000 {
 		t.Fatalf("caller mutated stored price: %+v", again)
+	}
+}
+
+func TestManagerPriceSnapshotRejectsInvalidOrOverflowingPrices(t *testing.T) {
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(provider)
+	instance, err := mgr.Provision(context.Background(), &ProvisionRequest{Name: "priced", GPUType: GPURTX4090})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if err := mgr.LinkWorker(instance.ID, "priced-worker"); err != nil {
+		t.Fatalf("LinkWorker: %v", err)
+	}
+
+	invalid := []float64{0, -1, math.NaN(), math.Inf(1), math.Inf(-1), float64(math.MaxInt64) / 1_000_000_000}
+	for _, price := range invalid {
+		mgr.instances.update(instance.ID, func(stored *Instance) { stored.CostPerHour = price })
+		if snapshot, ok := mgr.GetPriceSnapshotForWorker("priced-worker"); ok {
+			t.Fatalf("price %v must be unavailable, got %+v", price, snapshot)
+		}
+	}
+}
+
+func TestManagerPriceSnapshotRoundsToNearestNanoUSD(t *testing.T) {
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(provider)
+	instance, err := mgr.Provision(context.Background(), &ProvisionRequest{Name: "priced", GPUType: GPURTX4090})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if err := mgr.LinkWorker(instance.ID, "priced-worker"); err != nil {
+		t.Fatalf("LinkWorker: %v", err)
+	}
+	mgr.instances.update(instance.ID, func(stored *Instance) { stored.CostPerHour = 0.4000000006 })
+	snapshot, ok := mgr.GetPriceSnapshotForWorker("priced-worker")
+	if !ok || snapshot.AmountNano != 400_000_001 {
+		t.Fatalf("expected nearest-nano rounding, got %+v, ok=%v", snapshot, ok)
 	}
 }
 

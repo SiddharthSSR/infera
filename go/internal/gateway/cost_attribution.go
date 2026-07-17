@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"math"
+	"math/big"
 	"time"
 
 	"github.com/infera/infera/go/internal/audit"
@@ -23,15 +24,18 @@ func (g *Gateway) requestCostAttribution(workerID string, decision types.Routing
 	}
 	concurrency := int64(1)
 	if decision.WorkerActiveRequests != nil && *decision.WorkerActiveRequests > 0 {
+		if uint64(*decision.WorkerActiveRequests) >= uint64(math.MaxInt64) {
+			return audit.UnavailableCostAttribution()
+		}
 		concurrency += int64(*decision.WorkerActiveRequests)
 	}
 	elapsedMS := elapsed.Milliseconds()
 	if elapsedMS < 0 {
 		elapsedMS = 0
 	}
-	costNano := int64(math.Round(float64(snapshot.AmountNano) * float64(elapsedMS) / float64(millisecondsPerHour) / float64(concurrency)))
-	if costNano < 0 {
-		costNano = 0
+	costNano, ok := attributedCostNano(snapshot.AmountNano, elapsedMS, concurrency)
+	if !ok {
+		return audit.UnavailableCostAttribution()
 	}
 	return audit.CostAttribution{
 		Provider:                  string(snapshot.Provider),
@@ -46,4 +50,24 @@ func (g *Gateway) requestCostAttribution(workerID string, decision types.Routing
 		CostAttributionMethod:     audit.CostMethodActiveInstanceTimeShareV1,
 		ObservedActiveConcurrency: concurrency,
 	}
+}
+
+// attributedCostNano computes price*elapsed/(milliseconds/hour*concurrency)
+// with integer half-up rounding. big.Int keeps malformed extremes from
+// overflowing before the final checked int64 conversion.
+func attributedCostNano(priceNano, elapsedMS, concurrency int64) (int64, bool) {
+	if priceNano <= 0 || elapsedMS < 0 || concurrency <= 0 {
+		return 0, false
+	}
+	numerator := new(big.Int).Mul(big.NewInt(priceNano), big.NewInt(elapsedMS))
+	denominator := new(big.Int).Mul(big.NewInt(millisecondsPerHour), big.NewInt(concurrency))
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(numerator, denominator, remainder)
+	if new(big.Int).Lsh(remainder, 1).Cmp(denominator) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if !quotient.IsInt64() {
+		return 0, false
+	}
+	return quotient.Int64(), true
 }

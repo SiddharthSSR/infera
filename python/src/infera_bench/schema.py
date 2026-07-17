@@ -304,9 +304,11 @@ class WarmMetricSummary(BenchmarkBaseModel):
     health_sample_count: int = 0
     failures: int = 0
     cost_per_request_usd: float = 0.0
+    cost_per_paired_sample_usd: float = 0.0
     cost_per_token_usd: float = 0.0
     cost_per_1m_tokens_usd: float = 0.0
     cost_accuracy: Literal["exact", "estimated", "mixed", "unavailable"] = "unavailable"
+    cost_token_accuracy: Literal["exact", "estimated", "mixed", "unavailable"] = "unavailable"
     cost_attribution_method: str = ""
     source_path: str
 

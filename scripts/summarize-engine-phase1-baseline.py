@@ -137,7 +137,11 @@ def summarize_warm_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
     stream_total_values = [float(row["stream_total_ms"]) for row in rows]
     non_stream_total_values = [float(row["non_stream_total_ms"]) for row in rows]
     decode_values = [float(row["decode_tok_s"]) for row in rows if float(row["decode_tok_s"]) > 0]
-    cost_values = [float(row["cost_query_usd"]) for row in rows if float(row.get("cost_query_usd", 0.0)) > 0]
+    cost_values = [
+        float(row.get("cost_per_request_usd", row.get("cost_query_usd", 0.0)))
+        for row in rows
+        if float(row.get("cost_per_request_usd", row.get("cost_query_usd", 0.0))) > 0
+    ]
     group_rows = _group_representatives(rows)
     aggregate_decode_values = [
         float(row["aggregate_decode_tok_s"])
