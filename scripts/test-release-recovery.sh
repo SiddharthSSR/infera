@@ -77,17 +77,17 @@ assert_order() {
 
 PRIVATE_EVIDENCE_DIR="${TMP_DIR}/private-evidence"
 mkdir -p "${PRIVATE_EVIDENCE_DIR}"
-"${REPO_ROOT}/scripts/create-private-evidence.py" "${PRIVATE_EVIDENCE_DIR}/new.log"
+python3 "${REPO_ROOT}/scripts/create-private-evidence.py" "${PRIVATE_EVIDENCE_DIR}/new.log"
 assert_mode_600 "${PRIVATE_EVIDENCE_DIR}/new.log"
 printf 'existing-content\n' >"${PRIVATE_EVIDENCE_DIR}/existing.log"
-if "${REPO_ROOT}/scripts/create-private-evidence.py" "${PRIVATE_EVIDENCE_DIR}/existing.log"; then
+if python3 "${REPO_ROOT}/scripts/create-private-evidence.py" "${PRIVATE_EVIDENCE_DIR}/existing.log"; then
   echo "expected existing evidence path to be rejected" >&2
   exit 1
 fi
 [[ "$(cat "${PRIVATE_EVIDENCE_DIR}/existing.log")" == "existing-content" ]]
 printf 'target-content\n' >"${PRIVATE_EVIDENCE_DIR}/target.log"
 ln -s "${PRIVATE_EVIDENCE_DIR}/target.log" "${PRIVATE_EVIDENCE_DIR}/symlink.log"
-if "${REPO_ROOT}/scripts/create-private-evidence.py" "${PRIVATE_EVIDENCE_DIR}/symlink.log"; then
+if python3 "${REPO_ROOT}/scripts/create-private-evidence.py" "${PRIVATE_EVIDENCE_DIR}/symlink.log"; then
   echo "expected evidence symlink to be rejected" >&2
   exit 1
 fi
