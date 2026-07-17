@@ -20,20 +20,54 @@ recovery_gateway_url() {
   local compose_file="${COMPOSE_FILE:-docker-compose.prod.yml}"
   local gateway_id
   local gateway_ip
+  local gateway_ips=()
   gateway_id="$(docker compose -f "${compose_file}" ps -q gateway)"
   [[ -n "${gateway_id}" && "${gateway_id}" != *$'\n'* ]] || return 1
-  gateway_ip="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${gateway_id}")"
+  while IFS= read -r gateway_ip; do
+    [[ -n "${gateway_ip}" ]] && gateway_ips[${#gateway_ips[@]}]="${gateway_ip}"
+  done < <(docker inspect --format '{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}' "${gateway_id}")
+  [[ "${#gateway_ips[@]}" -eq 1 ]] || return 1
+  gateway_ip="${gateway_ips[0]}"
   [[ "${gateway_ip}" =~ ^[0-9a-fA-F:.]+$ ]] || return 1
+  [[ "${gateway_ip}" == *:* ]] && gateway_ip="[${gateway_ip}]"
   printf 'http://%s:8080\n' "${gateway_ip}"
+}
+
+recovery_https_host() {
+  local url="$1"
+  URL="${url}" python3 - <<'PY'
+import os
+import re
+from urllib.parse import urlsplit
+
+parsed = urlsplit(os.environ["URL"])
+host = parsed.hostname or ""
+if (
+    parsed.scheme != "https"
+    or parsed.username
+    or parsed.password
+    or parsed.port not in (None, 443)
+    or parsed.path not in ("", "/")
+    or parsed.query
+    or parsed.fragment
+    or not re.fullmatch(r"[A-Za-z0-9.-]+", host)
+):
+    raise SystemExit("expected a public HTTPS origin URL")
+print(host.lower())
+PY
 }
 
 recovery_bearer_config() {
   local token="$1"
   local config
   [[ -n "${token}" && "${token}" != *$'\n'* && "${token}" != *$'\r'* && "${token}" != *'"'* && "${token}" != *'\'* ]] || return 1
-  config="$(mktemp)"
-  chmod 600 "${config}"
-  printf 'header = "Authorization: Bearer %s"\n' "${token}" >"${config}"
+  if ! config="$(mktemp)"; then
+    return 1
+  fi
+  if ! chmod 600 "${config}" || ! printf 'header = "Authorization: Bearer %s"\n' "${token}" >"${config}"; then
+    rm -f "${config}"
+    return 1
+  fi
   printf '%s\n' "${config}"
 }
 

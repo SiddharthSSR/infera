@@ -81,8 +81,11 @@ export INFERA_DRAIN_TRAFFIC_EXECUTABLE="$PWD/scripts/caddy-drain-traffic.sh"
 export INFERA_RESTORE_TRAFFIC_EXECUTABLE="$PWD/scripts/caddy-restore-traffic.sh"
 export INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL=2
 export INFERA_EXPECT_TRAFFIC_DRAINED=1
+export INFERA_BASE_URL=https://inferai.co.in
+export INFERA_DASHBOARD_URL=https://dashboard.inferai.co.in
 export INFERA_SMOKE_API_KEY="$(secret-tool lookup service infera-smoke)"
 export INFERA_SMOKE_MODEL=Qwen/Qwen2.5-7B-Instruct
+export INFERA_RECOVERY_WORKER_MODEL=Qwen/Qwen2.5-7B-Instruct
 ./scripts/release-recovery.sh deploy \
   /secure/release/candidate.manifest \
   .infera-recovery/last-known-good.manifest
@@ -102,10 +105,10 @@ The command performs these gates in order:
    either state promotion or ingress restore fails, the command fails with traffic still drained;
    promotion failure also restores the verified prior release set.
 
-The RunPod deployment adapter defaults to one `RTX_4090` vLLM worker running
-`Qwen/Qwen2.5-7B-Instruct`. Override `INFERA_RECOVERY_WORKER_GPU_TYPE`,
-`INFERA_RECOVERY_WORKER_ENGINE`, or `INFERA_RECOVERY_WORKER_MODEL` when the reviewed release requires
-different capacity. It reads the admin and RunPod keys from the environment or `INFERA_ENV_FILE`,
+The RunPod deployment adapter requires an explicit reviewed `INFERA_RECOVERY_WORKER_MODEL`; it does
+not select a model implicitly. It defaults to one `RTX_4090` vLLM worker, with
+`INFERA_RECOVERY_WORKER_GPU_TYPE` and `INFERA_RECOVERY_WORKER_ENGINE` available when the reviewed
+release requires different capacity. It reads the admin and RunPod keys from the environment or `INFERA_ENV_FILE`,
 places bearer headers only in mode-0600 temporary curl configuration files, and waits for the
 gateway-managed worker to register. Before provisioning or stopping, it reconciles only pods whose
 name exactly matches `infera-release-<release ID>`; an orphan from an interrupted attempt is

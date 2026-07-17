@@ -14,13 +14,25 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 TRAFFIC_OPEN=0
 restore_maintenance_on_failure() {
   local status="$?"
+  local maintenance_status=""
+  local close_ingress=0
+  trap - EXIT
   if [[ "${status}" -ne 0 && "${TRAFFIC_OPEN}" == "1" ]]; then
     echo "ERROR: public validation failed; restoring maintenance ingress" >&2
-    docker compose -f "${COMPOSE_FILE}" exec -T caddy \
-      caddy reload --config /tmp/infera-maintenance.Caddyfile --adapter caddyfile >/dev/null 2>&1 || true
-    maintenance_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-      --max-time 15 "${INFERA_BASE_URL:-https://inferai.co.in}/health" 2>/dev/null || true)"
-    [[ "${maintenance_status}" == "503" ]] || echo "ERROR: unable to prove maintenance ingress after restore failure" >&2
+    if docker compose -f "${COMPOSE_FILE}" exec -T caddy \
+      caddy reload --config /tmp/infera-maintenance.Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+      maintenance_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+        --max-time 15 "${INFERA_BASE_URL:-https://inferai.co.in}/health" 2>/dev/null || true)"
+      [[ "${maintenance_status}" == "503" ]] || close_ingress=1
+    else
+      close_ingress=1
+    fi
+    if [[ "${close_ingress}" == "1" ]]; then
+      echo "ERROR: maintenance ingress could not be proven; stopping Caddy" >&2
+      if ! docker compose -f "${COMPOSE_FILE}" stop caddy; then
+        echo "CRITICAL: failed to stop unverified public ingress" >&2
+      fi
+    fi
   fi
   exit "${status}"
 }

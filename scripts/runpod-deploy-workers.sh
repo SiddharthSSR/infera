@@ -11,11 +11,15 @@ source "${SCRIPT_DIR}/recovery-adapter-common.sh"
 RELEASE_ID="$(recovery_manifest_value "${MANIFEST}" INFERA_RELEASE_ID)"
 ADMIN_KEY="$(recovery_env_value INFERA_ADMIN_KEY)"
 RUNPOD_KEY="$(recovery_env_value RUNPOD_API_KEY)"
+ADMIN_CONFIG=""
+RUNPOD_CONFIG=""
+cleanup_configs() { rm -f "${ADMIN_CONFIG:-}" "${RUNPOD_CONFIG:-}"; }
+trap cleanup_configs EXIT
 ADMIN_CONFIG="$(recovery_bearer_config "${ADMIN_KEY}")"
 RUNPOD_CONFIG="$(recovery_bearer_config "${RUNPOD_KEY}")"
-trap 'rm -f "${ADMIN_CONFIG}" "${RUNPOD_CONFIG}"' EXIT
 GATEWAY_URL="$(recovery_gateway_url)"
-MODEL="${INFERA_RECOVERY_WORKER_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+: "${INFERA_RECOVERY_WORKER_MODEL:?reviewed recovery worker model is required}"
+MODEL="${INFERA_RECOVERY_WORKER_MODEL}"
 GPU_TYPE="${INFERA_RECOVERY_WORKER_GPU_TYPE:-RTX_4090}"
 ENGINE="${INFERA_RECOVERY_WORKER_ENGINE:-vllm}"
 WAIT_ATTEMPTS="${INFERA_RECOVERY_WORKER_WAIT_ATTEMPTS:-120}"
