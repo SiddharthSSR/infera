@@ -61,7 +61,7 @@ export function instanceStatusClass(status: string): string {
   switch (status) {
     case 'running': return '';
     case 'error': return 'error';
-    case 'stopping': case 'pending': case 'provisioning': return 'warning';
+    case 'starting': case 'stopping': case 'pending': case 'provisioning': return 'warning';
     case 'stopped': case 'terminating': case 'terminated': return 'inactive';
     default: return '';
   }
@@ -72,6 +72,7 @@ export function instanceStatusLabel(status: string): string {
     pending: 'Pending',
     provisioning: 'Provisioning',
     running: 'Running',
+    starting: 'Starting',
     stopping: 'Stopping',
     stopped: 'Stopped',
     terminating: 'Terminating',

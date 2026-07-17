@@ -10,6 +10,7 @@ import (
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/deployments"
+	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/vault"
 	"github.com/infera/infera/go/pkg/types"
 )
@@ -369,15 +370,18 @@ func (g *Gateway) quotaStatusPayload(workspaceID string, now time.Time) (map[str
 }
 
 func (h *InstanceHandlers) listInstanceEntriesForWorkspace(workspaceID string) ([]map[string]interface{}, error) {
-	instances, err := h.manager.ListInstancesWithError()
+	normalizedWorkspaceID := normalizeWorkspaceIDForGateway(workspaceID)
+	var (
+		instances []*providers.Instance
+		err       error
+	)
+	if normalizedWorkspaceID == auth.DefaultWorkspaceID {
+		instances, err = h.manager.ListInstancesWithError()
+	} else {
+		instances, err = h.manager.ListInstancesByWorkspaceWithError(normalizedWorkspaceID)
+	}
 	if err != nil {
 		return nil, err
-	}
-	if normalizeWorkspaceIDForGateway(workspaceID) != auth.DefaultWorkspaceID {
-		instances, err = h.manager.ListInstancesByWorkspaceWithError(normalizeWorkspaceIDForGateway(workspaceID))
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	response := make([]map[string]interface{}, 0, len(instances))

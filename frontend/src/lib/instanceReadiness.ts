@@ -137,6 +137,14 @@ export function getInstanceReadiness(instance: Instance, workers: Worker[] | und
         serving: false,
         verified: false,
       };
+    case 'starting':
+      return {
+        label: 'STARTING',
+        detail: 'The provider is starting this node. It remains unavailable until startup is durably confirmed.',
+        tone: 'warning',
+        serving: false,
+        verified: false,
+      };
     case 'stopping':
       return {
         label: 'STOPPING',

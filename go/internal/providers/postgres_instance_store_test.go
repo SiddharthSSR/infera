@@ -94,13 +94,18 @@ func TestPostgresInstanceStoreCrossConnectionRestartAndBinding(t *testing.T) {
 	wg.Wait()
 	close(results)
 	var succeeded int
+	var conflicts int
 	for err := range results {
 		if err == nil {
 			succeeded++
+		} else if errors.Is(err, ErrWorkerIdentityConflict) {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected worker binding error: %v", err)
 		}
 	}
-	if succeeded != 1 {
-		t.Fatalf("expected exactly one concurrent worker binding, got %d", succeeded)
+	if succeeded != 1 || conflicts != 1 {
+		t.Fatalf("expected one binding and one identity conflict, got success=%d conflict=%d", succeeded, conflicts)
 	}
 	bound, found, err := storeB.get(instance.ID)
 	if err != nil || !found || bound.WorkerID == "" {
@@ -149,13 +154,19 @@ func TestPostgresInstanceStoreRejectsWrongEncryptionKey(t *testing.T) {
 
 func TestPostgresInstanceStoreUniqueWorkerBindingAcrossInstances(t *testing.T) {
 	dsn := isolatedControlStateDSN(t)
-	store, err := NewPostgresInstanceStore(dsn, randomEncodedKey(t))
+	key := randomEncodedKey(t)
+	storeA, err := NewPostgresInstanceStore(dsn, key)
 	if err != nil {
-		t.Fatalf("open store: %v", err)
+		t.Fatalf("open store A: %v", err)
 	}
-	defer store.Close()
+	defer storeA.Close()
+	storeB, err := NewPostgresInstanceStore(dsn, key)
+	if err != nil {
+		t.Fatalf("open store B: %v", err)
+	}
+	defer storeB.Close()
 	for _, id := range []string{"instance-1", "instance-2"} {
-		if err := store.put(&Instance{
+		if err := storeA.put(&Instance{
 			ID: id, ProviderID: "provider-" + id, Provider: ProviderRunPod,
 			WorkspaceID: "ws-" + id, Status: InstanceStatusRunning,
 			WorkerCredential: "credential-" + id, CreatedAt: time.Now().UTC(),
@@ -163,11 +174,34 @@ func TestPostgresInstanceStoreUniqueWorkerBindingAcrossInstances(t *testing.T) {
 			t.Fatalf("persist %s: %v", id, err)
 		}
 	}
-	if err := store.linkWorker("instance-1", "shared-worker", time.Now().UTC()); err != nil {
-		t.Fatalf("bind first instance: %v", err)
+	var validated sync.WaitGroup
+	validated.Add(2)
+	release := make(chan struct{})
+	for _, store := range []*PostgresInstanceStore{storeA, storeB} {
+		store.linkValidated = func() {
+			validated.Done()
+			<-release
+		}
 	}
-	if err := store.linkWorker("instance-2", "shared-worker", time.Now().UTC()); err == nil {
-		t.Fatal("expected unique worker binding to reject second instance")
+	results := make(chan error, 2)
+	go func() { results <- storeA.linkWorker("instance-1", "shared-worker", time.Now().UTC()) }()
+	go func() { results <- storeB.linkWorker("instance-2", "shared-worker", time.Now().UTC()) }()
+	validated.Wait()
+	close(release)
+	var success, conflict int
+	for range 2 {
+		err := <-results
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, ErrWorkerIdentityConflict):
+			conflict++
+		default:
+			t.Fatalf("unexpected binding result: %v", err)
+		}
+	}
+	if success != 1 || conflict != 1 {
+		t.Fatalf("expected unique index to yield one success and one identity conflict, got success=%d conflict=%d", success, conflict)
 	}
 }
 
@@ -215,7 +249,7 @@ func TestPostgresInstanceStoreInactiveCredentialsFailClosed(t *testing.T) {
 	}
 	defer store.Close()
 	for _, status := range []InstanceStatus{
-		InstanceStatusStopping, InstanceStatusStopped, InstanceStatusTerminating,
+		InstanceStatusStarting, InstanceStatusStopping, InstanceStatusStopped, InstanceStatusTerminating,
 		InstanceStatusTerminated, InstanceStatusError, "", "future_corrupt",
 	} {
 		id := "inactive-" + string(status)
@@ -252,6 +286,47 @@ func TestPostgresInstanceStoreInactiveCredentialsFailClosed(t *testing.T) {
 		if outbound, found, err := store.workerCredentialForWorker("worker-" + id); err != nil || !found || outbound != credential {
 			t.Fatalf("active %s outbound credential failed: found=%v err=%v", status, found, err)
 		}
+	}
+}
+
+func TestPostgresInstanceStoreReusableStoppedSelectionMatchesInMemoryPolicy(t *testing.T) {
+	dsn := isolatedControlStateDSN(t)
+	store, err := NewPostgresInstanceStore(dsn, randomEncodedKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	for _, candidate := range []struct {
+		id        string
+		stoppedAt time.Time
+		models    []string
+	}{
+		{id: "older", stoppedAt: now.Add(-time.Hour), models: []string{"model-a"}},
+		{id: "newer", stoppedAt: now.Add(-time.Minute), models: []string{"model-a"}},
+		{id: "different-model", stoppedAt: now, models: []string{"model-b"}},
+	} {
+		stoppedAt := candidate.stoppedAt
+		if err := store.put(&Instance{
+			ID: candidate.id, ProviderID: "provider-" + candidate.id, Provider: ProviderRunPod,
+			WorkspaceID: "ws-reuse", Status: InstanceStatusStopped, GPUType: GPUA100_80,
+			GPUCount: 1, Engine: EngineVLLM, Models: candidate.models, StoppedAt: &stoppedAt,
+			WorkerCredential: "credential-" + candidate.id, CreatedAt: now.Add(-2 * time.Hour),
+		}); err != nil {
+			t.Fatalf("seed %s: %v", candidate.id, err)
+		}
+	}
+	if reusable, err := store.findReusableStopped(ProviderRunPod, &ProvisionRequest{
+		WorkspaceID: "ws-reuse", GPUType: GPUA100_80, GPUCount: 1, Engine: EngineVLLM,
+	}); err != nil || reusable != nil {
+		t.Fatalf("empty model request must not reuse an instance: instance=%+v err=%v", reusable, err)
+	}
+	reusable, err := store.findReusableStopped(ProviderRunPod, &ProvisionRequest{
+		WorkspaceID: "ws-reuse", GPUType: GPUA100_80, GPUCount: 1, Engine: EngineVLLM,
+		Models: []string{"model-a"},
+	})
+	if err != nil || reusable == nil || reusable.ID != "newer" {
+		t.Fatalf("expected most recently stopped matching instance, got instance=%+v err=%v", reusable, err)
 	}
 }
 
@@ -368,8 +443,10 @@ func TestPostgresInstanceStoreVersionFenceRejectsCrossConnectionStaleUpdate(t *t
 		!afterHeartbeat.WorkerLastHeartbeatAt.Equal(heartbeatAt) || afterHeartbeat.LifecycleVersion != observed.LifecycleVersion {
 		t.Fatalf("generic heartbeat changed lifecycle version or lost worker state: %+v", afterHeartbeat)
 	}
+	claimedAt := heartbeatAt.Add(time.Second)
 	advanced, err := storeB.updateLifecycle("version-fence", func(instance *Instance) {
-		instance.Status = InstanceStatusStopped
+		instance.Status = InstanceStatusStopping
+		instance.LifecycleClaimedAt = &claimedAt
 	})
 	if err != nil || !advanced {
 		t.Fatalf("advance lifecycle: updated=%v err=%v", advanced, err)
@@ -387,8 +464,59 @@ func TestPostgresInstanceStoreVersionFenceRejectsCrossConnectionStaleUpdate(t *t
 	if err != nil || !found {
 		t.Fatalf("read final version: found=%v err=%v", found, err)
 	}
-	if stored.WorkerID != "worker-version-fence" || stored.Status != InstanceStatusStopped || stored.LifecycleVersion <= observed.LifecycleVersion {
+	if stored.WorkerID != "worker-version-fence" || stored.Status != InstanceStatusStopping ||
+		stored.LifecycleClaimedAt == nil || !stored.LifecycleClaimedAt.Equal(claimedAt) ||
+		stored.LifecycleVersion <= observed.LifecycleVersion {
 		t.Fatalf("version fence did not preserve newer mutation: %+v", stored)
+	}
+}
+
+func TestPostgresLifecycleClaimSurvivesCrossConnectionReopenAndPreventsEarlyRecovery(t *testing.T) {
+	dsn := isolatedControlStateDSN(t)
+	key := randomEncodedKey(t)
+	storeA, err := NewPostgresInstanceStore(dsn, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeA.Close()
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	if err := storeA.put(&Instance{
+		ID: "persisted-lease", ProviderID: "provider-persisted-lease", Provider: ProviderMock,
+		Status: InstanceStatusRunning, WorkerCredential: "persisted-lease-credential", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := storeA.updateLifecycle("persisted-lease", func(instance *Instance) {
+		instance.Status = InstanceStatusStopping
+		instance.LifecycleClaimedAt = &now
+	})
+	if err != nil || !claimed {
+		t.Fatalf("persist lifecycle claim: updated=%v err=%v", claimed, err)
+	}
+	storeB, err := NewPostgresInstanceStore(dsn, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManagerWithStore(ManagerConfig{
+		DefaultProvider: ProviderMock, LifecycleOperationTimeout: 30 * time.Second,
+		LifecycleReconcileLease: time.Minute, Now: func() time.Time { return now.Add(45 * time.Second) },
+	}, storeB)
+	if err != nil {
+		_ = storeB.Close()
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	provider := &blockingLifecycleProvider{mockTestProvider: newMockTestProvider()}
+	manager.RegisterProvider(provider)
+	reopened, found, err := storeB.get("persisted-lease")
+	if err != nil || !found || reopened.LifecycleClaimedAt == nil || !reopened.LifecycleClaimedAt.Equal(now) {
+		t.Fatalf("reopened replica lost lifecycle lease: found=%v err=%v instance=%+v", found, err, reopened)
+	}
+	if err := manager.RefreshInstances(context.Background()); err != nil {
+		t.Fatalf("refresh within persisted lease: %v", err)
+	}
+	if calls := provider.stopCalls.Load(); calls != 0 {
+		t.Fatalf("reopened replica reclaimed unexpired lifecycle lease: calls=%d", calls)
 	}
 }
 
@@ -418,6 +546,72 @@ func TestManagerControlStateOutageFailsBeforeDuplicateProvisioning(t *testing.T)
 	}
 	if _, _, err := manager.GetInstanceWithError("missing"); !errors.Is(err, ErrControlStateUnavailable) {
 		t.Fatalf("closed store looked like not-found: %v", err)
+	}
+}
+
+func TestPostgresInstanceStoreConfigDefaultsAndPoolBounds(t *testing.T) {
+	defaults := normalizePostgresInstanceStoreConfig(PostgresInstanceStoreConfig{})
+	if defaults.QueryTimeout != defaultControlStateQueryTimeout ||
+		defaults.MaxOpenConns != defaultControlStateMaxOpenConns ||
+		defaults.MaxIdleConns != defaultControlStateMaxIdleConns ||
+		defaults.ConnMaxLifetime != defaultControlStateConnMaxLifetime {
+		t.Fatalf("unexpected default control-state config: %+v", defaults)
+	}
+	bounded := normalizePostgresInstanceStoreConfig(PostgresInstanceStoreConfig{
+		QueryTimeout: time.Second, MaxOpenConns: 2, MaxIdleConns: 5, ConnMaxLifetime: time.Minute,
+	})
+	if bounded.MaxIdleConns != 2 {
+		t.Fatalf("idle pool must not exceed open pool: %+v", bounded)
+	}
+}
+
+func TestPostgresInstanceStoreQueryTimeoutFailsClosed(t *testing.T) {
+	dsn := isolatedControlStateDSN(t)
+	key := randomEncodedKey(t)
+	storeA, err := NewPostgresInstanceStore(dsn, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeA.Close()
+	storeB, err := NewPostgresInstanceStoreWithConfig(dsn, key, PostgresInstanceStoreConfig{
+		QueryTimeout: 75 * time.Millisecond, MaxOpenConns: 2, MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeB.Close()
+	credential := "timeout-credential"
+	if err := storeA.put(&Instance{
+		ID: "timeout", ProviderID: "provider-timeout", Provider: ProviderRunPod,
+		WorkspaceID: "ws-timeout", Status: InstanceStatusRunning,
+		WorkerCredential: credential, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := storeA.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback()
+	if _, err := blocker.Exec(`LOCK TABLE managed_instances IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if _, _, err := storeB.get("timeout"); !errors.Is(err, ErrControlStateUnavailable) {
+		t.Fatalf("timed-out get was not unavailable: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("get exceeded configured query bound: %v", elapsed)
+	}
+	hash := sha256.Sum256([]byte(credential))
+	if _, _, err := storeB.authenticateWorkerTokenHash(hash); !errors.Is(err, ErrControlStateUnavailable) {
+		t.Fatalf("timed-out authentication was not unavailable: %v", err)
+	}
+	if _, err := storeB.listByWorkspace("ws-timeout"); !errors.Is(err, ErrControlStateUnavailable) {
+		t.Fatalf("timed-out HTTP-reachable list was not unavailable: %v", err)
+	}
+	if stats := storeB.db.Stats(); stats.MaxOpenConnections != 2 {
+		t.Fatalf("configured pool bound was not applied: %+v", stats)
 	}
 }
 

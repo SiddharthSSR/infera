@@ -99,6 +99,7 @@ func TestInstanceStatus(t *testing.T) {
 		{"Pending", InstanceStatusPending, "pending"},
 		{"Provisioning", InstanceStatusProvisioning, "provisioning"},
 		{"Running", InstanceStatusRunning, "running"},
+		{"Starting", InstanceStatusStarting, "starting"},
 		{"Stopping", InstanceStatusStopping, "stopping"},
 		{"Stopped", InstanceStatusStopped, "stopped"},
 		{"Terminating", InstanceStatusTerminating, "terminating"},

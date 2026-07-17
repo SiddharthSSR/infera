@@ -39,6 +39,19 @@ const healthyWorker: Worker = {
 };
 
 describe('getInstanceReadiness', () => {
+  it('keeps a starting instance non-serving until durable startup finalization', () => {
+    const readiness = getInstanceReadiness(
+      { ...baseInstance, status: 'starting' },
+      [healthyWorker],
+      new Date('2026-03-14T10:12:00.000Z'),
+    );
+
+    expect(readiness.label).toBe('STARTING');
+    expect(readiness.tone).toBe('warning');
+    expect(readiness.serving).toBe(false);
+    expect(readiness.verified).toBe(false);
+  });
+
   it('marks serving as verified when assigned model is loaded on a fresh healthy worker', () => {
     const readiness = getInstanceReadiness(
       baseInstance,

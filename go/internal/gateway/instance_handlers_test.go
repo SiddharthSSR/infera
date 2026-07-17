@@ -435,7 +435,10 @@ func TestProvisionControlStateFailureReturnsGenericUnavailable(t *testing.T) {
 }
 
 func TestStopControlStateFailureReturnsGenericUnavailable(t *testing.T) {
-	provider := &failingProvider{}
+	provider := &failingProvider{provisionInstance: &providers.Instance{
+		ID: "inst-1", ProviderID: "mock-inst-1", Provider: providers.ProviderMock,
+		Status: providers.InstanceStatusRunning, CreatedAt: time.Now(),
+	}}
 	mgr, err := providers.NewManager(providers.ManagerConfig{DefaultProvider: providers.ProviderMock})
 	if err != nil {
 		t.Fatal(err)

@@ -36,6 +36,9 @@ type Manager struct {
 	workerProtocolVersion     string
 	workerRegistrationTimeout time.Duration
 	workerHeartbeatTimeout    time.Duration
+	providerCleanupTimeout    time.Duration
+	lifecycleOperationTimeout time.Duration
+	lifecycleReconcileLease   time.Duration
 	now                       func() time.Time
 
 	workspaceProviderConfigResolver WorkspaceProviderConfigResolver
@@ -66,6 +69,9 @@ type ManagerConfig struct {
 	CostDBPath                string                     // Path to SQLite DB for persistent cost tracking (empty = in-memory)
 	WorkerRegistrationTimeout time.Duration              // Max time a running provider instance may remain unregistered
 	WorkerHeartbeatTimeout    time.Duration              // Max age of a linked worker heartbeat before lifecycle becomes unhealthy
+	ProviderCleanupTimeout    time.Duration              // Max time allowed to clean up an orphan after persistence failure
+	LifecycleOperationTimeout time.Duration              // Provider-call bound for lifecycle actions
+	LifecycleReconcileLease   time.Duration              // Minimum claim age before another replica may recover an interrupted action
 	Now                       func() time.Time           // Optional clock used by deterministic lifecycle tests
 }
 
@@ -97,6 +103,18 @@ func NewManagerWithStore(config ManagerConfig, store instanceStore) (*Manager, e
 	if heartbeatTimeout <= 0 {
 		heartbeatTimeout = 90 * time.Second
 	}
+	cleanupTimeout := config.ProviderCleanupTimeout
+	if cleanupTimeout <= 0 {
+		cleanupTimeout = 15 * time.Second
+	}
+	operationTimeout := config.LifecycleOperationTimeout
+	if operationTimeout <= 0 {
+		operationTimeout = 2 * time.Minute
+	}
+	reconcileLease := config.LifecycleReconcileLease
+	if reconcileLease <= operationTimeout {
+		reconcileLease = 2 * operationTimeout
+	}
 	now := config.Now
 	if now == nil {
 		now = time.Now
@@ -114,6 +132,9 @@ func NewManagerWithStore(config ManagerConfig, store instanceStore) (*Manager, e
 		workerProtocolVersion:     strings.TrimSpace(config.WorkerProtocolVersion),
 		workerRegistrationTimeout: timeout,
 		workerHeartbeatTimeout:    heartbeatTimeout,
+		providerCleanupTimeout:    cleanupTimeout,
+		lifecycleOperationTimeout: operationTimeout,
+		lifecycleReconcileLease:   reconcileLease,
 		now:                       now,
 	}, nil
 }
@@ -283,14 +304,167 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	if err := m.putTrackedInstance(instance); err != nil {
 		// A provider resource without its credential record cannot safely join
 		// the control plane. Best-effort cleanup avoids leaving a paid orphan.
-		_ = provider.Terminate(ctx, instance.ProviderID)
-		return nil, fmt.Errorf("persist managed instance: %w", err)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), m.providerCleanupTimeout)
+		cleanupErr := provider.Terminate(cleanupCtx, instance.ProviderID)
+		cancel()
+		persistErr := fmt.Errorf("persist managed instance: %w", err)
+		if cleanupErr != nil {
+			return nil, errors.Join(persistErr, fmt.Errorf("terminate orphaned provider instance: %w", cleanupErr))
+		}
+		return nil, persistErr
 	}
 
 	// Start cost tracking
 	m.costs.StartTracking(instance)
 
 	return instance, nil
+}
+
+var ErrLifecycleConflict = errors.New("provider instance lifecycle changed concurrently")
+
+func lifecycleTransitionInProgress(status InstanceStatus) bool {
+	switch status {
+	case InstanceStatusStarting, InstanceStatusStopping, InstanceStatusTerminating:
+		return true
+	default:
+		return false
+	}
+}
+
+func lifecycleActionAllowed(action, status InstanceStatus) bool {
+	switch action {
+	case InstanceStatusStarting:
+		return status == InstanceStatusStopped
+	case InstanceStatusStopping:
+		return status == InstanceStatusPending || status == InstanceStatusProvisioning || status == InstanceStatusRunning
+	case InstanceStatusTerminating:
+		return status != InstanceStatusTerminated && !lifecycleTransitionInProgress(status)
+	default:
+		return false
+	}
+}
+
+func providerInstanceNotFound(err error) bool {
+	var providerErr *ProviderError
+	return errors.As(err, &providerErr) && providerErr.Code == ProviderErrorNotFound
+}
+
+func (m *Manager) claimLifecycle(instance *Instance, action InstanceStatus) (int64, error) {
+	if !lifecycleActionAllowed(action, instance.Status) {
+		return 0, fmt.Errorf("%w: cannot move instance %s from %s to %s", ErrLifecycleConflict, instance.ID, instance.Status, action)
+	}
+	updated, err := m.instances.updateIfLifecycleVersion(instance.ID, instance.LifecycleVersion, func(stored *Instance) {
+		stored.Status = action
+		now := m.now()
+		stored.LifecycleClaimedAt = &now
+	})
+	if err != nil {
+		return 0, err
+	}
+	if !updated {
+		return 0, fmt.Errorf("%w: instance %s", ErrLifecycleConflict, instance.ID)
+	}
+	return instance.LifecycleVersion + 1, nil
+}
+
+func (m *Manager) finalizeLifecycle(instanceID string, claimedVersion int64, action string, apply func(*Instance)) error {
+	updated, err := m.instances.updateIfLifecycleVersion(instanceID, claimedVersion, func(instance *Instance) {
+		apply(instance)
+		instance.LifecycleClaimedAt = nil
+	})
+	if err != nil {
+		return fmt.Errorf("provider %s succeeded but durable lifecycle finalization failed; instance remains inactive: %w", action, err)
+	}
+	if !updated {
+		return fmt.Errorf("provider %s succeeded but lifecycle finalization lost its claim: %w", action, ErrLifecycleConflict)
+	}
+	return nil
+}
+
+func (m *Manager) finalizeProviderMissing(instanceID string, claimedVersion int64, action string) error {
+	m.costs.StopTracking(instanceID)
+	return m.finalizeLifecycle(instanceID, claimedVersion, action, func(instance *Instance) {
+		instance.Status = InstanceStatusTerminated
+		stoppedAt := m.now()
+		instance.StoppedAt = &stoppedAt
+		m.clearWorkerRegistration(instance)
+	})
+}
+
+func (m *Manager) reconcileTransitionalLifecycle(ctx context.Context, instance *Instance) error {
+	now := m.now()
+	if instance.LifecycleClaimedAt != nil && now.Sub(*instance.LifecycleClaimedAt) < m.lifecycleReconcileLease {
+		return nil
+	}
+	provider, err := m.resolveProvider(instance.WorkspaceID, instance.Provider)
+	if err != nil {
+		return nil
+	}
+	claimedVersion := instance.LifecycleVersion + 1
+	claimed, err := m.instances.updateIfLifecycleVersion(instance.ID, instance.LifecycleVersion, func(stored *Instance) {
+		stored.LifecycleClaimedAt = &now
+	})
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, m.lifecycleOperationTimeout)
+	defer cancel()
+
+	switch instance.Status {
+	case InstanceStatusStarting:
+		if starter, ok := provider.(InstanceStarter); ok {
+			err = starter.StartWithInstance(actionCtx, instance)
+		} else {
+			err = provider.Start(actionCtx, instance.ProviderID)
+		}
+		if err != nil {
+			if providerInstanceNotFound(err) {
+				return m.finalizeProviderMissing(instance.ID, claimedVersion, "start recovery")
+			}
+			return nil
+		}
+		m.costs.StartTracking(instance)
+		return m.finalizeLifecycle(instance.ID, claimedVersion, "start recovery", func(stored *Instance) {
+			stored.Status = InstanceStatusProvisioning
+			startedAt := m.now()
+			stored.StartedAt = &startedAt
+			stored.StoppedAt = nil
+			stored.ErrorMessage = ""
+			m.initializeWorkerRegistration(stored, startedAt)
+		})
+	case InstanceStatusStopping:
+		err = provider.Stop(actionCtx, instance.ProviderID)
+		if err != nil && !providerInstanceNotFound(err) {
+			return nil
+		}
+		m.costs.StopTracking(instance.ID)
+		return m.finalizeLifecycle(instance.ID, claimedVersion, "stop recovery", func(stored *Instance) {
+			stored.Status = InstanceStatusStopped
+			if providerInstanceNotFound(err) {
+				stored.Status = InstanceStatusTerminated
+			}
+			stoppedAt := m.now()
+			stored.StoppedAt = &stoppedAt
+			m.clearWorkerRegistration(stored)
+		})
+	case InstanceStatusTerminating:
+		err = provider.Terminate(actionCtx, instance.ProviderID)
+		if err != nil && !providerInstanceNotFound(err) {
+			return nil
+		}
+		m.costs.StopTracking(instance.ID)
+		return m.finalizeLifecycle(instance.ID, claimedVersion, "termination recovery", func(stored *Instance) {
+			stored.Status = InstanceStatusTerminated
+			stoppedAt := m.now()
+			stored.StoppedAt = &stoppedAt
+			m.clearWorkerRegistration(stored)
+		})
+	default:
+		return nil
+	}
 }
 
 // AuthenticateWorkerToken resolves a provisioned instance from its unique worker credential.
@@ -360,8 +534,19 @@ func (m *Manager) Terminate(ctx context.Context, instanceID string) error {
 		return err
 	}
 
-	// Terminate via provider
-	if err := provider.Terminate(ctx, instance.ProviderID); err != nil {
+	claimedVersion, err := m.claimLifecycle(instance, InstanceStatusTerminating)
+	if err != nil {
+		return err
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, m.lifecycleOperationTimeout)
+	defer cancel()
+	if err := provider.Terminate(actionCtx, instance.ProviderID); err != nil {
+		if providerInstanceNotFound(err) {
+			return m.finalizeProviderMissing(instanceID, claimedVersion, "termination")
+		}
+		// Termination errors can be ambiguous: the provider may have completed
+		// server-side after the client timed out. Keep credentials inactive and
+		// let leased reconciliation retry the idempotent operation.
 		return err
 	}
 
@@ -369,19 +554,13 @@ func (m *Manager) Terminate(ctx context.Context, instanceID string) error {
 	m.costs.StopTracking(instanceID)
 
 	// Update status
-	updated, err := m.instances.updateLifecycle(instanceID, func(instance *Instance) {
+	err = m.finalizeLifecycle(instanceID, claimedVersion, "termination", func(instance *Instance) {
 		instance.Status = InstanceStatusTerminated
 		now := m.now()
 		instance.StoppedAt = &now
 		m.clearWorkerRegistration(instance)
 	})
-	if err != nil {
-		return err
-	}
-	if !updated {
-		return fmt.Errorf("instance %s not found", instanceID)
-	}
-	return nil
+	return err
 }
 
 // Start starts a stopped instance.
@@ -406,12 +585,24 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 		return err
 	}
 
+	claimedVersion, err := m.claimLifecycle(instance, InstanceStatusStarting)
+	if err != nil {
+		return err
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, m.lifecycleOperationTimeout)
+	defer cancel()
 	if starter, ok := provider.(InstanceStarter); ok {
-		if err := starter.StartWithInstance(ctx, instance); err != nil {
+		if err := starter.StartWithInstance(actionCtx, instance); err != nil {
+			if providerInstanceNotFound(err) {
+				return m.finalizeProviderMissing(instanceID, claimedVersion, "start")
+			}
 			return err
 		}
 	} else {
-		if err := provider.Start(ctx, instance.ProviderID); err != nil {
+		if err := provider.Start(actionCtx, instance.ProviderID); err != nil {
+			if providerInstanceNotFound(err) {
+				return m.finalizeProviderMissing(instanceID, claimedVersion, "start")
+			}
 			return err
 		}
 	}
@@ -419,7 +610,7 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 	// Resume cost tracking
 	m.costs.StartTracking(instance)
 
-	updated, err := m.instances.updateLifecycle(instanceID, func(instance *Instance) {
+	err = m.finalizeLifecycle(instanceID, claimedVersion, "start", func(instance *Instance) {
 		now := m.now()
 		instance.Status = InstanceStatusProvisioning
 		instance.StartedAt = &now
@@ -427,13 +618,7 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 		instance.ErrorMessage = ""
 		m.initializeWorkerRegistration(instance, now)
 	})
-	if err != nil {
-		return err
-	}
-	if !updated {
-		return fmt.Errorf("instance %s not found", instanceID)
-	}
-	return nil
+	return err
 }
 
 // Stop stops a running instance.
@@ -451,26 +636,31 @@ func (m *Manager) Stop(ctx context.Context, instanceID string) error {
 		return err
 	}
 
-	if err := provider.Stop(ctx, instance.ProviderID); err != nil {
+	claimedVersion, err := m.claimLifecycle(instance, InstanceStatusStopping)
+	if err != nil {
+		return err
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, m.lifecycleOperationTimeout)
+	defer cancel()
+	if err := provider.Stop(actionCtx, instance.ProviderID); err != nil {
+		if providerInstanceNotFound(err) {
+			return m.finalizeProviderMissing(instanceID, claimedVersion, "stop")
+		}
+		// A timeout or transport failure does not prove the provider kept the
+		// instance running. Preserve the inactive claim for reconciliation.
 		return err
 	}
 
 	// Stop cost tracking
 	m.costs.StopTracking(instanceID)
 
-	updated, err := m.instances.updateLifecycle(instanceID, func(instance *Instance) {
+	err = m.finalizeLifecycle(instanceID, claimedVersion, "stop", func(instance *Instance) {
 		now := m.now()
 		instance.Status = InstanceStatusStopped
 		instance.StoppedAt = &now
 		m.clearWorkerRegistration(instance)
 	})
-	if err != nil {
-		return err
-	}
-	if !updated {
-		return fmt.Errorf("instance %s not found", instanceID)
-	}
-	return nil
+	return err
 }
 
 func (m *Manager) getTrackedInstance(instanceID string) (*Instance, bool, error) {
@@ -570,6 +760,12 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 	}
 
 	for _, inst := range instances {
+		if lifecycleTransitionInProgress(inst.Status) {
+			if err := m.reconcileTransitionalLifecycle(ctx, inst); err != nil {
+				return err
+			}
+			continue
+		}
 		provider, err := m.resolveProvider(inst.WorkspaceID, inst.Provider)
 		if err != nil {
 			continue
@@ -927,7 +1123,7 @@ func (m *Manager) evaluateWorkerRegistration(instance *Instance, now time.Time) 
 	instance.ProviderNetworkError = ""
 
 	switch instance.Status {
-	case InstanceStatusStopped, InstanceStatusStopping, InstanceStatusTerminated, InstanceStatusTerminating:
+	case InstanceStatusStarting, InstanceStatusStopped, InstanceStatusStopping, InstanceStatusTerminated, InstanceStatusTerminating:
 		m.clearWorkerRegistration(instance)
 		return
 	case InstanceStatusError:

@@ -301,6 +301,7 @@ export function getDeploymentTimeline(summary: DeploymentAttemptSummary): Deploy
   switch (summary.instance.status) {
     case 'pending':
     case 'provisioning':
+    case 'starting':
       steps[2].state = 'active';
       return steps;
     case 'error':

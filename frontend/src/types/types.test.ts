@@ -92,6 +92,7 @@ describe('Types', () => {
         'pending',
         'provisioning',
         'running',
+        'starting',
         'stopping',
         'stopped',
         'terminating',
