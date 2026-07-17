@@ -72,6 +72,16 @@ func TestSLOPrometheusRulesContract(t *testing.T) {
 			t.Errorf("missing required recording rule %q", name)
 		}
 	}
+	for _, name := range []string{"infera:slo_v1:ttft_seconds_p95_14d", "infera:slo_v1:ttft_good_ratio14d"} {
+		if strings.Contains(records[name], "measurement") {
+			t.Errorf("14-day TTFT cohort %q must aggregate exact and derived samples: %s", name, records[name])
+		}
+	}
+	for _, name := range []string{"infera:slo_v1:ttft_seconds_p95_5m", "infera:slo_v1:ttft_seconds_p95_30m"} {
+		if !strings.Contains(records[name], "measurement") {
+			t.Errorf("operational TTFT diagnostic %q must retain measurement quality", name)
+		}
+	}
 	for name, wantFor := range map[string]string{
 		"InferaSLOAvailabilityFastBurn": "5m",
 		"InferaSLOAvailabilitySlowBurn": "30m",
@@ -132,7 +142,8 @@ func TestSLOGrafanaDashboardContract(t *testing.T) {
 				} `json:"defaults"`
 			} `json:"fieldConfig"`
 			Targets []struct {
-				Expr string `json:"expr"`
+				Expr         string `json:"expr"`
+				LegendFormat string `json:"legendFormat"`
 			} `json:"targets"`
 		} `json:"panels"`
 		Templating struct {
@@ -178,6 +189,11 @@ func TestSLOGrafanaDashboardContract(t *testing.T) {
 			allExpressions += "\n" + target.Expr
 			if !strings.Contains(target.Expr, `$model`) || !strings.Contains(target.Expr, `$routing_strategy`) {
 				t.Errorf("panel %q target must apply model and routing strategy filters: %s", panel.Title, target.Expr)
+			}
+			if strings.Contains(target.Expr, "ttft_seconds_p95_14d") || strings.Contains(target.Expr, "ttft_good_ratio14d") {
+				if strings.Contains(target.LegendFormat, "{{measurement}}") || !strings.Contains(target.LegendFormat, "combined") {
+					t.Errorf("14-day TTFT legend must describe the combined cohort: %q", target.LegendFormat)
+				}
 			}
 		}
 		for _, want := range wantedQueries {

@@ -13,7 +13,7 @@ Version 1 applies to requests accepted by the OpenAI-compatible chat-completions
 | TTFT | p95 <= 2s over 14 days | Successful requests with an exact or derived TTFT sample | Sample is <= 2s |
 | TPOT | p95 <= 100ms over 14 days | Successful requests with a derived TPOT sample | Sample is <= 100ms |
 
-The production rules publish rolling five-minute p50/p95/p99 operational views, 14-day p95 objective values, and 14-day good-event attainment ratios. The dashboard labels the short-window views as operational and reports objective attainment separately. The 14-day objective fits within the production Prometheus 15-day retention window.
+The production rules publish rolling five-minute p50/p95/p99 operational views, 14-day p95 objective values, and 14-day good-event attainment ratios. The 14-day TTFT objective is one cohort across all eligible exact and derived samples; measurement quality remains available on 5-minute/30-minute diagnostics and measurement-availability reporting. The dashboard labels the short-window views as operational and reports objective attainment separately. The 14-day objective fits within the production Prometheus 15-day retention window.
 
 ### Measurement semantics
 

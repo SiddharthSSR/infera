@@ -488,7 +488,7 @@
         {
           "editorMode": "code",
           "expr": "infera:slo_v1:ttft_seconds_p95_14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
-          "legendFormat": "14d p95 {{measurement}} / {{model}} / {{routing_strategy}}",
+          "legendFormat": "14d p95 combined / {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "D"
         }
@@ -849,7 +849,7 @@
         {
           "editorMode": "code",
           "expr": "infera:slo_v1:ttft_good_ratio14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
-          "legendFormat": "TTFT <=2s {{measurement}} / {{model}} / {{routing_strategy}}",
+          "legendFormat": "TTFT <=2s combined / {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "B"
         },
@@ -861,7 +861,7 @@
           "refId": "C"
         }
       ],
-      "description": "Share of eligible 14-day latency samples meeting each objective. TTFT/TPOT retain exact or derived quality; unavailable requests remain visible only in the measurement-availability panel.",
+      "description": "Share of eligible 14-day latency samples meeting each objective. TTFT combines exact and derived eligible samples into its documented cohort; unavailable requests remain visible only in the measurement-availability panel.",
       "title": "SLO v1 Latency Objective Attainment (14d)",
       "type": "stat"
     }

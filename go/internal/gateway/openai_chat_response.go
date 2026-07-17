@@ -244,6 +244,11 @@ func (g *Gateway) recordNonStreamingLatencyMetrics(model, strategy string, resp 
 	}
 	g.metrics.RecordSLOMeasurement("ttft", model, strategy, false, ttftMeasurement)
 
+	if ttft <= 0 {
+		g.metrics.RecordSLOMeasurement("tpot", model, strategy, false, sloMeasurementUnavailable)
+		return
+	}
+
 	if completionTokens <= 1 {
 		g.metrics.RecordSLOMeasurement("tpot", model, strategy, false, sloMeasurementUnavailable)
 		return

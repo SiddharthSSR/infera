@@ -46,9 +46,9 @@ groups:
       - record: infera:slo_v1:ttft_seconds_p95_30m
         expr: histogram_quantile(0.95, sum by (le, model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_ttft_seconds_bucket[30m])))
       - record: infera:slo_v1:ttft_seconds_p95_14d
-        expr: histogram_quantile(0.95, sum by (le, model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_ttft_seconds_bucket[14d])))
+        expr: histogram_quantile(0.95, sum by (le, model, routing_strategy) (increase(infera_gateway_slo_v1_ttft_seconds_bucket[14d])))
       - record: infera:slo_v1:ttft_good_ratio14d
-        expr: (sum by (model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_ttft_seconds_bucket{le="2"}[14d])) / clamp_min(sum by (model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_ttft_seconds_count[14d])), 1)) and sum by (model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_ttft_seconds_count[14d])) > 0
+        expr: (sum by (model, routing_strategy) (increase(infera_gateway_slo_v1_ttft_seconds_bucket{le="2"}[14d])) / clamp_min(sum by (model, routing_strategy) (increase(infera_gateway_slo_v1_ttft_seconds_count[14d])), 1)) and sum by (model, routing_strategy) (increase(infera_gateway_slo_v1_ttft_seconds_count[14d])) > 0
       - record: infera:slo_v1:ttft_sample_rate5m
         expr: sum by (model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_ttft_seconds_count[5m]))
 

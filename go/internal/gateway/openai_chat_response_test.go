@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/infera/infera/go/internal/audit"
@@ -10,20 +11,27 @@ import (
 )
 
 func TestNonStreamingLatencyMarksUnavailableWithoutZeroSample(t *testing.T) {
-	g := &Gateway{metrics: NewGatewayMetrics()}
-	resp := &types.InferenceResponse{}
-	resp.Latency.TotalMS = 20
+	for _, ttftMS := range []int64{0, -5} {
+		t.Run(fmt.Sprintf("ttft_ms=%d", ttftMS), func(t *testing.T) {
+			g := &Gateway{metrics: NewGatewayMetrics()}
+			resp := &types.InferenceResponse{}
+			resp.Latency.TotalMS = 20
+			resp.Latency.TimeToFirstTokenMS = ttftMS
 
-	g.recordNonStreamingLatencyMetrics("model-1", "least_loaded", resp, 1)
+			g.recordNonStreamingLatencyMetrics("model-1", "least_loaded", resp, 3)
 
-	if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("ttft", "model-1", "least_loaded", "false", "unavailable")); got != 1 {
-		t.Fatalf("expected unavailable TTFT count=1, got %v", got)
-	}
-	if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("tpot", "model-1", "least_loaded", "false", "unavailable")); got != 1 {
-		t.Fatalf("expected unavailable TPOT count=1, got %v", got)
-	}
-	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_slo_v1_ttft_seconds", map[string]string{"model": "model-1"}); got != 0 {
-		t.Fatalf("unavailable TTFT must not fabricate a zero sample, got count=%d", got)
+			if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("ttft", "model-1", "least_loaded", "false", "unavailable")); got != 1 {
+				t.Fatalf("expected unavailable TTFT count=1, got %v", got)
+			}
+			if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("tpot", "model-1", "least_loaded", "false", "unavailable")); got != 1 {
+				t.Fatalf("expected unavailable TPOT count=1, got %v", got)
+			}
+			for _, metric := range []string{"infera_gateway_slo_v1_ttft_seconds", "infera_gateway_slo_v1_tpot_seconds"} {
+				if got := histogramCountForLabels(t, g.metrics, metric, map[string]string{"model": "model-1"}); got != 0 {
+					t.Fatalf("unavailable latency must not fabricate a sample for %s, got count=%d", metric, got)
+				}
+			}
+		})
 	}
 }
 
