@@ -107,6 +107,9 @@ func TestInstanceLifecycleScenarios(t *testing.T) {
 					"worker_registration_token": "provider-private-payload",
 				},
 			}
+			if !test.networkReady {
+				template.Provider = providers.ProviderVastAI
+			}
 			if test.networkReady {
 				template.PublicIP = "203.0.113.35"
 				template.HTTPPort = 8081
@@ -159,7 +162,11 @@ func TestInstanceLifecycleScenarios(t *testing.T) {
 			if got["status"] != string(providers.InstanceStatusRunning) {
 				t.Fatalf("provider status: got %v", got["status"])
 			}
-			if got["provider"] != string(providers.ProviderRunPod) {
+			wantProvider := providers.ProviderRunPod
+			if !test.networkReady {
+				wantProvider = providers.ProviderVastAI
+			}
+			if got["provider"] != string(wantProvider) {
 				t.Fatalf("provider: got %v", got["provider"])
 			}
 			if got["worker_registration_status"] != string(test.wantStatus) {

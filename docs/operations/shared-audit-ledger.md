@@ -23,8 +23,11 @@ supported because they have no common quota serialization point.
    storage alerts, and enough connections for `INFERA_AUDIT_LEDGER_MAX_OPEN_CONNS × gateway replicas`
    plus operational headroom. Tune max-open, max-idle, and connection lifetime through the
    corresponding `INFERA_AUDIT_LEDGER_*` settings rather than rebuilding the gateway.
-2. Back up `data/audit.db` and its `-wal`/`-shm` files after stopping every gateway. Keep the
-   original files read-only until the rollback window closes.
+2. Stop every gateway, allow SQLite's clean shutdown/checkpoint to finish, then back up
+   `data/audit.db` and archive any `-wal`/`-shm` files separately as evidence. Use a self-contained
+   `audit.db` with no adjacent sidecars as the migration source; the tool rejects visible sidecars
+   rather than silently ignoring uncheckpointed rows. Keep the original files read-only until the
+   rollback window closes.
 3. Run the idempotent migration from the repository root:
 
    ```bash
@@ -33,8 +36,11 @@ supported because they have no common quota serialization point.
      go run ./cmd/audit-ledger-migrate -sqlite ../data/audit.db
    ```
 
-   The tool migrates immutable audit history and verifies conflicting first writes. It does not
-   copy transient reservations, so all gateways must remain drained while it runs.
+   The tool opens the source read-only and query-only. It does not enable WAL, run SQLite schema
+   migrations, or create/update migration tracking metadata. It fails clearly if the source lacks
+   the current audit columns; never let a cutover tool upgrade the evidence copy in place. The tool
+   migrates immutable audit history and verifies conflicting first writes. It does not copy
+   transient reservations, so all gateways must remain drained while it runs.
 4. Set `INFERA_AUDIT_LEDGER_BACKEND=postgres`, the same secret
    `INFERA_AUDIT_LEDGER_DSN` on every replica, and the intended `INFERA_GATEWAY_REPLICAS` value.
    Run `./scripts/validate-prod-env.sh` before starting any gateway.

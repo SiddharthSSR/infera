@@ -18,6 +18,9 @@ failures, and the database owner approves ledger restore or point-in-time recove
 - If candidate verification and rollback verification both fail, keep traffic drained and escalate.
 - Ingress drain is a required state transition, not a log message: no release mutation may start
   until the drain adapter succeeds, and traffic returns only after release verification succeeds.
+- While ingress is drained, the only public gateway exception is worker registration and heartbeat
+  on their two exact paths. Those requests must carry a worker-token header and still pass the
+  gateway's credential authentication; health, inference, and every other customer route remain 503.
 
 ## Targets
 
@@ -117,6 +120,12 @@ the verifier derives a current container-private gateway address and runs health
 and authenticated inference checks there. The restore adapter then proves public `/health` reaches
 the expected release and worker protocol before it returns success. If that public validation fails,
 it immediately reloads and verifies the maintenance configuration.
+
+The maintenance configuration permits only `/api/workers/register` and
+`/api/workers/heartbeat` through to the gateway when the request presents `X-Worker-Token` or a
+Bearer credential. The gateway remains authoritative for validating per-instance or shared worker
+credentials. This narrow control-plane exception lets replacement workers register while customer
+health and inference stay fail-closed at 503; it is not permission to expose other `/api/*` routes.
 
 The checked-in recovery adapter currently refuses `INFERA_GATEWAY_REPLICAS>1`. The PostgreSQL
 audit/quota ledger is replica-safe, but provider instance credentials and live worker/router

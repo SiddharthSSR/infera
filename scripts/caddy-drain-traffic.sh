@@ -32,7 +32,24 @@ ${APP_HOST} {
     Retry-After "60"
     -Server
   }
-  respond "Service temporarily unavailable" 503
+  @workerTokenControl {
+    path /api/workers/register /api/workers/heartbeat
+    header X-Worker-Token *
+  }
+  @workerBearerControl {
+    path /api/workers/register /api/workers/heartbeat
+    header_regexp Authorization ^Bearer[[:space:]]+[^[:space:]]+$
+  }
+
+  handle @workerTokenControl {
+    reverse_proxy gateway:8080
+  }
+  handle @workerBearerControl {
+    reverse_proxy gateway:8080
+  }
+  handle {
+    respond "Service temporarily unavailable" 503
+  }
 }
 
 ${DASHBOARD_HOST} {
