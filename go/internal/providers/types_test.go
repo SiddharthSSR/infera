@@ -167,6 +167,19 @@ func TestProviderError(t *testing.T) {
 		}
 	})
 
+	t.Run("capacity unavailable contract", func(t *testing.T) {
+		capacityErr := &ProviderError{Code: ProviderErrorCapacityUnavailable}
+		if !capacityErr.IsRetryable() {
+			t.Error("capacity_unavailable should be retryable")
+		}
+		if got := capacityErr.HTTPStatus(500); got != 503 {
+			t.Fatalf("expected 503, got %d", got)
+		}
+		if got := capacityErr.APIErrorType(); got != "provider_capacity_unavailable" {
+			t.Fatalf("expected provider_capacity_unavailable, got %q", got)
+		}
+	})
+
 	t.Run("IsRetryable - timeout", func(t *testing.T) {
 		retryableErr := &ProviderError{Code: "timeout"}
 		if !retryableErr.IsRetryable() {

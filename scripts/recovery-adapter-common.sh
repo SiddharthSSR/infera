@@ -1,5 +1,104 @@
 #!/usr/bin/env bash
 
+recovery_now_epoch() {
+  date +%s
+}
+
+RECOVERY_START_EPOCH="$(recovery_now_epoch)"
+
+recovery_deadline_epoch() {
+  local now timeout deadline
+  now="$(recovery_now_epoch)"
+  if [[ -n "${INFERA_RECOVERY_DEADLINE_EPOCH:-}" ]]; then
+    deadline="${INFERA_RECOVERY_DEADLINE_EPOCH}"
+    [[ "${deadline}" =~ ^[0-9]+$ && "${deadline}" -gt "${now}" && $((deadline - now)) -le 900 ]] || return 1
+    printf '%s\n' "${deadline}"
+    return
+  fi
+  timeout="${INFERA_RECOVERY_TIMEOUT_SECONDS:-900}"
+  [[ "${timeout}" =~ ^[1-9][0-9]*$ && "${timeout}" -le 900 ]] || return 1
+  printf '%s\n' "$((RECOVERY_START_EPOCH + timeout))"
+}
+
+recovery_is_candidate_step() {
+  [[ "${INFERA_RECOVERY_STEP:-}" == candidate.* ]]
+}
+
+recovery_remaining_seconds() {
+  local reserve="${1:-0}" deadline now remaining
+  [[ "${reserve}" =~ ^[0-9]+$ ]] || return 1
+  deadline="$(recovery_deadline_epoch)" || return 1
+  now="$(recovery_now_epoch)"
+  remaining=$((deadline - now - reserve))
+  (( remaining > 0 )) || return 1
+  printf '%s\n' "${remaining}"
+}
+
+recovery_bounded_timeout() {
+  local requested="$1" reserve="${2:-0}" remaining
+  [[ "${requested}" =~ ^[1-9][0-9]*$ ]] || return 1
+  remaining="$(recovery_remaining_seconds "${reserve}")" || return 1
+  (( requested < remaining )) && printf '%s\n' "${requested}" || printf '%s\n' "${remaining}"
+}
+
+recovery_deadline_sleep() {
+  local requested="$1" reserve="${2:-0}" remaining
+  [[ "${requested}" =~ ^[1-9][0-9]*$ ]] || return 1
+  remaining="$(recovery_remaining_seconds "${reserve}")" || return 1
+  (( remaining > requested )) || return 1
+  sleep "${requested}"
+}
+
+recovery_record_worker_evidence() {
+  local event="$1" result="$2" gpu="$3" attempt="$4" reason="$5"
+  local evidence_file="${INFERA_RECOVERY_EVIDENCE_FILE:-}"
+  local release="${INFERA_RECOVERY_RELEASE_ID:-unknown}"
+  local step="${INFERA_RECOVERY_STEP:-standalone}"
+  [[ -n "${evidence_file}" ]] || return 0
+  python3 - "${evidence_file}" "${event}" "${result}" "${gpu}" "${attempt}" "${reason}" "${release}" "${step}" <<'PY'
+import datetime
+import os
+import re
+import stat
+import sys
+
+path, event, result, gpu, attempt, reason, release, step = sys.argv[1:]
+allowed_events = {"candidate_selected", "provision_response", "reconcile", "registration"}
+allowed_results = {"start", "pass", "fail", "fallback", "terminal"}
+allowed_reasons = {
+    "none", "capacity_unavailable", "created", "registered", "deadline_exhausted",
+    "invalid_response", "unknown_failure", "transport_failure", "state_not_empty",
+    "cleanup_failed", "registration_timeout",
+}
+if event not in allowed_events or result not in allowed_results or reason not in allowed_reasons:
+    raise SystemExit(1)
+if not re.fullmatch(r"(?:RTX_4090|RTX_4080|A100_40GB|A100_80GB|H100|L40S|-)", gpu):
+    raise SystemExit(1)
+if not re.fullmatch(r"[0-9]+", attempt):
+    raise SystemExit(1)
+if not re.fullmatch(r"[A-Za-z0-9._:+/@-]+", release):
+    raise SystemExit(1)
+if not re.fullmatch(r"[A-Za-z0-9._-]+", step):
+    raise SystemExit(1)
+flags = os.O_WRONLY | os.O_APPEND
+if not hasattr(os, "O_NOFOLLOW"):
+    raise SystemExit(1)
+fd = os.open(path, flags | os.O_NOFOLLOW)
+try:
+    status = os.fstat(fd)
+    if not stat.S_ISREG(status.st_mode) or stat.S_IMODE(status.st_mode) != 0o600:
+        raise SystemExit(1)
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = (
+        f"{timestamp} WORKER_RECOVERY event={event} result={result} gpu={gpu} "
+        f"attempt={attempt} reason={reason} release={release} step={step}\n"
+    )
+    os.write(fd, line.encode("ascii"))
+finally:
+    os.close(fd)
+PY
+}
+
 recovery_manifest_value() {
   local manifest="$1"
   local key="$2"
@@ -117,7 +216,7 @@ recovery_bearer_config() {
 recovery_runpod_ids_by_name() {
   local name="$1"
   local curl_config="$2"
-  local payload response
+  local payload response timeout
   payload="$(mktemp)"
   QUERY='query GetPods { myself { pods { id name desiredStatus } } }' python3 - <<'PY' >"${payload}"
 import json
@@ -125,7 +224,8 @@ import os
 
 print(json.dumps({"query": os.environ["QUERY"]}))
 PY
-  if ! response="$(curl --fail --silent --show-error --max-time 30 \
+  timeout="$(recovery_bounded_timeout 30 "${INFERA_RECOVERY_CLEANUP_RESERVE_SECONDS:-0}")" || { rm -f "${payload}"; return 1; }
+  if ! response="$(curl --fail --silent --show-error --max-time "${timeout}" \
     --config "${curl_config}" -H 'Content-Type: application/json' \
     --data-binary "@${payload}" https://api.runpod.io/graphql)"; then
     rm -f "${payload}"
@@ -148,7 +248,7 @@ PY
 recovery_runpod_terminate() {
   local pod_id="$1"
   local curl_config="$2"
-  local payload
+  local payload timeout curl_status=0
   [[ "${pod_id}" =~ ^[A-Za-z0-9._:-]+$ ]] || return 1
   payload="$(mktemp)"
   POD_ID="${pod_id}" python3 - <<'PY' >"${payload}"
@@ -160,10 +260,12 @@ print(json.dumps({
     "variables": {"input": {"podId": os.environ["POD_ID"]}},
 }))
 PY
-  curl --fail --silent --show-error --max-time 120 \
+  timeout="$(recovery_bounded_timeout 120 "${INFERA_RECOVERY_CLEANUP_RESERVE_SECONDS:-0}")" || { rm -f "${payload}"; return 1; }
+  curl --fail --silent --show-error --max-time "${timeout}" \
     --config "${curl_config}" -H 'Content-Type: application/json' \
-    --data-binary "@${payload}" https://api.runpod.io/graphql >/dev/null
+    --data-binary "@${payload}" https://api.runpod.io/graphql >/dev/null || curl_status=$?
   rm -f "${payload}"
+  return "${curl_status}"
 }
 
 recovery_runpod_remove_named_pods() {
@@ -171,16 +273,25 @@ recovery_runpod_remove_named_pods() {
   local curl_config="$2"
   local pod_id
   local discovered
+  local id_count=0
+  local index
   local ids=()
   if ! discovered="$(recovery_runpod_ids_by_name "${name}" "${curl_config}")"; then
     echo "ERROR: unable to reconcile release-owned RunPod workers" >&2
     return 1
   fi
   while IFS= read -r pod_id; do
-    [[ -n "${pod_id}" ]] && ids[${#ids[@]}]="${pod_id}"
+    if [[ -n "${pod_id}" ]]; then
+      ids[${id_count}]="${pod_id}"
+      id_count=$((id_count + 1))
+    fi
   done <<<"${discovered}"
-  for pod_id in "${ids[@]}"; do
-    recovery_runpod_terminate "${pod_id}" "${curl_config}"
+  for ((index = 0; index < id_count; index++)); do
+    pod_id="${ids[${index}]}"
+    if ! recovery_runpod_terminate "${pod_id}" "${curl_config}"; then
+      echo "ERROR: unable to terminate release-owned RunPod worker" >&2
+      return 1
+    fi
   done
   for _ in $(seq 1 30); do
     if ! discovered="$(recovery_runpod_ids_by_name "${name}" "${curl_config}")"; then
@@ -188,11 +299,17 @@ recovery_runpod_remove_named_pods() {
       return 1
     fi
     if [[ -z "${discovered}" ]]; then
-      printf '%s\n' "${#ids[@]}"
+      printf '%s\n' "${id_count}"
       return 0
     fi
-    sleep 2
+    recovery_deadline_sleep 2 "${INFERA_RECOVERY_CLEANUP_RESERVE_SECONDS:-0}" || return 1
   done
   echo "ERROR: release-owned RunPod workers did not terminate" >&2
   return 1
+}
+
+recovery_runpod_confirm_named_pods_absent() {
+  local name="$1" curl_config="$2" discovered
+  discovered="$(recovery_runpod_ids_by_name "${name}" "${curl_config}")" || return 1
+  [[ -z "${discovered}" ]]
 }

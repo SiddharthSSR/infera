@@ -80,6 +80,28 @@ func TestGraphQLMapsRateLimitToRetryableProviderError(t *testing.T) {
 	}
 }
 
+func TestGraphQLDoesNotClassifyCapacityFromUnstructuredMessage(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusOK, `{"errors":[{"message":"There is no GPU capacity available"}]}`), nil
+	})
+
+	_, err = provider.graphQL(context.Background(), "mutation { podFindAndDeployOnDemand { id } }", nil)
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != providers.ProviderErrorGraphQLError {
+		t.Fatalf("expected unstructured error to remain %q, got %q", providers.ProviderErrorGraphQLError, providerErr.Code)
+	}
+	if providerErr.IsRetryable() {
+		t.Fatal("unstructured GraphQL error must not enable capacity fallback")
+	}
+}
+
 func TestGraphQLMapsUnauthorizedToAuthFailed(t *testing.T) {
 	provider, err := New(Config{APIKey: "invalid-key"})
 	if err != nil {
@@ -173,6 +195,112 @@ func TestGetInstanceReturnsNotFoundWhenPodMissing(t *testing.T) {
 	}
 }
 
+func TestProvisionReturnsCapacityUnavailableWithoutCreateMutation(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	createCalls := 0
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		var request graphQLRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		if strings.Contains(request.Query, "query GpuCapacity") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":0}]}}`), nil
+		}
+		createCalls++
+		return httpResponse(http.StatusOK, `{"data":{}}`), nil
+	})
+
+	_, err = provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:        "worker",
+		GPUType:     providers.GPUL40S,
+		GPUCount:    1,
+		DockerImage: "custom/worker:v1",
+	})
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != providers.ProviderErrorCapacityUnavailable {
+		t.Fatalf("expected capacity_unavailable, got %q", providerErr.Code)
+	}
+	if createCalls != 0 {
+		t.Fatalf("expected no create mutation, got %d", createCalls)
+	}
+}
+
+func TestProvisionCreatesWhenStructuredCapacityIsPositive(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	capacityCalls := 0
+	createCalls := 0
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		var request graphQLRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		if strings.Contains(request.Query, "query GpuCapacity") {
+			capacityCalls++
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":1}]}}`), nil
+		}
+		createCalls++
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S"}}}}`), nil
+	})
+
+	if _, err := provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:        "worker",
+		GPUType:     providers.GPUL40S,
+		GPUCount:    1,
+		DockerImage: "custom/worker:v1",
+	}); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if capacityCalls != 1 || createCalls != 1 {
+		t.Fatalf("expected one capacity query and one create mutation, got capacity=%d create=%d", capacityCalls, createCalls)
+	}
+}
+
+func TestProvisionPreservesStructuredCapacityQueryError(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	requests := 0
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return httpResponse(http.StatusTooManyRequests, `{"errors":[{"message":"too many requests"}]}`), nil
+	})
+
+	_, err = provider.Provision(context.Background(), &providers.ProvisionRequest{
+		Name:        "worker",
+		GPUType:     providers.GPUL40S,
+		GPUCount:    1,
+		DockerImage: "custom/worker:v1",
+	})
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != providers.ProviderErrorRateLimited {
+		t.Fatalf("expected rate_limited to be preserved, got %q", providerErr.Code)
+	}
+	if requests != 1 {
+		t.Fatalf("expected capacity query failure to stop before create, got %d requests", requests)
+	}
+}
+
 func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	t.Setenv("INFERA_WORKER_SHARED_TOKEN", "worker-shared-token")
 	t.Setenv("INFERA_GATEWAY_ADDRESS", "https://inferai.co.in")
@@ -191,6 +319,9 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 		}
 		if err := json.Unmarshal(body, &captured); err != nil {
 			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		if strings.Contains(captured.Query, "query GpuCapacity") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
 		}
 		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S"}}}}`), nil
 	})
@@ -282,6 +413,9 @@ func TestProvisionIncludesAllowedCudaVersions(t *testing.T) {
 		if err := json.Unmarshal(body, &captured); err != nil {
 			t.Fatalf("json.Unmarshal request: %v", err)
 		}
+		if strings.Contains(captured.Query, "query GpuCapacity") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA A100 80GB PCIe","maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":1}]}}`), nil
+		}
 		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA A100 80GB PCIe"}}}}`), nil
 	})
 
@@ -328,6 +462,9 @@ func TestProvisionAddsRuntimeEnvOverridesForKnownModel(t *testing.T) {
 		}
 		if err := json.Unmarshal(body, &captured); err != nil {
 			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		if strings.Contains(captured.Query, "query GpuCapacity") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
 		}
 		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S"}}}}`), nil
 	})
@@ -496,6 +633,9 @@ func TestProvisionPassesThroughUnknownLiveGPUDisplayName(t *testing.T) {
 		}
 		if err := json.Unmarshal(body, &captured); err != nil {
 			t.Fatalf("json.Unmarshal request: %v", err)
+		}
+		if strings.Contains(captured.Query, "query GpuCapacity") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"H200 SXM","maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
 		}
 		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-h200","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA H200 SXM"}}}}`), nil
 	})
