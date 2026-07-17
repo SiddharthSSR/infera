@@ -16,21 +16,64 @@ recovery_env_value() {
   awk -F= -v wanted="${key}" '$1 == wanted { count++; value=substr($0, index($0, "=") + 1) } END { if (count != 1 || value == "") exit 1; print value }' "${env_file}"
 }
 
-recovery_gateway_url() {
+recovery_configured_gateway_replicas() {
+  if [[ -n "${INFERA_GATEWAY_REPLICAS:-}" ]]; then
+    printf '%s\n' "${INFERA_GATEWAY_REPLICAS}"
+    return
+  fi
+  local env_file="${INFERA_ENV_FILE:-.env}"
+  awk -F= '$1 == "INFERA_GATEWAY_REPLICAS" { count++; value=substr($0, index($0, "=") + 1) } END { if (count == 1 && value != "") print value; else print "1" }' "${env_file}"
+}
+
+recovery_gateway_urls() {
   local compose_file="${COMPOSE_FILE:-docker-compose.prod.yml}"
   local gateway_id
   local gateway_ip
+  local gateway_ids_output
+  local gateway_ips_output
+  local expected_replicas
+  local gateway_ids=()
   local gateway_ips=()
-  gateway_id="$(docker compose -f "${compose_file}" ps -q gateway)"
-  [[ -n "${gateway_id}" && "${gateway_id}" != *$'\n'* ]] || return 1
-  while IFS= read -r gateway_ip; do
-    [[ -n "${gateway_ip}" ]] && gateway_ips[${#gateway_ips[@]}]="${gateway_ip}"
-  done < <(docker inspect --format '{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}' "${gateway_id}")
-  [[ "${#gateway_ips[@]}" -eq 1 ]] || return 1
-  gateway_ip="${gateway_ips[0]}"
-  [[ "${gateway_ip}" =~ ^[0-9a-fA-F:.]+$ ]] || return 1
-  [[ "${gateway_ip}" == *:* ]] && gateway_ip="[${gateway_ip}]"
-  printf 'http://%s:8080\n' "${gateway_ip}"
+  local gateway_urls=()
+  expected_replicas="$(recovery_configured_gateway_replicas)"
+  [[ "${expected_replicas}" =~ ^[1-9][0-9]*$ ]] || return 1
+  gateway_ids_output="$(docker compose -f "${compose_file}" ps -q gateway)" || return 1
+  while IFS= read -r gateway_id; do
+    [[ -n "${gateway_id}" ]] && gateway_ids[${#gateway_ids[@]}]="${gateway_id}"
+  done <<<"${gateway_ids_output}"
+  [[ "${#gateway_ids[@]}" -eq "${expected_replicas}" ]] || return 1
+  for gateway_id in "${gateway_ids[@]}"; do
+    gateway_ips=()
+    gateway_ips_output="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}' "${gateway_id}")" || return 1
+    while IFS= read -r gateway_ip; do
+      [[ -n "${gateway_ip}" ]] && gateway_ips[${#gateway_ips[@]}]="${gateway_ip}"
+    done <<<"${gateway_ips_output}"
+    [[ "${#gateway_ips[@]}" -eq 1 ]] || return 1
+    gateway_ip="${gateway_ips[0]}"
+    python3 - "${gateway_ip}" <<'PY' >/dev/null || return 1
+import ipaddress
+import sys
+
+address = ipaddress.ip_address(sys.argv[1])
+allowed = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
+if not any(address in network for network in allowed):
+    raise SystemExit(1)
+PY
+    [[ "${gateway_ip}" == *:* ]] && gateway_ip="[${gateway_ip}]"
+    gateway_urls[${#gateway_urls[@]}]="http://${gateway_ip}:8080"
+  done
+  printf '%s\n' "${gateway_urls[@]}"
+}
+
+recovery_gateway_url() {
+  local gateway_urls
+  gateway_urls="$(recovery_gateway_urls)" || return 1
+  printf '%s\n' "${gateway_urls%%$'\n'*}"
 }
 
 recovery_https_host() {

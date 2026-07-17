@@ -120,10 +120,10 @@ places bearer headers only in mode-0600 temporary curl configuration files, and 
 gateway-managed worker to register. Before provisioning or stopping, it reconciles only pods whose
 name exactly matches `infera-release-<release ID>`; an orphan from an interrupted attempt is
 terminated before a replacement is created. While Caddy returns the maintenance 503,
-the verifier derives a current container-private gateway address and runs health, worker discovery,
-and authenticated inference checks there. The restore adapter then proves public `/health` reaches
-the expected release and worker protocol before it returns success. If that public validation fails,
-it immediately reloads and verifies the maintenance configuration.
+the verifier enumerates every configured container-private gateway address and runs health, worker
+discovery, and authenticated inference checks against each replica. The restore adapter then proves
+public `/health` reaches the expected release and worker protocol before it returns success. If that
+public validation fails, it immediately reloads and verifies the maintenance configuration.
 
 The maintenance configuration permits only `/api/workers/register` and
 `/api/workers/heartbeat` through to the gateway when the request presents `X-Worker-Token` or a
