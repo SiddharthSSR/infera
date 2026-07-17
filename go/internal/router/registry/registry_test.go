@@ -407,6 +407,33 @@ func TestUpdateWorkerModels(t *testing.T) {
 	}
 }
 
+func TestHeartbeatAtomicallyUpdatesAndCanClearModels(t *testing.T) {
+	r := newTestRegistry()
+	worker := makeWorker("worker-heartbeat", "a:1", types.WorkerStatusUnhealthy, []string{"old-model"})
+	if err := r.Register(testContext, worker); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	updated, err := r.Heartbeat(testContext, "ignored-instance", worker.WorkerID, types.WorkerStats{QueueDepth: 4}, nil, true)
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if updated.Stats.QueueDepth != 4 || updated.Status != types.WorkerStatusHealthy || len(updated.LoadedModels) != 0 {
+		t.Fatalf("unexpected heartbeat state: %+v", updated)
+	}
+	if workers, err := r.GetWorkersForModel(testContext, "old-model"); err != nil || len(workers) != 0 {
+		t.Fatalf("cleared model remained indexed: workers=%v err=%v", workers, err)
+	}
+
+	updated, err = r.Heartbeat(testContext, "ignored-instance", worker.WorkerID, types.WorkerStats{QueueDepth: 1}, nil, false)
+	if err != nil {
+		t.Fatalf("Heartbeat without models: %v", err)
+	}
+	if len(updated.LoadedModels) != 0 {
+		t.Fatalf("omitted models changed state: %+v", updated.LoadedModels)
+	}
+}
+
 func TestHealthChecker(t *testing.T) {
 	cfg := RegistryConfig{
 		HealthCheckInterval: 10 * time.Millisecond,

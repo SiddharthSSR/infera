@@ -171,8 +171,10 @@ fi
 : >"${TEST_CALLS}"
 if TEST_GATEWAY_REPLICAS=2 \
 INFERA_GATEWAY_REPLICAS=2 \
+INFERA_CONTROL_STATE_DSN=postgresql://control.invalid/infera \
 INFERA_AUDIT_LEDGER_BACKEND=postgres \
 INFERA_AUDIT_LEDGER_DSN=postgresql://ledger.invalid/infera \
+INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
 INFERA_ADMIN_KEY=test-admin \
 INFERA_ALLOWED_ORIGINS=https://example.com \
 INFERA_GATEWAY_ADDRESS=https://example.com \
@@ -187,13 +189,12 @@ ALERT_SMTP_SMARTHOST=smtp.example.com:587 \
 ALERT_SMTP_USERNAME=alerts@example.com \
 ALERT_SMTP_PASSWORD=test-smtp \
 "${REPO_ROOT}/scripts/compose-release-driver.sh" deploy-gateway "${TMP_DIR}/release.manifest"; then
-  echo "multi-replica recovery must fail until worker state is durable" >&2
+  :
+else
+  echo "durable multi-replica recovery deployment failed" >&2
   exit 1
 fi
-if grep -q -- '--scale gateway=2 gateway' "${TEST_CALLS}"; then
-  echo "unsafe multi-replica deployment was attempted" >&2
-  exit 1
-fi
+grep -q -- '--scale gateway=2 gateway' "${TEST_CALLS}"
 
 if TEST_GATEWAY_NETWORKS=2 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_url' _ "${REPO_ROOT}"; then
   echo "multiple gateway network addresses must fail closed" >&2

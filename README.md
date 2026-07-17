@@ -121,6 +121,7 @@ INFERA_RELEASE_ID=v1.3.0
 INFERA_WORKER_PROTOCOL_VERSION=1
 INFERA_GATEWAY_IMAGE=<registry>/infera-gateway:<pinned-tag>
 INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY=<base64-encoded-32-byte-key>
+INFERA_CONTROL_STATE_DSN=postgres://...?...sslmode=require
 INFERA_WORKER_IMAGE=<registry>/infera-worker:<pinned-tag>
 INFERA_GATEWAY_REPLICAS=1
 INFERA_AUDIT_LEDGER_BACKEND=sqlite
@@ -144,6 +145,9 @@ Notes:
 - Deploy the gateway and workers as one release set. `INFERA_RELEASE_ID` and
   `INFERA_WORKER_PROTOCOL_VERSION` are injected into managed workers, and production gateways
   reject registration from mismatched releases or protocols.
+- Production gateways require `INFERA_CONTROL_STATE_DSN` and fail startup if the shared PostgreSQL
+  control state cannot be opened, migrated, or reconciled. Configure the same DSN and provider
+  credential encryption key on every replica. In-memory state is development-only.
 - Worker model-load requests accept only an approved `model_id`. Provider-provisioned workers
   bind `INFERA_ALLOWED_MODELS` to the deployment's requested models; custom worker deployments
   default to `INFERA_PRELOAD_MODELS` and may set a different comma-separated or JSON allowlist.
@@ -153,7 +157,8 @@ Notes:
 - Generate `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` with `openssl rand -base64 32`, store it in your secret manager, and back it up separately from the database. Losing it makes saved provider credentials unrecoverable.
 - Use non-`latest` gateway and worker image tags or full digests in production.
 - SQLite audit/quota accounting is single-replica only. For active-active gateways, configure
-  every replica with the same PostgreSQL DSN and set `INFERA_AUDIT_LEDGER_BACKEND=postgres`.
+  every replica with the same audit PostgreSQL DSN, the same control-state DSN, and set
+  `INFERA_AUDIT_LEDGER_BACKEND=postgres`.
   Startup fails closed when a multi-replica deployment selects SQLite or PostgreSQL lacks a DSN.
   Follow [the shared-ledger migration runbook](docs/operations/shared-audit-ledger.md) for cutover,
   backup, restore, and rollback.
@@ -379,6 +384,11 @@ Compatibility notes:
 | `INFERA_WORKER_PROTOCOL_VERSION` | — | Required production gateway/worker control-plane protocol version |
 | `INFERA_GATEWAY_IMAGE` | — | Pinned production gateway image tag or digest |
 | `INFERA_GATEWAY_REPLICAS` | `1` | Declared gateway replica count; values above one require PostgreSQL |
+| `INFERA_CONTROL_STATE_DSN` | — | Shared PostgreSQL connection URI for provider instances and worker registration; required outside development mode and should require TLS in production |
+| `INFERA_CONTROL_STATE_QUERY_TIMEOUT` | `5s` | Positive Go duration bounding each control-state database operation |
+| `INFERA_CONTROL_STATE_MAX_OPEN_CONNS` | `20` | Maximum PostgreSQL connections in each control-state component pool (provider state and worker registry) per gateway replica |
+| `INFERA_CONTROL_STATE_MAX_IDLE_CONNS` | `5` | Maximum idle connections in each control-state component pool; cannot exceed max open |
+| `INFERA_CONTROL_STATE_CONN_MAX_LIFETIME` | `30m` | Positive Go duration limiting control-state PostgreSQL connection lifetime |
 | `INFERA_AUDIT_LEDGER_BACKEND` | `sqlite` | `sqlite` for one replica or `postgres` for a shared transactional ledger |
 | `INFERA_AUDIT_LEDGER_DSN` | — | PostgreSQL connection URI; required for the `postgres` backend and should require TLS in production |
 | `INFERA_AUDIT_LEDGER_MAX_OPEN_CONNS` | `20` | Maximum PostgreSQL ledger connections per gateway replica |

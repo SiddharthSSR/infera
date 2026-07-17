@@ -69,6 +69,7 @@ type workerRegistry interface {
 	Deregister(ctx context.Context, workerID string) error
 	UpdateWorkerStats(ctx context.Context, workerID string, stats types.WorkerStats) error
 	UpdateWorkerModels(ctx context.Context, workerID string, models []types.LoadedModel) error
+	Heartbeat(ctx context.Context, instanceID, workerID string, stats types.WorkerStats, models []types.LoadedModel, replaceModels bool) (*types.WorkerInfo, error)
 	Snapshot(ctx context.Context) ([]*types.WorkerInfo, error)
 	StartHealthChecker(ctx context.Context)
 }
@@ -244,6 +245,12 @@ func (r *Router) UpdateWorkerStats(ctx context.Context, workerID string, stats t
 // UpdateWorkerModels updates loaded models for a worker.
 func (r *Router) UpdateWorkerModels(ctx context.Context, workerID string, models []types.LoadedModel) error {
 	return r.registry.UpdateWorkerModels(ctx, workerID, models)
+}
+
+// Heartbeat atomically records worker telemetry and optional loaded models,
+// returning the resulting authoritative registration.
+func (r *Router) Heartbeat(ctx context.Context, instanceID, workerID string, stats types.WorkerStats, models []types.LoadedModel, replaceModels bool) (*types.WorkerInfo, error) {
+	return r.registry.Heartbeat(ctx, instanceID, workerID, stats, models, replaceModels)
 }
 
 // GetWorker returns a worker by ID.

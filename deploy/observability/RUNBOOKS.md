@@ -99,13 +99,17 @@ RPO/RTO targets are defined in `docs/operations/deployment-recovery.md`.
    and verify worker registration, authenticated inference, and streaming inference.
 6. Roll back gateway and worker images together. Do not combine a rolled-back gateway with
    workers from the failed release unless the protocol contract was explicitly proven compatible.
+   Before rollback, confirm the target gateway supports the active control-state schema; never
+   point an older incompatible binary at a database already migrated by the candidate.
 
 ## Audit ledger startup or quota failures
 
-1. Check `INFERA_GATEWAY_REPLICAS`, `INFERA_AUDIT_LEDGER_BACKEND`, and whether the DSN secret is
-   present. Never print the DSN or place SQLite on a shared filesystem.
+1. Check `INFERA_GATEWAY_REPLICAS`, `INFERA_CONTROL_STATE_DSN`,
+   `INFERA_AUDIT_LEDGER_BACKEND`, and whether both DSN secrets are present. Never print a DSN or
+   place SQLite on a shared filesystem.
 2. For multiple replicas, confirm every replica uses `postgres` and the same database. Check
    PostgreSQL connectivity, TLS, connection capacity, storage, and transaction lock waits.
+   Separately confirm every replica uses the same control-state database and encryption key.
 3. `quota_unavailable` can mean `authHandler.Store().GetWorkspaceQuota` failed against the
    authorization/configuration store, or that the audit/PostgreSQL ledger failed during
    reservation. Check both stores and their logs. Preserve fail-closed behavior: do not disable

@@ -60,6 +60,7 @@ func (s *WorkerStats) IsOverloaded() bool {
 // WorkerInfo contains everything the router knows about a worker.
 type WorkerInfo struct {
 	WorkerID        string            `json:"worker_id"`
+	InstanceID      string            `json:"-"` // Durable managed-instance owner; never accepted from worker JSON.
 	RegistrationID  string            `json:"-"` // Opaque registry-issued identity for this registration generation.
 	WorkspaceID     string            `json:"-"`
 	SharedPool      bool              `json:"-"`
@@ -136,6 +137,7 @@ func (w *WorkerInfo) Clone() *WorkerInfo {
 
 	return &WorkerInfo{
 		WorkerID:        w.WorkerID,
+		InstanceID:      w.InstanceID,
 		RegistrationID:  w.RegistrationID,
 		WorkspaceID:     w.WorkspaceID,
 		SharedPool:      w.SharedPool,

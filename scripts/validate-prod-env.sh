@@ -13,6 +13,8 @@ required_vars=(
   INFERA_RELEASE_ID
   INFERA_WORKER_PROTOCOL_VERSION
   INFERA_GATEWAY_IMAGE
+  INFERA_CONTROL_STATE_DSN
+  INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY
   INFERA_WORKER_IMAGE
   GRAFANA_ADMIN_USER
   GRAFANA_ADMIN_PASSWORD
@@ -102,6 +104,14 @@ if [[ "${audit_backend}" != "sqlite" && "${audit_backend}" != "postgres" && "${a
 fi
 if (( gateway_replicas > 1 )) && [[ "${audit_backend}" == "sqlite" ]]; then
   echo "ERROR: multiple gateway replicas require INFERA_AUDIT_LEDGER_BACKEND=postgres; shared-filesystem SQLite is unsafe." >&2
+  exit 1
+fi
+
+# Production gateway startup is intentionally fail-closed without shared control state.
+# A single replica uses the same durable path so scaling out does not change semantics.
+control_state_dsn="$(lookup_env INFERA_CONTROL_STATE_DSN)"
+if [[ -z "${control_state_dsn}" ]]; then
+  echo "ERROR: INFERA_CONTROL_STATE_DSN is required outside development mode." >&2
   exit 1
 fi
 if [[ "${audit_backend}" == "postgres" || "${audit_backend}" == "postgresql" ]]; then

@@ -245,6 +245,9 @@ func (r *WorkerRegistry) UpdateWorkerStats(ctx context.Context, workerID string,
 	}
 
 	worker.UpdateStats(stats)
+	if worker.Status == types.WorkerStatusUnhealthy || worker.Status == types.WorkerStatusOffline {
+		worker.UpdateStatus(types.WorkerStatusHealthy)
+	}
 	return nil
 }
 
@@ -275,6 +278,37 @@ func (r *WorkerRegistry) UpdateWorkerModels(ctx context.Context, workerID string
 	}
 
 	return nil
+}
+
+// Heartbeat atomically updates telemetry and, when supplied, loaded models.
+func (r *WorkerRegistry) Heartbeat(ctx context.Context, _ string, workerID string, stats types.WorkerStats, models []types.LoadedModel, replaceModels bool) (*types.WorkerInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	worker, exists := r.workers[workerID]
+	if !exists {
+		return nil, fmt.Errorf("%w: %s", ErrWorkerNotFound, workerID)
+	}
+	worker.UpdateStats(stats)
+	if worker.Status == types.WorkerStatusUnhealthy || worker.Status == types.WorkerStatusOffline {
+		worker.UpdateStatus(types.WorkerStatusHealthy)
+	}
+	if replaceModels {
+		for _, model := range worker.LoadedModels {
+			r.removeFromModelIndex(model.ModelID, workerID)
+		}
+		worker.LoadedModels = models
+		for _, model := range models {
+			r.addToModelIndex(model.ModelID, workerID)
+		}
+	}
+	return worker.Clone(), nil
 }
 
 // Count returns the number of registered workers.

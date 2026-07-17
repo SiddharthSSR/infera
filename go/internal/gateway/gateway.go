@@ -947,6 +947,7 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 
 	workerInfo := &types.WorkerInfo{
 		WorkerID:     req.WorkerID,
+		InstanceID:   principal.InstanceID,
 		WorkspaceID:  principal.WorkspaceID,
 		Address:      req.Address,
 		Status:       types.WorkerStatus(req.Status),
@@ -1047,7 +1048,7 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 			P99LatencyMS      float64 `json:"p99_latency_ms"`
 			ErrorRate         float64 `json:"error_rate"`
 		} `json:"stats"`
-		LoadedModels []struct {
+		LoadedModels *[]struct {
 			ModelID string `json:"model_id"`
 			Version string `json:"version"`
 		} `json:"loaded_models"`
@@ -1078,7 +1079,21 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 		UpdatedAt:         time.Now(),
 	}
 
-	if err := g.router.UpdateWorkerStats(r.Context(), req.WorkerID, stats); err != nil {
+	var models []types.LoadedModel
+	if req.LoadedModels != nil {
+		models = make([]types.LoadedModel, len(*req.LoadedModels))
+		for i, m := range *req.LoadedModels {
+			models[i] = types.LoadedModel{
+				ModelID:  m.ModelID,
+				Version:  m.Version,
+				LoadedAt: time.Now(),
+			}
+		}
+	}
+
+	principal, _ := r.Context().Value(workerPrincipalContextKey{}).(workerPrincipal)
+	worker, err := g.router.Heartbeat(r.Context(), principal.InstanceID, req.WorkerID, stats, models, req.LoadedModels != nil)
+	if err != nil {
 		if g.writeRequestContextError(w, err) {
 			return
 		}
@@ -1097,52 +1112,9 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 		g.metrics.RecordWorkerQueueDepth(req.WorkerID, req.Stats.QueueDepth)
 	}
 
-	worker, found, err := g.router.GetWorker(r.Context(), req.WorkerID)
-	if err != nil {
-		if g.writeRequestContextError(w, err) {
-			return
-		}
-		g.writeWorkerRegistryUnavailable(w)
+	if err := g.linkWorkerToInstance(worker); err != nil {
+		g.writeError(w, http.StatusServiceUnavailable, "worker_control_state_unavailable", "Worker control state is temporarily unavailable")
 		return
-	}
-	if !found {
-		g.writeJSON(w, http.StatusOK, map[string]interface{}{
-			"acknowledged": false,
-			"message":      "Worker not registered",
-		})
-		return
-	}
-	if found {
-		if err := g.linkWorkerToInstance(worker); err != nil {
-			g.writeError(w, http.StatusServiceUnavailable, "worker_control_state_unavailable", "Worker control state is temporarily unavailable")
-			return
-		}
-	}
-
-	// Sync loaded models from heartbeat (self-healing if registration missed them)
-	if len(req.LoadedModels) > 0 {
-		models := make([]types.LoadedModel, len(req.LoadedModels))
-		for i, m := range req.LoadedModels {
-			models[i] = types.LoadedModel{
-				ModelID:  m.ModelID,
-				Version:  m.Version,
-				LoadedAt: time.Now(),
-			}
-		}
-		if err := g.router.UpdateWorkerModels(r.Context(), req.WorkerID, models); err != nil {
-			if g.writeRequestContextError(w, err) {
-				return
-			}
-			if errors.Is(err, registry.ErrWorkerNotFound) {
-				g.writeJSON(w, http.StatusOK, map[string]interface{}{
-					"acknowledged": false,
-					"message":      "Worker not registered",
-				})
-				return
-			}
-			g.writeWorkerRegistryUnavailable(w)
-			return
-		}
 	}
 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{

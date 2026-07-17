@@ -63,6 +63,13 @@ func (r *failingWorkerRegistry) UpdateWorkerModels(context.Context, string, []ty
 	return r.writeErr
 }
 
+func (r *failingWorkerRegistry) Heartbeat(context.Context, string, string, types.WorkerStats, []types.LoadedModel, bool) (*types.WorkerInfo, error) {
+	if r.writeErr != nil {
+		return nil, r.writeErr
+	}
+	return &types.WorkerInfo{WorkerID: "worker-1", Status: types.WorkerStatusHealthy}, nil
+}
+
 func (r *failingWorkerRegistry) Snapshot(context.Context) ([]*types.WorkerInfo, error) {
 	return nil, r.snapshotErr
 }
@@ -487,7 +494,7 @@ func TestHeartbeatAcknowledgesFalseOnlyForMissingRegistration(t *testing.T) {
 		}
 	})
 
-	t.Run("registration removed after stats update is acknowledged false", func(t *testing.T) {
+	t.Run("atomic heartbeat success is acknowledged true", func(t *testing.T) {
 		g := newGatewayWithWorkerRegistry(t, &failingWorkerRegistry{})
 		req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", bytes.NewReader(body))
 		recorder := httptest.NewRecorder()
@@ -495,8 +502,8 @@ func TestHeartbeatAcknowledgesFalseOnlyForMissingRegistration(t *testing.T) {
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
 		}
-		if !strings.Contains(recorder.Body.String(), `"acknowledged":false`) {
-			t.Fatalf("expected acknowledged false, got %s", recorder.Body.String())
+		if !strings.Contains(recorder.Body.String(), `"acknowledged":true`) {
+			t.Fatalf("expected acknowledged true, got %s", recorder.Body.String())
 		}
 	})
 }
