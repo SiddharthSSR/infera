@@ -71,6 +71,9 @@
 
 ## Coordinated gateway and worker rollout
 
+The executable rollout/rollback procedure, ownership, validation gates, recovery evidence, and
+RPO/RTO targets are defined in `docs/operations/deployment-recovery.md`.
+
 1. Build and publish pinned gateway and worker images from the same reviewed commit.
 2. Set one `INFERA_RELEASE_ID` and `INFERA_WORKER_PROTOCOL_VERSION` for the release, then run
    `./scripts/validate-prod-env.sh` before changing the running stack.

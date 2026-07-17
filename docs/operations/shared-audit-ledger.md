@@ -49,6 +49,9 @@ migrations, validate per-workspace counts and token sums, then atomically rotate
 the restored DSN. Never restore only `quota_reservations` or only `inference_audit`; they form one
 accounting state.
 
+Use `scripts/audit-ledger-recovery-drill.sh` and the RPO/RTO and sanitized-evidence procedure in
+`docs/operations/deployment-recovery.md` for the reproducible restore drill.
+
 ## Rollback
 
 Application rollback is safe only to a release that supports PostgreSQL writer protocol `2`.
