@@ -200,6 +200,8 @@ func (s *PostgresInstanceStore) migrate() error {
 			ON managed_instances(worker_credential_hash);
 		CREATE INDEX IF NOT EXISTS idx_managed_instances_workspace
 			ON managed_instances(workspace_id);
+		ALTER TABLE managed_instances
+			ADD COLUMN IF NOT EXISTS lifecycle_claimed_at TIMESTAMPTZ;
 	`); err != nil {
 		return err
 	}

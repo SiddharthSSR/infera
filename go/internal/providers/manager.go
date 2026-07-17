@@ -412,9 +412,38 @@ func (m *Manager) reconcileTransitionalLifecycle(ctx context.Context, instance *
 	}
 	actionCtx, cancel := context.WithTimeout(ctx, m.lifecycleOperationTimeout)
 	defer cancel()
+	observed, observeErr := provider.GetInstance(actionCtx, instance.ProviderID)
+	if providerInstanceNotFound(observeErr) || (observeErr == nil && observed != nil && observed.Status == InstanceStatusTerminated) {
+		return m.finalizeProviderMissing(instance.ID, claimedVersion, "lifecycle recovery")
+	}
+	if observeErr != nil || observed == nil {
+		// Without a provider observation, retrying an action could duplicate a
+		// request that succeeded after its response was lost. Retain the inactive
+		// claim for a later bounded reconciliation attempt.
+		return nil
+	}
 
 	switch instance.Status {
 	case InstanceStatusStarting:
+		switch observed.Status {
+		case InstanceStatusPending, InstanceStatusProvisioning, InstanceStatusRunning:
+			m.costs.StartTracking(instance)
+			return m.finalizeLifecycle(instance.ID, claimedVersion, "start recovery observation", func(stored *Instance) {
+				stored.Status = InstanceStatusProvisioning
+				stored.PublicIP = observed.PublicIP
+				stored.HTTPPort = observed.HTTPPort
+				stored.SSHPort = observed.SSHPort
+				startedAt := m.now()
+				stored.StartedAt = &startedAt
+				stored.StoppedAt = nil
+				stored.ErrorMessage = ""
+				m.initializeWorkerRegistration(stored, startedAt)
+			})
+		case InstanceStatusStopped:
+			// The provider confirms the original start did not take effect.
+		default:
+			return nil
+		}
 		if starter, ok := provider.(InstanceStarter); ok {
 			err = starter.StartWithInstance(actionCtx, instance)
 		} else {
@@ -436,6 +465,20 @@ func (m *Manager) reconcileTransitionalLifecycle(ctx context.Context, instance *
 			m.initializeWorkerRegistration(stored, startedAt)
 		})
 	case InstanceStatusStopping:
+		switch observed.Status {
+		case InstanceStatusStopped:
+			m.costs.StopTracking(instance.ID)
+			return m.finalizeLifecycle(instance.ID, claimedVersion, "stop recovery observation", func(stored *Instance) {
+				stored.Status = InstanceStatusStopped
+				stoppedAt := m.now()
+				stored.StoppedAt = &stoppedAt
+				m.clearWorkerRegistration(stored)
+			})
+		case InstanceStatusPending, InstanceStatusProvisioning, InstanceStatusRunning:
+			// The provider confirms the instance is still active, so retry stop.
+		default:
+			return nil
+		}
 		err = provider.Stop(actionCtx, instance.ProviderID)
 		if err != nil && !providerInstanceNotFound(err) {
 			return nil
@@ -451,6 +494,9 @@ func (m *Manager) reconcileTransitionalLifecycle(ctx context.Context, instance *
 			m.clearWorkerRegistration(stored)
 		})
 	case InstanceStatusTerminating:
+		if observed.Status == InstanceStatusStarting || observed.Status == InstanceStatusTerminating {
+			return nil
+		}
 		err = provider.Terminate(actionCtx, instance.ProviderID)
 		if err != nil && !providerInstanceNotFound(err) {
 			return nil
@@ -737,7 +783,7 @@ func (m *Manager) ListInstancesByProvider(providerType ProviderType) []*Instance
 }
 
 func (m *Manager) ListInstancesByWorkspaceWithError(workspaceID string) ([]*Instance, error) {
-	if err := m.refreshWorkerRegistrationStates(m.now()); err != nil {
+	if err := m.refreshWorkerRegistrationStatesByWorkspace(workspaceID, m.now()); err != nil {
 		return nil, err
 	}
 	return m.instances.listByWorkspace(workspaceID)
@@ -1102,6 +1148,18 @@ func (m *Manager) refreshWorkerRegistrationStates(now time.Time) error {
 	if err != nil {
 		return err
 	}
+	return m.refreshWorkerRegistrationStateRows(instances, now)
+}
+
+func (m *Manager) refreshWorkerRegistrationStatesByWorkspace(workspaceID string, now time.Time) error {
+	instances, err := m.instances.listByWorkspace(workspaceID)
+	if err != nil {
+		return err
+	}
+	return m.refreshWorkerRegistrationStateRows(instances, now)
+}
+
+func (m *Manager) refreshWorkerRegistrationStateRows(instances []*Instance, now time.Time) error {
 	for _, instance := range instances {
 		if _, err := m.instances.update(instance.ID, func(stored *Instance) {
 			m.evaluateWorkerRegistration(stored, now)

@@ -64,6 +64,29 @@ type lifecycleFaultStore struct {
 	failUpdateErr  error
 }
 
+type workspaceScopeSpyStore struct {
+	instanceStore
+	unscopedListCalls int
+	scopedListCalls   int
+	updatedIDs        []string
+	unscopedErr       error
+}
+
+func (s *workspaceScopeSpyStore) list() ([]*Instance, error) {
+	s.unscopedListCalls++
+	return nil, s.unscopedErr
+}
+
+func (s *workspaceScopeSpyStore) listByWorkspace(workspaceID string) ([]*Instance, error) {
+	s.scopedListCalls++
+	return s.instanceStore.listByWorkspace(workspaceID)
+}
+
+func (s *workspaceScopeSpyStore) update(instanceID string, apply func(*Instance)) (bool, error) {
+	s.updatedIDs = append(s.updatedIDs, instanceID)
+	return s.instanceStore.update(instanceID, apply)
+}
+
 func (s *lifecycleFaultStore) put(instance *Instance) error {
 	if s.putErr != nil {
 		return s.putErr
@@ -84,18 +107,21 @@ func (s *lifecycleFaultStore) updateIfLifecycleVersion(instanceID string, expect
 
 type blockingLifecycleProvider struct {
 	*mockTestProvider
-	startEntered     chan struct{}
-	startRelease     chan struct{}
-	stopEntered      chan struct{}
-	stopRelease      chan struct{}
-	terminateEntered chan struct{}
-	terminateRelease chan struct{}
-	stopCalls        atomic.Int32
-	startCalls       atomic.Int32
-	terminateCalls   atomic.Int32
-	stopErr          error
-	startErr         error
-	terminateErr     error
+	startEntered       chan struct{}
+	startRelease       chan struct{}
+	stopEntered        chan struct{}
+	stopRelease        chan struct{}
+	terminateEntered   chan struct{}
+	terminateRelease   chan struct{}
+	stopCalls          atomic.Int32
+	startCalls         atomic.Int32
+	terminateCalls     atomic.Int32
+	stopErr            error
+	startErr           error
+	terminateErr       error
+	startBeforeErr     bool
+	stopBeforeErr      bool
+	terminateBeforeErr bool
 }
 
 func (p *blockingLifecycleProvider) Start(ctx context.Context, instanceID string) error {
@@ -111,6 +137,9 @@ func (p *blockingLifecycleProvider) Start(ctx context.Context, instanceID string
 		}
 	}
 	if p.startErr != nil {
+		if p.startBeforeErr {
+			_ = p.mockTestProvider.Start(ctx, instanceID)
+		}
 		return p.startErr
 	}
 	return p.mockTestProvider.Start(ctx, instanceID)
@@ -129,6 +158,9 @@ func (p *blockingLifecycleProvider) Stop(ctx context.Context, instanceID string)
 		}
 	}
 	if p.stopErr != nil {
+		if p.stopBeforeErr {
+			_ = p.mockTestProvider.Stop(ctx, instanceID)
+		}
 		return p.stopErr
 	}
 	return p.mockTestProvider.Stop(ctx, instanceID)
@@ -146,7 +178,20 @@ func (p *blockingLifecycleProvider) Terminate(ctx context.Context, instanceID st
 			return ctx.Err()
 		}
 	}
+	if p.terminateErr != nil && p.terminateBeforeErr {
+		if instance := p.findInstance(instanceID); instance != nil {
+			instance.Status = InstanceStatusTerminated
+		}
+	}
 	return p.terminateErr
+}
+
+func (p *blockingLifecycleProvider) GetInstance(ctx context.Context, instanceID string) (*Instance, error) {
+	instance := p.findInstance(instanceID)
+	if instance == nil {
+		return nil, &ProviderError{Provider: ProviderMock, Code: ProviderErrorNotFound, Message: "not found"}
+	}
+	return cloneInstance(instance), nil
 }
 
 type cleanupObservingProvider struct {
@@ -1052,6 +1097,44 @@ func TestNewManagerWithStoreUsesInjectedInstanceStore(t *testing.T) {
 	}
 }
 
+func TestListInstancesByWorkspaceRefreshesOnlyTargetTenant(t *testing.T) {
+	baseStore := newInMemoryInstanceStore()
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	for _, instance := range []*Instance{
+		{ID: "target-instance", ProviderID: "provider-target", Provider: ProviderMock, WorkspaceID: "ws-target", Status: InstanceStatusRunning, CreatedAt: now},
+		{ID: "other-instance", ProviderID: "provider-other", Provider: ProviderMock, WorkspaceID: "ws-other", Status: InstanceStatusRunning, CreatedAt: now},
+	} {
+		if err := baseStore.put(instance); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spy := &workspaceScopeSpyStore{
+		instanceStore: baseStore,
+		unscopedErr:   errors.New("another tenant's control state is unavailable"),
+	}
+	mgr, err := NewManagerWithStore(ManagerConfig{DefaultProvider: ProviderMock, Now: func() time.Time { return now }}, spy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	instances, err := mgr.ListInstancesByWorkspaceWithError("ws-target")
+	if err != nil {
+		t.Fatalf("scoped list failed due to another tenant: %v", err)
+	}
+	if len(instances) != 1 || instances[0].ID != "target-instance" {
+		t.Fatalf("scoped list crossed tenant boundary: %+v", instances)
+	}
+	if spy.unscopedListCalls != 0 {
+		t.Fatalf("workspace read invoked unscoped list %d times", spy.unscopedListCalls)
+	}
+	if spy.scopedListCalls != 2 {
+		t.Fatalf("expected scoped refresh and scoped result read, got %d calls", spy.scopedListCalls)
+	}
+	if len(spy.updatedIDs) != 1 || spy.updatedIDs[0] != "target-instance" {
+		t.Fatalf("workspace refresh updated outside target tenant: %+v", spy.updatedIDs)
+	}
+}
+
 func TestInMemoryManagerCredentialsRequireExplicitActiveStatus(t *testing.T) {
 	store := newInMemoryInstanceStore()
 	mgr, err := NewManagerWithStore(ManagerConfig{DefaultProvider: ProviderMock}, store)
@@ -1403,8 +1486,8 @@ func TestManagerLifecycleFinalizationFailureRecoversExpiredStop(t *testing.T) {
 	if err != nil || !found || recovered.Status != InstanceStatusStopped || recovered.LifecycleClaimedAt != nil {
 		t.Fatalf("stop recovery did not finalize: found=%v err=%v instance=%+v", found, err, recovered)
 	}
-	if calls := provider.stopCalls.Load(); calls != 2 {
-		t.Fatalf("expected original and idempotent recovery stop calls, got %d", calls)
+	if calls := provider.stopCalls.Load(); calls != 1 {
+		t.Fatalf("recovery duplicated an already-applied provider stop: calls=%d", calls)
 	}
 }
 
@@ -1423,6 +1506,9 @@ func TestManagerExpiredTerminationRecoveryHasSingleCrossReplicaClaimer(t *testin
 		mockTestProvider: newMockTestProvider(),
 		terminateEntered: make(chan struct{}, 2),
 		terminateRelease: make(chan struct{}),
+	}
+	provider.instances[instance.ID] = &Instance{
+		ID: instance.ID, ProviderID: instance.ProviderID, Provider: ProviderMock, Status: InstanceStatusRunning,
 	}
 	config := ManagerConfig{
 		DefaultProvider: ProviderMock, LifecycleOperationTimeout: 30 * time.Second,
@@ -1554,6 +1640,9 @@ func TestManagerLifecycleRecoveryFailureRemainsInactiveForRetry(t *testing.T) {
 	provider := &blockingLifecycleProvider{
 		mockTestProvider: newMockTestProvider(), stopErr: errors.New("temporary provider failure"),
 	}
+	provider.instances[instance.ID] = &Instance{
+		ID: instance.ID, ProviderID: instance.ProviderID, Provider: ProviderMock, Status: InstanceStatusRunning,
+	}
 	mgr, err := NewManagerWithStore(ManagerConfig{
 		DefaultProvider: ProviderMock, LifecycleOperationTimeout: 30 * time.Second,
 		LifecycleReconcileLease: time.Minute, Now: func() time.Time { return now },
@@ -1635,6 +1724,65 @@ func TestManagerAmbiguousLifecycleFailureStaysInactiveAndRecovers(t *testing.T) 
 			}
 			if readErr != nil || !found || stored.Status != expectedFinal || stored.LifecycleClaimedAt != nil {
 				t.Fatalf("ambiguous action did not recover: found=%v err=%v instance=%+v", found, readErr, stored)
+			}
+		})
+	}
+}
+
+func TestManagerRecoveryObservesAppliedActionBeforeRetry(t *testing.T) {
+	for _, action := range []string{"start", "stop", "terminate"} {
+		t.Run(action, func(t *testing.T) {
+			now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+			provider := &blockingLifecycleProvider{mockTestProvider: newMockTestProvider()}
+			mgr := newTestManager(t, ManagerConfig{
+				DefaultProvider: ProviderMock, LifecycleOperationTimeout: 30 * time.Second,
+				LifecycleReconcileLease: time.Minute, Now: func() time.Time { return now },
+			})
+			mgr.RegisterProvider(provider)
+			instance, err := mgr.Provision(context.Background(), &ProvisionRequest{Name: "lost-response-" + action, GPUType: GPURTX4090})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action == "start" {
+				if err := mgr.Stop(context.Background(), instance.ID); err != nil {
+					t.Fatalf("prepare stopped instance: %v", err)
+				}
+				provider.startBeforeErr = true
+				provider.startErr = context.DeadlineExceeded
+				err = mgr.Start(context.Background(), instance.ID)
+			} else if action == "stop" {
+				provider.stopBeforeErr = true
+				provider.stopErr = context.DeadlineExceeded
+				err = mgr.Stop(context.Background(), instance.ID)
+			} else {
+				provider.terminateBeforeErr = true
+				provider.terminateErr = context.DeadlineExceeded
+				err = mgr.Terminate(context.Background(), instance.ID)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected lost provider response, got %v", err)
+			}
+			now = now.Add(2 * time.Minute)
+			if err := mgr.RefreshInstances(context.Background()); err != nil {
+				t.Fatalf("observe applied action: %v", err)
+			}
+			stored, found, readErr := mgr.instances.get(instance.ID)
+			if readErr != nil || !found || stored.LifecycleClaimedAt != nil {
+				t.Fatalf("observed action did not finalize: found=%v err=%v instance=%+v", found, readErr, stored)
+			}
+			switch action {
+			case "start":
+				if stored.Status != InstanceStatusProvisioning || provider.startCalls.Load() != 1 {
+					t.Fatalf("start recovery duplicated provider action or wrong status: calls=%d instance=%+v", provider.startCalls.Load(), stored)
+				}
+			case "stop":
+				if stored.Status != InstanceStatusStopped || provider.stopCalls.Load() != 1 {
+					t.Fatalf("stop recovery duplicated provider action or wrong status: calls=%d instance=%+v", provider.stopCalls.Load(), stored)
+				}
+			case "terminate":
+				if stored.Status != InstanceStatusTerminated || provider.terminateCalls.Load() != 1 {
+					t.Fatalf("terminate recovery duplicated provider action or wrong status: calls=%d instance=%+v", provider.terminateCalls.Load(), stored)
+				}
 			}
 		})
 	}

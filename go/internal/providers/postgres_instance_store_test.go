@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infera/infera/go/internal/secretbox"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -238,6 +240,95 @@ func TestPostgresInstanceStoreRejectsIncompatibleSchemaVersion(t *testing.T) {
 	}
 	if _, err := NewPostgresInstanceStore(dsn, key); err == nil || !strings.Contains(err.Error(), "schema version") {
 		t.Fatalf("expected incompatible schema version to fail closed, got %v", err)
+	}
+}
+
+func TestPostgresInstanceStoreUpgradesPriorV2LifecycleClaimColumn(t *testing.T) {
+	dsn := isolatedControlStateDSN(t)
+	key := randomEncodedKey(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE control_state_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+		INSERT INTO control_state_metadata (key, value) VALUES
+			('schema_version', '2'),
+			('writer_protocol', '1'),
+			('control_state_cluster_id', 'prior-v2-cluster');
+		CREATE TABLE managed_instances (
+			id TEXT PRIMARY KEY,
+			provider_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			workspace_id TEXT NOT NULL,
+			state_json JSONB NOT NULL,
+			worker_id TEXT,
+			worker_credential_hash BYTEA NOT NULL,
+			worker_credential_ciphertext TEXT NOT NULL,
+			lifecycle_version BIGINT NOT NULL DEFAULT 1 CHECK (lifecycle_version > 0),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (provider, provider_id)
+		)`); err != nil {
+		t.Fatalf("create prior v2 schema: %v", err)
+	}
+	var claimColumns int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = 'managed_instances'
+		  AND column_name = 'lifecycle_claimed_at'`).Scan(&claimColumns); err != nil || claimColumns != 0 {
+		t.Fatalf("prior v2 fixture unexpectedly has lifecycle_claimed_at: count=%d err=%v", claimColumns, err)
+	}
+	credential := "prior-v2-credential"
+	instance := &Instance{
+		ID: "prior-v2", ProviderID: "provider-prior-v2", Provider: ProviderRunPod,
+		WorkspaceID: "ws-prior-v2", Status: InstanceStatusRunning, CreatedAt: time.Now().UTC(),
+	}
+	payload, err := json.Marshal(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	box, err := secretbox.New(key, "worker credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := box.Encrypt(credential, workerCredentialAAD(instance.ID, instance.WorkspaceID, instance.Provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256([]byte(credential))
+	if _, err := db.Exec(`
+		INSERT INTO managed_instances
+			(id, provider_id, provider, workspace_id, state_json, worker_credential_hash, worker_credential_ciphertext, lifecycle_version, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8)`,
+		instance.ID, instance.ProviderID, string(instance.Provider), instance.WorkspaceID,
+		payload, hash[:], ciphertext, instance.CreatedAt,
+	); err != nil {
+		t.Fatalf("seed prior v2 instance: %v", err)
+	}
+
+	store, err := NewPostgresInstanceStore(dsn, key)
+	if err != nil {
+		t.Fatalf("open prior v2 store: %v", err)
+	}
+	defer store.Close()
+	stored, found, err := store.get(instance.ID)
+	if err != nil || !found || stored.WorkerCredential != credential || stored.LifecycleClaimedAt != nil {
+		t.Fatalf("read upgraded prior v2 instance: found=%v err=%v instance=%+v", found, err, stored)
+	}
+	claimedAt := time.Now().UTC()
+	updated, err := store.updateIfLifecycleVersion(instance.ID, stored.LifecycleVersion, func(current *Instance) {
+		current.Status = InstanceStatusStopping
+		current.LifecycleClaimedAt = &claimedAt
+	})
+	if err != nil || !updated {
+		t.Fatalf("claim lifecycle after prior v2 upgrade: updated=%v err=%v", updated, err)
+	}
+	claimed, found, err := store.get(instance.ID)
+	if err != nil || !found || claimed.LifecycleClaimedAt == nil || !claimed.LifecycleClaimedAt.Equal(claimedAt) {
+		t.Fatalf("upgraded lifecycle claim was not durable: found=%v err=%v instance=%+v", found, err, claimed)
 	}
 }
 
