@@ -175,6 +175,7 @@ type Instance struct {
 	Metadata             map[string]string `json:"metadata,omitempty"`
 	WorkerCredential     string            `json:"-"`
 	WorkerCredentialHash [sha256.Size]byte `json:"-"`
+	LifecycleVersion     int64             `json:"-"`
 
 	// Error info
 	ErrorMessage string `json:"error_message,omitempty"`

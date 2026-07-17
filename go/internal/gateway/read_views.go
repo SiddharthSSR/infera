@@ -368,10 +368,16 @@ func (g *Gateway) quotaStatusPayload(workspaceID string, now time.Time) (map[str
 	}, nil
 }
 
-func (h *InstanceHandlers) listInstanceEntriesForWorkspace(workspaceID string) []map[string]interface{} {
-	instances := h.manager.ListInstances()
+func (h *InstanceHandlers) listInstanceEntriesForWorkspace(workspaceID string) ([]map[string]interface{}, error) {
+	instances, err := h.manager.ListInstancesWithError()
+	if err != nil {
+		return nil, err
+	}
 	if normalizeWorkspaceIDForGateway(workspaceID) != auth.DefaultWorkspaceID {
-		instances = h.manager.ListInstancesByWorkspace(normalizeWorkspaceIDForGateway(workspaceID))
+		instances, err = h.manager.ListInstancesByWorkspaceWithError(normalizeWorkspaceIDForGateway(workspaceID))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	response := make([]map[string]interface{}, 0, len(instances))
@@ -379,7 +385,7 @@ func (h *InstanceHandlers) listInstanceEntriesForWorkspace(workspaceID string) [
 		response = append(response, instanceToMap(instance))
 	}
 	sortEntriesByStringKey(response, "id")
-	return response
+	return response, nil
 }
 
 func (h *InstanceHandlers) listDeploymentEntries(workspaceID string, limit int) ([]*deployments.AttemptRecord, error) {

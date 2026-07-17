@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -315,8 +316,57 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 	if replacementRec.Code != http.StatusForbidden {
 		t.Fatalf("expected deployment-bound credential to reject worker identity change, got %d body=%s", replacementRec.Code, replacementRec.Body.String())
 	}
+	if strings.Contains(replacementRec.Body.String(), "already bound") || !strings.Contains(replacementRec.Body.String(), "worker_identity_mismatch") {
+		t.Fatalf("identity conflict response was unstable or leaked details: %s", replacementRec.Body.String())
+	}
 	if _, found := r.GetWorker("w2"); found {
 		t.Fatal("rejected identity change mutated the worker registry")
+	}
+}
+
+func TestWorkerHeartbeatIdentityConflictReturnsStableForbidden(t *testing.T) {
+	r := router.New(router.DefaultConfig())
+	defer r.Stop()
+	manager, err := providers.NewManager(providers.ManagerConfig{
+		DefaultProvider: providers.ProviderMock,
+		WorkerImage:     "ghcr.io/infera/infera-worker:v1.0.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	provider := newRunPodLinkTestProvider()
+	manager.RegisterProvider(provider)
+	instance, err := manager.Provision(context.Background(), &providers.ProvisionRequest{
+		Name: "heartbeat-conflict", Provider: providers.ProviderRunPod,
+		GPUType: providers.GPUL40S, GPUCount: 1, Models: []string{"model-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.LinkWorker(instance.ID, "worker-a"); err != nil {
+		t.Fatal(err)
+	}
+	g := New(DefaultConfig(), r, manager)
+	handler := g.requireWorkerToken(g.handleWorkerHeartbeat)
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(`{"worker_id":"worker-b","stats":{}}`))
+	req.Header.Set("X-Worker-Token", provider.workerToken)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "worker_identity_mismatch") || strings.Contains(rec.Body.String(), "worker-a") {
+		t.Fatalf("unexpected heartbeat identity response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWorkerControlStateFailureReturnsGenericUnavailable(t *testing.T) {
+	g := New(DefaultConfig(), nil, nil)
+	rec := httptest.NewRecorder()
+	g.writeWorkerControlError(rec, fmt.Errorf("%w: postgres password=do-not-leak", providers.ErrControlStateUnavailable))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "worker_control_state_unavailable") {
+		t.Fatalf("unexpected unavailable response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "postgres") || strings.Contains(rec.Body.String(), "password") {
+		t.Fatalf("control-state response leaked internal details: %s", rec.Body.String())
 	}
 }
 

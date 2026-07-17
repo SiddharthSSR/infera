@@ -1,72 +1,29 @@
 package auth
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/base64"
-	"fmt"
-	"io"
-	"strings"
+	"github.com/infera/infera/go/internal/secretbox"
 )
 
-const providerCredentialCiphertextPrefix = "enc:v1:"
+const providerCredentialCiphertextPrefix = secretbox.CiphertextPrefix
 
 type providerCredentialCipher struct {
-	aead cipher.AEAD
+	box *secretbox.Box
 }
 
 func newProviderCredentialCipher(encodedKey string) (*providerCredentialCipher, error) {
-	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encodedKey))
+	box, err := secretbox.New(encodedKey, "provider credential")
 	if err != nil {
-		return nil, fmt.Errorf("provider credential encryption key must be base64 encoded: %w", err)
+		return nil, err
 	}
-	if len(key) != 32 {
-		return nil, fmt.Errorf("provider credential encryption key must decode to exactly 32 bytes")
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize provider credential encryption: %w", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize provider credential encryption: %w", err)
-	}
-	return &providerCredentialCipher{aead: aead}, nil
+	return &providerCredentialCipher{box: box}, nil
 }
 
 func (c *providerCredentialCipher) encrypt(value, workspaceID, provider, field string) (string, error) {
-	if value == "" {
-		return "", nil
-	}
-	nonce := make([]byte, c.aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", fmt.Errorf("failed to generate provider credential nonce: %w", err)
-	}
-	ciphertext := c.aead.Seal(nonce, nonce, []byte(value), providerCredentialAAD(workspaceID, provider, field))
-	return providerCredentialCiphertextPrefix + base64.RawStdEncoding.EncodeToString(ciphertext), nil
+	return c.box.Encrypt(value, providerCredentialAAD(workspaceID, provider, field))
 }
 
 func (c *providerCredentialCipher) decrypt(value, workspaceID, provider, field string) (string, error) {
-	if value == "" {
-		return "", nil
-	}
-	if !strings.HasPrefix(value, providerCredentialCiphertextPrefix) {
-		return "", fmt.Errorf("provider credential is not encrypted")
-	}
-	payload, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(value, providerCredentialCiphertextPrefix))
-	if err != nil {
-		return "", fmt.Errorf("provider credential ciphertext is invalid: %w", err)
-	}
-	if len(payload) < c.aead.NonceSize() {
-		return "", fmt.Errorf("provider credential ciphertext is truncated")
-	}
-	nonce, ciphertext := payload[:c.aead.NonceSize()], payload[c.aead.NonceSize():]
-	plaintext, err := c.aead.Open(nil, nonce, ciphertext, providerCredentialAAD(workspaceID, provider, field))
-	if err != nil {
-		return "", fmt.Errorf("provider credential could not be decrypted")
-	}
-	return string(plaintext), nil
+	return c.box.Decrypt(value, providerCredentialAAD(workspaceID, provider, field))
 }
 
 func providerCredentialAAD(workspaceID, provider, field string) []byte {

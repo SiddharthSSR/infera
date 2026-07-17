@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"math"
 	"testing"
@@ -43,6 +44,27 @@ func (r workspaceConfiguredProviderResolver) ResolveProviderConfig(workspaceID s
 type instanceAwareStartProvider struct {
 	*mockTestProvider
 	startedWithInstance []string
+}
+
+type delayedRefreshProvider struct {
+	*mockTestProvider
+	snapshotTaken chan struct{}
+	release       chan struct{}
+}
+
+func (p *delayedRefreshProvider) GetInstance(ctx context.Context, instanceID string) (*Instance, error) {
+	instance := p.findInstance(instanceID)
+	if instance == nil {
+		return nil, &ProviderError{Code: ProviderErrorNotFound, Message: "not found"}
+	}
+	snapshot := cloneInstance(instance)
+	close(p.snapshotTaken)
+	select {
+	case <-p.release:
+		return snapshot, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func newMockTestProvider() *mockTestProvider {
@@ -916,6 +938,37 @@ func TestNewManagerWithStoreUsesInjectedInstanceStore(t *testing.T) {
 	}
 }
 
+func TestInMemoryManagerCredentialsRequireExplicitActiveStatus(t *testing.T) {
+	store := newInMemoryInstanceStore()
+	mgr, err := NewManagerWithStore(ManagerConfig{DefaultProvider: ProviderMock}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	for _, status := range []InstanceStatus{
+		InstanceStatusStopping, InstanceStatusStopped, InstanceStatusTerminating,
+		InstanceStatusTerminated, InstanceStatusError, "", "future_corrupt",
+	} {
+		credential := "credential-" + string(status)
+		hash := sha256.Sum256([]byte(credential))
+		instance := &Instance{
+			ID: "instance-" + string(status), ProviderID: "provider-" + string(status),
+			Provider: ProviderMock, WorkspaceID: "ws-test", Status: status,
+			WorkerID: "worker-" + string(status), WorkerCredential: credential,
+			WorkerCredentialHash: hash, CreatedAt: time.Now().UTC(),
+		}
+		if err := store.put(instance); err != nil {
+			t.Fatal(err)
+		}
+		if authenticated, found, err := mgr.AuthenticateWorkerToken(credential); err != nil || found || authenticated != nil {
+			t.Fatalf("inactive %q authenticated: found=%v err=%v", status, found, err)
+		}
+		if outbound, found, err := mgr.WorkerCredentialForWorker(instance.WorkerID); err != nil || found || outbound != "" {
+			t.Fatalf("inactive %q returned outbound credential: found=%v err=%v", status, found, err)
+		}
+	}
+}
+
 func TestManagerStartRejectedForTerminatedInstance(t *testing.T) {
 	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
 	provider := newMockTestProvider()
@@ -965,6 +1018,93 @@ func TestManagerRefreshMarksMissingInstanceTerminated(t *testing.T) {
 	}
 	if refreshed.ErrorMessage == "" {
 		t.Fatal("expected refresh to persist missing-instance error")
+	}
+}
+
+func TestManagerRefreshDoesNotOverwriteConcurrentStopWithStaleRunningSnapshot(t *testing.T) {
+	provider := &delayedRefreshProvider{
+		mockTestProvider: newMockTestProvider(),
+		snapshotTaken:    make(chan struct{}),
+		release:          make(chan struct{}),
+	}
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(provider)
+	instance, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name: "version-fenced-refresh", Provider: ProviderMock,
+		GPUType: GPURTX4090, GPUCount: 1, Models: []string{"model-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential := provider.lastReq.WorkerToken
+	refreshResult := make(chan error, 1)
+	go func() { refreshResult <- mgr.RefreshInstances(context.Background()) }()
+	<-provider.snapshotTaken
+	if err := mgr.Stop(context.Background(), instance.ID); err != nil {
+		t.Fatalf("stop while refresh delayed: %v", err)
+	}
+	close(provider.release)
+	if err := <-refreshResult; err != nil {
+		t.Fatalf("delayed refresh: %v", err)
+	}
+	stored, found, err := mgr.GetInstanceWithError(instance.ID)
+	if err != nil || !found {
+		t.Fatalf("read stopped instance: found=%v err=%v", found, err)
+	}
+	if stored.Status != InstanceStatusStopped {
+		t.Fatalf("stale running snapshot overwrote stop: %s", stored.Status)
+	}
+	if authenticated, found, err := mgr.AuthenticateWorkerToken(credential); err != nil || found || authenticated != nil {
+		t.Fatalf("stale refresh restored stopped credential: found=%v err=%v", found, err)
+	}
+}
+
+func TestManagerRefreshAppliesProviderTransitionAcrossConcurrentWorkerHeartbeat(t *testing.T) {
+	provider := &delayedRefreshProvider{
+		mockTestProvider: newMockTestProvider(),
+		snapshotTaken:    make(chan struct{}),
+		release:          make(chan struct{}),
+	}
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(provider)
+	instance, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name: "worker-write-does-not-starve-refresh", Provider: ProviderMock,
+		GPUType: GPURTX4090, GPUCount: 1, Models: []string{"model-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.LinkWorker(instance.ID, "worker-during-refresh"); err != nil {
+		t.Fatalf("link worker before refresh: %v", err)
+	}
+	providerInstance := provider.findInstance(instance.ProviderID)
+	providerInstance.PublicIP = "203.0.113.42"
+	providerInstance.HTTPPort = 18443
+
+	refreshResult := make(chan error, 1)
+	go func() { refreshResult <- mgr.RefreshInstances(context.Background()) }()
+	<-provider.snapshotTaken
+	heartbeatAt := time.Now().UTC().Add(time.Minute)
+	updated, err := mgr.RecordWorkerHeartbeatWithError("worker-during-refresh", heartbeatAt)
+	if err != nil || !updated {
+		t.Fatalf("record heartbeat while refresh delayed: updated=%v err=%v", updated, err)
+	}
+	close(provider.release)
+	if err := <-refreshResult; err != nil {
+		t.Fatalf("delayed refresh: %v", err)
+	}
+	stored, found, err := mgr.GetInstanceWithError(instance.ID)
+	if err != nil || !found {
+		t.Fatalf("read refreshed instance: found=%v err=%v", found, err)
+	}
+	if stored.PublicIP != "203.0.113.42" || stored.HTTPPort != 18443 {
+		t.Fatalf("provider transition was not applied: %+v", stored)
+	}
+	if stored.WorkerID != "worker-during-refresh" {
+		t.Fatalf("provider refresh erased concurrent worker link: %+v", stored)
+	}
+	if stored.WorkerLastHeartbeatAt == nil || !stored.WorkerLastHeartbeatAt.Equal(heartbeatAt) {
+		t.Fatalf("provider refresh erased concurrent worker heartbeat: %+v", stored)
 	}
 }
 

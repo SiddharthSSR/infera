@@ -157,7 +157,9 @@ func New(config Config, r *router.Router, instanceMgr *providers.Manager) *Gatew
 		})
 		r.OnWorkerHealthTransition(func(transition router.WorkerHealthTransition) {
 			if gw.instanceManager != nil && (transition.ToStatus == types.WorkerStatusUnhealthy || transition.ToStatus == types.WorkerStatusOffline) {
-				gw.instanceManager.RecordWorkerUnhealthy(transition.WorkerID, time.Now())
+				if _, err := gw.instanceManager.RecordWorkerUnhealthyWithError(transition.WorkerID, time.Now()); err != nil {
+					gw.log.Error("worker.control_state_update_failed", slog.String("error", "control state unavailable"))
+				}
 			}
 			if gw.metrics != nil {
 				gw.metrics.RecordWorkerHealthTransition(string(transition.Event), string(transition.FromStatus), string(transition.ToStatus))
@@ -410,7 +412,11 @@ func (g *Gateway) requireWorkerToken(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		if g.instanceManager != nil {
-			instance, ok := g.instanceManager.AuthenticateWorkerToken(token)
+			instance, ok, err := g.instanceManager.AuthenticateWorkerToken(token)
+			if err != nil {
+				g.writeError(w, http.StatusServiceUnavailable, "worker_auth_unavailable", "Worker authentication is temporarily unavailable")
+				return
+			}
 			if !ok {
 				g.writeError(w, http.StatusUnauthorized, "unauthorized", "Invalid worker token")
 				return
@@ -864,7 +870,15 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 	principal, managed := r.Context().Value(workerPrincipalContextKey{}).(workerPrincipal)
 	if managed {
-		instance, _ := g.instanceManager.GetInstance(principal.InstanceID)
+		instance, found, err := g.instanceManager.GetInstanceWithError(principal.InstanceID)
+		if err != nil {
+			g.writeError(w, http.StatusServiceUnavailable, "worker_control_state_unavailable", "Worker control state is temporarily unavailable")
+			return
+		}
+		if !found {
+			g.writeError(w, http.StatusServiceUnavailable, "worker_control_state_unavailable", "Worker control state is temporarily unavailable")
+			return
+		}
 		address, err := trustedWorkerAddress(instance, req.Address)
 		if err != nil {
 			g.writeError(w, http.StatusForbidden, "worker_address_mismatch", err.Error())
@@ -872,7 +886,7 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Address = address
 		if err := g.instanceManager.LinkWorker(principal.InstanceID, req.WorkerID); err != nil {
-			g.writeError(w, http.StatusForbidden, "worker_identity_mismatch", err.Error())
+			g.writeWorkerControlError(w, err)
 			return
 		}
 	}
@@ -913,7 +927,7 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 	workerToken, err := g.workerCredentialForWorker(req.WorkerID)
 	if err != nil {
-		g.writeError(w, http.StatusForbidden, "worker_credential_unavailable", err.Error())
+		g.writeError(w, http.StatusServiceUnavailable, "worker_credential_unavailable", "Worker credential is temporarily unavailable")
 		return
 	}
 
@@ -923,7 +937,10 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !managed {
-		g.linkWorkerToInstance(workerInfo)
+		if err := g.linkWorkerToInstance(workerInfo); err != nil {
+			g.writeError(w, http.StatusServiceUnavailable, "worker_control_state_unavailable", "Worker control state is temporarily unavailable")
+			return
+		}
 	}
 
 	// Register worker client
@@ -998,7 +1015,7 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 	}
 	if principal, managed := r.Context().Value(workerPrincipalContextKey{}).(workerPrincipal); managed {
 		if err := g.instanceManager.AuthorizeWorkerBinding(principal.InstanceID, req.WorkerID); err != nil {
-			g.writeError(w, http.StatusForbidden, "worker_identity_mismatch", err.Error())
+			g.writeWorkerControlError(w, err)
 			return
 		}
 	}
@@ -1031,7 +1048,10 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if worker, found := g.router.GetWorker(req.WorkerID); found {
-		g.linkWorkerToInstance(worker)
+		if err := g.linkWorkerToInstance(worker); err != nil {
+			g.writeError(w, http.StatusServiceUnavailable, "worker_control_state_unavailable", "Worker control state is temporarily unavailable")
+			return
+		}
 	}
 
 	// Sync loaded models from heartbeat (self-healing if registration missed them)
@@ -1052,14 +1072,16 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func (g *Gateway) linkWorkerToInstance(worker *types.WorkerInfo) {
+func (g *Gateway) linkWorkerToInstance(worker *types.WorkerInfo) error {
 	if g == nil || g.instanceManager == nil || worker == nil {
-		return
+		return nil
 	}
 
-	if instance, found := g.instanceManager.GetInstanceByWorker(worker.WorkerID); found && instance != nil {
-		g.instanceManager.RecordWorkerHeartbeat(worker.WorkerID, worker.LastHealthCheck)
-		return
+	if instance, found, err := g.instanceManager.GetInstanceByWorkerWithError(worker.WorkerID); err != nil {
+		return err
+	} else if found && instance != nil {
+		_, err := g.instanceManager.RecordWorkerHeartbeatWithError(worker.WorkerID, worker.LastHealthCheck)
+		return err
 	}
 
 	instanceID := strings.TrimSpace(worker.Tags["instance_id"])
@@ -1068,14 +1090,17 @@ func (g *Gateway) linkWorkerToInstance(worker *types.WorkerInfo) {
 	}
 
 	if instanceID != "" {
-		if inst, found := g.instanceManager.GetInstance(instanceID); found && inst != nil {
-			if err := g.instanceManager.LinkWorker(inst.ID, worker.WorkerID); err == nil {
-				g.log.Info("worker.linked_via_tag",
-					slog.String("worker_id", worker.WorkerID),
-					slog.String("instance_id", inst.ID),
-				)
+		if inst, found, err := g.instanceManager.GetInstanceWithError(instanceID); err != nil {
+			return err
+		} else if found && inst != nil {
+			if err := g.instanceManager.LinkWorker(inst.ID, worker.WorkerID); err != nil {
+				return err
 			}
-			return
+			g.log.Info("worker.linked_via_tag",
+				slog.String("worker_id", worker.WorkerID),
+				slog.String("instance_id", inst.ID),
+			)
+			return nil
 		}
 	}
 
@@ -1086,19 +1111,22 @@ func (g *Gateway) linkWorkerToInstance(worker *types.WorkerInfo) {
 			slog.String("address", worker.Address),
 			slog.String("reason", "no provider ref resolvable from tags or hostname"),
 		)
-		return
+		return nil
 	}
 
-	if inst, found := g.instanceManager.GetInstanceByProviderRef(providerType, providerID); found && inst != nil {
-		if err := g.instanceManager.LinkWorker(inst.ID, worker.WorkerID); err == nil {
-			g.log.Info("worker.linked_via_provider_ref",
-				slog.String("worker_id", worker.WorkerID),
-				slog.String("instance_id", inst.ID),
-				slog.String("provider", string(providerType)),
-				slog.String("provider_id", providerID),
-				slog.String("method", method),
-			)
+	if inst, found, err := g.instanceManager.GetInstanceByProviderRefWithError(providerType, providerID); err != nil {
+		return err
+	} else if found && inst != nil {
+		if err := g.instanceManager.LinkWorker(inst.ID, worker.WorkerID); err != nil {
+			return err
 		}
+		g.log.Info("worker.linked_via_provider_ref",
+			slog.String("worker_id", worker.WorkerID),
+			slog.String("instance_id", inst.ID),
+			slog.String("provider", string(providerType)),
+			slog.String("provider_id", providerID),
+			slog.String("method", method),
+		)
 	} else {
 		g.log.Warn("worker.link_no_instance",
 			slog.String("worker_id", worker.WorkerID),
@@ -1107,6 +1135,15 @@ func (g *Gateway) linkWorkerToInstance(worker *types.WorkerInfo) {
 			slog.String("method", method),
 		)
 	}
+	return nil
+}
+
+func (g *Gateway) writeWorkerControlError(w http.ResponseWriter, err error) {
+	if errors.Is(err, providers.ErrWorkerIdentityConflict) {
+		g.writeError(w, http.StatusForbidden, "worker_identity_mismatch", "Worker identity does not match the provisioned instance")
+		return
+	}
+	g.writeError(w, http.StatusServiceUnavailable, "worker_control_state_unavailable", "Worker control state is temporarily unavailable")
 }
 
 func inferWorkerProviderRef(worker *types.WorkerInfo) (providerID string, providerType providers.ProviderType, method string, ok bool) {
@@ -1332,7 +1369,13 @@ func (g *Gateway) workerCredentialForWorker(workerID string) (string, error) {
 		}
 		return credential, nil
 	}
-	credential, found := g.instanceManager.WorkerCredentialForWorker(workerID)
+	credential, found, err := g.instanceManager.WorkerCredentialForWorker(workerID)
+	if err != nil {
+		if errors.Is(err, providers.ErrControlStateUnavailable) || errors.Is(err, providers.ErrWorkerCredentialIntegrity) {
+			return "", errors.New("worker control state is temporarily unavailable")
+		}
+		return "", errors.New("worker credential is unavailable")
+	}
 	if !found {
 		return "", fmt.Errorf("deployment-bound credential for worker %s is unavailable", workerID)
 	}
