@@ -97,9 +97,15 @@ The `strategy` label is set to `unknown` for failures that occur before a strate
 
 ## Benchmark Exposure
 
-Route decisions are not exposed in public benchmark response metadata yet. There is no current safe debug header or endpoint that can return route decision data without expanding the public API surface.
+Authenticated clients can opt in to safe route decision metadata by sending
+`X-Infera-Debug-Route: true`. The gateway returns the allowlisted metadata in the
+`X-Infera-Route-Decision` response header. The `infera-bench` option
+`--capture-route-decision` includes it in benchmark samples and summaries.
 
-Future benchmark work should add a safe mechanism for `infera-bench` to read route decision metadata, such as response headers or an authenticated debug endpoint. That mechanism must not expose prompt text, API keys, authorization headers, worker shared tokens, provider credentials, or raw provider responses.
+The header is omitted by default and excludes prompt text, API keys,
+authorization headers, worker shared tokens, provider credentials, and raw
+provider responses. See [Safe Route Decision Metadata](route-decision-metadata.md)
+for the complete contract and benchmark usage.
 
 ## Future Routing Work
 
