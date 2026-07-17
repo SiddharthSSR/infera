@@ -32,6 +32,7 @@
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "Unavailable (no data)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -93,16 +94,17 @@
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "Unavailable (no data)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
-                "color": "red",
-                "value": 0.05
+                "color": "green",
+                "value": 0.99
               }
             ]
           },
@@ -134,13 +136,14 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "((sum(rate(infera_gateway_http_requests_total{status=~\"5..\"}[5m])) or vector(0)) / clamp_min(sum(rate(infera_gateway_http_requests_total[5m])), 1)) or vector(0)",
-          "legendFormat": "5xx ratio",
+          "expr": "infera:slo_v1:availability_ratio14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "{{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Gateway 5xx Ratio (5m)",
+      "description": "SLO v1 14-day availability objective (target 99%). No eligible traffic is rendered as Unavailable (no data), never as 100%.",
+      "title": "SLO v1 Availability Attainment (14d)",
       "type": "stat"
     },
     {
@@ -154,6 +157,7 @@
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "Unavailable (no data)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -272,6 +276,7 @@
             "mode": "palette-classic"
           },
           "mappings": [],
+          "noValue": "Unavailable (no data)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -307,13 +312,35 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, status) (rate(infera_gateway_inference_duration_seconds_bucket[5m])))",
-          "legendFormat": "status={{status}}",
+          "expr": "infera:slo_v1:e2e_seconds_p50_5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "p50 {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:e2e_seconds_p95_5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "p95 {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:e2e_seconds_p99_5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "p99 {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:e2e_seconds_p95_14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "14d p95 {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "D"
         }
       ],
-      "title": "Inference p95 Duration by Status (s)",
+      "description": "Five-minute p50/p95/p99 are operational signals; the 14-day p95 is the SLO compliance value. Empty means no successful eligible requests.",
+      "title": "SLO v1 End-to-end Operational + 14d p95 (s)",
       "type": "timeseries"
     },
     {
@@ -327,6 +354,7 @@
             "mode": "palette-classic"
           },
           "mappings": [],
+          "noValue": "Unavailable (no data)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -410,6 +438,7 @@
             "mode": "palette-classic"
           },
           "mappings": [],
+          "noValue": "Unavailable (no data)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -437,20 +466,35 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(infera_gateway_inference_ttft_seconds_bucket[5m])))",
-          "legendFormat": "p95 {{model}}",
+          "expr": "infera:slo_v1:ttft_seconds_p50_5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "p50 {{measurement}} / {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "A"
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le, model) (rate(infera_gateway_inference_ttft_seconds_bucket[5m])))",
-          "legendFormat": "p50 {{model}}",
+          "expr": "infera:slo_v1:ttft_seconds_p95_5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "p95 {{measurement}} / {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:ttft_seconds_p99_5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "p99 {{measurement}} / {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:ttft_seconds_p95_14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "14d p95 combined / {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "D"
         }
       ],
-      "title": "Inference TTFT p95/p50 by Model (s)",
+      "description": "Five-minute quantiles are operational; 14-day p95 is the objective value. Streaming TTFT is exact and non-streaming TTFT is a derived worker proxy. Empty means unavailable.",
+      "title": "SLO v1 TTFT Operational + 14d p95 (s)",
       "type": "timeseries"
     },
     {
@@ -464,6 +508,7 @@
             "mode": "palette-classic"
           },
           "mappings": [],
+          "noValue": "Unavailable (no data)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -498,20 +543,35 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(infera_gateway_inference_tpot_seconds_bucket[5m])))",
-          "legendFormat": "p95 {{model}}",
+          "expr": "infera:slo_v1:tpot_seconds_p50_5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "p50 {{measurement}} / {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "A"
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le, model) (rate(infera_gateway_inference_tpot_seconds_bucket[5m])))",
-          "legendFormat": "p50 {{model}}",
+          "expr": "infera:slo_v1:tpot_seconds_p95_5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "p95 {{measurement}} / {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:tpot_seconds_p99_5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "p99 {{measurement}} / {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:tpot_seconds_p95_14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "14d p95 {{measurement}} / {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "D"
         }
       ],
-      "title": "Inference TPOT p95/p50 by Model (s)",
+      "description": "Five-minute quantiles are operational; 14-day p95 is the objective value. TPOT is derived for both modes. Empty means no usable output-token interval was available.",
+      "title": "SLO v1 TPOT Operational + 14d p95 (s)",
       "type": "timeseries"
     },
     {
@@ -525,6 +585,7 @@
             "mode": "palette-classic"
           },
           "mappings": [],
+          "noValue": "Unavailable (no data)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -580,6 +641,7 @@
             "mode": "palette-classic"
           },
           "mappings": [],
+          "noValue": "Unavailable (no data)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -635,6 +697,7 @@
             "mode": "palette-classic"
           },
           "mappings": [],
+          "noValue": "Unavailable (no data)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -670,13 +733,14 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (reason) (rate(infera_gateway_inference_rejected_total[5m])) or vector(0)",
-          "legendFormat": "reason={{reason}}",
+          "expr": "infera:slo_v1:measurement_count14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "{{metric}} / {{measurement}} / {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Gateway Inference Rejections",
+      "description": "14-day request-level TTFT/TPOT quality. Unavailable is counted explicitly and is not emitted as a zero latency sample.",
+      "title": "SLO v1 Measurement Availability (14d)",
       "type": "timeseries"
     },
     {
@@ -733,6 +797,73 @@
       ],
       "title": "Worker Health Transitions",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "infera-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "noValue": "Unavailable (no data)",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 0.95 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "id": 13,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:e2e_good_ratio14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "E2E <=10s {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:ttft_good_ratio14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "TTFT <=2s combined / {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:tpot_good_ratio14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "TPOT <=100ms {{measurement}} / {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "description": "Share of eligible 14-day latency samples meeting each objective. TTFT combines exact and derived eligible samples into its documented cohort; unavailable requests remain visible only in the measurement-availability panel.",
+      "title": "SLO v1 Latency Objective Attainment (14d)",
+      "type": "stat"
     }
   ],
   "refresh": "30s",
@@ -744,7 +875,34 @@
     "observability"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "infera-prometheus" },
+        "definition": "label_values(infera_gateway_slo_v1_requests_total, model)",
+        "includeAll": true,
+        "label": "Model",
+        "multi": true,
+        "name": "model",
+        "query": { "query": "label_values(infera_gateway_slo_v1_requests_total, model)", "refId": "PrometheusVariableQueryEditor-Model" },
+        "refresh": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "infera-prometheus" },
+        "definition": "label_values(infera_gateway_slo_v1_requests_total, routing_strategy)",
+        "includeAll": true,
+        "label": "Routing strategy",
+        "multi": true,
+        "name": "routing_strategy",
+        "query": { "query": "label_values(infera_gateway_slo_v1_requests_total, routing_strategy)", "refId": "PrometheusVariableQueryEditor-RoutingStrategy" },
+        "refresh": 1,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-6h",
@@ -754,6 +912,6 @@
   "timezone": "browser",
   "title": "Infera Overview",
   "uid": "infera-overview",
-  "version": 4,
+  "version": 6,
   "weekStart": ""
 }

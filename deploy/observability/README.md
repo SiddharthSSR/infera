@@ -6,6 +6,9 @@ This directory contains baseline monitoring config for Infera production:
 - Alertmanager routing + email templates
 - Grafana datasource and dashboard provisioning
 - Starter dashboard for gateway + worker metrics
+- Versioned inference SLO definitions, recording rules, and multi-window burn alerts
+
+The customer-facing contract is documented in [`SLO.md`](SLO.md). SLO v1 preserves exact, derived, and unavailable latency semantics instead of substituting zero for missing measurements.
 
 ## Services
 
@@ -91,15 +94,20 @@ Then log in to Grafana and open the `Infera / Infera Overview` dashboard.
 
 Start with these panels in `Infera / Infera Overview`:
 
-- `Inference TTFT p95 by Model (s)` to catch cold-start, routing, or prefill regressions.
-- `Inference TPOT p95 by Model (s)` to catch decode-side slowdowns after the first token.
+- `SLO v1 Availability Attainment (14d)` for the actual 99% availability objective filtered by model and routing strategy.
+- `SLO v1 Latency Objective Attainment (14d)` for the share of eligible E2E, TTFT, and TPOT samples meeting their p95 targets.
+- `SLO v1 End-to-end/TTFT/TPOT Operational + 14d p95` panels to compare short-window diagnostics with objective-window values.
+- `SLO v1 Measurement Availability (14d)` to distinguish exact, derived, and unavailable TTFT/TPOT requests.
 - `Batch Wait p95 by Model (s)` to see whether requests are stalling in the queue before dispatch.
 - `Batch Size avg by Model` to confirm batching is actually coalescing useful work.
 
 Alert expectations:
 
-- `InferaInferenceTTFTHigh` should stay quiet during normal warm traffic.
-- `InferaInferenceTPOTHigh` usually indicates saturated decode throughput or poor runtime config.
+- `InferaSLOAvailabilityFastBurn` pages only when both 5-minute and 1-hour windows exceed 14.4x the 1% error budget and recent traffic exists.
+- `InferaSLOAvailabilitySlowBurn` warns only when both 30-minute and 6-hour windows exceed 6x the budget and recent traffic exists.
+- No SLO burn alert fires merely because inference traffic is absent; `InferaGatewayDown` covers missing gateway telemetry.
+- `InferaSLOTTFTSustainedHigh` requires elevated SLO-v1 p95 on both 5-minute and 30-minute windows with usable samples.
+- `InferaSLOTPOTSustainedHigh` applies the same sustained-window contract to derived TPOT samples.
 - `InferaBatchWaitHigh` means queueing delay is becoming user-visible and should be read alongside batch size.
 
 Recommended post-deploy check:

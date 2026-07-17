@@ -30,6 +30,11 @@ type GatewayMetrics struct {
 	batchWait         *prometheus.HistogramVec
 	inferenceTokens   prometheus.Counter
 	inferenceRejected *prometheus.CounterVec
+	sloRequests       *prometheus.CounterVec
+	sloDuration       *prometheus.HistogramVec
+	sloTTFT           *prometheus.HistogramVec
+	sloTPOT           *prometheus.HistogramVec
+	sloMeasurements   *prometheus.CounterVec
 
 	routeDecisions           *prometheus.CounterVec
 	routeCandidatesEvaluated prometheus.Histogram
@@ -46,6 +51,13 @@ var inferenceTTFTBuckets = []float64{0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10}
 var inferenceTPOTBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5}
 var batchSizeBuckets = []float64{1, 2, 4, 8, 16, 32}
 var batchWaitBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1}
+
+const (
+	sloUnknownLabel           = "unknown"
+	sloMeasurementExact       = "exact"
+	sloMeasurementDerived     = "derived"
+	sloMeasurementUnavailable = "unavailable"
+)
 
 func NewGatewayMetrics() *GatewayMetrics {
 	registry := prometheus.NewRegistry()
@@ -106,6 +118,29 @@ func NewGatewayMetrics() *GatewayMetrics {
 			Name: "infera_gateway_inference_rejected_total",
 			Help: "Total number of inference requests rejected before worker dispatch.",
 		}, []string{"reason"}),
+		sloRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "infera_gateway_slo_v1_requests_total",
+			Help: "SLO v1 eligible inference requests by bounded diagnostic dimensions and outcome.",
+		}, []string{"model", "routing_strategy", "stream", "outcome"}),
+		sloDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "infera_gateway_slo_v1_end_to_end_seconds",
+			Help:    "SLO v1 gateway-observed end-to-end inference latency in seconds.",
+			Buckets: inferenceDurationBuckets,
+		}, []string{"model", "routing_strategy", "stream", "outcome"}),
+		sloTTFT: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "infera_gateway_slo_v1_ttft_seconds",
+			Help:    "SLO v1 time to first token in seconds; measurement identifies exact or derived samples.",
+			Buckets: inferenceTTFTBuckets,
+		}, []string{"model", "routing_strategy", "stream", "measurement"}),
+		sloTPOT: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "infera_gateway_slo_v1_tpot_seconds",
+			Help:    "SLO v1 time per output token in seconds; measurement identifies exact or derived samples.",
+			Buckets: inferenceTPOTBuckets,
+		}, []string{"model", "routing_strategy", "stream", "measurement"}),
+		sloMeasurements: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "infera_gateway_slo_v1_latency_measurements_total",
+			Help: "SLO v1 request-level latency measurement availability and quality.",
+		}, []string{"metric", "model", "routing_strategy", "stream", "measurement"}),
 		routeDecisions: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "infera_route_decisions_total",
 			Help: "Total number of route decisions by strategy and result.",
@@ -152,6 +187,11 @@ func NewGatewayMetrics() *GatewayMetrics {
 		m.batchWait,
 		m.inferenceTokens,
 		m.inferenceRejected,
+		m.sloRequests,
+		m.sloDuration,
+		m.sloTTFT,
+		m.sloTPOT,
+		m.sloMeasurements,
 		m.routeDecisions,
 		m.routeCandidatesEvaluated,
 		m.workerQueueDepth,
@@ -202,18 +242,79 @@ func (m *GatewayMetrics) RecordInference(stream bool, status string, tokenCount 
 	}
 }
 
-func (m *GatewayMetrics) RecordTTFT(model string, stream bool, duration time.Duration) {
-	if duration <= 0 {
-		return
+// RecordSLORequest records one SLO v1 eligible inference request. Callers must
+// pass a route-selected model; pre-route failures use the bounded "unknown"
+// bucket so arbitrary request input cannot create Prometheus label values.
+func (m *GatewayMetrics) RecordSLORequest(model, strategy string, stream bool, status string, duration time.Duration) {
+	outcome := "error"
+	if strings.TrimSpace(status) == "success" {
+		outcome = "success"
 	}
-	m.inferenceTTFT.WithLabelValues(strings.TrimSpace(model), strconv.FormatBool(stream)).Observe(duration.Seconds())
+	labels := []string{sloModelLabel(model), sloStrategyLabel(strategy), strconv.FormatBool(stream), outcome}
+	m.sloRequests.WithLabelValues(labels...).Inc()
+	if duration > 0 {
+		m.sloDuration.WithLabelValues(labels...).Observe(duration.Seconds())
+	}
 }
 
-func (m *GatewayMetrics) RecordTPOT(model string, stream bool, duration time.Duration) {
+func (m *GatewayMetrics) RecordTTFT(model, strategy string, stream bool, measurement string, duration time.Duration) {
 	if duration <= 0 {
 		return
 	}
-	m.inferenceTPOT.WithLabelValues(strings.TrimSpace(model), strconv.FormatBool(stream)).Observe(duration.Seconds())
+	modelLabel := sloModelLabel(model)
+	streamLabel := strconv.FormatBool(stream)
+	m.inferenceTTFT.WithLabelValues(modelLabel, streamLabel).Observe(duration.Seconds())
+	m.sloTTFT.WithLabelValues(modelLabel, sloStrategyLabel(strategy), streamLabel, sloMeasurementLabel(measurement)).Observe(duration.Seconds())
+}
+
+func (m *GatewayMetrics) RecordTPOT(model, strategy string, stream bool, measurement string, duration time.Duration) {
+	if duration <= 0 {
+		return
+	}
+	modelLabel := sloModelLabel(model)
+	streamLabel := strconv.FormatBool(stream)
+	m.inferenceTPOT.WithLabelValues(modelLabel, streamLabel).Observe(duration.Seconds())
+	m.sloTPOT.WithLabelValues(modelLabel, sloStrategyLabel(strategy), streamLabel, sloMeasurementLabel(measurement)).Observe(duration.Seconds())
+}
+
+func (m *GatewayMetrics) RecordSLOMeasurement(metric, model, strategy string, stream bool, measurement string) {
+	metric = strings.TrimSpace(metric)
+	if metric != "ttft" && metric != "tpot" {
+		return
+	}
+	m.sloMeasurements.WithLabelValues(
+		metric,
+		sloModelLabel(model),
+		sloStrategyLabel(strategy),
+		strconv.FormatBool(stream),
+		sloMeasurementLabel(measurement),
+	).Inc()
+}
+
+func sloModelLabel(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return sloUnknownLabel
+	}
+	return model
+}
+
+func sloStrategyLabel(strategy string) string {
+	switch strings.TrimSpace(strategy) {
+	case "least_loaded", "round_robin", "latency_based", "affinity":
+		return strings.TrimSpace(strategy)
+	default:
+		return sloUnknownLabel
+	}
+}
+
+func sloMeasurementLabel(measurement string) string {
+	switch strings.TrimSpace(measurement) {
+	case sloMeasurementExact, sloMeasurementDerived, sloMeasurementUnavailable:
+		return strings.TrimSpace(measurement)
+	default:
+		return sloMeasurementUnavailable
+	}
 }
 
 func (m *GatewayMetrics) RecordInferenceRejected(reason string) {

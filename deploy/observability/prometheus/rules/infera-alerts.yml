@@ -44,40 +44,6 @@ groups:
           description: Gateway p95 HTTP latency is above 2 seconds for 10 minutes.
           runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewayp95latencyhigh
 
-      - alert: InferaInferenceTTFTHigh
-        expr: |
-          histogram_quantile(
-            0.95,
-            sum by (le, model) (rate(infera_gateway_inference_ttft_seconds_bucket[5m]))
-          ) > 2
-          and
-          sum by (model) (rate(infera_gateway_inference_ttft_seconds_count[5m])) > 0.02
-        for: 5m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: Inference TTFT is high for {{ $labels.model }}
-          description: Model {{ $labels.model }} has p95 time-to-first-token above 2 seconds for 5 minutes.
-          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferainferencettfthigh
-
-      - alert: InferaInferenceTPOTHigh
-        expr: |
-          histogram_quantile(
-            0.95,
-            sum by (le, model) (rate(infera_gateway_inference_tpot_seconds_bucket[5m]))
-          ) > 0.1
-          and
-          sum by (model) (rate(infera_gateway_inference_tpot_seconds_count[5m])) > 0.05
-        for: 10m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: Inference TPOT is high for {{ $labels.model }}
-          description: Model {{ $labels.model }} has p95 time-per-output-token above 100ms for 10 minutes.
-          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferainferencetpothigh
-
       - alert: InferaBatchWaitHigh
         expr: |
           histogram_quantile(

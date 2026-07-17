@@ -2,11 +2,66 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/pkg/types"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
+
+func TestNonStreamingLatencyMarksUnavailableWithoutZeroSample(t *testing.T) {
+	for _, ttftMS := range []int64{0, -5} {
+		t.Run(fmt.Sprintf("ttft_ms=%d", ttftMS), func(t *testing.T) {
+			g := &Gateway{metrics: NewGatewayMetrics()}
+			resp := &types.InferenceResponse{}
+			resp.Latency.TotalMS = 20
+			resp.Latency.TimeToFirstTokenMS = ttftMS
+
+			g.recordNonStreamingLatencyMetrics("model-1", "least_loaded", resp, 3)
+
+			if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("ttft", "model-1", "least_loaded", "false", "unavailable")); got != 1 {
+				t.Fatalf("expected unavailable TTFT count=1, got %v", got)
+			}
+			if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("tpot", "model-1", "least_loaded", "false", "unavailable")); got != 1 {
+				t.Fatalf("expected unavailable TPOT count=1, got %v", got)
+			}
+			for _, metric := range []string{"infera_gateway_slo_v1_ttft_seconds", "infera_gateway_slo_v1_tpot_seconds"} {
+				if got := histogramCountForLabels(t, g.metrics, metric, map[string]string{"model": "model-1"}); got != 0 {
+					t.Fatalf("unavailable latency must not fabricate a sample for %s, got count=%d", metric, got)
+				}
+			}
+		})
+	}
+}
+
+func TestUsableOutputObservation(t *testing.T) {
+	tests := []struct {
+		name  string
+		chunk *types.TokenChunk
+		want  bool
+	}{
+		{name: "nil", chunk: nil, want: false},
+		{name: "empty", chunk: &types.TokenChunk{}, want: false},
+		{name: "content", chunk: &types.TokenChunk{Delta: " "}, want: true},
+		{name: "usage only", chunk: &types.TokenChunk{Usage: &types.UsageStats{CompletionTokens: 2}}, want: false},
+		{name: "finish only", chunk: &types.TokenChunk{FinishReason: finishReasonPtr(types.FinishReasonStop)}, want: false},
+		{name: "tool metadata only", chunk: &types.TokenChunk{ToolCalls: []types.ToolCallChunkDelta{{ID: "call_1", Type: "function"}}}, want: false},
+		{name: "tool name", chunk: &types.TokenChunk{ToolCalls: []types.ToolCallChunkDelta{{Function: types.FunctionDelta{Name: "search"}}}}, want: true},
+		{name: "tool arguments", chunk: &types.TokenChunk{ToolCalls: []types.ToolCallChunkDelta{{Function: types.FunctionDelta{Arguments: `{}`}}}}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isUsableOutputObservation(test.chunk); got != test.want {
+				t.Fatalf("isUsableOutputObservation()=%v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func finishReasonPtr(reason types.FinishReason) *types.FinishReason {
+	return &reason
+}
 
 func TestResolveUsageMeasurementTracksAccuracy(t *testing.T) {
 	t.Parallel()

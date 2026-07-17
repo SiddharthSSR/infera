@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/infera/infera/go/internal/audit"
@@ -108,7 +109,25 @@ func buildStreamingChatCompletionChunk(requestID string, created int64, model st
 	return openAIChunk
 }
 
-func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) streamingInferenceResult {
+// isUsableOutputObservation excludes protocol-only chunks from customer
+// latency measurements. Content and generated tool function deltas are usable
+// output; usage, finish markers, tool IDs, and tool types alone are metadata.
+func isUsableOutputObservation(chunk *types.TokenChunk) bool {
+	if chunk == nil {
+		return false
+	}
+	if chunk.Delta != "" {
+		return true
+	}
+	for _, toolCall := range chunk.ToolCalls {
+		if strings.TrimSpace(toolCall.Function.Name) != "" || toolCall.Function.Arguments != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model, strategy string, requestStart time.Time) streamingInferenceResult {
 	chunks, err := client.InferStream(r.Context(), req)
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, OpenAIChatErrorTypeInferenceError, err.Error())
@@ -128,7 +147,9 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 
 	requestID := "chatcmpl-" + req.RequestID
 	created := time.Now().Unix()
-	streamStart := time.Now()
+	if requestStart.IsZero() {
+		requestStart = time.Now()
+	}
 
 	initialChunk := buildInitialChatCompletionChunk(requestID, created, model)
 	data, _ := json.Marshal(initialChunk)
@@ -139,32 +160,40 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	bestPromptTokens := 0
 	bestCompletionTokens := 0
 	bestTotalTokens := 0
-	firstChunkObserved := false
-	var previousChunkAt time.Time
+	firstOutputObserved := false
+	tPOTObserved := false
+	var previousOutputAt time.Time
 	prevCompletionTokens := 0
+	havePrevCompletionTokens := false
 
 	for chunk := range chunks {
 		now := time.Now()
-		if !firstChunkObserved {
-			firstChunkObserved = true
-			if g.metrics != nil {
-				g.metrics.RecordTTFT(model, true, now.Sub(streamStart))
+		if isUsableOutputObservation(chunk) {
+			if !firstOutputObserved {
+				firstOutputObserved = true
+				if g.metrics != nil {
+					g.metrics.RecordTTFT(model, strategy, true, sloMeasurementExact, now.Sub(requestStart))
+				}
+			} else {
+				tPOTObserved = true
+				if g.metrics != nil {
+					elapsed := now.Sub(previousOutputAt)
+					tokensInChunk := 1
+					if havePrevCompletionTokens && chunk.Usage != nil && chunk.Usage.CompletionTokens > prevCompletionTokens {
+						tokensInChunk = chunk.Usage.CompletionTokens - prevCompletionTokens
+					}
+					perToken := elapsed / time.Duration(tokensInChunk)
+					for i := 0; i < tokensInChunk; i++ {
+						g.metrics.RecordTPOT(model, strategy, true, sloMeasurementDerived, perToken)
+					}
+				}
 			}
-		} else if g.metrics != nil {
-			elapsed := now.Sub(previousChunkAt)
-			tokensInChunk := 1
-			if chunk.Usage != nil && chunk.Usage.CompletionTokens > prevCompletionTokens {
-				tokensInChunk = chunk.Usage.CompletionTokens - prevCompletionTokens
+			if chunk.Usage != nil && chunk.Usage.CompletionTokens > 0 {
+				prevCompletionTokens = chunk.Usage.CompletionTokens
+				havePrevCompletionTokens = true
 			}
-			perToken := elapsed / time.Duration(tokensInChunk)
-			for i := 0; i < tokensInChunk; i++ {
-				g.metrics.RecordTPOT(model, true, perToken)
-			}
+			previousOutputAt = now
 		}
-		if chunk.Usage != nil && chunk.Usage.CompletionTokens > 0 {
-			prevCompletionTokens = chunk.Usage.CompletionTokens
-		}
-		previousChunkAt = now
 
 		generatedChars += len(chunk.Delta)
 		if chunk.Usage != nil {
@@ -182,6 +211,18 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+	if g.metrics != nil {
+		ttftMeasurement := sloMeasurementUnavailable
+		if firstOutputObserved {
+			ttftMeasurement = sloMeasurementExact
+		}
+		tpotMeasurement := sloMeasurementUnavailable
+		if tPOTObserved {
+			tpotMeasurement = sloMeasurementDerived
+		}
+		g.metrics.RecordSLOMeasurement("ttft", model, strategy, true, ttftMeasurement)
+		g.metrics.RecordSLOMeasurement("tpot", model, strategy, true, tpotMeasurement)
+	}
 
 	usage := resolveUsageMeasurement(
 		bestPromptTokens,
@@ -194,20 +235,33 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	return streamingInferenceResult{Usage: usage, Status: "success"}
 }
 
-func (g *Gateway) recordNonStreamingLatencyMetrics(model string, resp *types.InferenceResponse, completionTokens int) {
+func (g *Gateway) recordNonStreamingLatencyMetrics(model, strategy string, resp *types.InferenceResponse, completionTokens int) {
 	ttft := time.Duration(resp.Latency.TimeToFirstTokenMS) * time.Millisecond
-	g.metrics.RecordTTFT(model, false, ttft)
+	ttftMeasurement := sloMeasurementUnavailable
+	if ttft > 0 {
+		ttftMeasurement = sloMeasurementDerived
+		g.metrics.RecordTTFT(model, strategy, false, ttftMeasurement, ttft)
+	}
+	g.metrics.RecordSLOMeasurement("ttft", model, strategy, false, ttftMeasurement)
+
+	if ttft <= 0 {
+		g.metrics.RecordSLOMeasurement("tpot", model, strategy, false, sloMeasurementUnavailable)
+		return
+	}
 
 	if completionTokens <= 1 {
+		g.metrics.RecordSLOMeasurement("tpot", model, strategy, false, sloMeasurementUnavailable)
 		return
 	}
 
 	total := time.Duration(resp.Latency.TotalMS) * time.Millisecond
 	if total <= ttft {
+		g.metrics.RecordSLOMeasurement("tpot", model, strategy, false, sloMeasurementUnavailable)
 		return
 	}
 
-	g.metrics.RecordTPOT(model, false, (total-ttft)/time.Duration(completionTokens-1))
+	g.metrics.RecordTPOT(model, strategy, false, sloMeasurementDerived, (total-ttft)/time.Duration(completionTokens-1))
+	g.metrics.RecordSLOMeasurement("tpot", model, strategy, false, sloMeasurementDerived)
 }
 
 func usageTotalTokens(promptTokens, completionTokens, totalTokens int) int {

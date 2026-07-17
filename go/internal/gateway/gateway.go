@@ -564,6 +564,8 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 	auditUsage := usageMeasurement{TokenSource: audit.TokenSourceUnknown}
 	auditWorkerID := ""
 	auditErrorCode := ""
+	sloModel := ""
+	sloStrategy := ""
 	defer func() {
 		latencyMS := time.Since(requestStart).Milliseconds()
 		attrs := []any{
@@ -610,6 +612,7 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 		}
 		if g.metrics != nil {
 			g.metrics.RecordInference(true, auditStatus, auditTokenCount, time.Since(requestStart))
+			g.metrics.RecordSLORequest(sloModel, sloStrategy, true, auditStatus, time.Since(requestStart))
 		}
 	}()
 
@@ -658,6 +661,8 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 		return
 	}
 	g.logRouteDecision(routed.RoutingDecision)
+	sloModel = req.Model
+	sloStrategy = string(routed.RoutingDecision.Strategy)
 	setRouteDecisionHeader(w, r, routed.RoutingDecision)
 
 	auditWorkerID = routed.WorkerID
@@ -669,7 +674,7 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	streamResult := g.handleStreamingInference(w, r.WithContext(ctx), client, inferenceReq, req.Model)
+	streamResult := g.handleStreamingInference(w, r.WithContext(ctx), client, inferenceReq, req.Model, sloStrategy, requestStart)
 	auditUsage = streamResult.Usage
 	auditTokenCount = auditUsage.TotalTokens
 	auditStatus = streamResult.Status
