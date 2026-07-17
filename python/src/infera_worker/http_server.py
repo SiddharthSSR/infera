@@ -418,6 +418,8 @@ class HTTPServer:
         while True:
             try:
                 await asyncio.sleep(interval)
+                if not self._gateway_registered and not await self._restore_gateway_registration():
+                    continue
 
                 stats = self.worker.get_stats()
                 heartbeat_data = {
@@ -449,9 +451,7 @@ class HTTPServer:
                     timeout=5.0,
                 )
                 if response.status_code == 200:
-                    self._record_gateway_heartbeat("success")
-                    self._consecutive_auth_failures = 0
-                    logger.debug("Heartbeat sent successfully")
+                    await self._handle_gateway_heartbeat_ack(response, gateway_url)
                 elif response.status_code in (401, 403):
                     self._record_gateway_heartbeat("auth_rejected")
                     self._consecutive_auth_failures += 1
@@ -495,6 +495,58 @@ class HTTPServer:
             except Exception as e:
                 self._record_gateway_heartbeat("exception")
                 logger.debug("Heartbeat failed", error=str(e))
+
+    async def _handle_gateway_heartbeat_ack(self, response: httpx.Response, gateway_url: str) -> None:
+        """Accept an acknowledged heartbeat or restore lost gateway registration."""
+        try:
+            payload = response.json()
+        except (TypeError, ValueError):
+            payload = None
+
+        if isinstance(payload, dict) and payload.get("acknowledged") is True:
+            self._record_gateway_heartbeat("success")
+            self._consecutive_auth_failures = 0
+            logger.debug("Heartbeat sent successfully")
+            return
+
+        result = (
+            "registration_lost"
+            if isinstance(payload, dict) and payload.get("acknowledged") is False
+            else "invalid_response"
+        )
+        self._record_gateway_heartbeat(result)
+        self._gateway_registered = False
+        logger.warning(
+            "Gateway did not acknowledge worker heartbeat; re-registering",
+            result=result,
+            gateway_url=gateway_url,
+            worker_id=self.worker.worker_id,
+        )
+        await self._restore_gateway_registration()
+
+    async def _restore_gateway_registration(self) -> bool:
+        """Re-register after gateway state loss without resuming heartbeats early."""
+        try:
+            await self._register_with_gateway()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Failed to restore gateway registration",
+                gateway=self.config.router_address,
+                worker_id=self.worker.worker_id,
+                error=str(exc),
+            )
+            return False
+
+        self._gateway_registered = True
+        self._consecutive_auth_failures = 0
+        logger.info(
+            "Restored gateway registration",
+            gateway=self.config.router_address,
+            worker_id=self.worker.worker_id,
+        )
+        return True
 
     def _get_worker_address(self) -> str:
         """Get the address where the gateway can reach this worker."""
