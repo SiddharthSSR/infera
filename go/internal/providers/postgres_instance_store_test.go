@@ -176,23 +176,42 @@ func TestPostgresInstanceStoreUniqueWorkerBindingAcrossInstances(t *testing.T) {
 			t.Fatalf("persist %s: %v", id, err)
 		}
 	}
-	var validated sync.WaitGroup
-	validated.Add(2)
+	validated := make(chan struct{}, 2)
 	release := make(chan struct{})
 	for _, store := range []*PostgresInstanceStore{storeA, storeB} {
 		store.linkValidated = func() {
-			validated.Done()
+			validated <- struct{}{}
 			<-release
 		}
 	}
 	results := make(chan error, 2)
 	go func() { results <- storeA.linkWorker("instance-1", "shared-worker", time.Now().UTC()) }()
 	go func() { results <- storeB.linkWorker("instance-2", "shared-worker", time.Now().UTC()) }()
-	validated.Wait()
+	validationTimeout := time.NewTimer(2 * time.Second)
+	defer validationTimeout.Stop()
+	for count := 0; count < 2; {
+		select {
+		case <-validated:
+			count++
+		case err := <-results:
+			close(release)
+			t.Fatalf("linkWorker returned before both validation callbacks: %v", err)
+		case <-validationTimeout.C:
+			close(release)
+			t.Fatal("timed out waiting for both worker-binding validation callbacks")
+		}
+	}
 	close(release)
 	var success, conflict int
+	resultTimeout := time.NewTimer(2 * defaultControlStateQueryTimeout)
+	defer resultTimeout.Stop()
 	for range 2 {
-		err := <-results
+		var err error
+		select {
+		case err = <-results:
+		case <-resultTimeout.C:
+			t.Fatal("timed out waiting for concurrent worker-binding results")
+		}
 		switch {
 		case err == nil:
 			success++

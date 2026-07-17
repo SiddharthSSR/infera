@@ -131,6 +131,18 @@ describe('deploymentHistory', () => {
     expect(getDeploymentRemediation(summary)?.action).toBe('verify_inference');
   });
 
+  it('keeps the node-running timeline step active while an instance is starting', () => {
+    const [attempt] = recordProvisionedAttempt(
+      workspaceID,
+      { name: 'worker-1', provider: 'runpod', gpu_type: 'A100_80GB', gpu_count: 1, models: ['org/model-a'] },
+      baseInstance,
+      'Model A',
+    );
+    const summary = summarizeDeploymentAttempt(attempt, [{ ...baseInstance, status: 'starting' }], []);
+
+    expect(getDeploymentTimeline(summary)[2]).toEqual({ label: 'Node running', state: 'active' });
+  });
+
   it('routes auth-like request failures to workspace remediation', () => {
     const [attempt] = recordFailedAttempt(
       workspaceID,
