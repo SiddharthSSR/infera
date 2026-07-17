@@ -87,6 +87,9 @@ func TestHandleChatCompletionsPersistsExactUsageProvenance(t *testing.T) {
 	if got.RequestID == "req-usage-exact" || got.ClientRequestID != "req-usage-exact" || got.PromptTokens != 12 || got.CompletionTokens != 4 || got.TokenCount != 16 || got.TokenSource != audit.TokenSourceExact {
 		t.Fatalf("unexpected usage record: %+v", got)
 	}
+	if got.Cost.CostAccuracy != audit.CostAccuracyUnavailable {
+		t.Fatalf("unmanaged worker price must be unavailable, got %+v", got.Cost)
+	}
 	if store.appended[1].RequestID == got.RequestID || store.appended[1].ClientRequestID != "req-usage-exact" {
 		t.Fatalf("duplicate client request id reused execution identity: first=%+v second=%+v", got, store.appended[1])
 	}

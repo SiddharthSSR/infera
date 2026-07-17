@@ -253,6 +253,11 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 		EstimatedTokens   int64
 		Successes         int64
 		Errors            int64
+		CostNano          int64
+		CostedTokens      int64
+		ExactCosts        int64
+		EstimatedCosts    int64
+		UnavailableCosts  int64
 	}
 	aggregate := make(map[int64]usageBucket, len(rows))
 	for _, row := range rows {
@@ -266,6 +271,11 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 		current.EstimatedTokens += row.EstimatedTokenCount
 		current.Successes += row.SuccessCount
 		current.Errors += row.ErrorCount
+		current.CostNano += row.CostNano
+		current.CostedTokens += row.CostedTokenCount
+		current.ExactCosts += row.ExactCostCount
+		current.EstimatedCosts += row.EstimatedCostCount
+		current.UnavailableCosts += row.UnavailableCostCount
 		aggregate[row.BucketStartMS] = current
 	}
 
@@ -283,6 +293,7 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 			"estimated_tokens":   snapshot.EstimatedTokens,
 			"successes":          snapshot.Successes,
 			"errors":             snapshot.Errors,
+			"cost":               buildCostMetrics(snapshot.CostNano, snapshot.CostedTokens, snapshot.ExactCosts, snapshot.EstimatedCosts, snapshot.UnavailableCosts),
 		})
 	}
 
@@ -306,6 +317,7 @@ func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[st
 			"estimated_tokens":   totals.EstimatedTokenCount,
 			"successes":          totals.SuccessCount,
 			"errors":             totals.ErrorCount,
+			"cost":               buildCostMetrics(totals.CostNano, totals.CostedTokenCount, totals.ExactCostCount, totals.EstimatedCostCount, totals.UnavailableCostCount),
 		},
 		"daily_trend": trend,
 	}, nil

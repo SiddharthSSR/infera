@@ -1,5 +1,18 @@
 const API_BASE = '';
 
+export interface CostMetrics {
+  currency: 'USD';
+  cost_usd: number;
+  cost_per_request_usd: number;
+  cost_per_token_usd: number;
+  cost_per_1m_tokens_usd: number;
+  costed_requests: number;
+  costed_tokens: number;
+  exact_requests: number;
+  estimated_requests: number;
+  unavailable_requests: number;
+}
+
 export interface AuditUsageRow {
   bucket_start: string;
   workspace_id: string;
@@ -13,6 +26,7 @@ export interface AuditUsageRow {
   estimated_tokens?: number;
   successes: number;
   errors: number;
+  cost?: CostMetrics;
 }
 
 export interface AuditUsageResponse {

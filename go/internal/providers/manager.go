@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -661,6 +662,44 @@ func (m *Manager) UnlinkWorker(instanceID string) {
 // GetInstanceByWorker finds an instance by its linked worker ID.
 func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
 	return m.instances.findByWorker(workerID)
+}
+
+// GetPriceSnapshotForWorker captures the provisioned instance price that was
+// recorded when the worker's instance was created. Provider refreshes may
+// affect future instances, but never mutate an audit row that has persisted
+// this snapshot.
+func (m *Manager) GetPriceSnapshotForWorker(workerID string) (PriceSnapshot, bool) {
+	instance, found := m.instances.findByWorker(workerID)
+	if !found || instance == nil || !validHourlyPrice(instance.CostPerHour) {
+		return PriceSnapshot{}, false
+	}
+	amountNano := int64(math.Round(instance.CostPerHour * 1_000_000_000))
+	if amountNano <= 0 {
+		return PriceSnapshot{}, false
+	}
+	capturedAt := instance.CreatedAt.UTC()
+	if capturedAt.IsZero() {
+		capturedAt = m.now().UTC()
+	}
+	return PriceSnapshot{
+		Version:    PriceSnapshotVersionV1,
+		Provider:   instance.Provider,
+		InstanceID: instance.ID,
+		AmountNano: amountNano,
+		Currency:   PriceCurrencyUSD,
+		TimeUnit:   PriceTimeUnitHour,
+		CapturedAt: capturedAt,
+	}, true
+}
+
+func validHourlyPrice(price float64) bool {
+	if math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
+		return false
+	}
+	scaled := price * 1_000_000_000
+	// float64(math.MaxInt64) rounds up to 1<<63, which cannot be converted
+	// safely to int64. Reject that boundary and anything larger.
+	return !math.IsInf(scaled, 0) && scaled < float64(math.MaxInt64)
 }
 
 // WorkerCredentialForWorker returns the deployment-bound credential for a

@@ -29,6 +29,12 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 		Status:      "success",
 		TokenCount:  120,
 		TokenSource: audit.TokenSourceExact,
+		Cost: audit.CostAttribution{
+			Provider: "runpod", InstanceID: "i-1", PriceSnapshotVersion: "provider-instance-hourly-v1",
+			PriceAmountNano: 1_000_000_000, PriceCurrency: "USD", PriceTimeUnit: "hour",
+			PriceCapturedAt: now.Add(-time.Hour), CostNano: 1_000_000, CostAccuracy: audit.CostAccuracyExact,
+			CostAttributionMethod: "provider_request_charge_v1", ObservedActiveConcurrency: 1,
+		},
 	}); err != nil {
 		t.Fatalf("AppendInference req-1: %v", err)
 	}
@@ -65,17 +71,18 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 
 	var payload struct {
 		Rows []struct {
-			WorkspaceID       string `json:"workspace_id"`
-			KeyID             string `json:"key_id"`
-			Attempts          int64  `json:"attempts"`
-			Requests          int64  `json:"requests"`
-			Tokens            int64  `json:"tokens"`
-			ExactRequests     int64  `json:"exact_requests"`
-			EstimatedRequests int64  `json:"estimated_requests"`
-			ExactTokens       int64  `json:"exact_tokens"`
-			EstimatedTokens   int64  `json:"estimated_tokens"`
-			Successes         int64  `json:"successes"`
-			Errors            int64  `json:"errors"`
+			WorkspaceID       string      `json:"workspace_id"`
+			KeyID             string      `json:"key_id"`
+			Attempts          int64       `json:"attempts"`
+			Requests          int64       `json:"requests"`
+			Tokens            int64       `json:"tokens"`
+			ExactRequests     int64       `json:"exact_requests"`
+			EstimatedRequests int64       `json:"estimated_requests"`
+			ExactTokens       int64       `json:"exact_tokens"`
+			EstimatedTokens   int64       `json:"estimated_tokens"`
+			Successes         int64       `json:"successes"`
+			Errors            int64       `json:"errors"`
+			Cost              costMetrics `json:"cost"`
 		} `json:"rows"`
 		Reconciliation usageReconciliation `json:"reconciliation"`
 	}
@@ -98,6 +105,9 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 	}
 	if row.ExactRequests != 1 || row.EstimatedRequests != 0 || row.ExactTokens != 120 || row.EstimatedTokens != 0 {
 		t.Fatalf("unexpected accuracy values: %+v", row)
+	}
+	if row.Cost.Currency != "USD" || row.Cost.CostUSD != 0.001 || row.Cost.CostPerRequestUSD != 0.001 || row.Cost.CostedTokens != 120 || row.Cost.ExactRequests != 1 || row.Cost.UnavailableRequests != 1 {
+		t.Fatalf("unexpected cost metrics: %+v", row.Cost)
 	}
 	if payload.Reconciliation.Status != "ok" || len(payload.Reconciliation.Discrepancies) != 0 {
 		t.Fatalf("unexpected reconciliation: %+v", payload.Reconciliation)

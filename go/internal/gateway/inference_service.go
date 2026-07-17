@@ -148,11 +148,13 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 	auditTokenCount := 0
 	auditUsage := usageMeasurement{TokenSource: audit.TokenSourceUnknown}
 	auditWorkerID := ""
+	auditRoutingDecision := types.RoutingDecision{}
 	auditErrorCode := ""
 	sloModel := ""
 	sloStrategy := ""
 	defer func() {
-		latencyMS := time.Since(requestStart).Milliseconds()
+		elapsed := time.Since(requestStart)
+		latencyMS := elapsed.Milliseconds()
 		attrs := []any{
 			slog.String("request_id", requestID),
 			slog.String("key_id", keyID),
@@ -190,6 +192,7 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 				Status:           auditStatus,
 				ErrorCode:        auditErrorCode,
 				LatencyMS:        latencyMS,
+				Cost:             g.requestCostAttribution(auditWorkerID, auditRoutingDecision, elapsed),
 			}
 			if err := g.enqueueAuditRecord(rec); err != nil {
 				g.log.Error("inference.audit_persist_failed", slog.String("request_id", requestID), slog.String("error", err.Error()))
@@ -236,6 +239,7 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 	g.logRouteDecision(routed.RoutingDecision)
 	sloModel = req.ModelID
 	sloStrategy = string(routed.RoutingDecision.Strategy)
+	auditRoutingDecision = routed.RoutingDecision
 
 	auditWorkerID = routed.WorkerID
 	client, err := g.getWorkerClient(routed.WorkerID)

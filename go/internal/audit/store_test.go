@@ -70,6 +70,8 @@ func TestAppendInferenceRejectsInvalidTokenData(t *testing.T) {
 	}{
 		{name: "negative prompt tokens", record: InferenceAuditRecord{RequestID: "req_negative", Model: "m1", Status: "success", PromptTokens: -1}},
 		{name: "unknown token source", record: InferenceAuditRecord{RequestID: "req_source", Model: "m1", Status: "success", TokenSource: "guessed"}},
+		{name: "unknown cost accuracy", record: InferenceAuditRecord{RequestID: "req_cost_accuracy", Model: "m1", Status: "success", Cost: CostAttribution{CostAccuracy: "guessed"}}},
+		{name: "implicit price units", record: InferenceAuditRecord{RequestID: "req_cost_units", Model: "m1", Status: "success", Cost: CostAttribution{CostAccuracy: CostAccuracyEstimated, PriceAmountNano: 1, ObservedActiveConcurrency: 1}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -603,5 +605,54 @@ func TestUsageSummarySeparatesExactAndEstimatedTokens(t *testing.T) {
 	}
 	if summary.ExactTokenCount != 100 || summary.EstimatedTokenCount != 100 {
 		t.Fatalf("unexpected token accuracy totals: %+v", summary)
+	}
+}
+
+func TestCostAttributionIsImmutableAndSummarizesAccuracy(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	estimated := CostAttribution{
+		Provider: "runpod", InstanceID: "instance-1", PriceSnapshotVersion: "provider-instance-hourly-v1",
+		PriceAmountNano: 1_800_000_000, PriceCurrency: "USD", PriceTimeUnit: "hour",
+		PriceCapturedAt: base.Add(-time.Hour), CostNano: 500_000, CostAccuracy: CostAccuracyEstimated,
+		CostAttributionMethod: CostMethodActiveInstanceTimeShareV1, ObservedActiveConcurrency: 2,
+	}
+	record := InferenceAuditRecord{
+		Timestamp: base, RequestID: "costed-success", WorkspaceID: "ws_alpha", Model: "m1",
+		Status: "success", PromptTokens: 80, CompletionTokens: 20, TokenSource: TokenSourceExact, Cost: estimated,
+	}
+	if err := s.AppendInference(record); err != nil {
+		t.Fatalf("AppendInference: %v", err)
+	}
+	if err := s.AppendInference(record); err != nil {
+		t.Fatalf("idempotent replay: %v", err)
+	}
+	conflict := record
+	conflict.Cost.CostNano++
+	if err := s.AppendInference(conflict); err == nil {
+		t.Fatal("expected changed historical cost to conflict")
+	}
+	if err := s.AppendInference(InferenceAuditRecord{
+		Timestamp: base.Add(time.Minute), RequestID: "costed-failure", WorkspaceID: "ws_alpha", Model: "m1",
+		Status: "failed", TokenCount: 10, TokenSource: TokenSourceEstimated, Cost: estimated,
+	}); err != nil {
+		t.Fatalf("append failed attempt cost: %v", err)
+	}
+	if err := s.AppendInference(InferenceAuditRecord{
+		Timestamp: base.Add(2 * time.Minute), RequestID: "missing-price", WorkspaceID: "ws_alpha", Model: "m1",
+		Status: "success", TokenCount: 50, TokenSource: TokenSourceMixed,
+	}); err != nil {
+		t.Fatalf("append unavailable cost: %v", err)
+	}
+
+	summary, err := s.UsageSummary(UsageSummaryQuery{Start: base.Add(-time.Hour), End: base.Add(time.Hour), WorkspaceID: "ws_alpha"})
+	if err != nil {
+		t.Fatalf("UsageSummary: %v", err)
+	}
+	if summary.AttemptCount != 3 || summary.CostNano != 1_000_000 || summary.CostedTokenCount != 110 {
+		t.Fatalf("unexpected cost totals: %+v", summary)
+	}
+	if summary.ExactCostCount != 0 || summary.EstimatedCostCount != 2 || summary.UnavailableCostCount != 1 {
+		t.Fatalf("unexpected cost accuracy: %+v", summary)
 	}
 }

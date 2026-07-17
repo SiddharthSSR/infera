@@ -180,6 +180,26 @@ type Instance struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 }
 
+const (
+	PriceSnapshotVersionV1 = "provider-instance-hourly-v1"
+	PriceCurrencyUSD       = "USD"
+	PriceTimeUnitHour      = "hour"
+)
+
+// PriceSnapshot is the immutable input used to attribute instance cost to an
+// inference execution. AmountNano is integer nanocurrency units per TimeUnit.
+// The current provider adapters expose hourly USD instance prices, so callers
+// persist both units rather than relying on implicit dollar/hour semantics.
+type PriceSnapshot struct {
+	Version    string
+	Provider   ProviderType
+	InstanceID string
+	AmountNano int64
+	Currency   string
+	TimeUnit   string
+	CapturedAt time.Time
+}
+
 // ProvisionRequest contains parameters for creating a new instance.
 type ProvisionRequest struct {
 	Name                string       `json:"name"`
