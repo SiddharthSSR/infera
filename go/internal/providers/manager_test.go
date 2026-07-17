@@ -209,6 +209,63 @@ func TestManagerSurfacesRunningInstanceWithoutNetwork(t *testing.T) {
 	}
 }
 
+func TestManagerUsesRunPodProxyForNetworkReadinessAndRegistrationTimeout(t *testing.T) {
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{
+		DefaultProvider:           ProviderMock,
+		WorkerRegistrationTimeout: 5 * time.Minute,
+	})
+	mgr.RegisterProvider(provider)
+
+	inst, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name:    "runpod-proxy",
+		GPUType: GPURTX4090,
+	})
+	if err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	mgr.instances.update(inst.ID, func(stored *Instance) {
+		stored.Provider = ProviderRunPod
+		stored.ProviderID = "pod-123"
+		stored.PublicIP = ""
+		stored.HTTPPort = 0
+		stored.StartedAt = &old
+		stored.CreatedAt = old
+		stored.WorkerRegistrationDeadline = nil
+		mgr.evaluateWorkerRegistration(stored, time.Now())
+	})
+
+	got, ok := mgr.GetInstance(inst.ID)
+	if !ok {
+		t.Fatalf("expected instance %s", inst.ID)
+	}
+	if !got.ProviderNetworkReady {
+		t.Fatal("expected deterministic RunPod proxy endpoint to be network-ready")
+	}
+	if got.WorkerHealthURL != "https://pod-123-8081.proxy.runpod.net/health" {
+		t.Fatalf("unexpected RunPod worker health URL %q", got.WorkerHealthURL)
+	}
+	if got.WorkerRegistrationStatus != WorkerRegistrationProviderRunningUnregistered {
+		t.Fatalf("expected registration timeout to remain enforced, got %q", got.WorkerRegistrationStatus)
+	}
+}
+
+func TestWorkerHealthURLPrefersRunPodProxyOverDirectIP(t *testing.T) {
+	instance := &Instance{
+		Provider:   ProviderRunPod,
+		ProviderID: "pod-deterministic",
+		PublicIP:   "203.0.113.10",
+		HTTPPort:   8081,
+	}
+	if got := workerHealthURL(instance); got != "https://pod-deterministic-8081.proxy.runpod.net/health" {
+		t.Fatalf("RunPod health URL did not use deterministic proxy: %q", got)
+	}
+	if !providerNetworkReady(instance) {
+		t.Fatal("expected RunPod proxy endpoint to be network-ready")
+	}
+}
+
 func TestManagerSurfacesRunningInstanceRegistrationTimeout(t *testing.T) {
 	provider := newMockTestProvider()
 	mgr := newTestManager(t, ManagerConfig{

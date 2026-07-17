@@ -21,6 +21,9 @@ cat >"${TMP_DIR}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf 'docker:%s\n' "$*" >>"${TEST_CALLS}"
+if [[ "${1:-}" == "cp" && -n "${TEST_CADDY_CONFIG:-}" ]]; then
+  cp "$2" "${TEST_CADDY_CONFIG}"
+fi
 if [[ "$*" == *"exec -T caddy"*"/tmp/infera-maintenance.Caddyfile"* && "${TEST_MAINTENANCE_RELOAD_FAIL:-0}" == "1" ]]; then
   exit 1
 fi
@@ -111,6 +114,7 @@ chmod +x "${TMP_DIR}/bin/docker" "${TMP_DIR}/bin/curl" "${TMP_DIR}/bin/mktemp"
 
 export PATH="${TMP_DIR}/bin:${PATH}"
 export TEST_CALLS="${TMP_DIR}/calls"
+export TEST_CADDY_CONFIG="${TMP_DIR}/maintenance.Caddyfile"
 export TEST_RUNPOD_STATE="${TMP_DIR}/runpod-state.json"
 export INFERA_ENV_FILE="${TMP_DIR}/env"
 export COMPOSE_FILE="docker-compose.prod.yml"
@@ -201,6 +205,15 @@ fi
 "${REPO_ROOT}/scripts/caddy-drain-traffic.sh" "${TMP_DIR}/release.manifest"
 grep -q 'infera-maintenance.Caddyfile' "${TEST_CALLS}"
 grep -q 'caddy reload --config /tmp/infera-maintenance.Caddyfile' "${TEST_CALLS}"
+grep -q 'path /api/workers/register /api/workers/heartbeat' "${TEST_CADDY_CONFIG}"
+grep -q 'header X-Worker-Token \*' "${TEST_CADDY_CONFIG}"
+grep -q 'header_regexp Authorization \^Bearer' "${TEST_CADDY_CONFIG}"
+[[ "$(grep -c 'reverse_proxy gateway:8080' "${TEST_CADDY_CONFIG}")" == "2" ]]
+grep -q 'respond "Service temporarily unavailable" 503' "${TEST_CADDY_CONFIG}"
+if grep -qE 'path /api/\*|handle /api/\*|reverse_proxy frontend:3000' "${TEST_CADDY_CONFIG}"; then
+  echo "maintenance config exposed non-worker application routes" >&2
+  exit 1
+fi
 
 : >"${TEST_CALLS}"
 if TEST_BAD_HEALTH=1 TEST_MAINTENANCE_RELOAD_FAIL=1 \
