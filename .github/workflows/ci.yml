@@ -140,6 +140,7 @@ jobs:
           INFERA_GATEWAY_ADDRESS: https://example.com
           INFERA_WORKER_SHARED_TOKEN: test-worker-token
           INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          INFERA_CONTROL_STATE_DSN: postgres://infera:infera-smoke@control-state:5432/infera?sslmode=disable
           INFERA_RELEASE_ID: ci-test
           INFERA_WORKER_PROTOCOL_VERSION: "1"
           INFERA_GATEWAY_IMAGE: ghcr.io/example/infera-gateway:test
@@ -181,6 +182,7 @@ jobs:
           INFERA_GATEWAY_ADDRESS: https://example.com
           INFERA_WORKER_SHARED_TOKEN: test-worker-token
           INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          INFERA_CONTROL_STATE_DSN: postgres://infera:infera-smoke@control-state:5432/infera?sslmode=disable
           INFERA_RELEASE_ID: ci-test
           INFERA_WORKER_PROTOCOL_VERSION: "1"
           INFERA_GATEWAY_IMAGE: ghcr.io/example/infera-gateway:test
