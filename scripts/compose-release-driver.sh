@@ -11,6 +11,28 @@ value() {
   awk -F= -v wanted="$2" '$1 == wanted { count++; value=substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$1"
 }
 
+configured_gateway_replicas() {
+  if [[ -n "${INFERA_GATEWAY_REPLICAS:-}" ]]; then
+    printf '%s\n' "${INFERA_GATEWAY_REPLICAS}"
+    return
+  fi
+  local env_file="${ENV_FILE:-.env}"
+  if [[ -f "${env_file}" ]]; then
+    awk -F= '$1 == "INFERA_GATEWAY_REPLICAS" { count++; value=substr($0, index($0, "=") + 1) } END { if (count == 1 && value != "") print value; else print "1" }' "${env_file}"
+    return
+  fi
+  printf '1\n'
+}
+
+require_single_gateway_recovery_topology() {
+  local replicas
+  replicas="$(configured_gateway_replicas)"
+  [[ "${replicas}" == "1" ]] || {
+    echo "ERROR: recovery adapter requires one gateway until worker credentials and router registration use shared durable state" >&2
+    return 1
+  }
+}
+
 export INFERA_RELEASE_ID="$(value "${MANIFEST}" INFERA_RELEASE_ID)"
 export INFERA_GATEWAY_IMAGE="$(value "${MANIFEST}" INFERA_GATEWAY_IMAGE)"
 export INFERA_WORKER_IMAGE="$(value "${MANIFEST}" INFERA_WORKER_IMAGE)"
@@ -18,6 +40,7 @@ export INFERA_WORKER_PROTOCOL_VERSION="$(value "${MANIFEST}" INFERA_WORKER_PROTO
 
 case "${ACTION}" in
   preflight)
+    require_single_gateway_recovery_topology
     for executable_name in \
       INFERA_STOP_WORKERS_EXECUTABLE \
       INFERA_DEPLOY_WORKERS_EXECUTABLE \
@@ -38,9 +61,10 @@ case "${ACTION}" in
     "${INFERA_STOP_WORKERS_EXECUTABLE}" "${MANIFEST}"
     ;;
   deploy-gateway)
-    docker compose -f "${COMPOSE_FILE}" up -d --no-deps gateway
+    require_single_gateway_recovery_topology
+    docker compose -f "${COMPOSE_FILE}" up -d --no-deps --scale gateway=1 gateway
     gateway_id="$(docker compose -f "${COMPOSE_FILE}" ps -q gateway)"
-    [[ -n "${gateway_id}" ]]
+    [[ -n "${gateway_id}" && "${gateway_id}" != *$'\n'* ]]
     for _ in $(seq 1 "${INFERA_GATEWAY_HEALTH_ATTEMPTS:-30}"); do
       status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${gateway_id}")"
       [[ "${status}" == "healthy" ]] && exit 0

@@ -9,6 +9,15 @@ BASE_URL="${2:-${INFERA_BASE_URL:-https://inferai.co.in}}"
 export INFERA_SMOKE_STREAM=1
 export SKIP_CHAT_CHECKS=0
 
+if [[ "${INFERA_EXPECT_TRAFFIC_DRAINED:-0}" == "1" && -z "${INFERA_GATEWAY_INTERNAL_URL:-}" ]]; then
+  COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+  GATEWAY_ID="$(docker compose -f "${COMPOSE_FILE}" ps -q gateway | head -1)"
+  [[ -n "${GATEWAY_ID}" ]] || { echo "no gateway container is available for drained verification" >&2; exit 1; }
+  GATEWAY_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${GATEWAY_ID}")"
+  [[ "${GATEWAY_IP}" =~ ^[0-9a-fA-F:.]+$ ]] || { echo "gateway container has no usable internal address" >&2; exit 1; }
+  export INFERA_GATEWAY_INTERNAL_URL="http://${GATEWAY_IP}:8080"
+fi
+
 value() {
   awk -F= -v wanted="$2" '$1 == wanted { count++; value=substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$1"
 }

@@ -1,0 +1,12 @@
+FROM golang:1.22-alpine3.19 AS builder
+
+RUN apk add --no-cache gcc musl-dev
+WORKDIR /app
+COPY go/ ./go/
+RUN cd go && CGO_ENABLED=1 go build -o /audit-ledger-migrate ./cmd/audit-ledger-migrate
+
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /audit-ledger-migrate /usr/local/bin/audit-ledger-migrate
+ENTRYPOINT ["audit-ledger-migrate"]

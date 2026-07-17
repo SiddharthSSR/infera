@@ -10,6 +10,7 @@ DASHBOARD_URL="${DASHBOARD_URL%/}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 GATEWAY_INTERNAL_URL="${INFERA_GATEWAY_INTERNAL_URL:-}"
 GATEWAY_INTERNAL_URL="${GATEWAY_INTERNAL_URL%/}"
+APP_VERIFY_URL="${GATEWAY_INTERNAL_URL:-${BASE_URL}}"
 VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-10}"
 
 echo "Release verification"
@@ -21,13 +22,23 @@ else
   echo "  gateway:   docker compose exec gateway"
 fi
 
-echo "1) Checking public site root"
-curl --fail --silent --show-error --max-time "${VERIFY_TIMEOUT}" -I "${BASE_URL}" >/dev/null
-echo "   OK: site root responds"
+echo "1) Checking public ingress state"
+if [[ "${INFERA_EXPECT_TRAFFIC_DRAINED:-0}" == "1" ]]; then
+  PUBLIC_STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --max-time "${VERIFY_TIMEOUT}" "${BASE_URL}/health")"
+  [[ "${PUBLIC_STATUS}" == "503" ]] || {
+    echo "public ingress is not drained" >&2
+    exit 1
+  }
+  echo "   OK: public ingress remains drained"
+else
+  curl --fail --silent --show-error --max-time "${VERIFY_TIMEOUT}" -I "${BASE_URL}" >/dev/null
+  echo "   OK: site root responds"
+fi
 
-echo "2) Checking public health endpoint"
+echo "2) Checking gateway health endpoint"
 GATEWAY_HEALTH_BODY="$(curl --fail --silent --show-error --max-time "${VERIFY_TIMEOUT}" \
-  "${BASE_URL}/health")"
+  "${APP_VERIFY_URL}/health")"
 GATEWAY_HEALTH_BODY="${GATEWAY_HEALTH_BODY}" python3 - <<'PY'
 import json
 import os
@@ -79,6 +90,6 @@ if [[ -z "${INFERA_SMOKE_API_KEY:-}" ]]; then
   echo "INFERA_SMOKE_API_KEY must be set to run smoke tests" >&2
   exit 1
 fi
-"$(dirname "$0")/smoke-test.sh" "${BASE_URL}"
+"$(dirname "$0")/smoke-test.sh" "${APP_VERIFY_URL}"
 
 echo "Release verification passed."
