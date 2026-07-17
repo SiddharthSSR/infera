@@ -16,6 +16,8 @@ failures, and the database owner approves ledger restore or point-in-time recove
 - A candidate is last-known-good only after automated verification passes. Authentication, tenant
   isolation, quota enforcement, and the shared ledger must never be bypassed to make a rollout pass.
 - If candidate verification and rollback verification both fail, keep traffic drained and escalate.
+- Ingress drain is a required state transition, not a log message: no release mutation may start
+  until the drain adapter succeeds, and traffic returns only after release verification succeeds.
 
 ## Targets
 
@@ -57,6 +59,10 @@ Provider-specific executables receive one manifest path and must be idempotent:
 - `INFERA_DEPLOY_WORKERS_EXECUTABLE`: create/reprovision workers with the manifest's pinned image,
   release ID, worker protocol, gateway address, and existing shared-token secret reference. It must
   return nonzero until expected workers register and become healthy.
+- `INFERA_DRAIN_TRAFFIC_EXECUTABLE`: remove public ingress from the gateway and verify that new
+  requests receive the approved maintenance response before returning success.
+- `INFERA_RESTORE_TRAFFIC_EXECUTABLE`: restore ingress to the manifest's verified gateway and prove
+  public health reaches that release before returning success.
 
 These executables must log resource IDs and safe lifecycle states only. They must never print the
 worker token, provider credentials, authorization headers, DSNs, or raw environment dumps.
@@ -70,6 +76,8 @@ export INFERA_RECOVERY_DRIVER="$PWD/scripts/compose-release-driver.sh"
 export INFERA_RECOVERY_VERIFIER="$PWD/scripts/verify-release-manifest.sh"
 export INFERA_STOP_WORKERS_EXECUTABLE=/opt/infera/bin/stop-release-workers
 export INFERA_DEPLOY_WORKERS_EXECUTABLE=/opt/infera/bin/deploy-release-workers
+export INFERA_DRAIN_TRAFFIC_EXECUTABLE=/opt/infera/bin/drain-release-traffic
+export INFERA_RESTORE_TRAFFIC_EXECUTABLE=/opt/infera/bin/restore-release-traffic
 export INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL=2
 export INFERA_SMOKE_API_KEY="$(secret-tool lookup service infera-smoke)"
 export INFERA_SMOKE_MODEL=Qwen/Qwen2.5-7B-Instruct
@@ -81,13 +89,16 @@ export INFERA_SMOKE_MODEL=Qwen/Qwen2.5-7B-Instruct
 The command performs these gates in order:
 
 1. Validate the candidate and current production configuration without displaying values.
-2. Stop/drain last-known-good workers.
-3. Deploy the candidate gateway and require its container health check to pass.
-4. Deploy candidate workers; the provider adapter requires successful registration and health.
-5. Run release verification. `/health` must match release/protocol, worker discovery must contain at
+2. Drain public ingress and verify the maintenance response.
+3. Stop/drain last-known-good workers.
+4. Deploy the candidate gateway and require its container health check to pass.
+5. Deploy candidate workers; the provider adapter requires successful registration and health.
+6. Run release verification. `/health` must match release/protocol, worker discovery must contain at
    least one target, and authenticated non-streaming/streaming smoke requests must pass. A
    `quota_unavailable` response fails this gate rather than weakening quota enforcement.
-6. Only then replace `.infera-recovery/last-known-good.manifest`.
+7. Atomically replace `.infera-recovery/last-known-good.manifest`, then restore public ingress. If
+   either state promotion or ingress restore fails, the command fails with traffic still drained;
+   promotion failure also restores the verified prior release set.
 
 Any failure after orchestration starts stops candidate workers, redeploys the old gateway, deploys
 old workers, and verifies the old release. A successful recovery still returns a nonzero command
@@ -120,10 +131,16 @@ export INFERA_AUDIT_LEDGER_WRITER_PROTOCOL=2
 ./scripts/audit-ledger-recovery-drill.sh
 ```
 
-The script creates a transactionally consistent custom-format dump, restores the complete schema,
-then compares the writer protocol, audit row/token totals, and reservation row/request/token totals.
-It records only aggregate fingerprints and pass/fail states. After the drill, the database owner
-drops the isolated restore database through the managed database console.
+Before any dump or restore, the script resolves each connection to PostgreSQL's physical system
+identifier plus database OID and refuses equivalent targets. The recovery database role therefore
+requires permission to execute `pg_control_system()`; inability to prove identity fails closed. The
+target identity is checked again immediately before restore. The script then holds `SHARE` locks on all
+accounting tables and exports one PostgreSQL snapshot. Both `pg_dump` and the source digest consume
+that exact snapshot while the helper transaction remains live, blocking accounting writes. After
+restoring the complete schema, it compares the writer protocol and deterministic MD5 content
+digests of every JSONB-normalized metadata, audit, and reservation row in primary-key order. Raw
+rows, tenant IDs, request IDs, and DSNs never enter evidence. After the drill, the database owner drops the isolated
+restore database through the managed database console.
 
 For an incident restore, prefer managed PITR to a new database at the latest safe point within the
 five-minute RPO. Run the drill validation against it, start exactly one gateway using the restored
@@ -143,3 +160,8 @@ bash -n ./scripts/release-recovery.sh ./scripts/compose-release-driver.sh \
 For a production drill, attach the sanitized recovery and ledger evidence logs, start/end times,
 release IDs, image digests, actual RPO/RTO, incident owner, and final decision. Review every file for
 secrets and tenant data before attaching it to a pilot-readiness review.
+
+The checked-in Compose driver intentionally delegates provider worker lifecycle and ingress control
+to environment-owned executable adapters. INF-46 remains **In Progress** until a real production
+drill exercises those exact adapters and demonstrates the stated RPO/RTO; deterministic CI coverage
+alone is not pilot-readiness evidence.

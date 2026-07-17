@@ -9,7 +9,8 @@ Usage: release-recovery.sh deploy <candidate.manifest> <last-known-good.manifest
 
 Required environment:
   INFERA_RECOVERY_DRIVER       Executable implementing: preflight, stop-workers,
-                               deploy-gateway, and deploy-workers.
+                               deploy-gateway, deploy-workers, drain-traffic,
+                               and restore-traffic.
   INFERA_RECOVERY_VERIFIER     Executable accepting one release manifest.
   INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL
 
@@ -120,6 +121,10 @@ rollback() {
     record "FAIL_CLOSED release=${LAST_GOOD_RELEASE} action=keep-traffic-drained-and-escalate"
     return 1
   fi
+  if ! run_step "rollback.restore-traffic" "${DRIVER}" restore-traffic "${LAST_GOOD_MANIFEST}"; then
+    record "FAIL_CLOSED release=${LAST_GOOD_RELEASE} action=keep-traffic-drained-and-escalate"
+    return 1
+  fi
   record "RECOVERED release=${LAST_GOOD_RELEASE} started_at=${STARTED_AT}"
   return 0
 }
@@ -130,14 +135,26 @@ if ! run_step "candidate.preflight" "${DRIVER}" preflight "${CANDIDATE_MANIFEST}
   record "REJECTED release=${CANDIDATE_RELEASE} action=leave-last-known-good-untouched"
   exit 1
 fi
+if ! run_step "candidate.drain-traffic" "${DRIVER}" drain-traffic "${CANDIDATE_MANIFEST}"; then
+  record "FAIL_CLOSED release=${LAST_GOOD_RELEASE} action=verify-ingress-is-drained-and-escalate"
+  exit 1
+fi
 if ! run_step "candidate.stop-last-known-good-workers" "${DRIVER}" stop-workers "${LAST_GOOD_MANIFEST}"; then rollback; exit 1; fi
 if ! run_step "candidate.deploy-gateway" "${DRIVER}" deploy-gateway "${CANDIDATE_MANIFEST}"; then rollback; exit 1; fi
 if ! run_step "candidate.deploy-workers" "${DRIVER}" deploy-workers "${CANDIDATE_MANIFEST}"; then rollback; exit 1; fi
 if ! run_step "candidate.verify" "${VERIFIER}" "${CANDIDATE_MANIFEST}"; then rollback; exit 1; fi
 
-if ! cp "${CANDIDATE_MANIFEST}" "${STATE_DIR}/.last-known-good.manifest.$$" || \
-   ! mv "${STATE_DIR}/.last-known-good.manifest.$$" "${STATE_DIR}/last-known-good.manifest"; then
-  record "FAIL promote-state release=${CANDIDATE_RELEASE} action=escalate"
+PROMOTION_TMP="${STATE_DIR}/.last-known-good.manifest.$$"
+if ! cp "${CANDIDATE_MANIFEST}" "${PROMOTION_TMP}" || \
+   ! mv "${PROMOTION_TMP}" "${STATE_DIR}/last-known-good.manifest"; then
+  rm -f "${PROMOTION_TMP}" >/dev/null 2>&1 || true
+  FAILED_STEP="candidate.promote-state"
+  record "FAIL ${FAILED_STEP}"
+  rollback
   exit 1
 fi
 record "PROMOTED release=${CANDIDATE_RELEASE} state=${STATE_DIR}/last-known-good.manifest"
+if ! run_step "candidate.restore-traffic" "${DRIVER}" restore-traffic "${CANDIDATE_MANIFEST}"; then
+  record "FAIL_CLOSED release=${CANDIDATE_RELEASE} action=keep-traffic-drained-and-escalate"
+  exit 1
+fi

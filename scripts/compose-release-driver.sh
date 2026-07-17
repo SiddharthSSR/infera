@@ -18,6 +18,17 @@ export INFERA_WORKER_PROTOCOL_VERSION="$(value "${MANIFEST}" INFERA_WORKER_PROTO
 
 case "${ACTION}" in
   preflight)
+    for executable_name in \
+      INFERA_STOP_WORKERS_EXECUTABLE \
+      INFERA_DEPLOY_WORKERS_EXECUTABLE \
+      INFERA_DRAIN_TRAFFIC_EXECUTABLE \
+      INFERA_RESTORE_TRAFFIC_EXECUTABLE; do
+      executable_path="${!executable_name:-}"
+      [[ -n "${executable_path}" && -x "${executable_path}" ]] || {
+        echo "ERROR: ${executable_name} must name an executable" >&2
+        exit 2
+      }
+    done
     "$(dirname "$0")/validate-prod-env.sh"
     docker compose -f "${COMPOSE_FILE}" config --quiet
     ;;
@@ -42,6 +53,16 @@ case "${ACTION}" in
     : "${INFERA_DEPLOY_WORKERS_EXECUTABLE:?provider-specific deploy-workers executable is required}"
     [[ -x "${INFERA_DEPLOY_WORKERS_EXECUTABLE}" ]]
     "${INFERA_DEPLOY_WORKERS_EXECUTABLE}" "${MANIFEST}"
+    ;;
+  drain-traffic)
+    : "${INFERA_DRAIN_TRAFFIC_EXECUTABLE:?ingress drain executable is required}"
+    [[ -x "${INFERA_DRAIN_TRAFFIC_EXECUTABLE}" ]]
+    "${INFERA_DRAIN_TRAFFIC_EXECUTABLE}" "${MANIFEST}"
+    ;;
+  restore-traffic)
+    : "${INFERA_RESTORE_TRAFFIC_EXECUTABLE:?ingress restore executable is required}"
+    [[ -x "${INFERA_RESTORE_TRAFFIC_EXECUTABLE}" ]]
+    "${INFERA_RESTORE_TRAFFIC_EXECUTABLE}" "${MANIFEST}"
     ;;
   *)
     echo "ERROR: unsupported recovery driver action: ${ACTION}" >&2
