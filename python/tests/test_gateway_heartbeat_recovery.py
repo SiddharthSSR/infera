@@ -1,6 +1,7 @@
 """Deterministic coverage for gateway heartbeat registration recovery."""
 
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,11 +10,35 @@ import pytest
 from prometheus_client import generate_latest
 
 from infera_worker.http_server import HTTPServer
+from infera_worker.types import LoadedModel
 from infera_worker.worker import Worker
 
 
 def heartbeat_metrics(server: HTTPServer) -> str:
     return generate_latest(server._metrics_registry).decode()
+
+
+def test_loaded_model_payload_preserves_complete_metadata():
+    loaded_at = datetime(2026, 7, 17, 18, 0, tzinfo=timezone.utc)
+    payload = HTTPServer._loaded_model_payload(
+        LoadedModel(
+            model_id="model-1",
+            version="v2",
+            loaded_at=loaded_at,
+            memory_bytes=123,
+            max_batch_size=8,
+            max_sequence_length=4096,
+        )
+    )
+
+    assert payload == {
+        "model_id": "model-1",
+        "version": "v2",
+        "loaded_at": loaded_at.isoformat(),
+        "memory_bytes": 123,
+        "max_batch_size": 8,
+        "max_sequence_length": 4096,
+    }
 
 
 @pytest.mark.asyncio

@@ -96,6 +96,26 @@ func TestPostgresRegistryRejectsOwnershipConflictAndInactiveInstance(t *testing.
 	}
 }
 
+func TestPostgresRegistryRetiresPriorWorkerAfterManagedRebinding(t *testing.T) {
+	dsn := isolatedRegistryDSN(t)
+	seedManagedWorker(t, dsn, "instance-1", "worker-old", "workspace-1", "running")
+	registry := newTestPostgresRegistry(t, dsn, PostgresRegistryConfig{})
+	if err := registry.Register(context.Background(), testManagedWorker("instance-1", "worker-old", "workspace-1")); err != nil {
+		t.Fatalf("register old worker: %v", err)
+	}
+	if _, err := registry.db.Exec(`UPDATE managed_instances SET worker_id = 'worker-new' WHERE id = 'instance-1'`); err != nil {
+		t.Fatalf("rebind managed worker: %v", err)
+	}
+	if err := registry.Register(context.Background(), testManagedWorker("instance-1", "worker-new", "workspace-1")); err != nil {
+		t.Fatalf("register rebound worker: %v", err)
+	}
+
+	workers, err := registry.Snapshot(context.Background())
+	if err != nil || len(workers) != 1 || workers[0].WorkerID != "worker-new" {
+		t.Fatalf("old registration was not retired: workers=%+v err=%v", workers, err)
+	}
+}
+
 func TestPostgresRegistryConditionalHealthTransitionsAcrossReplicas(t *testing.T) {
 	dsn := isolatedRegistryDSN(t)
 	seedManagedWorker(t, dsn, "instance-unhealthy", "worker-unhealthy", "workspace-1", "running")

@@ -140,4 +140,17 @@ func TestControlStatePostgresConfigsFromEnv(t *testing.T) {
 	if _, _, err := controlStatePostgresConfigsFromEnv(); err == nil {
 		t.Fatal("expected invalid pool bounds to fail")
 	}
+
+	t.Setenv("INFERA_CONTROL_STATE_MAX_OPEN_CONNS", "2")
+	t.Setenv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS", "")
+	instanceConfig, registryConfig, err = controlStatePostgresConfigsFromEnv()
+	if err != nil || instanceConfig.MaxIdleConns != 2 || registryConfig.MaxIdleConns != 2 {
+		t.Fatalf("small open pool did not clamp idle default: instance=%+v registry=%+v err=%v", instanceConfig, registryConfig, err)
+	}
+
+	t.Setenv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS", "0")
+	instanceConfig, registryConfig, err = controlStatePostgresConfigsFromEnv()
+	if err != nil || instanceConfig.MaxIdleConns != -1 || registryConfig.MaxIdleConns != -1 {
+		t.Fatalf("explicit zero idle pool was not preserved: instance=%+v registry=%+v err=%v", instanceConfig, registryConfig, err)
+	}
 }

@@ -221,27 +221,34 @@ func (r *PostgresRegistry) Register(parent context.Context, worker *types.Worker
 	registrationID := uuid.NewString()
 	ctx, cancel := r.operationContext(parent)
 	defer cancel()
-	stored, err := r.scanWorker(r.db.QueryRowContext(ctx, `
-		WITH owner AS MATERIALIZED (
-			SELECT managed.id, managed.workspace_id
-			FROM managed_instances AS managed
-			WHERE managed.id = $2
-			  AND managed.worker_id = $1
-			  AND managed.workspace_id = $3
-			  AND managed.state_json->>'status' IN ('pending', 'provisioning', 'running')
-		), retired AS (
-			DELETE FROM worker_registrations AS previous
-			USING owner
-			WHERE previous.instance_id = owner.id
-			  AND previous.worker_id <> $1
-		)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return registryUnavailable(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM worker_registrations AS previous
+		USING managed_instances AS managed
+		WHERE managed.id = $2
+		  AND managed.worker_id = $1
+		  AND managed.workspace_id = $3
+		  AND managed.state_json->>'status' IN ('pending', 'provisioning', 'running')
+		  AND previous.instance_id = managed.id
+		  AND previous.worker_id <> $1`, worker.WorkerID, worker.InstanceID, worker.WorkspaceID); err != nil {
+		return registryUnavailable(err)
+	}
+	stored, err := r.scanWorker(tx.QueryRowContext(ctx, `
 		INSERT INTO worker_registrations AS registration
 			(worker_id, instance_id, workspace_id, shared_pool, address, status,
 			 loaded_models, stats, tags, registration_id, registration_generation,
 			 last_health_check, registered_at, updated_at)
-		SELECT $1, owner.id, owner.workspace_id, $4, $5, $6,
+		SELECT $1, managed.id, managed.workspace_id, $4, $5, $6,
 			$7, $8, $9, $10, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-		FROM owner
+		FROM managed_instances AS managed
+		WHERE managed.id = $2
+		  AND managed.worker_id = $1
+		  AND managed.workspace_id = $3
+		  AND managed.state_json->>'status' IN ('pending', 'provisioning', 'running')
 		ON CONFLICT (worker_id) DO UPDATE SET
 			workspace_id = EXCLUDED.workspace_id,
 			shared_pool = EXCLUDED.shared_pool,
@@ -264,6 +271,9 @@ func (r *PostgresRegistry) Register(parent context.Context, worker *types.Worker
 		return fmt.Errorf("%w: managed instance is inactive, mismatched, or owned by another worker", ErrWorkerRegistrationConflict)
 	}
 	if err != nil {
+		return registryUnavailable(err)
+	}
+	if err := tx.Commit(); err != nil {
 		return registryUnavailable(err)
 	}
 	copyWorkerRegistration(worker, stored)

@@ -107,13 +107,6 @@ if (( gateway_replicas > 1 )) && [[ "${audit_backend}" == "sqlite" ]]; then
   exit 1
 fi
 
-# Production gateway startup is intentionally fail-closed without shared control state.
-# A single replica uses the same durable path so scaling out does not change semantics.
-control_state_dsn="$(lookup_env INFERA_CONTROL_STATE_DSN)"
-if [[ -z "${control_state_dsn}" ]]; then
-  echo "ERROR: INFERA_CONTROL_STATE_DSN is required outside development mode." >&2
-  exit 1
-fi
 if [[ "${audit_backend}" == "postgres" || "${audit_backend}" == "postgresql" ]]; then
   if ! ledger_dsn="$(lookup_env INFERA_AUDIT_LEDGER_DSN)" || [[ -z "${ledger_dsn}" ]]; then
     echo "ERROR: INFERA_AUDIT_LEDGER_DSN is required for the PostgreSQL audit ledger." >&2

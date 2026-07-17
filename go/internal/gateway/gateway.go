@@ -858,6 +858,30 @@ func (g *Gateway) handleGetWorkers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type workerLoadedModelPayload struct {
+	ModelID           string    `json:"model_id"`
+	Version           string    `json:"version"`
+	LoadedAt          time.Time `json:"loaded_at"`
+	MemoryBytes       int64     `json:"memory_bytes"`
+	MaxBatchSize      int       `json:"max_batch_size"`
+	MaxSequenceLength int       `json:"max_sequence_length"`
+}
+
+func (m workerLoadedModelPayload) loadedModel(fallback time.Time) types.LoadedModel {
+	loadedAt := m.LoadedAt
+	if loadedAt.IsZero() {
+		loadedAt = fallback
+	}
+	return types.LoadedModel{
+		ModelID:           m.ModelID,
+		Version:           m.Version,
+		LoadedAt:          loadedAt,
+		MemoryBytes:       m.MemoryBytes,
+		MaxBatchSize:      m.MaxBatchSize,
+		MaxSequenceLength: m.MaxSequenceLength,
+	}
+}
+
 func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed")
@@ -865,20 +889,14 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		WorkerID        string            `json:"worker_id"`
-		Address         string            `json:"address"`
-		Status          string            `json:"status"`
-		Tags            map[string]string `json:"tags"`
-		ReleaseID       string            `json:"release_id"`
-		ProtocolVersion string            `json:"protocol_version"`
-		LoadedModels    []struct {
-			ModelID           string `json:"model_id"`
-			Version           string `json:"version"`
-			MemoryBytes       int64  `json:"memory_bytes"`
-			MaxBatchSize      int    `json:"max_batch_size"`
-			MaxSequenceLength int    `json:"max_sequence_length"`
-		} `json:"loaded_models"`
-		Stats struct {
+		WorkerID        string                     `json:"worker_id"`
+		Address         string                     `json:"address"`
+		Status          string                     `json:"status"`
+		Tags            map[string]string          `json:"tags"`
+		ReleaseID       string                     `json:"release_id"`
+		ProtocolVersion string                     `json:"protocol_version"`
+		LoadedModels    []workerLoadedModelPayload `json:"loaded_models"`
+		Stats           struct {
 			QueueDepth        int     `json:"queue_depth"`
 			ActiveRequests    int     `json:"active_requests"`
 			GPUUtilization    float64 `json:"gpu_utilization"`
@@ -934,15 +952,9 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 
 	// Convert to WorkerInfo
 	loadedModels := make([]types.LoadedModel, len(req.LoadedModels))
+	loadedAtFallback := time.Now()
 	for i, m := range req.LoadedModels {
-		loadedModels[i] = types.LoadedModel{
-			ModelID:           m.ModelID,
-			Version:           m.Version,
-			MemoryBytes:       m.MemoryBytes,
-			MaxBatchSize:      m.MaxBatchSize,
-			MaxSequenceLength: m.MaxSequenceLength,
-			LoadedAt:          time.Now(),
-		}
+		loadedModels[i] = m.loadedModel(loadedAtFallback)
 	}
 
 	workerInfo := &types.WorkerInfo{
@@ -1048,10 +1060,7 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 			P99LatencyMS      float64 `json:"p99_latency_ms"`
 			ErrorRate         float64 `json:"error_rate"`
 		} `json:"stats"`
-		LoadedModels *[]struct {
-			ModelID string `json:"model_id"`
-			Version string `json:"version"`
-		} `json:"loaded_models"`
+		LoadedModels *[]workerLoadedModelPayload `json:"loaded_models"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1082,12 +1091,9 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 	var models []types.LoadedModel
 	if req.LoadedModels != nil {
 		models = make([]types.LoadedModel, len(*req.LoadedModels))
+		loadedAtFallback := time.Now()
 		for i, m := range *req.LoadedModels {
-			models[i] = types.LoadedModel{
-				ModelID:  m.ModelID,
-				Version:  m.Version,
-				LoadedAt: time.Now(),
-			}
+			models[i] = m.loadedModel(loadedAtFallback)
 		}
 	}
 

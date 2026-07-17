@@ -527,12 +527,18 @@ func controlStatePostgresConfigsFromEnv() (providers.PostgresInstanceStoreConfig
 	if err != nil {
 		return providers.PostgresInstanceStoreConfig{}, routerregistry.PostgresRegistryConfig{}, err
 	}
-	maxIdle, err := parseOptionalIntEnv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS", 5, true)
+	maxIdleFallback := min(5, maxOpen)
+	maxIdle, err := parseOptionalIntEnv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS", maxIdleFallback, true)
 	if err != nil {
 		return providers.PostgresInstanceStoreConfig{}, routerregistry.PostgresRegistryConfig{}, err
 	}
 	if maxIdle > maxOpen {
 		return providers.PostgresInstanceStoreConfig{}, routerregistry.PostgresRegistryConfig{}, errors.New("INFERA_CONTROL_STATE_MAX_IDLE_CONNS cannot exceed INFERA_CONTROL_STATE_MAX_OPEN_CONNS")
+	}
+	if strings.TrimSpace(os.Getenv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS")) == "0" {
+		// Store normalizers use zero as "unset" and negative as the explicit
+		// zero-idle sentinel.
+		maxIdle = -1
 	}
 	connMaxLifetime, err := parseOptionalDurationEnv("INFERA_CONTROL_STATE_CONN_MAX_LIFETIME", 30*time.Minute)
 	if err != nil {

@@ -5,7 +5,7 @@ import hmac
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -25,6 +25,7 @@ from .types import (
     FunctionCall,
     InferenceParameters,
     InferenceRequest,
+    LoadedModel,
     Message,
     Priority,
     Role,
@@ -293,6 +294,21 @@ class HTTPServer:
         self.worker.record_startup_stage("gateway_registered")
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
+    @staticmethod
+    def _loaded_model_payload(model: LoadedModel) -> dict[str, Any]:
+        """Serialize the complete model metadata for registration and heartbeats."""
+        loaded_at = model.loaded_at
+        if loaded_at.tzinfo is None:
+            loaded_at = loaded_at.replace(tzinfo=timezone.utc)
+        return {
+            "model_id": model.model_id,
+            "version": model.version,
+            "loaded_at": loaded_at.isoformat(),
+            "memory_bytes": model.memory_bytes,
+            "max_batch_size": model.max_batch_size,
+            "max_sequence_length": model.max_sequence_length,
+        }
+
     async def _register_with_gateway(self) -> None:
         """Register this worker with the gateway."""
         gateway_url = build_gateway_url(self.config.router_address, "/api/workers/register")
@@ -308,14 +324,7 @@ class HTTPServer:
             "protocol_version": self.config.worker_protocol_version,
             "tags": self._worker_tags(),
             "loaded_models": [
-                {
-                    "model_id": m.model_id,
-                    "version": m.version,
-                    "memory_bytes": m.memory_bytes,
-                    "max_batch_size": 0,
-                    "max_sequence_length": 0,
-                }
-                for m in self.worker.get_loaded_models()
+                self._loaded_model_payload(m) for m in self.worker.get_loaded_models()
             ],
             "gpu_type": os.environ.get("RUNPOD_GPU_TYPE", "unknown"),
             "gpu_count": int(os.environ.get("RUNPOD_GPU_COUNT", "1")),
@@ -449,8 +458,7 @@ class HTTPServer:
                         "error_rate": stats.error_rate,
                     },
                     "loaded_models": [
-                        {"model_id": m.model_id, "version": m.version}
-                        for m in self.worker.get_loaded_models()
+                        self._loaded_model_payload(m) for m in self.worker.get_loaded_models()
                     ],
                 }
 
