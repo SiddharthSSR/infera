@@ -89,6 +89,11 @@ STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 EVIDENCE_FILE="${EVIDENCE_DIR}/recovery-${CANDIDATE_RELEASE}-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
 FAILED_STEP=""
 
+if ! python3 "$(dirname "$0")/create-private-evidence.py" "${EVIDENCE_FILE}"; then
+  echo "ERROR: unable to create root-only recovery evidence" >&2
+  exit 1
+fi
+
 record() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" | tee -a "${EVIDENCE_FILE}"
 }

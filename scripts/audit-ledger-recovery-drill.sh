@@ -17,6 +17,11 @@ mkdir -p "${EVIDENCE_DIR}"
 EVIDENCE_FILE="${EVIDENCE_DIR}/ledger-restore-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
 DUMP_FILE="${TMP_DIR}/audit-ledger.dump"
 
+if ! python3 "$(dirname "$0")/create-private-evidence.py" "${EVIDENCE_FILE}"; then
+  echo "ERROR: unable to create root-only ledger recovery evidence" >&2
+  exit 1
+fi
+
 cleanup() {
   if [[ -n "${LOCK_PID}" ]]; then
     touch "${LOCK_RELEASE}"

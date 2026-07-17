@@ -51,6 +51,20 @@ run_recovery() {
 }
 
 assert_contains() { grep -qF "$2" "$1" || { echo "expected '$2' in $1" >&2; exit 1; }; }
+assert_mode_600() {
+  python3 - "$1" <<'PY'
+import os
+import stat
+import sys
+
+status = os.lstat(sys.argv[1])
+if not stat.S_ISREG(status.st_mode):
+    raise SystemExit(f"expected regular evidence file: {sys.argv[1]}")
+mode = stat.S_IMODE(status.st_mode)
+if mode != 0o600:
+    raise SystemExit(f"expected mode 0600 for {sys.argv[1]}, got {mode:04o}")
+PY
+}
 assert_order() {
   local file="$1" first="$2" second="$3" first_line second_line
   first_line="$(grep -nF "${first}" "${file}" | head -1 | cut -d: -f1)"
@@ -61,8 +75,27 @@ assert_order() {
   }
 }
 
+PRIVATE_EVIDENCE_DIR="${TMP_DIR}/private-evidence"
+mkdir -p "${PRIVATE_EVIDENCE_DIR}"
+python3 "${REPO_ROOT}/scripts/create-private-evidence.py" "${PRIVATE_EVIDENCE_DIR}/new.log"
+assert_mode_600 "${PRIVATE_EVIDENCE_DIR}/new.log"
+printf 'existing-content\n' >"${PRIVATE_EVIDENCE_DIR}/existing.log"
+if python3 "${REPO_ROOT}/scripts/create-private-evidence.py" "${PRIVATE_EVIDENCE_DIR}/existing.log"; then
+  echo "expected existing evidence path to be rejected" >&2
+  exit 1
+fi
+[[ "$(cat "${PRIVATE_EVIDENCE_DIR}/existing.log")" == "existing-content" ]]
+printf 'target-content\n' >"${PRIVATE_EVIDENCE_DIR}/target.log"
+ln -s "${PRIVATE_EVIDENCE_DIR}/target.log" "${PRIVATE_EVIDENCE_DIR}/symlink.log"
+if python3 "${REPO_ROOT}/scripts/create-private-evidence.py" "${PRIVATE_EVIDENCE_DIR}/symlink.log"; then
+  echo "expected evidence symlink to be rejected" >&2
+  exit 1
+fi
+[[ "$(cat "${PRIVATE_EVIDENCE_DIR}/target.log")" == "target-content" ]]
+
 rm -f "${TMP_DIR}/calls"
 run_recovery "${TMP_DIR}/candidate.manifest"
+for evidence_file in "${TMP_DIR}/evidence/"*.log; do assert_mode_600 "${evidence_file}"; done
 assert_contains "${TMP_DIR}/calls" "verify:candidate"
 assert_order "${TMP_DIR}/calls" "drain-traffic:candidate" "deploy-gateway:candidate"
 assert_order "${TMP_DIR}/calls" "verify:candidate" "restore-traffic:candidate"
@@ -246,6 +279,7 @@ INFERA_AUDIT_LEDGER_RESTORE_DSN='postgres://restore-secret' \
 INFERA_RECOVERY_EVIDENCE_DIR="${TMP_DIR}/ledger-evidence" \
 "${REPO_ROOT}/scripts/audit-ledger-recovery-drill.sh"
 grep -q "PASS accounting-content-digest" "${TMP_DIR}/ledger-evidence/"*.log
+for evidence_file in "${TMP_DIR}/ledger-evidence/"*.log; do assert_mode_600 "${evidence_file}"; done
 if grep -Eq 'source-secret|restore-secret' "${TMP_DIR}/ledger-evidence/"*.log; then
   echo "ledger evidence exposed a DSN" >&2
   exit 1
