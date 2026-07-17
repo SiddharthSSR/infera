@@ -188,6 +188,9 @@ func (g *Gateway) handleCreateAgentRun(w http.ResponseWriter, r *http.Request) {
 	}
 	modelExists, err := g.modelExists(r.Context(), model)
 	if err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
 		if errors.Is(err, errWorkerRegistryUnavailable) {
 			g.writeWorkerRegistryUnavailable(w)
 		} else {
@@ -639,6 +642,9 @@ func (g *Gateway) handleExternalAgentRun(w http.ResponseWriter, r *http.Request)
 	}
 	modelExists, err := g.modelExists(r.Context(), model)
 	if err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
 		if errors.Is(err, errWorkerRegistryUnavailable) {
 			g.writeWorkerRegistryUnavailable(w)
 		} else {

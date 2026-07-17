@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/infera/infera/go/pkg/types"
 )
 
@@ -82,10 +83,14 @@ func (r *WorkerRegistry) Register(ctx context.Context, worker *types.WorkerInfo)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if worker.WorkerID == "" {
 		return fmt.Errorf("worker ID is required")
 	}
+	worker.RegistrationID = uuid.NewString()
 
 	// If replacing an existing worker entry, remove old model index entries first.
 	if existing, exists := r.workers[worker.WorkerID]; exists {
@@ -110,6 +115,9 @@ func (r *WorkerRegistry) Deregister(ctx context.Context, workerID string) error 
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	worker, exists := r.workers[workerID]
 	if !exists {
@@ -131,6 +139,9 @@ func (r *WorkerRegistry) Get(ctx context.Context, workerID string) (*types.Worke
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 
 	worker, exists := r.workers[workerID]
 	if !exists {
@@ -146,6 +157,9 @@ func (r *WorkerRegistry) GetWorkersForModel(ctx context.Context, modelID string)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	workerIDs, exists := r.modelIndex[modelID]
 	if !exists {
@@ -183,6 +197,9 @@ func (r *WorkerRegistry) GetAllWorkers(ctx context.Context) ([]*types.WorkerInfo
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	workers := make([]*types.WorkerInfo, 0, len(r.workers))
 	for _, w := range r.workers {
@@ -218,6 +235,9 @@ func (r *WorkerRegistry) UpdateWorkerStats(ctx context.Context, workerID string,
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	worker, exists := r.workers[workerID]
 	if !exists {
@@ -235,6 +255,9 @@ func (r *WorkerRegistry) UpdateWorkerModels(ctx context.Context, workerID string
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	worker, exists := r.workers[workerID]
 	if !exists {

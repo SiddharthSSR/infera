@@ -31,15 +31,15 @@ const (
 type WorkerClient struct {
 	address             string
 	workerToken         string
-	registeredAtMS      int64
+	registrationID      string
 	httpClient          *http.Client
 	streamingHTTPClient *http.Client
 	breaker             *CircuitBreaker
 }
 
-func newRegisteredWorkerClient(address, workerToken string, registeredAt time.Time) *WorkerClient {
+func newRegisteredWorkerClient(address, workerToken, registrationID string) *WorkerClient {
 	client := newWorkerClient(address, workerToken)
-	client.registeredAtMS = registeredAt.UnixMilli()
+	client.registrationID = registrationID
 	return client
 }
 

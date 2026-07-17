@@ -121,6 +121,49 @@ func TestGatewayWorkerRegistryReadsFailClosed(t *testing.T) {
 	}
 }
 
+func TestGatewayRegistryContextErrorsPreserveHTTPBoundarySemantics(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantBody   string
+	}{
+		{name: "canceled", err: context.Canceled, wantStatus: http.StatusOK, wantBody: ""},
+		{name: "deadline", err: context.DeadlineExceeded, wantStatus: http.StatusGatewayTimeout, wantBody: "request_timeout"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			g := newGatewayWithWorkerRegistry(t, &failingWorkerRegistry{snapshotErr: test.err})
+			handlers := []struct {
+				name    string
+				method  string
+				path    string
+				body    string
+				handler http.HandlerFunc
+			}{
+				{name: "discovery", method: http.MethodGet, path: "/internal/prometheus/worker-targets", handler: g.handlePrometheusWorkerTargets},
+				{name: "models", method: http.MethodGet, path: "/v1/models", handler: g.handleListModels},
+				{name: "health", method: http.MethodGet, path: "/health", handler: g.handleHealth},
+				{name: "agent model check", method: http.MethodPost, path: "/api/agents/runs", body: `{"model":"model-1","input":"hello"}`, handler: g.handleCreateAgentRun},
+			}
+			for _, endpoint := range handlers {
+				t.Run(endpoint.name, func(t *testing.T) {
+					req := httptest.NewRequest(endpoint.method, endpoint.path, strings.NewReader(endpoint.body))
+					recorder := httptest.NewRecorder()
+					endpoint.handler(recorder, req)
+					if recorder.Code != test.wantStatus {
+						t.Fatalf("expected %d, got %d: %s", test.wantStatus, recorder.Code, recorder.Body.String())
+					}
+					body := recorder.Body.String()
+					if (test.wantBody == "" && body != "") || (test.wantBody != "" && !strings.Contains(body, test.wantBody)) {
+						t.Fatalf("expected body %q, got %q", test.wantBody, body)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestChatCompletionsRegistryOutageReturnsSanitized503(t *testing.T) {
 	g := newGatewayWithWorkerRegistry(t, &failingWorkerRegistry{snapshotErr: errors.New("secret database host")})
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
@@ -275,6 +318,7 @@ func TestWorkerClientCacheTracksRegistrationAndCredentialIdentity(t *testing.T) 
 	if clientB == clientA || clientB.address != replacement.Address {
 		t.Fatalf("address change reused stale client: old=%p new=%p address=%q", clientA, clientB, clientB.address)
 	}
+	replacementRegistrationID := replacement.RegistrationID
 
 	// Credential changes become visible to other replicas through a fresh
 	// registration generation. Avoid polling the credential store on every
@@ -289,9 +333,12 @@ func TestWorkerClientCacheTracksRegistrationAndCredentialIdentity(t *testing.T) 
 	}
 
 	rotated := replacement.Clone()
-	rotated.RegisteredAt = registeredAt.Add(2 * time.Second)
+	rotated.RegisteredAt = replacement.RegisteredAt
 	if err := r.RegisterWorker(context.Background(), rotated); err != nil {
 		t.Fatal(err)
+	}
+	if rotated.RegistrationID == replacementRegistrationID {
+		t.Fatal("same-millisecond re-registration reused opaque registration identity")
 	}
 	clientC, err := g.getWorkerClient(context.Background(), worker.WorkerID)
 	if err != nil {
@@ -303,31 +350,67 @@ func TestWorkerClientCacheTracksRegistrationAndCredentialIdentity(t *testing.T) 
 }
 
 func TestWorkerClientResolutionNeverOverwritesNewerCachedRegistration(t *testing.T) {
+	g := New(DefaultConfig(), router.New(router.DefaultConfig()), nil)
+	t.Cleanup(g.router.Stop)
+	observed := newRegisteredWorkerClient("http://worker-a.internal:8081", "token-a", "registration-a")
+	newer := newRegisteredWorkerClient("http://worker-c.internal:8081", "token-c", "registration-c")
+	replacement := newRegisteredWorkerClient("http://worker-b.internal:8081", "token-b", "registration-b")
+	g.workerClients["worker-1"] = newer
+
+	current, installed := g.installWorkerClientIfUnchanged("worker-1", observed, replacement)
+	if installed || current != newer {
+		t.Fatalf("stale cache observation installed=%t current=%p, want newer %p", installed, current, newer)
+	}
+	if cached := g.workerClients["worker-1"]; cached != newer {
+		t.Fatalf("stale registry snapshot overwrote newer cached client: got %p want %p", cached, newer)
+	}
+}
+
+func TestWorkerClientResolutionFailsClosedWhenRegistrationChangesDuringCredentialLookup(t *testing.T) {
 	r := router.New(router.DefaultConfig())
 	t.Cleanup(r.Stop)
-	registeredAt := time.Now()
 	worker := &types.WorkerInfo{
 		WorkerID:     "worker-1",
-		Address:      "http://worker-old.internal:8081",
+		Address:      "http://worker-b.internal:8081",
 		Status:       types.WorkerStatusHealthy,
 		LoadedModels: []types.LoadedModel{{ModelID: "model-1"}},
-		RegisteredAt: registeredAt,
 	}
 	if err := r.RegisterWorker(context.Background(), worker); err != nil {
 		t.Fatal(err)
 	}
-	gatewayConfig := DefaultConfig()
-	gatewayConfig.WorkerSharedToken = "new-token"
-	g := New(gatewayConfig, r, nil)
-	newer := newRegisteredWorkerClient("http://worker-new.internal:8081", "new-token", registeredAt.Add(time.Second))
-	g.workerClients[worker.WorkerID] = newer
+	g := New(DefaultConfig(), r, nil)
+	g.workerClients[worker.WorkerID] = newRegisteredWorkerClient(worker.Address, "token-a", "registration-a")
 
-	_, err := g.getWorkerClient(context.Background(), worker.WorkerID)
-	if err == nil || !strings.Contains(err.Error(), "registration changed") {
-		t.Fatalf("expected stale registry resolution to fail closed, got %v", err)
+	credentialStarted := make(chan struct{})
+	releaseCredential := make(chan struct{})
+	g.workerCredentialResolver = func(string) (string, error) {
+		close(credentialStarted)
+		<-releaseCredential
+		return "token-b", nil
 	}
-	if cached := g.workerClients[worker.WorkerID]; cached != newer {
-		t.Fatalf("stale registry snapshot overwrote newer cached client: got %p want %p", cached, newer)
+	result := make(chan error, 1)
+	go func() {
+		_, err := g.getWorkerClient(context.Background(), worker.WorkerID)
+		result <- err
+	}()
+	<-credentialStarted
+
+	newRegistration := worker.Clone()
+	newRegistration.Address = "http://worker-c.internal:8081"
+	if err := r.RegisterWorker(context.Background(), newRegistration); err != nil {
+		t.Fatal(err)
+	}
+	newerClient := newRegisteredWorkerClient(newRegistration.Address, "token-c", newRegistration.RegistrationID)
+	g.workerClientsMu.Lock()
+	g.workerClients[worker.WorkerID] = newerClient
+	g.workerClientsMu.Unlock()
+	close(releaseCredential)
+
+	if err := <-result; err == nil || !strings.Contains(err.Error(), "registration changed") {
+		t.Fatalf("expected registration-change failure, got %v", err)
+	}
+	if cached := g.workerClients[worker.WorkerID]; cached != newerClient {
+		t.Fatalf("stale resolution overwrote concurrent registration: got %p want %p", cached, newerClient)
 	}
 }
 
@@ -340,7 +423,7 @@ func TestWorkerClientCacheClosesDisplacedTransports(t *testing.T) {
 		httpClient:          &http.Client{Transport: registerTransport},
 		streamingHTTPClient: &http.Client{Transport: registerTransport},
 	}
-	g.registerWorkerClient("worker-1", "http://worker.internal:8081", "token", time.Now())
+	g.registerWorkerClient("worker-1", "http://worker.internal:8081", "token", "registration-1")
 	if calls := registerTransport.closeCalls.Load(); calls != 2 {
 		t.Fatalf("register replacement closed idle transports %d times, want 2", calls)
 	}
@@ -353,6 +436,25 @@ func TestWorkerClientCacheClosesDisplacedTransports(t *testing.T) {
 	g.RemoveWorkerClient("worker-1")
 	if calls := removeTransport.closeCalls.Load(); calls != 2 {
 		t.Fatalf("removal closed idle transports %d times, want 2", calls)
+	}
+}
+
+func TestRegisterWorkerClientRejectsAddressOutsideRegistration(t *testing.T) {
+	r := router.New(router.DefaultConfig())
+	t.Cleanup(r.Stop)
+	worker := &types.WorkerInfo{WorkerID: "worker-1", Address: "http://worker.internal:8081", Status: types.WorkerStatusHealthy}
+	if err := r.RegisterWorker(context.Background(), worker); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultConfig()
+	config.WorkerSharedToken = "token"
+	g := New(config, r, nil)
+
+	if err := g.RegisterWorkerClient(worker.WorkerID, "http://attacker.internal:8081"); err == nil {
+		t.Fatal("expected mismatched address to be rejected")
+	}
+	if _, exists := g.workerClients[worker.WorkerID]; exists {
+		t.Fatal("mismatched address populated worker client cache")
 	}
 }
 

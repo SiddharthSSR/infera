@@ -76,8 +76,9 @@ type Gateway struct {
 	log *slog.Logger
 
 	// Worker clients for direct inference calls
-	workerClients   map[string]*WorkerClient
-	workerClientsMu sync.RWMutex
+	workerClients            map[string]*WorkerClient
+	workerClientsMu          sync.RWMutex
+	workerCredentialResolver func(string) (string, error)
 }
 
 // Config configures the gateway.
@@ -730,6 +731,9 @@ func (g *Gateway) handlePrometheusWorkerTargets(w http.ResponseWriter, r *http.R
 
 	workers, err := g.router.GetWorkers(r.Context(), "", true)
 	if err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
 		g.writeWorkerRegistryUnavailable(w)
 		return
 	}
@@ -801,6 +805,9 @@ func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 	models, err := g.listModelEntries(r.Context())
 	if err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
 		if errors.Is(err, errWorkerRegistryUnavailable) {
 			g.writeWorkerRegistryUnavailable(w)
 			return
@@ -839,6 +846,9 @@ func (g *Gateway) handleGetWorkers(w http.ResponseWriter, r *http.Request) {
 
 	response, err := g.listWorkerEntries(r.Context(), currentWorkspaceID(r))
 	if err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
 		g.writeWorkerRegistryUnavailable(w)
 		return
 	}
@@ -963,6 +973,9 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := g.router.RegisterWorker(r.Context(), workerInfo); err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
 		g.writeWorkerRegistryUnavailable(w)
 		return
 	}
@@ -975,7 +988,7 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Register worker client
-	g.registerWorkerClient(req.WorkerID, req.Address, workerToken, workerInfo.RegisteredAt)
+	g.registerWorkerClient(req.WorkerID, req.Address, workerToken, workerInfo.RegistrationID)
 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":   true,
@@ -1066,6 +1079,9 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := g.router.UpdateWorkerStats(r.Context(), req.WorkerID, stats); err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
 		if errors.Is(err, registry.ErrWorkerNotFound) {
 			g.writeJSON(w, http.StatusOK, map[string]interface{}{
 				"acknowledged": false,
@@ -1083,6 +1099,9 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 
 	worker, found, err := g.router.GetWorker(r.Context(), req.WorkerID)
 	if err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
 		g.writeWorkerRegistryUnavailable(w)
 		return
 	}
@@ -1111,6 +1130,9 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 		if err := g.router.UpdateWorkerModels(r.Context(), req.WorkerID, models); err != nil {
+			if g.writeRequestContextError(w, err) {
+				return
+			}
 			if errors.Is(err, registry.ErrWorkerNotFound) {
 				g.writeJSON(w, http.StatusOK, map[string]interface{}{
 					"acknowledged": false,
@@ -1249,6 +1271,9 @@ func (g *Gateway) handleGetStats(w http.ResponseWriter, r *http.Request) {
 
 	payload, err := g.statsPayload(r.Context(), currentWorkspaceID(r))
 	if err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
 		g.writeWorkerRegistryUnavailable(w)
 		return
 	}
@@ -1373,6 +1398,9 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 	stats, err := g.router.GetStats(r.Context())
 	if err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
 		g.writeWorkerRegistryUnavailable(w)
 		return
 	}
@@ -1394,62 +1422,56 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) getWorkerClient(ctx context.Context, workerID string) (*WorkerClient, error) {
-	const maxRegistrationResolutionAttempts = 3
-	for attempt := 0; attempt < maxRegistrationResolutionAttempts; attempt++ {
-		// Resolve the current registration before consulting the process-local
-		// client cache. A cached transport must not hide a registry outage or a
-		// worker that was removed after routing.
-		worker, found, err := g.router.GetWorker(ctx, workerID)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return nil, err
-			}
-			return nil, fmt.Errorf("%w", errWorkerRegistryUnavailable)
-		}
-		if !found {
-			return nil, fmt.Errorf("worker %s not found", workerID)
-		}
-
-		g.workerClientsMu.RLock()
-		client, exists := g.workerClients[workerID]
-		if exists && workerClientMatches(client, worker) {
-			g.workerClientsMu.RUnlock()
-			return client, nil
-		}
-		newerCachedRegistration := exists && workerClientSupersedesRegistration(client, worker)
-		g.workerClientsMu.RUnlock()
-		if newerCachedRegistration {
-			continue
-		}
-
-		// Registration identity is non-secret and changes on every successful
-		// registration. Compare it at millisecond precision so a durable store's
-		// timestamp round-trip cannot force credential reads onto the fast path.
-		// Fetch the credential only on a cache miss or identity change.
-		workerToken, err := g.workerCredentialForWorker(workerID)
-		if err != nil {
+	// Resolve the current registration before consulting the process-local
+	// client cache. A cached transport must not hide a registry outage or a
+	// worker that was removed after routing.
+	worker, found, err := g.router.GetWorker(ctx, workerID)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
-
-		g.workerClientsMu.Lock()
-		client, exists = g.workerClients[workerID]
-		if exists && workerClientMatches(client, worker) {
-			g.workerClientsMu.Unlock()
-			return client, nil
-		}
-		if exists && workerClientSupersedesRegistration(client, worker) {
-			g.workerClientsMu.Unlock()
-			continue
-		}
-		replacement := newRegisteredWorkerClient(worker.Address, workerToken, worker.RegisteredAt)
-		g.workerClients[workerID] = replacement
-		g.workerClientsMu.Unlock()
-		if exists {
-			client.closeIdleConnections()
-		}
-		return replacement, nil
+		return nil, fmt.Errorf("%w", errWorkerRegistryUnavailable)
 	}
-	return nil, errors.New("worker registration changed while resolving client")
+	if !found {
+		return nil, fmt.Errorf("worker %s not found", workerID)
+	}
+
+	g.workerClientsMu.RLock()
+	observedClient, exists := g.workerClients[workerID]
+	if exists && workerClientMatches(observedClient, worker) {
+		g.workerClientsMu.RUnlock()
+		return observedClient, nil
+	}
+	g.workerClientsMu.RUnlock()
+
+	// The registry issues an opaque identity on every registration. Fetch the
+	// credential only on a cache miss or identity change, never on the
+	// unchanged-registration fast path.
+	workerToken, err := g.workerCredentialForWorker(workerID)
+	if err != nil {
+		return nil, err
+	}
+
+	confirmed, found, err := g.router.GetWorker(ctx, workerID)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w", errWorkerRegistryUnavailable)
+	}
+	if !found || confirmed.RegistrationID != worker.RegistrationID || confirmed.Address != worker.Address {
+		return nil, errors.New("worker registration changed while resolving client")
+	}
+
+	replacement := newRegisteredWorkerClient(worker.Address, workerToken, worker.RegistrationID)
+	currentClient, installed := g.installWorkerClientIfUnchanged(workerID, observedClient, replacement)
+	if !installed {
+		return nil, errors.New("worker registration changed while resolving client")
+	}
+	if currentClient != nil {
+		currentClient.closeIdleConnections()
+	}
+	return replacement, nil
 }
 
 func workerClientMatches(client *WorkerClient, worker *types.WorkerInfo) bool {
@@ -1459,20 +1481,34 @@ func workerClientMatches(client *WorkerClient, worker *types.WorkerInfo) bool {
 	// Generationless clients are supported for explicitly injected transports
 	// (for example, tests and embedders). Gateway-created clients always carry
 	// a registration generation and therefore use the stricter comparison.
-	return client.registeredAtMS == 0 || client.registeredAtMS == worker.RegisteredAt.UnixMilli()
+	return client.registrationID == "" || client.registrationID == worker.RegistrationID
 }
 
-func workerClientSupersedesRegistration(client *WorkerClient, worker *types.WorkerInfo) bool {
-	if client == nil || worker == nil || client.registeredAtMS == 0 {
-		return false
+func (g *Gateway) installWorkerClientIfUnchanged(workerID string, observed, replacement *WorkerClient) (*WorkerClient, bool) {
+	g.workerClientsMu.Lock()
+	defer g.workerClientsMu.Unlock()
+	current := g.workerClients[workerID]
+	if current != observed {
+		return current, false
 	}
-	workerRegisteredAtMS := worker.RegisteredAt.UnixMilli()
-	return client.registeredAtMS > workerRegisteredAtMS ||
-		(client.registeredAtMS == workerRegisteredAtMS && client.address != worker.Address)
+	g.workerClients[workerID] = replacement
+	return current, true
 }
 
 func (g *Gateway) writeWorkerRegistryUnavailable(w http.ResponseWriter) {
 	g.writeError(w, http.StatusServiceUnavailable, string(types.ErrorCodeWorkerRegistryUnavailable), "Worker registry is temporarily unavailable")
+}
+
+func (g *Gateway) writeRequestContextError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return true
+	case errors.Is(err, context.DeadlineExceeded):
+		g.writeError(w, http.StatusGatewayTimeout, "request_timeout", "Request timed out")
+		return true
+	default:
+		return false
+	}
 }
 
 func filterHealthyWorkers(workers []*types.WorkerInfo) []*types.WorkerInfo {
@@ -1486,6 +1522,9 @@ func filterHealthyWorkers(workers []*types.WorkerInfo) []*types.WorkerInfo {
 }
 
 func (g *Gateway) workerCredentialForWorker(workerID string) (string, error) {
+	if g.workerCredentialResolver != nil {
+		return g.workerCredentialResolver(workerID)
+	}
 	if g.instanceManager == nil {
 		credential := strings.TrimSpace(g.config.WorkerSharedToken)
 		if credential == "" {
@@ -1519,14 +1558,17 @@ func (g *Gateway) RegisterWorkerClient(workerID, address string) error {
 	if err != nil {
 		return err
 	}
-	g.registerWorkerClient(workerID, address, workerToken, worker.RegisteredAt)
+	if strings.TrimSpace(address) != strings.TrimSpace(worker.Address) {
+		return fmt.Errorf("worker %s address does not match its registration", workerID)
+	}
+	g.registerWorkerClient(workerID, worker.Address, workerToken, worker.RegistrationID)
 	return nil
 }
 
-func (g *Gateway) registerWorkerClient(workerID, address, workerToken string, registeredAt time.Time) {
+func (g *Gateway) registerWorkerClient(workerID, address, workerToken, registrationID string) {
 	g.workerClientsMu.Lock()
 	previous := g.workerClients[workerID]
-	g.workerClients[workerID] = newRegisteredWorkerClient(address, workerToken, registeredAt)
+	g.workerClients[workerID] = newRegisteredWorkerClient(address, workerToken, registrationID)
 	g.workerClientsMu.Unlock()
 	if previous != nil {
 		previous.closeIdleConnections()

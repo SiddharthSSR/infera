@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
@@ -53,17 +52,12 @@ func (g *Gateway) logRouteDecision(decision types.RoutingDecision) {
 }
 
 func (g *Gateway) logRouteDecisionFailed(req *types.InferenceRequest, errorCode, reason string) {
-	model, requestID, healthyWorkers := "", "", 0
+	model, requestID, healthyWorkers := "", "", -1
 	if req != nil {
 		model, requestID = req.ModelID, req.RequestID
 	}
-	if g.router != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		workers, err := g.router.GetWorkers(ctx, "", true)
-		cancel()
-		if err == nil {
-			healthyWorkers = len(workers)
-		}
+	if strings.TrimSpace(errorCode) == string(types.ErrorCodeNoWorkersAvailable) {
+		healthyWorkers = 0
 	}
 	if g.metrics != nil {
 		g.metrics.RecordRouteDecision("", "failure", -1)

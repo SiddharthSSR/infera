@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -50,6 +51,9 @@ func TestRegister(t *testing.T) {
 		if workerCount(t, r) != 1 {
 			t.Errorf("expected 1 worker, got %d", workerCount(t, r))
 		}
+		if w.RegistrationID == "" {
+			t.Fatal("registry did not issue a registration identity")
+		}
 	})
 
 	t.Run("empty ID returns error", func(t *testing.T) {
@@ -60,6 +64,7 @@ func TestRegister(t *testing.T) {
 	})
 
 	t.Run("overwrites existing worker", func(t *testing.T) {
+		previousRegistrationID := wRegistrationID(t, r, "w1")
 		w := makeWorker("w1", "localhost:9001", types.WorkerStatusHealthy, []string{"mistral-7b"})
 		if err := r.Register(testContext, w); err != nil {
 			t.Fatalf("Register failed: %v", err)
@@ -74,6 +79,9 @@ func TestRegister(t *testing.T) {
 		}
 		if got.Address != "localhost:9001" {
 			t.Errorf("expected updated address, got %s", got.Address)
+		}
+		if got.RegistrationID == previousRegistrationID {
+			t.Fatal("replacement reused the previous registration identity")
 		}
 
 		oldModelWorkers, err := r.GetWorkersForModel(testContext, "llama-8b")
@@ -139,10 +147,94 @@ func TestDeregister(t *testing.T) {
 
 	t.Run("nonexistent returns error", func(t *testing.T) {
 		err := r.Deregister(testContext, "nonexistent")
-		if err == nil {
-			t.Error("expected error for nonexistent worker")
+		if !errors.Is(err, ErrWorkerNotFound) {
+			t.Fatalf("expected ErrWorkerNotFound, got %v", err)
 		}
 	})
+}
+
+func wRegistrationID(t *testing.T, r *WorkerRegistry, workerID string) string {
+	t.Helper()
+	worker, found, err := r.Get(testContext, workerID)
+	if err != nil || !found {
+		t.Fatalf("Get(%s): found=%t err=%v", workerID, found, err)
+	}
+	return worker.RegistrationID
+}
+
+func TestOperationsRespectCanceledContexts(t *testing.T) {
+	r := newTestRegistry()
+	if err := r.Register(testContext, makeWorker("w1", "a:1", types.WorkerStatusHealthy, []string{"old"})); err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, expire := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer expire()
+
+	operations := []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{name: "register", run: func(ctx context.Context) error {
+			return r.Register(ctx, makeWorker("w2", "a:2", types.WorkerStatusHealthy, nil))
+		}},
+		{name: "deregister", run: func(ctx context.Context) error { return r.Deregister(ctx, "w1") }},
+		{name: "get", run: func(ctx context.Context) error { _, _, err := r.Get(ctx, "w1"); return err }},
+		{name: "model read", run: func(ctx context.Context) error { _, err := r.GetWorkersForModel(ctx, "old"); return err }},
+		{name: "snapshot", run: func(ctx context.Context) error { _, err := r.Snapshot(ctx); return err }},
+		{name: "stats write", run: func(ctx context.Context) error {
+			return r.UpdateWorkerStats(ctx, "w1", types.WorkerStats{QueueDepth: 99})
+		}},
+		{name: "models write", run: func(ctx context.Context) error {
+			return r.UpdateWorkerModels(ctx, "w1", []types.LoadedModel{{ModelID: "new"}})
+		}},
+		{name: "count", run: func(ctx context.Context) error { _, err := r.Count(ctx); return err }},
+	}
+	for _, operation := range operations {
+		for _, contextCase := range []struct {
+			name string
+			ctx  context.Context
+			want error
+		}{{name: "canceled", ctx: canceled, want: context.Canceled}, {name: "deadline", ctx: expired, want: context.DeadlineExceeded}} {
+			t.Run(operation.name+"/"+contextCase.name, func(t *testing.T) {
+				if err := operation.run(contextCase.ctx); !errors.Is(err, contextCase.want) {
+					t.Fatalf("expected %v, got %v", contextCase.want, err)
+				}
+			})
+		}
+	}
+
+	worker, found, err := r.Get(testContext, "w1")
+	if err != nil || !found {
+		t.Fatalf("canceled writes removed worker: found=%t err=%v", found, err)
+	}
+	if worker.Stats.QueueDepth != 0 || !worker.HasModel("old") || worker.HasModel("new") {
+		t.Fatalf("canceled writes mutated worker: %#v", worker)
+	}
+	if _, found, err := r.Get(testContext, "w2"); err != nil || found {
+		t.Fatalf("canceled registration mutated registry: found=%t err=%v", found, err)
+	}
+}
+
+func TestRegisterRechecksDeadlineAfterWaitingForLock(t *testing.T) {
+	r := newTestRegistry()
+	r.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- r.Register(ctx, makeWorker("blocked", "a:1", types.WorkerStatusHealthy, nil))
+	}()
+	<-ctx.Done()
+	r.mu.Unlock()
+
+	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded after lock wait, got %v", err)
+	}
+	if _, found, err := r.Get(testContext, "blocked"); err != nil || found {
+		t.Fatalf("expired registration mutated registry: found=%t err=%v", found, err)
+	}
 }
 
 func TestGet(t *testing.T) {
@@ -277,8 +369,8 @@ func TestUpdateWorkerStats(t *testing.T) {
 	}
 
 	// Nonexistent worker
-	if err := r.UpdateWorkerStats(testContext, "nonexistent", stats); err == nil {
-		t.Error("expected error for nonexistent worker")
+	if err := r.UpdateWorkerStats(testContext, "nonexistent", stats); !errors.Is(err, ErrWorkerNotFound) {
+		t.Fatalf("expected ErrWorkerNotFound, got %v", err)
 	}
 }
 

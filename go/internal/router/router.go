@@ -62,7 +62,8 @@ type WorkerHealthTransition = registry.HealthTransition
 // workerRegistry defines the worker-state surface the router needs.
 // The default implementation remains the in-memory registry, but this
 // interface lets future shared-state implementations plug in without
-// changing routing logic.
+// changing routing logic. Register implementations must issue a fresh opaque
+// WorkerInfo.RegistrationID for every successful registration.
 type workerRegistry interface {
 	Register(ctx context.Context, worker *types.WorkerInfo) error
 	Deregister(ctx context.Context, workerID string) error
