@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,8 +16,13 @@ import (
 	"github.com/infera/infera/go/pkg/types"
 )
 
-func (g *Gateway) listModelEntries() ([]map[string]interface{}, error) {
-	workers := g.router.GetWorkers("", false)
+var errWorkerRegistryUnavailable = errors.New("worker registry unavailable")
+
+func (g *Gateway) listModelEntries(ctx context.Context) ([]map[string]interface{}, error) {
+	workers, err := g.router.GetWorkers(ctx, "", false)
+	if err != nil {
+		return nil, classifyWorkerRegistryReadError(err)
+	}
 	loadedSet := make(map[string]bool)
 	for _, worker := range workers {
 		for _, model := range worker.LoadedModels {
@@ -83,37 +89,50 @@ func (g *Gateway) listModelEntries() ([]map[string]interface{}, error) {
 	return models, nil
 }
 
-func (g *Gateway) modelExists(modelID string) bool {
+func (g *Gateway) modelExists(ctx context.Context, modelID string) (bool, error) {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
-		return false
+		return false, nil
 	}
-	models, err := g.listModelEntries()
+	models, err := g.listModelEntries(ctx)
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, model := range models {
 		if id, ok := model["id"].(string); ok && id == modelID {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-func (g *Gateway) workersForWorkspace(workspaceID string) []*types.WorkerInfo {
+func (g *Gateway) workersForWorkspace(ctx context.Context, workspaceID string) ([]*types.WorkerInfo, error) {
 	workspaceID = normalizeWorkspaceIDForGateway(workspaceID)
-	workers := g.router.GetWorkers("", false)
+	workers, err := g.router.GetWorkers(ctx, "", false)
+	if err != nil {
+		return nil, classifyWorkerRegistryReadError(err)
+	}
 	filtered := make([]*types.WorkerInfo, 0, len(workers))
 	for _, worker := range workers {
 		if worker.SharedPool || normalizeWorkspaceIDForGateway(worker.WorkspaceID) == workspaceID {
 			filtered = append(filtered, worker)
 		}
 	}
-	return filtered
+	return filtered, nil
 }
 
-func (g *Gateway) listWorkerEntries(workspaceID string) []map[string]interface{} {
-	workers := g.workersForWorkspace(workspaceID)
+func classifyWorkerRegistryReadError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return fmt.Errorf("%w", errWorkerRegistryUnavailable)
+}
+
+func (g *Gateway) listWorkerEntries(ctx context.Context, workspaceID string) ([]map[string]interface{}, error) {
+	workers, err := g.workersForWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
 	response := make([]map[string]interface{}, 0, len(workers))
 	for _, worker := range workers {
 		models := make([]string, 0, len(worker.LoadedModels))
@@ -140,11 +159,14 @@ func (g *Gateway) listWorkerEntries(workspaceID string) []map[string]interface{}
 		})
 	}
 	sortEntriesByStringKey(response, "worker_id")
-	return response
+	return response, nil
 }
 
-func (g *Gateway) statsPayload(workspaceID string) map[string]interface{} {
-	workers := g.workersForWorkspace(workspaceID)
+func (g *Gateway) statsPayload(ctx context.Context, workspaceID string) (map[string]interface{}, error) {
+	workers, err := g.workersForWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
 
 	var totalRPS float64
 	var totalMemoryUsed, totalMemoryTotal int64
@@ -206,7 +228,7 @@ func (g *Gateway) statsPayload(workspaceID string) map[string]interface{} {
 			"total_bytes": totalMemoryTotal,
 		},
 		"uptime_seconds": int64(time.Since(g.startedAt).Seconds()),
-	}
+	}, nil
 }
 
 func (g *Gateway) usageSummaryPayload(workspaceID string, now time.Time) (map[string]interface{}, error) {

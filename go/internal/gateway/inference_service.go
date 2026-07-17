@@ -242,9 +242,21 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 	auditRoutingDecision = routed.RoutingDecision
 
 	auditWorkerID = routed.WorkerID
-	client, err := g.getWorkerClient(routed.WorkerID)
+	client, err := g.getWorkerClient(timeoutCtx, routed.WorkerID)
 	if err != nil {
 		auditStatus = "failed"
+		if errors.Is(err, context.Canceled) {
+			auditStatus = "client_canceled"
+			return nil, err
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			auditErrorCode = "inference_timeout"
+			return nil, types.NewInferaError(types.ErrorCode("inference_timeout"), "Inference request timed out")
+		}
+		if errors.Is(err, errWorkerRegistryUnavailable) {
+			auditErrorCode = string(types.ErrorCodeWorkerRegistryUnavailable)
+			return nil, types.NewInferaError(types.ErrorCodeWorkerRegistryUnavailable, "Worker registry is temporarily unavailable")
+		}
 		auditErrorCode = "worker_unavailable"
 		return nil, types.NewInferaError(types.ErrorCode("worker_unavailable"), err.Error())
 	}

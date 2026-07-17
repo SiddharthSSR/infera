@@ -31,9 +31,16 @@ const (
 type WorkerClient struct {
 	address             string
 	workerToken         string
+	registrationID      string
 	httpClient          *http.Client
 	streamingHTTPClient *http.Client
 	breaker             *CircuitBreaker
+}
+
+func newRegisteredWorkerClient(address, workerToken, registrationID string) *WorkerClient {
+	client := newWorkerClient(address, workerToken)
+	client.registrationID = registrationID
+	return client
 }
 
 // NewWorkerClient creates a new worker client.
@@ -67,6 +74,18 @@ func newWorkerClient(address, workerToken string) *WorkerClient {
 func (c *WorkerClient) addWorkerAuthHeader(req *http.Request) {
 	if c.workerToken != "" {
 		req.Header.Set("X-Worker-Token", c.workerToken)
+	}
+}
+
+func (c *WorkerClient) closeIdleConnections() {
+	if c == nil {
+		return
+	}
+	if c.httpClient != nil {
+		c.httpClient.CloseIdleConnections()
+	}
+	if c.streamingHTTPClient != nil {
+		c.streamingHTTPClient.CloseIdleConnections()
 	}
 }
 

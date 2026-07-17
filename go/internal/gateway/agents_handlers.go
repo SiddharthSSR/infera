@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -185,7 +186,19 @@ func (g *Gateway) handleCreateAgentRun(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "input is required")
 		return
 	}
-	if !g.modelExists(model) {
+	modelExists, err := g.modelExists(r.Context(), model)
+	if err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
+		if errors.Is(err, errWorkerRegistryUnavailable) {
+			g.writeWorkerRegistryUnavailable(w)
+		} else {
+			g.writeError(w, http.StatusServiceUnavailable, "models_unavailable", "Models are temporarily unavailable")
+		}
+		return
+	}
+	if !modelExists {
 		g.writeError(w, http.StatusNotFound, "model_not_found", "Model is not registered in Infera")
 		return
 	}
@@ -627,7 +640,19 @@ func (g *Gateway) handleExternalAgentRun(w http.ResponseWriter, r *http.Request)
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "input is required")
 		return
 	}
-	if !g.modelExists(model) {
+	modelExists, err := g.modelExists(r.Context(), model)
+	if err != nil {
+		if g.writeRequestContextError(w, err) {
+			return
+		}
+		if errors.Is(err, errWorkerRegistryUnavailable) {
+			g.writeWorkerRegistryUnavailable(w)
+		} else {
+			g.writeError(w, http.StatusServiceUnavailable, "models_unavailable", "Models are temporarily unavailable")
+		}
+		return
+	}
+	if !modelExists {
 		g.writeError(w, http.StatusNotFound, "model_not_found", "Model is not registered in Infera")
 		return
 	}

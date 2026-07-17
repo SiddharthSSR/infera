@@ -16,7 +16,7 @@ func TestRouteFiltersSameModelWorkersByWorkspace(t *testing.T) {
 		{WorkerID: "a", WorkspaceID: "ws_a", Status: types.WorkerStatusHealthy, LoadedModels: []types.LoadedModel{{ModelID: "shared"}}},
 		{WorkerID: "b", WorkspaceID: "ws_b", Status: types.WorkerStatusHealthy, LoadedModels: []types.LoadedModel{{ModelID: "shared"}}},
 	} {
-		if err := r.RegisterWorker(worker); err != nil {
+		if err := r.RegisterWorker(context.Background(), worker); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -36,7 +36,7 @@ func TestAffinityCannotCrossWorkspace(t *testing.T) {
 	config.EnableBatching = false
 	r := New(config)
 	defer r.Stop()
-	if err := r.RegisterWorker(&types.WorkerInfo{WorkerID: "a", WorkspaceID: "ws_a", Status: types.WorkerStatusHealthy, LoadedModels: []types.LoadedModel{{ModelID: "shared"}}}); err != nil {
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{WorkerID: "a", WorkspaceID: "ws_a", Status: types.WorkerStatusHealthy, LoadedModels: []types.LoadedModel{{ModelID: "shared"}}}); err != nil {
 		t.Fatal(err)
 	}
 	reqA := &types.InferenceRequest{ModelID: "shared", WorkspaceID: "ws_a", Metadata: map[string]string{types.MetadataAffinityKey: "same"}}

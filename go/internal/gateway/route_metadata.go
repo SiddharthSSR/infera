@@ -52,12 +52,12 @@ func (g *Gateway) logRouteDecision(decision types.RoutingDecision) {
 }
 
 func (g *Gateway) logRouteDecisionFailed(req *types.InferenceRequest, errorCode, reason string) {
-	model, requestID, healthyWorkers := "", "", 0
+	model, requestID, healthyWorkers := "", "", -1
 	if req != nil {
 		model, requestID = req.ModelID, req.RequestID
 	}
-	if g.router != nil {
-		healthyWorkers = len(g.router.GetWorkers("", true))
+	if strings.TrimSpace(errorCode) == string(types.ErrorCodeNoWorkersAvailable) {
+		healthyWorkers = 0
 	}
 	if g.metrics != nil {
 		g.metrics.RecordRouteDecision("", "failure", -1)
