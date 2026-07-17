@@ -339,6 +339,18 @@ func TestHandleChatCompletionsRecordsBatchAndLatencyMetrics(t *testing.T) {
 		t.Fatalf("expected tpot metric count=1, got %d", got)
 	}
 
+	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_slo_v1_ttft_seconds", map[string]string{
+		"measurement":      "derived",
+		"model":            modelID,
+		"routing_strategy": "least_loaded",
+		"stream":           "false",
+	}); got != 1 {
+		t.Fatalf("expected derived SLO ttft metric count=1, got %d", got)
+	}
+	if got := testutil.ToFloat64(g.metrics.sloRequests.WithLabelValues(modelID, "least_loaded", "false", "success")); got != 1 {
+		t.Fatalf("expected routed SLO success count=1, got %v", got)
+	}
+
 	// Batch metrics are only recorded when requests actually go through the
 	// batcher (queue depth > 0 when they arrive). A single isolated request
 	// takes the fast-path directly to the worker, so no batch metric is emitted.

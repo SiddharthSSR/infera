@@ -108,7 +108,7 @@ func buildStreamingChatCompletionChunk(requestID string, created int64, model st
 	return openAIChunk
 }
 
-func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model string) streamingInferenceResult {
+func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model, strategy string, requestStart time.Time) streamingInferenceResult {
 	chunks, err := client.InferStream(r.Context(), req)
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, OpenAIChatErrorTypeInferenceError, err.Error())
@@ -128,7 +128,9 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 
 	requestID := "chatcmpl-" + req.RequestID
 	created := time.Now().Unix()
-	streamStart := time.Now()
+	if requestStart.IsZero() {
+		requestStart = time.Now()
+	}
 
 	initialChunk := buildInitialChatCompletionChunk(requestID, created, model)
 	data, _ := json.Marshal(initialChunk)
@@ -140,6 +142,7 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	bestCompletionTokens := 0
 	bestTotalTokens := 0
 	firstChunkObserved := false
+	tPOTObserved := false
 	var previousChunkAt time.Time
 	prevCompletionTokens := 0
 
@@ -148,9 +151,10 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 		if !firstChunkObserved {
 			firstChunkObserved = true
 			if g.metrics != nil {
-				g.metrics.RecordTTFT(model, true, now.Sub(streamStart))
+				g.metrics.RecordTTFT(model, strategy, true, sloMeasurementExact, now.Sub(requestStart))
 			}
 		} else if g.metrics != nil {
+			tPOTObserved = true
 			elapsed := now.Sub(previousChunkAt)
 			tokensInChunk := 1
 			if chunk.Usage != nil && chunk.Usage.CompletionTokens > prevCompletionTokens {
@@ -158,7 +162,7 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 			}
 			perToken := elapsed / time.Duration(tokensInChunk)
 			for i := 0; i < tokensInChunk; i++ {
-				g.metrics.RecordTPOT(model, true, perToken)
+				g.metrics.RecordTPOT(model, strategy, true, sloMeasurementDerived, perToken)
 			}
 		}
 		if chunk.Usage != nil && chunk.Usage.CompletionTokens > 0 {
@@ -182,6 +186,18 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+	if g.metrics != nil {
+		ttftMeasurement := sloMeasurementUnavailable
+		if firstChunkObserved {
+			ttftMeasurement = sloMeasurementExact
+		}
+		tpotMeasurement := sloMeasurementUnavailable
+		if tPOTObserved {
+			tpotMeasurement = sloMeasurementDerived
+		}
+		g.metrics.RecordSLOMeasurement("ttft", model, strategy, true, ttftMeasurement)
+		g.metrics.RecordSLOMeasurement("tpot", model, strategy, true, tpotMeasurement)
+	}
 
 	usage := resolveUsageMeasurement(
 		bestPromptTokens,
@@ -194,20 +210,28 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	return streamingInferenceResult{Usage: usage, Status: "success"}
 }
 
-func (g *Gateway) recordNonStreamingLatencyMetrics(model string, resp *types.InferenceResponse, completionTokens int) {
+func (g *Gateway) recordNonStreamingLatencyMetrics(model, strategy string, resp *types.InferenceResponse, completionTokens int) {
 	ttft := time.Duration(resp.Latency.TimeToFirstTokenMS) * time.Millisecond
-	g.metrics.RecordTTFT(model, false, ttft)
+	ttftMeasurement := sloMeasurementUnavailable
+	if ttft > 0 {
+		ttftMeasurement = sloMeasurementDerived
+		g.metrics.RecordTTFT(model, strategy, false, ttftMeasurement, ttft)
+	}
+	g.metrics.RecordSLOMeasurement("ttft", model, strategy, false, ttftMeasurement)
 
 	if completionTokens <= 1 {
+		g.metrics.RecordSLOMeasurement("tpot", model, strategy, false, sloMeasurementUnavailable)
 		return
 	}
 
 	total := time.Duration(resp.Latency.TotalMS) * time.Millisecond
 	if total <= ttft {
+		g.metrics.RecordSLOMeasurement("tpot", model, strategy, false, sloMeasurementUnavailable)
 		return
 	}
 
-	g.metrics.RecordTPOT(model, false, (total-ttft)/time.Duration(completionTokens-1))
+	g.metrics.RecordTPOT(model, strategy, false, sloMeasurementDerived, (total-ttft)/time.Duration(completionTokens-1))
+	g.metrics.RecordSLOMeasurement("tpot", model, strategy, false, sloMeasurementDerived)
 }
 
 func usageTotalTokens(promptTokens, completionTokens, totalTokens int) int {

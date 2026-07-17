@@ -61,8 +61,12 @@ func TestGatewayMetricsRecordInference(t *testing.T) {
 	m := NewGatewayMetrics()
 	m.RecordInference(true, "success", 128, 150*time.Millisecond)
 	m.RecordInference(false, "inference_timeout", 0, 300*time.Millisecond)
-	m.RecordTTFT("model-1", false, 250*time.Millisecond)
-	m.RecordTPOT("model-1", false, 25*time.Millisecond)
+	m.RecordTTFT("model-1", "least_loaded", false, sloMeasurementDerived, 250*time.Millisecond)
+	m.RecordTPOT("model-1", "least_loaded", false, sloMeasurementDerived, 25*time.Millisecond)
+	m.RecordSLOMeasurement("ttft", "model-1", "least_loaded", false, sloMeasurementDerived)
+	m.RecordSLOMeasurement("tpot", "model-1", "least_loaded", false, sloMeasurementDerived)
+	m.RecordSLORequest("model-1", "least_loaded", false, "success", 150*time.Millisecond)
+	m.RecordSLORequest("", "attacker-controlled", true, "failed", 300*time.Millisecond)
 	m.RecordBatch("model-1", 4, 40*time.Millisecond)
 	m.RecordInferenceRejected("overloaded")
 	m.RecordRouteDecision("least_loaded", "success", 3)
@@ -97,6 +101,22 @@ func TestGatewayMetricsRecordInference(t *testing.T) {
 		"stream": "false",
 	}); got != 1 {
 		t.Fatalf("expected tpot histogram count=1, got %d", got)
+	}
+
+	if got := histogramCountForLabels(t, m, "infera_gateway_slo_v1_ttft_seconds", map[string]string{
+		"measurement":      "derived",
+		"model":            "model-1",
+		"routing_strategy": "least_loaded",
+		"stream":           "false",
+	}); got != 1 {
+		t.Fatalf("expected SLO ttft histogram count=1, got %d", got)
+	}
+
+	if got := testutil.ToFloat64(m.sloRequests.WithLabelValues("unknown", "unknown", "true", "error")); got != 1 {
+		t.Fatalf("expected pre-route error in bounded unknown labels, got %v", got)
+	}
+	if got := testutil.ToFloat64(m.sloMeasurements.WithLabelValues("ttft", "model-1", "least_loaded", "false", "derived")); got != 1 {
+		t.Fatalf("expected derived TTFT availability count=1, got %v", got)
 	}
 
 	if got := histogramCountForLabels(t, m, "infera_gateway_batch_size", map[string]string{
@@ -156,8 +176,11 @@ func TestGatewayMetricsHandler(t *testing.T) {
 	httpHandler.ServeHTTP(httpRec, httpReq)
 
 	m.RecordInference(false, "success", 42, 120*time.Millisecond)
-	m.RecordTTFT("model-1", false, 200*time.Millisecond)
-	m.RecordTPOT("model-1", false, 20*time.Millisecond)
+	m.RecordTTFT("model-1", "least_loaded", false, sloMeasurementDerived, 200*time.Millisecond)
+	m.RecordTPOT("model-1", "least_loaded", false, sloMeasurementDerived, 20*time.Millisecond)
+	m.RecordSLOMeasurement("ttft", "model-1", "least_loaded", false, sloMeasurementDerived)
+	m.RecordSLOMeasurement("tpot", "model-1", "least_loaded", false, sloMeasurementDerived)
+	m.RecordSLORequest("model-1", "least_loaded", false, "success", 120*time.Millisecond)
 	m.RecordBatch("model-1", 2, 30*time.Millisecond)
 	m.RecordInferenceRejected("overloaded")
 	m.RecordRouteDecision("least_loaded", "success", 2)
@@ -186,6 +209,11 @@ func TestGatewayMetricsHandler(t *testing.T) {
 		"infera_gateway_batch_wait_seconds",
 		"infera_gateway_inference_tokens_total",
 		"infera_gateway_inference_rejected_total",
+		"infera_gateway_slo_v1_requests_total",
+		"infera_gateway_slo_v1_end_to_end_seconds",
+		"infera_gateway_slo_v1_ttft_seconds",
+		"infera_gateway_slo_v1_tpot_seconds",
+		"infera_gateway_slo_v1_latency_measurements_total",
 		"infera_route_decisions_total",
 		"infera_route_candidates_evaluated",
 		"infera_workers_total",

@@ -159,6 +159,13 @@ jobs:
       - name: Test deployment recovery behavior
         run: bash ./scripts/test-release-recovery.sh
 
+      - name: Validate Prometheus SLO rules
+        run: >-
+          docker run --rm --entrypoint promtool
+          -v "$PWD/deploy/observability/prometheus:/etc/prometheus:ro"
+          prom/prometheus:v2.55.1
+          check config /etc/prometheus/prometheus.yml
+
   prod-smoke:
     name: Production Compose Smoke
     runs-on: ubuntu-latest

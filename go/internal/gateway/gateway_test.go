@@ -639,13 +639,24 @@ func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *
 	rec := httptest.NewRecorder()
 	httpReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(context.Background())
 
-	result := g.handleStreamingInference(rec, httpReq, client, req, "model-1")
+	result := g.handleStreamingInference(rec, httpReq, client, req, "model-1", "least_loaded", time.Now())
 
 	if result.Status != "success" {
 		t.Fatalf("expected success status, got %q", result.Status)
 	}
 	if result.Usage.TotalTokens != 7 {
 		t.Fatalf("expected recomputed token count 7, got %d", result.Usage.TotalTokens)
+	}
+	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_slo_v1_ttft_seconds", map[string]string{
+		"measurement":      "exact",
+		"model":            "model-1",
+		"routing_strategy": "least_loaded",
+		"stream":           "true",
+	}); got != 1 {
+		t.Fatalf("expected exact streaming TTFT sample, got %d", got)
+	}
+	if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("tpot", "model-1", "least_loaded", "true", "derived")); got != 1 {
+		t.Fatalf("expected derived streaming TPOT measurement count=1, got %v", got)
 	}
 }
 

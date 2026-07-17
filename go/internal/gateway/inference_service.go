@@ -149,6 +149,8 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 	auditUsage := usageMeasurement{TokenSource: audit.TokenSourceUnknown}
 	auditWorkerID := ""
 	auditErrorCode := ""
+	sloModel := ""
+	sloStrategy := ""
 	defer func() {
 		latencyMS := time.Since(requestStart).Milliseconds()
 		attrs := []any{
@@ -196,6 +198,7 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 
 		if g.metrics != nil {
 			g.metrics.RecordInference(false, auditStatus, auditTokenCount, time.Since(requestStart))
+			g.metrics.RecordSLORequest(sloModel, sloStrategy, false, auditStatus, time.Since(requestStart))
 		}
 	}()
 
@@ -231,6 +234,8 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 		return nil, types.NewInferaError(types.ErrorCode("no_workers"), "No healthy workers available for model: "+req.ModelID)
 	}
 	g.logRouteDecision(routed.RoutingDecision)
+	sloModel = req.ModelID
+	sloStrategy = string(routed.RoutingDecision.Strategy)
 
 	auditWorkerID = routed.WorkerID
 	client, err := g.getWorkerClient(routed.WorkerID)
@@ -265,7 +270,7 @@ func (g *Gateway) executeNonStreamingInference(ctx context.Context, key *auth.Ke
 		estimateCompletionTokens(resp),
 	)
 	if g.metrics != nil {
-		g.recordNonStreamingLatencyMetrics(req.ModelID, resp, auditUsage.CompletionTokens)
+		g.recordNonStreamingLatencyMetrics(req.ModelID, sloStrategy, resp, auditUsage.CompletionTokens)
 	}
 
 	auditTokenCount = auditUsage.TotalTokens

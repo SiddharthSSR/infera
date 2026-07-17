@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/pkg/types"
@@ -199,6 +200,8 @@ func TestHandleStreamingInferenceMatchesSharedFixtures(t *testing.T) {
 		client,
 		req,
 		req.ModelID,
+		"least_loaded",
+		time.Now(),
 	)
 
 	if result.Status != "success" {

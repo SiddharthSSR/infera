@@ -6,7 +6,26 @@ import (
 
 	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/pkg/types"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
+
+func TestNonStreamingLatencyMarksUnavailableWithoutZeroSample(t *testing.T) {
+	g := &Gateway{metrics: NewGatewayMetrics()}
+	resp := &types.InferenceResponse{}
+	resp.Latency.TotalMS = 20
+
+	g.recordNonStreamingLatencyMetrics("model-1", "least_loaded", resp, 1)
+
+	if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("ttft", "model-1", "least_loaded", "false", "unavailable")); got != 1 {
+		t.Fatalf("expected unavailable TTFT count=1, got %v", got)
+	}
+	if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("tpot", "model-1", "least_loaded", "false", "unavailable")); got != 1 {
+		t.Fatalf("expected unavailable TPOT count=1, got %v", got)
+	}
+	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_slo_v1_ttft_seconds", map[string]string{"model": "model-1"}); got != 0 {
+		t.Fatalf("unavailable TTFT must not fabricate a zero sample, got count=%d", got)
+	}
+}
 
 func TestResolveUsageMeasurementTracksAccuracy(t *testing.T) {
 	t.Parallel()

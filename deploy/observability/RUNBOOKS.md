@@ -1,5 +1,17 @@
 # Infera Observability Runbooks
 
+The versioned SLO definitions and exact/derived/unavailable measurement contract are in [SLO.md](SLO.md).
+
+## InferaSLOAvailabilityBurn
+
+1. Select the alert's `model` and `routing_strategy` in the `Infera Overview` dashboard. Confirm request rate is non-zero; absent traffic intentionally does not page.
+2. Separate pre-route failures (`model="unknown"`, `routing_strategy="unknown"`) from post-route failures. Pre-route failures point to gateway quota, validation, router, or healthy-capacity problems.
+3. Check gateway logs for the matching error codes and route-decision failures. High gateway CPU, in-flight load, or overload rejections indicates a gateway cause.
+4. For routed failures, compare worker health transitions, queue depth, batch wait, and worker logs. Connection/read failures with healthy gateway load indicate a worker cause.
+5. If workers are healthy but inference calls fail or slow across a provider, inspect provider instance/network health and capacity. Compare other providers before changing routing.
+6. If requests fail with `quota_unavailable` or reservation/write errors, inspect the authorization store and audit ledger/PostgreSQL health. Preserve fail-closed quota behavior; do not bypass the ledger.
+7. Use TTFT, TPOT, and end-to-end panels together: high TTFT with normal TPOT suggests routing, queueing, cold start, or prefill; normal TTFT with high TPOT suggests decode saturation; high end-to-end with both normal can indicate gateway transfer or ledger finalization overhead.
+
 ## InferaGatewayDown
 
 1. Check container status:
@@ -29,14 +41,14 @@
 
 ## InferaInferenceTTFTHigh
 
-1. Check the `Inference TTFT p95 by Model` panel in Grafana and identify which model is affected.
+1. Check the `SLO v1 TTFT p50/p95/p99` panel in Grafana and identify the model, routing strategy, and measurement quality affected.
 2. Compare TTFT against `Batch Wait p95 by Model` to separate queueing delay from model prefill delay.
 3. Confirm warm workers exist for the affected model and that recent requests are not cold-starting new capacity.
 4. If TTFT regressed after a deploy, compare worker image, model preload behavior, and model cache persistence on RunPod.
 
 ## InferaInferenceTPOTHigh
 
-1. Inspect the `Inference TPOT p95 by Model` panel and verify whether the issue is isolated to one model family.
+1. Inspect the `SLO v1 TPOT p50/p95/p99` panel and verify whether the issue is isolated to one model family or routing strategy.
 2. Compare worker GPU utilization, active requests, and queue depth to determine whether decode is saturated.
 3. Check batching behavior and KV-cache locality; if batch wait is low but TPOT is high, decode efficiency is the likely bottleneck.
 4. If sustained, reduce concurrency for the affected model or benchmark a more suitable quantization/runtime config.
