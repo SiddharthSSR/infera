@@ -152,9 +152,19 @@ The coordinator uses one absolute deadline, defaulting to and capped at 900 seco
 seconds for rollback by default, stops candidate work at the soft deadline, and terminates hung
 driver/verifier process groups with the checked-in portable deadline wrapper. Worker provisioning
 POSTs default to 45 seconds and a new GPU attempt is refused without the configured minimum
-attempt-and-cleanup budget. Sanitized evidence records only fixed phase, result, GPU, attempt,
-reason, release, and step fields; raw provider/gateway responses, credentials, DSNs, and arbitrary
-child output are never copied into the evidence file.
+attempt-and-cleanup budget. Every evidence line begins with a UTC timestamp and then uses one of two
+fixed record families. Coordinator records use these exact event-specific fields: `DRILL candidate
+last_known_good ledger_protocol timeout_seconds rollback_reserve_seconds`; `START step`; `PASS step`;
+`FAIL step [reason]`; `ROLLBACK from to trigger`; `FAIL_CLOSED release action`; `RECOVERED release
+started_at`; `REJECTED release action`; and `PROMOTED release`. Here, `step` is the single positional
+token following `START`, `PASS`, or `FAIL`; every other listed field is emitted as `key=value`.
+Worker-adapter records use exactly `WORKER_RECOVERY event result gpu attempt reason release step`,
+all as `key=value`. Allowed events are `candidate_selected`, `provision_response`, `reconcile`, and
+`registration`; allowed results are `start`, `pass`, `fail`, `fallback`, and `terminal`; allowed
+reasons are `none`, `capacity_unavailable`, `created`, `registered`, `deadline_exhausted`,
+`invalid_response`, `unknown_failure`, `transport_failure`, `state_not_empty`, `cleanup_failed`, and
+`registration_timeout`. Raw provider/gateway responses, credentials, DSNs, configured filesystem
+paths, and arbitrary child output are never copied into the evidence file.
 
 The maintenance configuration permits only `/api/workers/register` and
 `/api/workers/heartbeat` through to the gateway when the request presents `X-Worker-Token` or a

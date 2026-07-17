@@ -86,6 +86,7 @@ if [[ "$*" == *"api.runpod.io/graphql"* ]]; then
     cat "${TEST_RUNPOD_STATE}"
     printf '}}}\n'
   else
+    [[ "${TEST_RUNPOD_TERMINATE_FAIL:-0}" != "1" ]] || exit 22
     python3 - "${TEST_RUNPOD_STATE}" "${body_file}" <<'PY'
 import json
 import sys
@@ -187,6 +188,20 @@ export INFERA_BASE_URL="https://inferai.co.in"
 export INFERA_DASHBOARD_URL="https://dashboard.inferai.co.in"
 export INFERA_RECOVERY_WORKER_MODEL="Qwen/Qwen2.5-7B-Instruct"
 
+# A standalone adapter derives one fixed deadline instead of extending its
+# budget on every remaining-time query.
+(
+  INFERA_RECOVERY_TIMEOUT_SECONDS=10
+  source "${REPO_ROOT}/scripts/recovery-adapter-common.sh"
+  first_deadline="$(recovery_deadline_epoch)"
+  first_remaining="$(recovery_remaining_seconds)"
+  sleep 1
+  second_deadline="$(recovery_deadline_epoch)"
+  second_remaining="$(recovery_remaining_seconds)"
+  [[ "${first_deadline}" == "${second_deadline}" ]]
+  (( second_remaining < first_remaining ))
+)
+
 printf '%s\n' '[]' >"${TEST_RUNPOD_STATE}"
 : >"${TEST_CALLS}"
 if TEST_RUNPOD_QUERY_FAIL=1 TEST_MODE=stop \
@@ -218,6 +233,14 @@ if grep -q 'infera-release-release-1' "${TEST_RUNPOD_STATE}"; then
   echo "stop adapter did not terminate the exact release-owned pod" >&2
   exit 1
 fi
+
+printf '%s\n' '[{"id":"runpod-1","name":"infera-release-release-1","desiredStatus":"RUNNING"}]' >"${TEST_RUNPOD_STATE}"
+if TEST_RUNPOD_TERMINATE_FAIL=1 TEST_MODE=stop \
+  "${REPO_ROOT}/scripts/runpod-stop-workers.sh" "${TMP_DIR}/release.manifest"; then
+  echo "RunPod termination failure must stop cleanup immediately" >&2
+  exit 1
+fi
+grep -q 'infera-release-release-1' "${TEST_RUNPOD_STATE}"
 if grep -q 'test-runpod-key\|test-admin-key' "${TEST_CALLS}"; then
   echo "recovery adapter exposed a bearer token in process arguments" >&2
   exit 1
@@ -294,6 +317,23 @@ if grep -q 'test-runpod-key\|test-admin-key\|provider-private-payload' "${EVIDEN
   echo "worker recovery evidence exposed non-allowlisted content" >&2
   exit 1
 fi
+python3 - "${EVIDENCE_FILE}" <<'PY'
+import re
+import sys
+
+pattern = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z WORKER_RECOVERY "
+    r"event=(candidate_selected|provision_response|reconcile|registration) "
+    r"result=(start|pass|fail|fallback|terminal) "
+    r"gpu=(RTX_4090|RTX_4080|A100_40GB|A100_80GB|H100|L40S|-) "
+    r"attempt=\d+ "
+    r"reason=(none|capacity_unavailable|created|registered|deadline_exhausted|invalid_response|unknown_failure|transport_failure|state_not_empty|cleanup_failed|registration_timeout) "
+    r"release=[A-Za-z0-9._:+/@-]+ step=[A-Za-z0-9._-]+$"
+)
+for line in open(sys.argv[1], encoding="ascii"):
+    if not pattern.fullmatch(line.rstrip("\n")):
+        raise SystemExit(f"unexpected worker evidence schema: {line!r}")
+PY
 
 : >"${TEST_CALLS}"
 printf '%s\n' '[{"id":"orphan-1","name":"infera-release-release-1","desiredStatus":"RUNNING"}]' >"${TEST_RUNPOD_STATE}"

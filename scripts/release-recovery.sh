@@ -93,6 +93,10 @@ fi
   echo "ERROR: rollback reserve must retain at least five rollback-stage slices of 3 seconds or more" >&2
   exit 2
 }
+(( AMBIGUOUS_CLEANUP_SECONDS + (MIN_ROLLBACK_STAGE_SECONDS * 5) < ROLLBACK_RESERVE_SECONDS )) || {
+  echo "ERROR: ambiguous cleanup must leave all five rollback-stage slices available" >&2
+  exit 2
+}
 
 manifest_value() {
   local manifest="$1"
@@ -305,7 +309,7 @@ if ! cp "${CANDIDATE_MANIFEST}" "${PROMOTION_TMP}" || \
   rollback
   exit 1
 fi
-record "PROMOTED release=${CANDIDATE_RELEASE} state=${STATE_DIR}/last-known-good.manifest"
+record "PROMOTED release=${CANDIDATE_RELEASE}"
 if ! run_step "candidate.restore-traffic" "${DRIVER}" restore-traffic "${CANDIDATE_MANIFEST}"; then
   record "FAIL_CLOSED release=${CANDIDATE_RELEASE} action=keep-traffic-drained-and-escalate"
   exit 1

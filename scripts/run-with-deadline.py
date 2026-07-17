@@ -21,30 +21,43 @@ class RecoveryInterrupted(Exception):
         self.signum = signum
 
 
-def terminate_and_wait(process: subprocess.Popen[bytes]) -> None:
-    """Reap the whole child process group before returning to the coordinator."""
-    if process.poll() is not None:
-        process.wait()
-        return
+def process_group_exists(pgid: int) -> bool:
+    """Return whether any process still belongs to the recovery process group."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
+
+def terminate_and_wait(process: subprocess.Popen[bytes]) -> None:
+    """Terminate the child group and wait for every member to disappear."""
     # Do not let a second terminal signal interrupt cleanup and orphan a paid action.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    pgid = process.pid
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    try:
-        process.wait(timeout=1.0)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+
+    grace_deadline = time.monotonic() + 1.0
+    while process_group_exists(pgid) and time.monotonic() < grace_deadline:
+        process.poll()
+        time.sleep(0.05)
+
+    if process_group_exists(pgid):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
     process.wait()
+    while process_group_exists(pgid):
+        time.sleep(0.01)
 
 
 def main() -> int:

@@ -4,6 +4,8 @@ recovery_now_epoch() {
   date +%s
 }
 
+RECOVERY_START_EPOCH="$(recovery_now_epoch)"
+
 recovery_deadline_epoch() {
   local now timeout deadline
   now="$(recovery_now_epoch)"
@@ -15,7 +17,7 @@ recovery_deadline_epoch() {
   fi
   timeout="${INFERA_RECOVERY_TIMEOUT_SECONDS:-900}"
   [[ "${timeout}" =~ ^[1-9][0-9]*$ && "${timeout}" -le 900 ]] || return 1
-  printf '%s\n' "$((now + timeout))"
+  printf '%s\n' "$((RECOVERY_START_EPOCH + timeout))"
 }
 
 recovery_is_candidate_step() {
@@ -246,7 +248,7 @@ PY
 recovery_runpod_terminate() {
   local pod_id="$1"
   local curl_config="$2"
-  local payload timeout
+  local payload timeout curl_status=0
   [[ "${pod_id}" =~ ^[A-Za-z0-9._:-]+$ ]] || return 1
   payload="$(mktemp)"
   POD_ID="${pod_id}" python3 - <<'PY' >"${payload}"
@@ -261,8 +263,9 @@ PY
   timeout="$(recovery_bounded_timeout 120 "${INFERA_RECOVERY_CLEANUP_RESERVE_SECONDS:-0}")" || { rm -f "${payload}"; return 1; }
   curl --fail --silent --show-error --max-time "${timeout}" \
     --config "${curl_config}" -H 'Content-Type: application/json' \
-    --data-binary "@${payload}" https://api.runpod.io/graphql >/dev/null
+    --data-binary "@${payload}" https://api.runpod.io/graphql >/dev/null || curl_status=$?
   rm -f "${payload}"
+  return "${curl_status}"
 }
 
 recovery_runpod_remove_named_pods() {
@@ -285,7 +288,10 @@ recovery_runpod_remove_named_pods() {
   done <<<"${discovered}"
   for ((index = 0; index < id_count; index++)); do
     pod_id="${ids[${index}]}"
-    recovery_runpod_terminate "${pod_id}" "${curl_config}"
+    if ! recovery_runpod_terminate "${pod_id}" "${curl_config}"; then
+      echo "ERROR: unable to terminate release-owned RunPod worker" >&2
+      return 1
+    fi
   done
   for _ in $(seq 1 30); do
     if ! discovered="$(recovery_runpod_ids_by_name "${name}" "${curl_config}")"; then
