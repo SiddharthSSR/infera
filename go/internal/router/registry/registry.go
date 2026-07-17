@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -9,6 +10,11 @@ import (
 
 	"github.com/infera/infera/go/pkg/types"
 )
+
+// ErrWorkerNotFound distinguishes a missing registration from a registry
+// backend failure. Callers may safely ask the worker to register again only
+// for this error.
+var ErrWorkerNotFound = errors.New("worker not found")
 
 // WorkerRegistry maintains the pool of available workers.
 type WorkerRegistry struct {
@@ -70,7 +76,10 @@ func (r *WorkerRegistry) OnHealthTransition(callback func(HealthTransition)) {
 }
 
 // Register adds a worker to the registry.
-func (r *WorkerRegistry) Register(worker *types.WorkerInfo) error {
+func (r *WorkerRegistry) Register(ctx context.Context, worker *types.WorkerInfo) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -95,13 +104,16 @@ func (r *WorkerRegistry) Register(worker *types.WorkerInfo) error {
 }
 
 // Deregister removes a worker from the registry.
-func (r *WorkerRegistry) Deregister(workerID string) error {
+func (r *WorkerRegistry) Deregister(ctx context.Context, workerID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	worker, exists := r.workers[workerID]
 	if !exists {
-		return fmt.Errorf("worker %s not found", workerID)
+		return fmt.Errorf("%w: %s", ErrWorkerNotFound, workerID)
 	}
 
 	for _, model := range worker.LoadedModels {
@@ -113,25 +125,31 @@ func (r *WorkerRegistry) Deregister(workerID string) error {
 }
 
 // Get returns a worker by ID.
-func (r *WorkerRegistry) Get(workerID string) (*types.WorkerInfo, bool) {
+func (r *WorkerRegistry) Get(ctx context.Context, workerID string) (*types.WorkerInfo, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	worker, exists := r.workers[workerID]
 	if !exists {
-		return nil, false
+		return nil, false, nil
 	}
-	return worker.Clone(), true
+	return worker.Clone(), true, nil
 }
 
 // GetWorkersForModel returns all workers that have a specific model loaded.
-func (r *WorkerRegistry) GetWorkersForModel(modelID string) []*types.WorkerInfo {
+func (r *WorkerRegistry) GetWorkersForModel(ctx context.Context, modelID string) ([]*types.WorkerInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	workerIDs, exists := r.modelIndex[modelID]
 	if !exists {
-		return nil
+		return nil, nil
 	}
 
 	workers := make([]*types.WorkerInfo, 0, len(workerIDs))
@@ -140,23 +158,29 @@ func (r *WorkerRegistry) GetWorkersForModel(modelID string) []*types.WorkerInfo 
 			workers = append(workers, worker.Clone())
 		}
 	}
-	return workers
+	return workers, nil
 }
 
 // GetHealthyWorkersForModel returns healthy workers that have a model loaded.
-func (r *WorkerRegistry) GetHealthyWorkersForModel(modelID string) []*types.WorkerInfo {
-	workers := r.GetWorkersForModel(modelID)
+func (r *WorkerRegistry) GetHealthyWorkersForModel(ctx context.Context, modelID string) ([]*types.WorkerInfo, error) {
+	workers, err := r.GetWorkersForModel(ctx, modelID)
+	if err != nil {
+		return nil, err
+	}
 	healthy := make([]*types.WorkerInfo, 0, len(workers))
 	for _, w := range workers {
 		if w.IsHealthy() && w.HasCapacity() {
 			healthy = append(healthy, w)
 		}
 	}
-	return healthy
+	return healthy, nil
 }
 
 // GetAllWorkers returns all registered workers.
-func (r *WorkerRegistry) GetAllWorkers() []*types.WorkerInfo {
+func (r *WorkerRegistry) GetAllWorkers(ctx context.Context) ([]*types.WorkerInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -164,29 +188,40 @@ func (r *WorkerRegistry) GetAllWorkers() []*types.WorkerInfo {
 	for _, w := range r.workers {
 		workers = append(workers, w.Clone())
 	}
-	return workers
+	return workers, nil
+}
+
+// Snapshot returns one consistent cloned view of the worker registry.
+func (r *WorkerRegistry) Snapshot(ctx context.Context) ([]*types.WorkerInfo, error) {
+	return r.GetAllWorkers(ctx)
 }
 
 // GetHealthyWorkers returns all healthy workers.
-func (r *WorkerRegistry) GetHealthyWorkers() []*types.WorkerInfo {
-	workers := r.GetAllWorkers()
+func (r *WorkerRegistry) GetHealthyWorkers(ctx context.Context) ([]*types.WorkerInfo, error) {
+	workers, err := r.GetAllWorkers(ctx)
+	if err != nil {
+		return nil, err
+	}
 	healthy := make([]*types.WorkerInfo, 0, len(workers))
 	for _, w := range workers {
 		if w.IsHealthy() {
 			healthy = append(healthy, w)
 		}
 	}
-	return healthy
+	return healthy, nil
 }
 
 // UpdateWorkerStats updates the stats for a worker.
-func (r *WorkerRegistry) UpdateWorkerStats(workerID string, stats types.WorkerStats) error {
+func (r *WorkerRegistry) UpdateWorkerStats(ctx context.Context, workerID string, stats types.WorkerStats) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	worker, exists := r.workers[workerID]
 	if !exists {
-		return fmt.Errorf("worker %s not found", workerID)
+		return fmt.Errorf("%w: %s", ErrWorkerNotFound, workerID)
 	}
 
 	worker.UpdateStats(stats)
@@ -194,13 +229,16 @@ func (r *WorkerRegistry) UpdateWorkerStats(workerID string, stats types.WorkerSt
 }
 
 // UpdateWorkerModels updates the loaded models for a worker.
-func (r *WorkerRegistry) UpdateWorkerModels(workerID string, models []types.LoadedModel) error {
+func (r *WorkerRegistry) UpdateWorkerModels(ctx context.Context, workerID string, models []types.LoadedModel) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	worker, exists := r.workers[workerID]
 	if !exists {
-		return fmt.Errorf("worker %s not found", workerID)
+		return fmt.Errorf("%w: %s", ErrWorkerNotFound, workerID)
 	}
 
 	for _, model := range worker.LoadedModels {
@@ -217,10 +255,9 @@ func (r *WorkerRegistry) UpdateWorkerModels(workerID string, models []types.Load
 }
 
 // Count returns the number of registered workers.
-func (r *WorkerRegistry) Count() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.workers)
+func (r *WorkerRegistry) Count(ctx context.Context) (int, error) {
+	workers, err := r.Snapshot(ctx)
+	return len(workers), err
 }
 
 // StartHealthChecker starts a background goroutine that checks worker health.

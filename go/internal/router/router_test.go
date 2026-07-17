@@ -21,7 +21,7 @@ func TestRouteSoloRequestAvoidsFullBatchWait(t *testing.T) {
 	r := New(cfg)
 	defer r.Stop()
 
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID: "worker-1",
 		Address:  "worker-1:8081",
 		Status:   types.WorkerStatusHealthy,
@@ -61,7 +61,7 @@ func TestRouteDecisionIncludesSelectedWorkerSignals(t *testing.T) {
 	r := New(cfg)
 	defer r.Stop()
 
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID: "worker-1",
 		Address:  "worker-1:8081",
 		Status:   types.WorkerStatusHealthy,
@@ -141,7 +141,7 @@ func TestRouteDecisionDoesNotExposePromptOrAPIKey(t *testing.T) {
 	r := New(cfg)
 	defer r.Stop()
 
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID:     "worker-1",
 		Address:      "worker-1:8081",
 		Status:       types.WorkerStatusHealthy,
@@ -182,7 +182,7 @@ func TestRouteBatchedRequestsShareBatch(t *testing.T) {
 	r := New(cfg)
 	defer r.Stop()
 
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID: "worker-1",
 		Address:  "worker-1:8081",
 		Status:   types.WorkerStatusHealthy,
@@ -280,10 +280,10 @@ func TestRoutePrefersAffinityWorkerWhenHealthy(t *testing.T) {
 		},
 	}
 
-	if err := r.RegisterWorker(worker1); err != nil {
+	if err := r.RegisterWorker(context.Background(), worker1); err != nil {
 		t.Fatalf("register worker1: %v", err)
 	}
-	if err := r.RegisterWorker(worker2); err != nil {
+	if err := r.RegisterWorker(context.Background(), worker2); err != nil {
 		t.Fatalf("register worker2: %v", err)
 	}
 
@@ -303,14 +303,14 @@ func TestRoutePrefersAffinityWorkerWhenHealthy(t *testing.T) {
 		t.Fatalf("expected first request to choose worker-1, got %s", first.WorkerID)
 	}
 
-	if err := r.UpdateWorkerStats("worker-1", types.WorkerStats{
+	if err := r.UpdateWorkerStats(context.Background(), "worker-1", types.WorkerStats{
 		GPUUtilization:   0.70,
 		MemoryTotalBytes: 100,
 		MemoryUsedBytes:  70,
 	}); err != nil {
 		t.Fatalf("update worker1 stats: %v", err)
 	}
-	if err := r.UpdateWorkerStats("worker-2", types.WorkerStats{
+	if err := r.UpdateWorkerStats(context.Background(), "worker-2", types.WorkerStats{
 		GPUUtilization:   0.05,
 		MemoryTotalBytes: 100,
 		MemoryUsedBytes:  10,
@@ -373,7 +373,7 @@ func TestRouteFallsBackWhenAffinityWorkerLosesCapacity(t *testing.T) {
 			},
 		},
 	} {
-		if err := r.RegisterWorker(worker); err != nil {
+		if err := r.RegisterWorker(context.Background(), worker); err != nil {
 			t.Fatalf("register worker %s: %v", worker.WorkerID, err)
 		}
 	}
@@ -394,7 +394,7 @@ func TestRouteFallsBackWhenAffinityWorkerLosesCapacity(t *testing.T) {
 		t.Fatalf("expected worker-1, got %s", first.WorkerID)
 	}
 
-	if err := r.UpdateWorkerStats("worker-1", types.WorkerStats{
+	if err := r.UpdateWorkerStats(context.Background(), "worker-1", types.WorkerStats{
 		QueueDepth:       500,
 		GPUUtilization:   0.95,
 		MemoryTotalBytes: 100,

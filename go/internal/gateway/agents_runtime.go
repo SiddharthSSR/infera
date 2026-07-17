@@ -57,7 +57,7 @@ func (g *Gateway) NewAgentsRuntime(store *agents.Store) (*agents.Runtime, error)
 		Name:        "list_models",
 		Description: "List model ids and loaded/vault metadata available in Infera.",
 		Handler: func(ctx context.Context, call agents.ToolCallContext, arguments json.RawMessage) (any, error) {
-			return g.listModelEntries()
+			return g.listModelEntries(ctx)
 		},
 	}); err != nil {
 		return nil, err
@@ -68,7 +68,7 @@ func (g *Gateway) NewAgentsRuntime(store *agents.Store) (*agents.Runtime, error)
 		Description: "List worker runtime health, loaded models, queue depth, latency, and memory statistics.",
 		Permission:  auth.PermissionViewInfrastructure,
 		Handler: func(ctx context.Context, call agents.ToolCallContext, arguments json.RawMessage) (any, error) {
-			return g.listWorkerEntries(call.Run.WorkspaceID), nil
+			return g.listWorkerEntries(ctx, call.Run.WorkspaceID)
 		},
 	}); err != nil {
 		return nil, err
@@ -79,7 +79,7 @@ func (g *Gateway) NewAgentsRuntime(store *agents.Store) (*agents.Runtime, error)
 		Description: "Read the aggregated gateway statistics snapshot for workers, requests, latency, GPU, and memory.",
 		Permission:  auth.PermissionViewInfrastructure,
 		Handler: func(ctx context.Context, call agents.ToolCallContext, arguments json.RawMessage) (any, error) {
-			return g.statsPayload(call.Run.WorkspaceID), nil
+			return g.statsPayload(ctx, call.Run.WorkspaceID)
 		},
 	}); err != nil {
 		return nil, err

@@ -291,7 +291,7 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 	if linked.WorkerID != "w1" {
 		t.Fatalf("expected instance worker_id to be linked to w1, got %q", linked.WorkerID)
 	}
-	client, err := g.getWorkerClient("w1")
+	client, err := g.getWorkerClient(context.Background(), "w1")
 	if err != nil {
 		t.Fatalf("getWorkerClient: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestHandleRegisterWorkerLinksRunPodInstanceByProxyAddress(t *testing.T) {
 	if strings.Contains(replacementRec.Body.String(), "already bound") || !strings.Contains(replacementRec.Body.String(), "worker_identity_mismatch") {
 		t.Fatalf("identity conflict response was unstable or leaked details: %s", replacementRec.Body.String())
 	}
-	if _, found := r.GetWorker("w2"); found {
+	if _, found, err := r.GetWorker(context.Background(), "w2"); err != nil || found {
 		t.Fatal("rejected identity change mutated the worker registry")
 	}
 }
@@ -397,7 +397,7 @@ func TestHandleWorkerHeartbeatRepairsMissingInstanceLink(t *testing.T) {
 		t.Fatalf("manager.Provision: %v", err)
 	}
 
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID: "w1",
 		Address:  "uxh9he0pyoqpho-8081.proxy.runpod.net",
 		Status:   types.WorkerStatusHealthy,
@@ -507,7 +507,7 @@ func TestHandlePrometheusWorkerTargets(t *testing.T) {
 	r := router.New(router.DefaultConfig())
 	defer r.Stop()
 
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID: "worker-1",
 		Address:  "abc-8081.proxy.runpod.net",
 		Status:   types.WorkerStatusHealthy,
@@ -520,7 +520,7 @@ func TestHandlePrometheusWorkerTargets(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RegisterWorker healthy: %v", err)
 	}
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID: "worker-2",
 		Address:  "10.0.0.5:8081",
 		Status:   types.WorkerStatusUnhealthy,
@@ -568,14 +568,14 @@ func TestHandleMetricsExposesWorkerCounts(t *testing.T) {
 	r := router.New(router.DefaultConfig())
 	defer r.Stop()
 
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID: "worker-healthy",
 		Address:  "worker-healthy:8081",
 		Status:   types.WorkerStatusHealthy,
 	}); err != nil {
 		t.Fatalf("RegisterWorker healthy: %v", err)
 	}
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID: "worker-unhealthy",
 		Address:  "worker-unhealthy:8081",
 		Status:   types.WorkerStatusUnhealthy,
@@ -896,7 +896,7 @@ func TestHandleChatCompletions_RejectsWhenWorkspaceQuotaExceeded(t *testing.T) {
 	r := router.New(router.DefaultConfig())
 	defer r.Stop()
 
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID:     "worker-1",
 		Address:      "worker-1:8081",
 		Status:       types.WorkerStatusHealthy,

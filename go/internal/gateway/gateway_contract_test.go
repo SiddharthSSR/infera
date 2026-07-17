@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -374,7 +375,7 @@ func TestHandleChatCompletionsLogsRouteDecisionAndMetrics(t *testing.T) {
 	})
 	r := router.New(router.DefaultConfig())
 	t.Cleanup(r.Stop)
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID: "worker-1",
 		Address:  "http://localhost:8081",
 		Status:   types.WorkerStatusHealthy,
@@ -688,7 +689,7 @@ func TestHandleListModelsIncludesCoreOpenAIFields(t *testing.T) {
 
 	r := router.New(router.DefaultConfig())
 	t.Cleanup(r.Stop)
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID: "worker-1",
 		Address:  "http://localhost:8081",
 		Status:   types.WorkerStatusHealthy,
@@ -922,7 +923,7 @@ func newGatewayWithTestWorker(t *testing.T, modelID string, transport http.Round
 	t.Cleanup(r.Stop)
 
 	address := "http://localhost:8081"
-	if err := r.RegisterWorker(&types.WorkerInfo{
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
 		WorkerID:   "worker-1",
 		SharedPool: true,
 		Address:    address,

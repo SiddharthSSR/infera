@@ -2,6 +2,8 @@ package router
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +14,50 @@ import (
 type stubWorkerRegistry struct {
 	workers            map[string]*types.WorkerInfo
 	healthCheckerCalls atomic.Int32
+	snapshotCalls      atomic.Int32
+	snapshotErr        error
+	blockSnapshot      bool
+}
+
+func TestRouteFailsClosedWhenRegistrySnapshotFails(t *testing.T) {
+	registry := newStubWorkerRegistry()
+	registry.snapshotErr = errors.New("database address and secret detail")
+	r := NewWithRegistry(DefaultConfig(), registry)
+	defer r.Stop()
+
+	_, err := r.Route(context.Background(), &types.InferenceRequest{
+		RequestID: "req-registry-outage",
+		ModelID:   "model-1",
+	})
+	var inferaErr *types.InferaError
+	if !errors.As(err, &inferaErr) {
+		t.Fatalf("expected typed registry error, got %v", err)
+	}
+	if inferaErr.Code != types.ErrorCodeWorkerRegistryUnavailable {
+		t.Fatalf("expected worker_registry_unavailable, got %s", inferaErr.Code)
+	}
+	if strings.Contains(inferaErr.Message, "secret") {
+		t.Fatalf("registry error leaked internal detail: %q", inferaErr.Message)
+	}
+	if calls := registry.snapshotCalls.Load(); calls != 1 {
+		t.Fatalf("expected one failed snapshot attempt, got %d", calls)
+	}
+}
+
+func TestRoutePreservesRegistryContextErrors(t *testing.T) {
+	for _, contextErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(contextErr.Error(), func(t *testing.T) {
+			workerState := newStubWorkerRegistry()
+			workerState.snapshotErr = contextErr
+			r := NewWithRegistry(DefaultConfig(), workerState)
+			defer r.Stop()
+
+			_, err := r.Route(context.Background(), &types.InferenceRequest{RequestID: "req-context", ModelID: "model-1"})
+			if !errors.Is(err, contextErr) {
+				t.Fatalf("expected %v, got %v", contextErr, err)
+			}
+		})
+	}
 }
 
 func newStubWorkerRegistry(workers ...*types.WorkerInfo) *stubWorkerRegistry {
@@ -22,78 +68,67 @@ func newStubWorkerRegistry(workers ...*types.WorkerInfo) *stubWorkerRegistry {
 	return &stubWorkerRegistry{workers: indexed}
 }
 
-func (r *stubWorkerRegistry) Register(worker *types.WorkerInfo) error {
+func (r *stubWorkerRegistry) Register(_ context.Context, worker *types.WorkerInfo) error {
 	r.workers[worker.WorkerID] = worker.Clone()
 	return nil
 }
 
-func (r *stubWorkerRegistry) Deregister(workerID string) error {
+func (r *stubWorkerRegistry) Deregister(_ context.Context, workerID string) error {
 	delete(r.workers, workerID)
 	return nil
 }
 
-func (r *stubWorkerRegistry) UpdateWorkerStats(workerID string, stats types.WorkerStats) error {
+func (r *stubWorkerRegistry) UpdateWorkerStats(_ context.Context, workerID string, stats types.WorkerStats) error {
 	if worker, ok := r.workers[workerID]; ok {
 		worker.UpdateStats(stats)
 	}
 	return nil
 }
 
-func (r *stubWorkerRegistry) UpdateWorkerModels(workerID string, models []types.LoadedModel) error {
+func (r *stubWorkerRegistry) UpdateWorkerModels(_ context.Context, workerID string, models []types.LoadedModel) error {
 	if worker, ok := r.workers[workerID]; ok {
 		worker.LoadedModels = models
 	}
 	return nil
 }
 
-func (r *stubWorkerRegistry) Get(workerID string) (*types.WorkerInfo, bool) {
-	worker, ok := r.workers[workerID]
-	if !ok {
-		return nil, false
+func (r *stubWorkerRegistry) Snapshot(ctx context.Context) ([]*types.WorkerInfo, error) {
+	r.snapshotCalls.Add(1)
+	if r.blockSnapshot {
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
-	return worker.Clone(), true
-}
-
-func (r *stubWorkerRegistry) GetWorkersForModel(modelID string) []*types.WorkerInfo {
-	var workers []*types.WorkerInfo
-	for _, worker := range r.workers {
-		if worker.HasModel(modelID) {
-			workers = append(workers, worker.Clone())
-		}
+	if r.snapshotErr != nil {
+		return nil, r.snapshotErr
 	}
-	return workers
-}
-
-func (r *stubWorkerRegistry) GetHealthyWorkersForModel(modelID string) []*types.WorkerInfo {
-	var workers []*types.WorkerInfo
-	for _, worker := range r.workers {
-		if worker.IsHealthy() && worker.HasModel(modelID) {
-			workers = append(workers, worker.Clone())
-		}
-	}
-	return workers
-}
-
-func (r *stubWorkerRegistry) GetAllWorkers() []*types.WorkerInfo {
 	var workers []*types.WorkerInfo
 	for _, worker := range r.workers {
 		workers = append(workers, worker.Clone())
 	}
-	return workers
+	return workers, nil
 }
 
-func (r *stubWorkerRegistry) GetHealthyWorkers() []*types.WorkerInfo {
-	var workers []*types.WorkerInfo
-	for _, worker := range r.workers {
-		if worker.IsHealthy() {
-			workers = append(workers, worker.Clone())
-		}
+func TestBatchDispatchBoundsRegistrySnapshot(t *testing.T) {
+	workerState := newStubWorkerRegistry()
+	workerState.blockSnapshot = true
+	config := DefaultConfig()
+	config.RequestTimeoutMS = 20
+	r := NewWithRegistry(config, workerState)
+	defer r.Stop()
+
+	started := time.Now()
+	r.onBatchReady(&types.BatchContext{
+		BatchID:   "batch-timeout",
+		ModelID:   "model-1",
+		CreatedAt: started,
+	})
+	elapsed := time.Since(started)
+	if elapsed < 10*time.Millisecond || elapsed > 500*time.Millisecond {
+		t.Fatalf("expected bounded batch registry lookup near configured timeout, elapsed %s", elapsed)
 	}
-	return workers
-}
-
-func (r *stubWorkerRegistry) Count() int {
-	return len(r.workers)
+	if calls := workerState.snapshotCalls.Load(); calls != 1 {
+		t.Fatalf("expected one batch snapshot attempt, got %d", calls)
+	}
 }
 
 func (r *stubWorkerRegistry) StartHealthChecker(ctx context.Context) {
@@ -139,5 +174,8 @@ func TestNewWithRegistryUsesInjectedWorkerRegistry(t *testing.T) {
 	}
 	if routed.WorkerID != "worker-1" {
 		t.Fatalf("expected injected registry worker-1, got %s", routed.WorkerID)
+	}
+	if calls := registry.snapshotCalls.Load(); calls != 1 {
+		t.Fatalf("expected one registry snapshot for one route decision, got %d", calls)
 	}
 }

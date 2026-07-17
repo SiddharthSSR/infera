@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
@@ -57,7 +58,12 @@ func (g *Gateway) logRouteDecisionFailed(req *types.InferenceRequest, errorCode,
 		model, requestID = req.ModelID, req.RequestID
 	}
 	if g.router != nil {
-		healthyWorkers = len(g.router.GetWorkers("", true))
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		workers, err := g.router.GetWorkers(ctx, "", true)
+		cancel()
+		if err == nil {
+			healthyWorkers = len(workers)
+		}
 	}
 	if g.metrics != nil {
 		g.metrics.RecordRouteDecision("", "failure", -1)

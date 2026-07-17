@@ -64,16 +64,11 @@ type WorkerHealthTransition = registry.HealthTransition
 // interface lets future shared-state implementations plug in without
 // changing routing logic.
 type workerRegistry interface {
-	Register(worker *types.WorkerInfo) error
-	Deregister(workerID string) error
-	UpdateWorkerStats(workerID string, stats types.WorkerStats) error
-	UpdateWorkerModels(workerID string, models []types.LoadedModel) error
-	Get(workerID string) (*types.WorkerInfo, bool)
-	GetWorkersForModel(modelID string) []*types.WorkerInfo
-	GetHealthyWorkersForModel(modelID string) []*types.WorkerInfo
-	GetAllWorkers() []*types.WorkerInfo
-	GetHealthyWorkers() []*types.WorkerInfo
-	Count() int
+	Register(ctx context.Context, worker *types.WorkerInfo) error
+	Deregister(ctx context.Context, workerID string) error
+	UpdateWorkerStats(ctx context.Context, workerID string, stats types.WorkerStats) error
+	UpdateWorkerModels(ctx context.Context, workerID string, models []types.LoadedModel) error
+	Snapshot(ctx context.Context) ([]*types.WorkerInfo, error)
 	StartHealthChecker(ctx context.Context)
 }
 
@@ -139,8 +134,13 @@ func (r *Router) Route(ctx context.Context, request *types.InferenceRequest) (*t
 		Deadline:    time.Now().Add(time.Duration(r.config.RequestTimeoutMS) * time.Millisecond),
 	}
 
+	workers, err := r.registry.Snapshot(ctx)
+	if err != nil {
+		return nil, classifyRegistrySnapshotError(err, request.RequestID)
+	}
+
 	if r.batchManager.ShouldBatch(request) {
-		if err := r.validateModelAvailability(request); err != nil {
+		if err := r.validateModelAvailability(request, workers); err != nil {
 			return nil, err
 		}
 		waiter := r.registerBatchWaiter(request.RequestID)
@@ -166,7 +166,7 @@ func (r *Router) Route(ctx context.Context, request *types.InferenceRequest) (*t
 		}
 	}
 
-	selection, err := r.selectWorker(request)
+	selection, err := r.selectWorker(request, workers)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func (r *Router) Route(ctx context.Context, request *types.InferenceRequest) (*t
 }
 
 // HandleFailure processes a failed request, potentially retrying.
-func (r *Router) HandleFailure(request *types.RoutedRequest, err error) (*types.RoutedRequest, error) {
+func (r *Router) HandleFailure(ctx context.Context, request *types.RoutedRequest, err error) (*types.RoutedRequest, error) {
 	tracker := r.getTracker(request.Request.RequestID)
 	if tracker != nil {
 		tracker.Transition(types.RequestStateFailed, err.Error())
@@ -193,7 +193,11 @@ func (r *Router) HandleFailure(request *types.RoutedRequest, err error) (*types.
 
 	retry := request.WithRetry()
 
-	candidates := workersForWorkspace(r.registry.GetHealthyWorkersForModel(request.Request.ModelID), request.Request.WorkspaceID)
+	workers, registryErr := r.registry.Snapshot(ctx)
+	if registryErr != nil {
+		return nil, classifyRegistrySnapshotError(registryErr, request.Request.RequestID)
+	}
+	candidates := healthyWorkersForModel(workersForWorkspace(workers, request.Request.WorkspaceID), request.Request.ModelID)
 	filtered := make([]*types.WorkerInfo, 0, len(candidates))
 	for _, w := range candidates {
 		if w.WorkerID != request.WorkerID {
@@ -222,47 +226,52 @@ func (r *Router) HandleFailure(request *types.RoutedRequest, err error) (*types.
 }
 
 // RegisterWorker registers a worker with the router.
-func (r *Router) RegisterWorker(worker *types.WorkerInfo) error {
-	return r.registry.Register(worker)
+func (r *Router) RegisterWorker(ctx context.Context, worker *types.WorkerInfo) error {
+	return r.registry.Register(ctx, worker)
 }
 
 // DeregisterWorker removes a worker from the router.
-func (r *Router) DeregisterWorker(workerID string) error {
-	return r.registry.Deregister(workerID)
+func (r *Router) DeregisterWorker(ctx context.Context, workerID string) error {
+	return r.registry.Deregister(ctx, workerID)
 }
 
 // UpdateWorkerStats updates stats for a worker.
-func (r *Router) UpdateWorkerStats(workerID string, stats types.WorkerStats) error {
-	return r.registry.UpdateWorkerStats(workerID, stats)
+func (r *Router) UpdateWorkerStats(ctx context.Context, workerID string, stats types.WorkerStats) error {
+	return r.registry.UpdateWorkerStats(ctx, workerID, stats)
 }
 
 // UpdateWorkerModels updates loaded models for a worker.
-func (r *Router) UpdateWorkerModels(workerID string, models []types.LoadedModel) error {
-	return r.registry.UpdateWorkerModels(workerID, models)
+func (r *Router) UpdateWorkerModels(ctx context.Context, workerID string, models []types.LoadedModel) error {
+	return r.registry.UpdateWorkerModels(ctx, workerID, models)
 }
 
 // GetWorker returns a worker by ID.
-func (r *Router) GetWorker(workerID string) (*types.WorkerInfo, bool) {
-	return r.registry.Get(workerID)
+func (r *Router) GetWorker(ctx context.Context, workerID string) (*types.WorkerInfo, bool, error) {
+	workers, err := r.registry.Snapshot(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, worker := range workers {
+		if worker.WorkerID == workerID {
+			return worker, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 // GetWorkers returns all workers, optionally filtered.
-func (r *Router) GetWorkers(modelID string, healthyOnly bool) []*types.WorkerInfo {
-	if modelID != "" {
-		if healthyOnly {
-			return r.registry.GetHealthyWorkersForModel(modelID)
-		}
-		return r.registry.GetWorkersForModel(modelID)
+func (r *Router) GetWorkers(ctx context.Context, modelID string, healthyOnly bool) ([]*types.WorkerInfo, error) {
+	workers, err := r.registry.Snapshot(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if healthyOnly {
-		return r.registry.GetHealthyWorkers()
-	}
-	return r.registry.GetAllWorkers()
+	return filterWorkers(workers, modelID, healthyOnly), nil
 }
 
 // WorkerCount returns the number of registered workers.
-func (r *Router) WorkerCount() int {
-	return r.registry.Count()
+func (r *Router) WorkerCount(ctx context.Context) (int, error) {
+	workers, err := r.registry.Snapshot(ctx)
+	return len(workers), err
 }
 
 // GetQueueDepth returns the total queue depth.
@@ -290,7 +299,13 @@ func (r *Router) getTracker(requestID string) *types.RequestTracker {
 }
 
 func (r *Router) onBatchReady(batch *types.BatchContext) {
-	selection, err := r.selectWorkerForModel(batch.ModelID)
+	requestTimeout := time.Duration(r.config.RequestTimeoutMS) * time.Millisecond
+	if requestTimeout <= 0 {
+		requestTimeout = 30 * time.Second
+	}
+	dispatchCtx, cancel := context.WithTimeout(r.ctx, requestTimeout)
+	selection, err := r.selectWorkerForModel(dispatchCtx, batch.ModelID)
+	cancel()
 	batchWait := time.Since(batch.CreatedAt)
 	if batch.SealedAt != nil {
 		batchWait = batch.SealedAt.Sub(batch.CreatedAt)
@@ -376,15 +391,16 @@ func (r *Router) completeBatchRoute(requestID string, result batchRouteResult) {
 	close(waiter)
 }
 
-func (r *Router) validateModelAvailability(request *types.InferenceRequest) error {
-	if len(workersForWorkspace(r.registry.GetHealthyWorkers(), request.WorkspaceID)) == 0 {
+func (r *Router) validateModelAvailability(request *types.InferenceRequest, snapshot []*types.WorkerInfo) error {
+	workers := workersForWorkspace(snapshot, request.WorkspaceID)
+	if len(filterWorkers(workers, "", true)) == 0 {
 		return types.NewInferaError(
 			types.ErrorCodeNoWorkersAvailable,
 			"No healthy workers are currently available to serve the requested model.",
 		).WithRequestID(request.RequestID)
 	}
 
-	allWorkers := workersForWorkspace(r.registry.GetWorkersForModel(request.ModelID), request.WorkspaceID)
+	allWorkers := filterWorkers(workers, request.ModelID, false)
 	if len(allWorkers) == 0 {
 		return types.NewInferaError(
 			types.ErrorCodeModelNotFound,
@@ -392,7 +408,7 @@ func (r *Router) validateModelAvailability(request *types.InferenceRequest) erro
 		).WithRequestID(request.RequestID)
 	}
 
-	if len(workersForWorkspace(r.registry.GetHealthyWorkersForModel(request.ModelID), request.WorkspaceID)) == 0 {
+	if len(filterWorkers(workers, request.ModelID, true)) == 0 {
 		return types.NewInferaError(
 			types.ErrorCodeModelOverloaded,
 			fmt.Sprintf("all workers for model %s at capacity", request.ModelID),
@@ -402,16 +418,16 @@ func (r *Router) validateModelAvailability(request *types.InferenceRequest) erro
 	return nil
 }
 
-func (r *Router) selectWorker(request *types.InferenceRequest) (*strategy.Selection, error) {
-	if err := r.validateModelAvailability(request); err != nil {
+func (r *Router) selectWorker(request *types.InferenceRequest, snapshot []*types.WorkerInfo) (*strategy.Selection, error) {
+	if err := r.validateModelAvailability(request, snapshot); err != nil {
 		return nil, err
 	}
 
-	if selection, ok := r.selectAffinityWorker(request); ok {
+	if selection, ok := r.selectAffinityWorker(request, snapshot); ok {
 		return selection, nil
 	}
 
-	candidates := workersForWorkspace(r.registry.GetHealthyWorkersForModel(request.ModelID), request.WorkspaceID)
+	candidates := filterWorkers(workersForWorkspace(snapshot, request.WorkspaceID), request.ModelID, true)
 	selection, err := r.strategyEngine.SelectWorker(request, candidates)
 	if err != nil {
 		return nil, types.NewInferaError(
@@ -423,13 +439,17 @@ func (r *Router) selectWorker(request *types.InferenceRequest) (*strategy.Select
 	return selection, nil
 }
 
-func (r *Router) selectWorkerForModel(modelID string) (*strategy.Selection, error) {
+func (r *Router) selectWorkerForModel(ctx context.Context, modelID string) (*strategy.Selection, error) {
 	req := &types.InferenceRequest{
 		RequestID: uuid.New().String(),
 		ModelID:   modelID,
 		Priority:  types.PriorityNormal,
 	}
-	return r.selectWorker(req)
+	workers, err := r.registry.Snapshot(ctx)
+	if err != nil {
+		return nil, classifyRegistrySnapshotError(err, req.RequestID)
+	}
+	return r.selectWorker(req, workers)
 }
 
 func (r *Router) enrichRoutingDecision(request *types.InferenceRequest, selection *strategy.Selection) types.RoutingDecision {
@@ -485,9 +505,12 @@ type Stats struct {
 }
 
 // GetStats returns current router statistics.
-func (r *Router) GetStats() Stats {
-	allWorkers := r.registry.GetAllWorkers()
-	healthyWorkers := r.registry.GetHealthyWorkers()
+func (r *Router) GetStats(ctx context.Context) (Stats, error) {
+	allWorkers, err := r.registry.Snapshot(ctx)
+	if err != nil {
+		return Stats{}, err
+	}
+	healthyWorkers := filterWorkers(allWorkers, "", true)
 
 	modelSet := make(map[string]struct{})
 	for _, w := range allWorkers {
@@ -501,7 +524,7 @@ func (r *Router) GetStats() Stats {
 		HealthyWorkers:  len(healthyWorkers),
 		TotalQueueDepth: r.GetQueueDepth(),
 		ModelsAvailable: len(modelSet),
-	}
+	}, nil
 }
 
 func (r *Router) affinityKey(request *types.InferenceRequest) string {
@@ -511,7 +534,7 @@ func (r *Router) affinityKey(request *types.InferenceRequest) string {
 	return request.Metadata[types.MetadataAffinityKey]
 }
 
-func (r *Router) selectAffinityWorker(request *types.InferenceRequest) (*strategy.Selection, bool) {
+func (r *Router) selectAffinityWorker(request *types.InferenceRequest, snapshot []*types.WorkerInfo) (*strategy.Selection, bool) {
 	key := r.affinityKey(request)
 	if key == "" || r.config.AffinityTTL <= 0 {
 		return nil, false
@@ -528,7 +551,7 @@ func (r *Router) selectAffinityWorker(request *types.InferenceRequest) (*strateg
 		return nil, false
 	}
 
-	worker, ok := r.registry.Get(binding.WorkerID)
+	worker, ok := workerByID(snapshot, binding.WorkerID)
 	if !ok || len(workersForWorkspace([]*types.WorkerInfo{worker}, request.WorkspaceID)) != 1 || !worker.IsHealthy() || !worker.HasCapacity() || !worker.HasModel(request.ModelID) {
 		r.clearAffinity(key)
 		return nil, false
@@ -545,6 +568,47 @@ func (r *Router) selectAffinityWorker(request *types.InferenceRequest) (*strateg
 			SelectedWorkerScore: score,
 		},
 	}, true
+}
+
+func workerRegistryUnavailable(requestID string) error {
+	return types.NewInferaError(
+		types.ErrorCodeWorkerRegistryUnavailable,
+		"Worker registry is temporarily unavailable.",
+	).WithRequestID(requestID)
+}
+
+func classifyRegistrySnapshotError(err error, requestID string) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return workerRegistryUnavailable(requestID)
+}
+
+func workerByID(workers []*types.WorkerInfo, workerID string) (*types.WorkerInfo, bool) {
+	for _, worker := range workers {
+		if worker.WorkerID == workerID {
+			return worker, true
+		}
+	}
+	return nil, false
+}
+
+func healthyWorkersForModel(workers []*types.WorkerInfo, modelID string) []*types.WorkerInfo {
+	return filterWorkers(workers, modelID, true)
+}
+
+func filterWorkers(workers []*types.WorkerInfo, modelID string, healthyOnly bool) []*types.WorkerInfo {
+	filtered := make([]*types.WorkerInfo, 0, len(workers))
+	for _, worker := range workers {
+		if modelID != "" && !worker.HasModel(modelID) {
+			continue
+		}
+		if healthyOnly && (!worker.IsHealthy() || (modelID != "" && !worker.HasCapacity())) {
+			continue
+		}
+		filtered = append(filtered, worker)
+	}
+	return filtered
 }
 
 func workersForWorkspace(workers []*types.WorkerInfo, workspaceID string) []*types.WorkerInfo {
