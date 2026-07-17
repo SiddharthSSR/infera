@@ -31,12 +31,18 @@ case "$*" in
   *"compose"*"ps -q gateway"*)
     printf '%s\n' gateway-container
     [[ "${TEST_GATEWAY_REPLICAS:-1}" == "2" ]] && printf '%s\n' gateway-container-2
+    [[ "${TEST_DOCKER_PS_FAIL:-0}" != "1" ]] || exit 1
     ;;
   *"compose"*"ps -q caddy"*) printf '%s\n' caddy-container ;;
   *"inspect"*".State.Health"*) printf '%s\n' healthy ;;
   *"inspect"*)
-    printf '%s\n' "${TEST_GATEWAY_IP:-172.20.0.9}"
+    if [[ "$*" == *"gateway-container-2"* ]]; then
+      printf '%s\n' "${TEST_GATEWAY_IP_2:-172.20.0.10}"
+    else
+      printf '%s\n' "${TEST_GATEWAY_IP:-172.20.0.9}"
+    fi
     [[ "${TEST_GATEWAY_NETWORKS:-1}" == "2" ]] && printf '%s\n' 172.21.0.9
+    [[ "${TEST_DOCKER_INSPECT_FAIL:-0}" != "1" ]] || exit 1
     ;;
 esac
 EOF
@@ -94,11 +100,22 @@ case "$*" in
     ;;
   *"-X DELETE"*) printf '%s\n' '{"success":true}' ;;
   *"--write-out %{http_code}"*) printf '%s' 503 ;;
+  *"/internal/prometheus/worker-targets"*) printf '%s\n' '[{"targets":["worker:8081"]}]' ;;
+  *"/v1/models"*) printf '%s\n' '{"data":[]}' ;;
+  *"/v1/chat/completions"*)
+    if [[ "$*" == *'"stream": true'* ]]; then
+      printf '%s\n' 'data: {"object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant"}}]}'
+      printf '%s\n' 'data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"ok"}}]}'
+      printf '%s\n' 'data: [DONE]'
+    else
+      printf '%s\n' '{"object":"chat.completion","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+    fi
+    ;;
   *"/health"*)
     if [[ "${TEST_BAD_HEALTH:-0}" == "1" ]]; then
       printf '%s\n' '{"release_id":"wrong-release","worker_protocol_version":"1"}'
     else
-      printf '%s\n' '{"release_id":"release-1","worker_protocol_version":"1"}'
+      printf '%s\n' '{"status":"healthy","release_id":"release-1","worker_protocol_version":"1"}'
     fi
     ;;
   *)
@@ -200,7 +217,46 @@ if TEST_GATEWAY_NETWORKS=2 bash -c 'source "$1/scripts/recovery-adapter-common.s
   echo "multiple gateway network addresses must fail closed" >&2
   exit 1
 fi
-[[ "$(TEST_GATEWAY_IP=2001:db8::1 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_url' _ "${REPO_ROOT}")" == "http://[2001:db8::1]:8080" ]]
+[[ "$(TEST_GATEWAY_IP=fd00::1 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_url' _ "${REPO_ROOT}")" == "http://[fd00::1]:8080" ]]
+if TEST_GATEWAY_IP=2001:db8::1 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_url' _ "${REPO_ROOT}"; then
+  echo "public gateway address must fail closed" >&2
+  exit 1
+fi
+if TEST_DOCKER_PS_FAIL=1 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_urls' _ "${REPO_ROOT}"; then
+  echo "partial gateway enumeration must fail closed" >&2
+  exit 1
+fi
+if TEST_DOCKER_INSPECT_FAIL=1 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_urls' _ "${REPO_ROOT}"; then
+  echo "partial gateway inspection must fail closed" >&2
+  exit 1
+fi
+gateway_urls="$(TEST_GATEWAY_REPLICAS=2 INFERA_GATEWAY_REPLICAS=2 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_urls' _ "${REPO_ROOT}")"
+[[ "$(printf '%s\n' "${gateway_urls}" | wc -l | tr -d ' ')" == "2" ]]
+[[ "$(TEST_GATEWAY_REPLICAS=2 INFERA_GATEWAY_REPLICAS=2 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_url' _ "${REPO_ROOT}")" == "http://172.20.0.9:8080" ]]
+if TEST_GATEWAY_REPLICAS=2 INFERA_GATEWAY_REPLICAS=3 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_urls' _ "${REPO_ROOT}"; then
+  echo "gateway replica count mismatch must fail closed" >&2
+  exit 1
+fi
+
+: >"${TEST_CALLS}"
+TEST_GATEWAY_REPLICAS=2 \
+INFERA_GATEWAY_REPLICAS=2 \
+INFERA_EXPECT_TRAFFIC_DRAINED=1 \
+INFERA_SMOKE_API_KEY=test-smoke-key \
+INFERA_SMOKE_MODEL=test-model \
+"${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"
+grep -q 'http://172.20.0.9:8080/v1/models' "${TEST_CALLS}"
+grep -q 'http://172.20.0.10:8080/v1/models' "${TEST_CALLS}"
+if TEST_GATEWAY_REPLICAS=2 \
+INFERA_GATEWAY_REPLICAS=2 \
+INFERA_EXPECT_TRAFFIC_DRAINED=1 \
+INFERA_GATEWAY_INTERNAL_URL=http://172.20.0.9:8080 \
+INFERA_SMOKE_API_KEY=test-smoke-key \
+INFERA_SMOKE_MODEL=test-model \
+"${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"; then
+  echo "drained verification override must not bypass replica enumeration" >&2
+  exit 1
+fi
 
 : >"${TEST_CALLS}"
 "${REPO_ROOT}/scripts/caddy-drain-traffic.sh" "${TMP_DIR}/release.manifest"

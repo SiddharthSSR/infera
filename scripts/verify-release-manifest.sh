@@ -12,11 +12,6 @@ source "${SCRIPT_DIR}/recovery-adapter-common.sh"
 export INFERA_SMOKE_STREAM=1
 export SKIP_CHAT_CHECKS=0
 
-if [[ "${INFERA_EXPECT_TRAFFIC_DRAINED:-0}" == "1" && -z "${INFERA_GATEWAY_INTERNAL_URL:-}" ]]; then
-  INFERA_GATEWAY_INTERNAL_URL="$(recovery_gateway_url)"
-  export INFERA_GATEWAY_INTERNAL_URL
-fi
-
 value() {
   awk -F= -v wanted="$2" '$1 == wanted { count++; value=substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$1"
 }
@@ -24,4 +19,26 @@ value() {
 INFERA_RELEASE_ID="$(value "${MANIFEST}" INFERA_RELEASE_ID)"
 INFERA_WORKER_PROTOCOL_VERSION="$(value "${MANIFEST}" INFERA_WORKER_PROTOCOL_VERSION)"
 export INFERA_RELEASE_ID INFERA_WORKER_PROTOCOL_VERSION
+
+if [[ "${INFERA_EXPECT_TRAFFIC_DRAINED:-0}" == "1" ]]; then
+  [[ -z "${INFERA_GATEWAY_INTERNAL_URL:-}" ]] || {
+    echo "INFERA_GATEWAY_INTERNAL_URL cannot override drained replica verification" >&2
+    exit 1
+  }
+  gateway_urls=()
+  gateway_urls_output="$(recovery_gateway_urls)" || {
+    echo "unable to enumerate every configured gateway replica" >&2
+    exit 1
+  }
+  while IFS= read -r gateway_url; do
+    [[ -n "${gateway_url}" ]] && gateway_urls+=("${gateway_url}")
+  done <<<"${gateway_urls_output}"
+  [[ "${#gateway_urls[@]}" -gt 0 ]]
+  for gateway_url in "${gateway_urls[@]}"; do
+    INFERA_GATEWAY_INTERNAL_URL="${gateway_url}" \
+      "$(dirname "$0")/release-verify.sh" "${BASE_URL}"
+  done
+  exit 0
+fi
+
 exec "$(dirname "$0")/release-verify.sh" "${BASE_URL}"
