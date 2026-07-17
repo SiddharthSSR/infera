@@ -136,14 +136,14 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "infera:slo_v1:availability_ratio5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "expr": "infera:slo_v1:availability_ratio14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
           "legendFormat": "{{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "description": "SLO v1 availability. No eligible traffic is rendered as Unavailable (no data), never as 100%.",
-      "title": "SLO v1 Availability (5m)",
+      "description": "SLO v1 14-day availability objective (target 99%). No eligible traffic is rendered as Unavailable (no data), never as 100%.",
+      "title": "SLO v1 Availability Attainment (14d)",
       "type": "stat"
     },
     {
@@ -330,10 +330,17 @@
           "legendFormat": "p99 {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:e2e_seconds_p95_14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "14d p95 {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "D"
         }
       ],
-      "description": "Successful gateway-observed inference latency. Empty means no successful eligible requests.",
-      "title": "SLO v1 End-to-end p50/p95/p99 (s)",
+      "description": "Five-minute p50/p95/p99 are operational signals; the 14-day p95 is the SLO compliance value. Empty means no successful eligible requests.",
+      "title": "SLO v1 End-to-end Operational + 14d p95 (s)",
       "type": "timeseries"
     },
     {
@@ -477,10 +484,17 @@
           "legendFormat": "p99 {{measurement}} / {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:ttft_seconds_p95_14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "14d p95 {{measurement}} / {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "D"
         }
       ],
-      "description": "Streaming TTFT is exact gateway-observed; non-streaming TTFT is a derived worker proxy. Empty means unavailable.",
-      "title": "SLO v1 TTFT p50/p95/p99 (s)",
+      "description": "Five-minute quantiles are operational; 14-day p95 is the objective value. Streaming TTFT is exact and non-streaming TTFT is a derived worker proxy. Empty means unavailable.",
+      "title": "SLO v1 TTFT Operational + 14d p95 (s)",
       "type": "timeseries"
     },
     {
@@ -547,10 +561,17 @@
           "legendFormat": "p99 {{measurement}} / {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:tpot_seconds_p95_14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "14d p95 {{measurement}} / {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "D"
         }
       ],
-      "description": "TPOT is derived for both modes. Empty means no usable output-token interval was available.",
-      "title": "SLO v1 TPOT p50/p95/p99 (s)",
+      "description": "Five-minute quantiles are operational; 14-day p95 is the objective value. TPOT is derived for both modes. Empty means no usable output-token interval was available.",
+      "title": "SLO v1 TPOT Operational + 14d p95 (s)",
       "type": "timeseries"
     },
     {
@@ -712,14 +733,14 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "infera:slo_v1:measurement_rate5m{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "expr": "infera:slo_v1:measurement_count14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
           "legendFormat": "{{metric}} / {{measurement}} / {{model}} / {{routing_strategy}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "description": "Request-level TTFT/TPOT quality. Unavailable is counted explicitly and is not emitted as a zero latency sample.",
-      "title": "SLO v1 Measurement Availability",
+      "description": "14-day request-level TTFT/TPOT quality. Unavailable is counted explicitly and is not emitted as a zero latency sample.",
+      "title": "SLO v1 Measurement Availability (14d)",
       "type": "timeseries"
     },
     {
@@ -776,6 +797,73 @@
       ],
       "title": "Worker Health Transitions",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "infera-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "noValue": "Unavailable (no data)",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 0.95 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "id": 13,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:e2e_good_ratio14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "E2E <=10s {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:ttft_good_ratio14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "TTFT <=2s {{measurement}} / {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "infera:slo_v1:tpot_good_ratio14d{model=~\"$model\", routing_strategy=~\"$routing_strategy\"}",
+          "legendFormat": "TPOT <=100ms {{measurement}} / {{model}} / {{routing_strategy}}",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "description": "Share of eligible 14-day latency samples meeting each objective. TTFT/TPOT retain exact or derived quality; unavailable requests remain visible only in the measurement-availability panel.",
+      "title": "SLO v1 Latency Objective Attainment (14d)",
+      "type": "stat"
     }
   ],
   "refresh": "30s",
@@ -824,6 +912,6 @@
   "timezone": "browser",
   "title": "Infera Overview",
   "uid": "infera-overview",
-  "version": 5,
+  "version": 6,
   "weekStart": ""
 }

@@ -27,6 +27,34 @@ func TestNonStreamingLatencyMarksUnavailableWithoutZeroSample(t *testing.T) {
 	}
 }
 
+func TestUsableOutputObservation(t *testing.T) {
+	tests := []struct {
+		name  string
+		chunk *types.TokenChunk
+		want  bool
+	}{
+		{name: "nil", chunk: nil, want: false},
+		{name: "empty", chunk: &types.TokenChunk{}, want: false},
+		{name: "content", chunk: &types.TokenChunk{Delta: " "}, want: true},
+		{name: "usage only", chunk: &types.TokenChunk{Usage: &types.UsageStats{CompletionTokens: 2}}, want: false},
+		{name: "finish only", chunk: &types.TokenChunk{FinishReason: finishReasonPtr(types.FinishReasonStop)}, want: false},
+		{name: "tool metadata only", chunk: &types.TokenChunk{ToolCalls: []types.ToolCallChunkDelta{{ID: "call_1", Type: "function"}}}, want: false},
+		{name: "tool name", chunk: &types.TokenChunk{ToolCalls: []types.ToolCallChunkDelta{{Function: types.FunctionDelta{Name: "search"}}}}, want: true},
+		{name: "tool arguments", chunk: &types.TokenChunk{ToolCalls: []types.ToolCallChunkDelta{{Function: types.FunctionDelta{Arguments: `{}`}}}}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isUsableOutputObservation(test.chunk); got != test.want {
+				t.Fatalf("isUsableOutputObservation()=%v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func finishReasonPtr(reason types.FinishReason) *types.FinishReason {
+	return &reason
+}
+
 func TestResolveUsageMeasurementTracksAccuracy(t *testing.T) {
 	t.Parallel()
 

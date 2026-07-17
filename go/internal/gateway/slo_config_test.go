@@ -62,6 +62,11 @@ func TestSLOPrometheusRulesContract(t *testing.T) {
 		"infera:slo_v1:ttft_seconds_p50_5m", "infera:slo_v1:ttft_seconds_p95_5m", "infera:slo_v1:ttft_seconds_p99_5m",
 		"infera:slo_v1:tpot_seconds_p50_5m", "infera:slo_v1:tpot_seconds_p95_5m", "infera:slo_v1:tpot_seconds_p99_5m",
 		"infera:slo_v1:measurement_rate5m",
+		"infera:slo_v1:request_count14d", "infera:slo_v1:success_count14d", "infera:slo_v1:availability_ratio14d",
+		"infera:slo_v1:e2e_seconds_p95_14d", "infera:slo_v1:e2e_good_ratio14d",
+		"infera:slo_v1:ttft_seconds_p95_30m", "infera:slo_v1:ttft_seconds_p95_14d", "infera:slo_v1:ttft_good_ratio14d", "infera:slo_v1:ttft_sample_rate5m",
+		"infera:slo_v1:tpot_seconds_p95_30m", "infera:slo_v1:tpot_seconds_p95_14d", "infera:slo_v1:tpot_good_ratio14d", "infera:slo_v1:tpot_sample_rate5m",
+		"infera:slo_v1:measurement_count14d",
 	} {
 		if records[name] == "" {
 			t.Errorf("missing required recording rule %q", name)
@@ -81,6 +86,36 @@ func TestSLOPrometheusRulesContract(t *testing.T) {
 		}
 		if !strings.Contains(alert.expr, "request_rate5m > 0.01") {
 			t.Errorf("alert %q must explicitly suppress no-traffic pages", name)
+		}
+	}
+	for name, metric := range map[string]string{
+		"InferaSLOTTFTSustainedHigh": "ttft",
+		"InferaSLOTPOTSustainedHigh": "tpot",
+	} {
+		alert, ok := alerts[name]
+		if !ok {
+			t.Errorf("missing required SLO-v1 latency alert %q", name)
+			continue
+		}
+		if alert.forDuration != "10m" {
+			t.Errorf("alert %q for=%q, want 10m", name, alert.forDuration)
+		}
+		for _, want := range []string{
+			"infera:slo_v1:" + metric + "_seconds_p95_5m",
+			"infera:slo_v1:" + metric + "_seconds_p95_30m",
+			"infera:slo_v1:" + metric + "_sample_rate5m",
+			"and on (model, routing_strategy, measurement)",
+		} {
+			if !strings.Contains(alert.expr, want) {
+				t.Errorf("alert %q must contain %q", name, want)
+			}
+		}
+	}
+
+	legacyAlerts := string(readRepositoryFile(t, "deploy", "observability", "prometheus", "rules", "infera-alerts.yml"))
+	for _, removed := range []string{"InferaInferenceTTFTHigh", "InferaInferenceTPOTHigh"} {
+		if strings.Contains(legacyAlerts, removed) {
+			t.Errorf("legacy latency alert %q must be removed", removed)
 		}
 	}
 }
@@ -120,29 +155,39 @@ func TestSLOGrafanaDashboardContract(t *testing.T) {
 		}
 	}
 
-	wantedPanels := map[string]bool{
-		"SLO v1 Availability (5m)":          false,
-		"SLO v1 End-to-end p50/p95/p99 (s)": false,
-		"SLO v1 TTFT p50/p95/p99 (s)":       false,
-		"SLO v1 TPOT p50/p95/p99 (s)":       false,
-		"SLO v1 Measurement Availability":   false,
+	wantedPanels := map[string][]string{
+		"SLO v1 Availability Attainment (14d)":        {"availability_ratio14d"},
+		"SLO v1 End-to-end Operational + 14d p95 (s)": {"e2e_seconds_p95_14d"},
+		"SLO v1 TTFT Operational + 14d p95 (s)":       {"ttft_seconds_p95_14d"},
+		"SLO v1 TPOT Operational + 14d p95 (s)":       {"tpot_seconds_p95_14d"},
+		"SLO v1 Measurement Availability (14d)":       {"measurement_count14d"},
+		"SLO v1 Latency Objective Attainment (14d)":   {"e2e_good_ratio14d", "ttft_good_ratio14d", "tpot_good_ratio14d"},
 	}
+	foundPanels := map[string]bool{}
 	for _, panel := range dashboard.Panels {
-		if _, ok := wantedPanels[panel.Title]; !ok {
+		wantedQueries, ok := wantedPanels[panel.Title]
+		if !ok {
 			continue
 		}
-		wantedPanels[panel.Title] = true
+		foundPanels[panel.Title] = true
 		if panel.Description == "" || panel.FieldConfig.Defaults.NoValue != "Unavailable (no data)" {
 			t.Errorf("panel %q must document and render no-data explicitly", panel.Title)
 		}
+		allExpressions := ""
 		for _, target := range panel.Targets {
+			allExpressions += "\n" + target.Expr
 			if !strings.Contains(target.Expr, `$model`) || !strings.Contains(target.Expr, `$routing_strategy`) {
 				t.Errorf("panel %q target must apply model and routing strategy filters: %s", panel.Title, target.Expr)
 			}
 		}
+		for _, want := range wantedQueries {
+			if !strings.Contains(allExpressions, want) {
+				t.Errorf("panel %q must query %q", panel.Title, want)
+			}
+		}
 	}
-	for name, found := range wantedPanels {
-		if !found {
+	for name := range wantedPanels {
+		if !foundPanels[name] {
 			t.Errorf("missing dashboard panel %q", name)
 		}
 	}

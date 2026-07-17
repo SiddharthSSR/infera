@@ -13,16 +13,16 @@ Version 1 applies to requests accepted by the OpenAI-compatible chat-completions
 | TTFT | p95 <= 2s over 14 days | Successful requests with an exact or derived TTFT sample | Sample is <= 2s |
 | TPOT | p95 <= 100ms over 14 days | Successful requests with a derived TPOT sample | Sample is <= 100ms |
 
-The production recording rules publish rolling five-minute p50, p95, and p99 views for operations. The 14-day objective fits within the production Prometheus 15-day retention window; objective-window reporting can query the versioned source histograms directly.
+The production rules publish rolling five-minute p50/p95/p99 operational views, 14-day p95 objective values, and 14-day good-event attainment ratios. The dashboard labels the short-window views as operational and reports objective attainment separately. The 14-day objective fits within the production Prometheus 15-day retention window.
 
 ### Measurement semantics
 
 | Request mode | End-to-end | TTFT | TPOT |
 | --- | --- | --- | --- |
-| Streaming | `exact`: gateway wall clock | `exact`: gateway-observed time from inference execution start to the first worker content chunk | `derived`: elapsed time between worker chunks divided by the increase in cumulative completion-token usage when present; otherwise one token per chunk |
+| Streaming | `exact`: gateway wall clock | `exact`: gateway-observed time from inference execution start to the first usable worker output observation | `derived`: elapsed time between successive usable output observations; cumulative-token deltas expand samples only when the prior usable observation supplied a trustworthy cumulative baseline, otherwise the interval conservatively contributes one sample |
 | Non-streaming | `exact`: gateway wall clock | `derived`: worker-reported internal TTFT; it is not client-observed and excludes gateway-to-worker routing time | `derived`: `(worker total - worker TTFT) / (completion tokens - 1)` |
 
-TTFT is `unavailable` when streaming completes without a worker content chunk or a non-streaming response has no positive worker TTFT. TPOT is `unavailable` when fewer than two usable output observations exist, token count is insufficient, or worker timing is inconsistent. Unavailable requests increment `infera_gateway_slo_v1_latency_measurements_total` but never receive a fabricated zero-valued histogram sample.
+A usable streaming output observation has a non-empty content delta or a non-empty generated tool function name/arguments delta. Empty, usage-only, finish-only, and tool-ID/type-only chunks are protocol metadata: they are still forwarded, but never start TTFT or advance TPOT. TTFT is `unavailable` when streaming completes without a usable output observation or a non-streaming response has no positive worker TTFT. TPOT is `unavailable` when fewer than two usable output observations exist, token count is insufficient, or worker timing is inconsistent. Unavailable requests increment `infera_gateway_slo_v1_latency_measurements_total` but never receive a fabricated zero-valued histogram sample.
 
 ### Labels, privacy, and cardinality
 

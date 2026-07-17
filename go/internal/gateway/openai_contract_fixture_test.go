@@ -15,6 +15,7 @@ import (
 
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/pkg/types"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestToInferenceRequestMatchesSharedRequestFixture(t *testing.T) {
@@ -222,6 +223,20 @@ func TestHandleStreamingInferenceMatchesSharedFixtures(t *testing.T) {
 
 	if events[3] != "[DONE]" {
 		t.Fatalf("expected final DONE event, got %q", events[3])
+	}
+	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_slo_v1_ttft_seconds", map[string]string{
+		"measurement":      "exact",
+		"model":            "model-1",
+		"routing_strategy": "least_loaded",
+		"stream":           "true",
+	}); got != 1 {
+		t.Fatalf("expected tool function output to produce TTFT, got %d", got)
+	}
+	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_slo_v1_tpot_seconds", map[string]string{"model": "model-1"}); got != 0 {
+		t.Fatalf("finish/usage-only terminal chunk must not produce TPOT, got %d samples", got)
+	}
+	if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("tpot", "model-1", "least_loaded", "true", "unavailable")); got != 1 {
+		t.Fatalf("expected unavailable TPOT for one usable tool output, got %v", got)
 	}
 }
 

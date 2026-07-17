@@ -612,6 +612,12 @@ func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *
 	client.streamingHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var builder strings.Builder
 		encoder := json.NewEncoder(&builder)
+		if err := encoder.Encode(map[string]any{"delta": ""}); err != nil {
+			t.Fatalf("encode leading empty chunk: %v", err)
+		}
+		if err := encoder.Encode(map[string]any{"delta": "", "usage": map[string]int{"completion_tokens": 1}}); err != nil {
+			t.Fatalf("encode leading usage-only chunk: %v", err)
+		}
 		if err := encoder.Encode(map[string]any{
 			"delta": "Hello",
 			"usage": map[string]int{
@@ -621,10 +627,17 @@ func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *
 			t.Fatalf("encode first chunk: %v", err)
 		}
 		if err := encoder.Encode(map[string]any{
-			"delta":         " world",
-			"finish_reason": "stop",
+			"delta": " world",
+			"usage": map[string]int{
+				"prompt_tokens":     5,
+				"completion_tokens": 2,
+				"total_tokens":      7,
+			},
 		}); err != nil {
 			t.Fatalf("encode second chunk: %v", err)
+		}
+		if err := encoder.Encode(map[string]any{"delta": "", "finish_reason": "stop"}); err != nil {
+			t.Fatalf("encode terminal chunk: %v", err)
 		}
 		return jsonHTTPResponse(http.StatusOK, builder.String()), nil
 	})
@@ -657,6 +670,14 @@ func TestHandleStreamingInferenceRecomputesFinalTokenCountFromObservedChunks(t *
 	}
 	if got := testutil.ToFloat64(g.metrics.sloMeasurements.WithLabelValues("tpot", "model-1", "least_loaded", "true", "derived")); got != 1 {
 		t.Fatalf("expected derived streaming TPOT measurement count=1, got %v", got)
+	}
+	if got := histogramCountForLabels(t, g.metrics, "infera_gateway_slo_v1_tpot_seconds", map[string]string{
+		"measurement":      "derived",
+		"model":            "model-1",
+		"routing_strategy": "least_loaded",
+		"stream":           "true",
+	}); got != 1 {
+		t.Fatalf("expected only the interval between two usable outputs to produce TPOT, got %d samples", got)
 	}
 }
 

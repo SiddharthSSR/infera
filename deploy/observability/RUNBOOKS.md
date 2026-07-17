@@ -39,19 +39,21 @@ The versioned SLO definitions and exact/derived/unavailable measurement contract
 3. Check provider-side latency and instance health.
 4. If sustained, scale workers or reduce per-request token limits.
 
-## InferaInferenceTTFTHigh
+## InferaSLOTTFTSustainedHigh
 
-1. Check the `SLO v1 TTFT p50/p95/p99` panel in Grafana and identify the model, routing strategy, and measurement quality affected.
-2. Compare TTFT against `Batch Wait p95 by Model` to separate queueing delay from model prefill delay.
-3. Confirm warm workers exist for the affected model and that recent requests are not cold-starting new capacity.
-4. If TTFT regressed after a deploy, compare worker image, model preload behavior, and model cache persistence on RunPod.
+1. Check the `SLO v1 TTFT Operational + 14d p95` panel in Grafana and identify the model, routing strategy, and measurement quality affected. The alert requires both 5-minute and 30-minute p95 to exceed 2 seconds for 10 minutes.
+2. Confirm `SLO v1 Measurement Availability (14d)` still has usable samples. Unavailable or absent TTFT does not fire this alert.
+3. Compare TTFT against `Batch Wait p95 by Model` to separate queueing delay from model prefill delay.
+4. Confirm warm workers exist for the affected model and that recent requests are not cold-starting new capacity.
+5. If TTFT regressed after a deploy, compare worker image, model preload behavior, and model cache persistence on RunPod.
 
-## InferaInferenceTPOTHigh
+## InferaSLOTPOTSustainedHigh
 
-1. Inspect the `SLO v1 TPOT p50/p95/p99` panel and verify whether the issue is isolated to one model family or routing strategy.
-2. Compare worker GPU utilization, active requests, and queue depth to determine whether decode is saturated.
-3. Check batching behavior and KV-cache locality; if batch wait is low but TPOT is high, decode efficiency is the likely bottleneck.
-4. If sustained, reduce concurrency for the affected model or benchmark a more suitable quantization/runtime config.
+1. Inspect the `SLO v1 TPOT Operational + 14d p95` panel and verify whether the issue is isolated to one model family, routing strategy, or measurement quality. The alert requires both 5-minute and 30-minute p95 to exceed 100ms for 10 minutes.
+2. Confirm `SLO v1 Measurement Availability (14d)` still has usable samples. Unavailable or absent TPOT does not fire this alert.
+3. Compare worker GPU utilization, active requests, and queue depth to determine whether decode is saturated.
+4. Check batching behavior and KV-cache locality; if batch wait is low but TPOT is high, decode efficiency is the likely bottleneck.
+5. If sustained, reduce concurrency for the affected model or benchmark a more suitable quantization/runtime config.
 
 ## InferaBatchWaitHigh
 

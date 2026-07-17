@@ -19,12 +19,23 @@ groups:
       - record: infera:slo_v1:error_ratio6h
         expr: sum by (model, routing_strategy) (rate(infera_gateway_slo_v1_requests_total{outcome="error"}[6h])) / clamp_min(sum by (model, routing_strategy) (rate(infera_gateway_slo_v1_requests_total[6h])), 0.000001)
 
+      - record: infera:slo_v1:request_count14d
+        expr: sum by (model, routing_strategy) (increase(infera_gateway_slo_v1_requests_total[14d]))
+      - record: infera:slo_v1:success_count14d
+        expr: sum by (model, routing_strategy) (increase(infera_gateway_slo_v1_requests_total{outcome="success"}[14d]))
+      - record: infera:slo_v1:availability_ratio14d
+        expr: (infera:slo_v1:success_count14d / clamp_min(infera:slo_v1:request_count14d, 1)) and infera:slo_v1:request_count14d > 0
+
       - record: infera:slo_v1:e2e_seconds_p50_5m
         expr: histogram_quantile(0.50, sum by (le, model, routing_strategy) (rate(infera_gateway_slo_v1_end_to_end_seconds_bucket{outcome="success"}[5m])))
       - record: infera:slo_v1:e2e_seconds_p95_5m
         expr: histogram_quantile(0.95, sum by (le, model, routing_strategy) (rate(infera_gateway_slo_v1_end_to_end_seconds_bucket{outcome="success"}[5m])))
       - record: infera:slo_v1:e2e_seconds_p99_5m
         expr: histogram_quantile(0.99, sum by (le, model, routing_strategy) (rate(infera_gateway_slo_v1_end_to_end_seconds_bucket{outcome="success"}[5m])))
+      - record: infera:slo_v1:e2e_seconds_p95_14d
+        expr: histogram_quantile(0.95, sum by (le, model, routing_strategy) (increase(infera_gateway_slo_v1_end_to_end_seconds_bucket{outcome="success"}[14d])))
+      - record: infera:slo_v1:e2e_good_ratio14d
+        expr: (sum by (model, routing_strategy) (increase(infera_gateway_slo_v1_end_to_end_seconds_bucket{outcome="success", le="10"}[14d])) / clamp_min(sum by (model, routing_strategy) (increase(infera_gateway_slo_v1_end_to_end_seconds_count{outcome="success"}[14d])), 1)) and sum by (model, routing_strategy) (increase(infera_gateway_slo_v1_end_to_end_seconds_count{outcome="success"}[14d])) > 0
 
       - record: infera:slo_v1:ttft_seconds_p50_5m
         expr: histogram_quantile(0.50, sum by (le, model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_ttft_seconds_bucket[5m])))
@@ -32,6 +43,14 @@ groups:
         expr: histogram_quantile(0.95, sum by (le, model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_ttft_seconds_bucket[5m])))
       - record: infera:slo_v1:ttft_seconds_p99_5m
         expr: histogram_quantile(0.99, sum by (le, model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_ttft_seconds_bucket[5m])))
+      - record: infera:slo_v1:ttft_seconds_p95_30m
+        expr: histogram_quantile(0.95, sum by (le, model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_ttft_seconds_bucket[30m])))
+      - record: infera:slo_v1:ttft_seconds_p95_14d
+        expr: histogram_quantile(0.95, sum by (le, model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_ttft_seconds_bucket[14d])))
+      - record: infera:slo_v1:ttft_good_ratio14d
+        expr: (sum by (model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_ttft_seconds_bucket{le="2"}[14d])) / clamp_min(sum by (model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_ttft_seconds_count[14d])), 1)) and sum by (model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_ttft_seconds_count[14d])) > 0
+      - record: infera:slo_v1:ttft_sample_rate5m
+        expr: sum by (model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_ttft_seconds_count[5m]))
 
       - record: infera:slo_v1:tpot_seconds_p50_5m
         expr: histogram_quantile(0.50, sum by (le, model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_tpot_seconds_bucket[5m])))
@@ -39,9 +58,19 @@ groups:
         expr: histogram_quantile(0.95, sum by (le, model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_tpot_seconds_bucket[5m])))
       - record: infera:slo_v1:tpot_seconds_p99_5m
         expr: histogram_quantile(0.99, sum by (le, model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_tpot_seconds_bucket[5m])))
+      - record: infera:slo_v1:tpot_seconds_p95_30m
+        expr: histogram_quantile(0.95, sum by (le, model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_tpot_seconds_bucket[30m])))
+      - record: infera:slo_v1:tpot_seconds_p95_14d
+        expr: histogram_quantile(0.95, sum by (le, model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_tpot_seconds_bucket[14d])))
+      - record: infera:slo_v1:tpot_good_ratio14d
+        expr: (sum by (model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_tpot_seconds_bucket{le="0.1"}[14d])) / clamp_min(sum by (model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_tpot_seconds_count[14d])), 1)) and sum by (model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_tpot_seconds_count[14d])) > 0
+      - record: infera:slo_v1:tpot_sample_rate5m
+        expr: sum by (model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_tpot_seconds_count[5m]))
 
       - record: infera:slo_v1:measurement_rate5m
         expr: sum by (metric, model, routing_strategy, measurement) (rate(infera_gateway_slo_v1_latency_measurements_total[5m]))
+      - record: infera:slo_v1:measurement_count14d
+        expr: sum by (metric, model, routing_strategy, measurement) (increase(infera_gateway_slo_v1_latency_measurements_total[14d]))
 
   - name: infera-slo-v1-alerts
     rules:
@@ -78,3 +107,37 @@ groups:
           summary: Inference availability SLO is burning for {{ $labels.model }}
           description: Availability error budget is burning above 6x on both 30m and 6h windows for routing strategy {{ $labels.routing_strategy }}. Missing traffic produces no alert.
           runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferasloavailabilityburn
+
+      - alert: InferaSLOTTFTSustainedHigh
+        expr: |
+          infera:slo_v1:ttft_seconds_p95_5m > 2
+          and on (model, routing_strategy, measurement)
+          infera:slo_v1:ttft_seconds_p95_30m > 2
+          and on (model, routing_strategy, measurement)
+          infera:slo_v1:ttft_sample_rate5m > 0.02
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+          slo: ttft-v1
+        annotations:
+          summary: Inference TTFT is sustainably high for {{ $labels.model }}
+          description: SLO-v1 {{ $labels.measurement }} TTFT p95 exceeds 2s on both 5m and 30m windows for routing strategy {{ $labels.routing_strategy }}. No usable samples produces no alert.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferaslottftsustainedhigh
+
+      - alert: InferaSLOTPOTSustainedHigh
+        expr: |
+          infera:slo_v1:tpot_seconds_p95_5m > 0.1
+          and on (model, routing_strategy, measurement)
+          infera:slo_v1:tpot_seconds_p95_30m > 0.1
+          and on (model, routing_strategy, measurement)
+          infera:slo_v1:tpot_sample_rate5m > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+          slo: tpot-v1
+        annotations:
+          summary: Inference TPOT is sustainably high for {{ $labels.model }}
+          description: SLO-v1 {{ $labels.measurement }} TPOT p95 exceeds 100ms on both 5m and 30m windows for routing strategy {{ $labels.routing_strategy }}. No usable samples produces no alert.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferaslotpotsustainedhigh

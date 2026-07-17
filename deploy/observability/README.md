@@ -94,11 +94,10 @@ Then log in to Grafana and open the `Infera / Infera Overview` dashboard.
 
 Start with these panels in `Infera / Infera Overview`:
 
-- `SLO v1 Availability` for request success/error behavior filtered by model and routing strategy.
-- `SLO v1 End-to-end p50/p95/p99` for successful request latency.
-- `SLO v1 TTFT p50/p95/p99` to catch cold-start, routing, or prefill regressions while retaining exact/derived quality.
-- `SLO v1 TPOT p50/p95/p99` to catch decode-side slowdowns after the first token.
-- `SLO v1 Measurement Availability` to distinguish exact, derived, and unavailable TTFT/TPOT requests.
+- `SLO v1 Availability Attainment (14d)` for the actual 99% availability objective filtered by model and routing strategy.
+- `SLO v1 Latency Objective Attainment (14d)` for the share of eligible E2E, TTFT, and TPOT samples meeting their p95 targets.
+- `SLO v1 End-to-end/TTFT/TPOT Operational + 14d p95` panels to compare short-window diagnostics with objective-window values.
+- `SLO v1 Measurement Availability (14d)` to distinguish exact, derived, and unavailable TTFT/TPOT requests.
 - `Batch Wait p95 by Model (s)` to see whether requests are stalling in the queue before dispatch.
 - `Batch Size avg by Model` to confirm batching is actually coalescing useful work.
 
@@ -107,8 +106,8 @@ Alert expectations:
 - `InferaSLOAvailabilityFastBurn` pages only when both 5-minute and 1-hour windows exceed 14.4x the 1% error budget and recent traffic exists.
 - `InferaSLOAvailabilitySlowBurn` warns only when both 30-minute and 6-hour windows exceed 6x the budget and recent traffic exists.
 - No SLO burn alert fires merely because inference traffic is absent; `InferaGatewayDown` covers missing gateway telemetry.
-- `InferaInferenceTTFTHigh` should stay quiet during normal warm traffic.
-- `InferaInferenceTPOTHigh` usually indicates saturated decode throughput or poor runtime config.
+- `InferaSLOTTFTSustainedHigh` requires elevated SLO-v1 p95 on both 5-minute and 30-minute windows with usable samples.
+- `InferaSLOTPOTSustainedHigh` applies the same sustained-window contract to derived TPOT samples.
 - `InferaBatchWaitHigh` means queueing delay is becoming user-visible and should be read alongside batch size.
 
 Recommended post-deploy check:

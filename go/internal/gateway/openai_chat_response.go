@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/infera/infera/go/internal/audit"
@@ -108,6 +109,24 @@ func buildStreamingChatCompletionChunk(requestID string, created int64, model st
 	return openAIChunk
 }
 
+// isUsableOutputObservation excludes protocol-only chunks from customer
+// latency measurements. Content and generated tool function deltas are usable
+// output; usage, finish markers, tool IDs, and tool types alone are metadata.
+func isUsableOutputObservation(chunk *types.TokenChunk) bool {
+	if chunk == nil {
+		return false
+	}
+	if chunk.Delta != "" {
+		return true
+	}
+	for _, toolCall := range chunk.ToolCalls {
+		if strings.TrimSpace(toolCall.Function.Name) != "" || toolCall.Function.Arguments != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Request, client *WorkerClient, req *types.InferenceRequest, model, strategy string, requestStart time.Time) streamingInferenceResult {
 	chunks, err := client.InferStream(r.Context(), req)
 	if err != nil {
@@ -141,34 +160,40 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	bestPromptTokens := 0
 	bestCompletionTokens := 0
 	bestTotalTokens := 0
-	firstChunkObserved := false
+	firstOutputObserved := false
 	tPOTObserved := false
-	var previousChunkAt time.Time
+	var previousOutputAt time.Time
 	prevCompletionTokens := 0
+	havePrevCompletionTokens := false
 
 	for chunk := range chunks {
 		now := time.Now()
-		if !firstChunkObserved {
-			firstChunkObserved = true
-			if g.metrics != nil {
-				g.metrics.RecordTTFT(model, strategy, true, sloMeasurementExact, now.Sub(requestStart))
+		if isUsableOutputObservation(chunk) {
+			if !firstOutputObserved {
+				firstOutputObserved = true
+				if g.metrics != nil {
+					g.metrics.RecordTTFT(model, strategy, true, sloMeasurementExact, now.Sub(requestStart))
+				}
+			} else {
+				tPOTObserved = true
+				if g.metrics != nil {
+					elapsed := now.Sub(previousOutputAt)
+					tokensInChunk := 1
+					if havePrevCompletionTokens && chunk.Usage != nil && chunk.Usage.CompletionTokens > prevCompletionTokens {
+						tokensInChunk = chunk.Usage.CompletionTokens - prevCompletionTokens
+					}
+					perToken := elapsed / time.Duration(tokensInChunk)
+					for i := 0; i < tokensInChunk; i++ {
+						g.metrics.RecordTPOT(model, strategy, true, sloMeasurementDerived, perToken)
+					}
+				}
 			}
-		} else if g.metrics != nil {
-			tPOTObserved = true
-			elapsed := now.Sub(previousChunkAt)
-			tokensInChunk := 1
-			if chunk.Usage != nil && chunk.Usage.CompletionTokens > prevCompletionTokens {
-				tokensInChunk = chunk.Usage.CompletionTokens - prevCompletionTokens
+			if chunk.Usage != nil && chunk.Usage.CompletionTokens > 0 {
+				prevCompletionTokens = chunk.Usage.CompletionTokens
+				havePrevCompletionTokens = true
 			}
-			perToken := elapsed / time.Duration(tokensInChunk)
-			for i := 0; i < tokensInChunk; i++ {
-				g.metrics.RecordTPOT(model, strategy, true, sloMeasurementDerived, perToken)
-			}
+			previousOutputAt = now
 		}
-		if chunk.Usage != nil && chunk.Usage.CompletionTokens > 0 {
-			prevCompletionTokens = chunk.Usage.CompletionTokens
-		}
-		previousChunkAt = now
 
 		generatedChars += len(chunk.Delta)
 		if chunk.Usage != nil {
@@ -188,7 +213,7 @@ func (g *Gateway) handleStreamingInference(w http.ResponseWriter, r *http.Reques
 	flusher.Flush()
 	if g.metrics != nil {
 		ttftMeasurement := sloMeasurementUnavailable
-		if firstChunkObserved {
+		if firstOutputObserved {
 			ttftMeasurement = sloMeasurementExact
 		}
 		tpotMeasurement := sloMeasurementUnavailable
