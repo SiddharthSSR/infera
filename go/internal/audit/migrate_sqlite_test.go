@@ -94,6 +94,38 @@ func TestOpenSQLiteMigrationSourceIsImmutable(t *testing.T) {
 	}
 }
 
+func TestOpenSQLiteMigrationSourceAcceptsRelativePath(t *testing.T) {
+	sourcePath := filepath.Join(t.TempDir(), "audit.db")
+	source, err := NewStore(sourcePath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close source: %v", err)
+	}
+
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	relativePath, err := filepath.Rel(workingDirectory, sourcePath)
+	if err != nil {
+		t.Fatalf("make source path relative: %v", err)
+	}
+	readOnly, err := openSQLiteMigrationSource(relativePath)
+	if err != nil {
+		t.Fatalf("open relative SQLite migration source: %v", err)
+	}
+	defer readOnly.Close()
+	var auditTables int
+	if err := readOnly.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'inference_audit'`).Scan(&auditTables); err != nil {
+		t.Fatalf("inspect relative SQLite migration source: %v", err)
+	}
+	if auditTables != 1 {
+		t.Fatalf("expected inference_audit table, got %d", auditTables)
+	}
+}
+
 func TestOpenSQLiteMigrationSourceRejectsIncompatibleSchemaWithoutMigrating(t *testing.T) {
 	sourcePath := filepath.Join(t.TempDir(), "legacy.db")
 	db, err := sql.Open("sqlite3", sourcePath)

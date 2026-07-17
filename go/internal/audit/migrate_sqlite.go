@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -82,12 +83,16 @@ func (s *Store) MigrateSQLiteHistory(ctx context.Context, sqlitePath string) (in
 // sources are immutable evidence: opening one must not enable WAL, apply
 // runtime migrations, or create/update schema_migrations.
 func openSQLiteMigrationSource(sqlitePath string) (*sql.DB, error) {
-	if err := requireCheckpointedSQLiteMigrationSource(sqlitePath); err != nil {
+	absolutePath, err := filepath.Abs(sqlitePath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve sqlite migration source: %w", err)
+	}
+	if err := requireCheckpointedSQLiteMigrationSource(absolutePath); err != nil {
 		return nil, err
 	}
 	dsn := (&url.URL{
 		Scheme:   "file",
-		Path:     sqlitePath,
+		Path:     absolutePath,
 		RawQuery: url.Values{"mode": {"ro"}, "immutable": {"1"}, "_query_only": {"1"}}.Encode(),
 	}).String()
 	db, err := sql.Open("sqlite3", dsn)
@@ -104,7 +109,7 @@ func openSQLiteMigrationSource(sqlitePath string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := requireCheckpointedSQLiteMigrationSource(sqlitePath); err != nil {
+	if err := requireCheckpointedSQLiteMigrationSource(absolutePath); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
