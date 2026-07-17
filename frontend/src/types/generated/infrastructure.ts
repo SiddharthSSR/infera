@@ -9,6 +9,7 @@ export type InstanceStatus =
   | 'pending'
   | 'provisioning'
   | 'running'
+  | 'starting'
   | 'stopping'
   | 'stopped'
   | 'terminating'

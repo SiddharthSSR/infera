@@ -17,6 +17,7 @@ function StatusBadge({ status }: { status: Instance['status'] }) {
     pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
     provisioning: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
     running: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+    starting: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
     stopping: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
     stopped: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
     terminating: 'bg-red-500/20 text-red-400 border-red-500/30',
@@ -28,6 +29,7 @@ function StatusBadge({ status }: { status: Instance['status'] }) {
     pending: Clock,
     provisioning: Loader2,
     running: CheckCircle2,
+    starting: Loader2,
     stopping: Clock,
     stopped: Square,
     terminating: Loader2,
@@ -36,7 +38,7 @@ function StatusBadge({ status }: { status: Instance['status'] }) {
   };
 
   const Icon = icons[status];
-  const isSpinning = status === 'provisioning' || status === 'terminating';
+  const isSpinning = status === 'provisioning' || status === 'starting' || status === 'terminating';
 
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${colors[status]}`}>
@@ -76,6 +78,7 @@ function InstanceCard({ instance }: { instance: Instance }) {
 
   const isRunning = instance.status === 'running';
   const isStopped = instance.status === 'stopped';
+  const isTransitioning = ['starting', 'stopping', 'terminating'].includes(instance.status);
 
   return (
     <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-colors">
@@ -152,7 +155,7 @@ function InstanceCard({ instance }: { instance: Instance }) {
           )}
           <button
             onClick={handleTerminate}
-            disabled={isDeleting}
+            disabled={isDeleting || isTransitioning}
             className="p-1.5 text-red-400 hover:bg-red-500/20 rounded transition-colors disabled:opacity-50"
             title="Terminate"
           >

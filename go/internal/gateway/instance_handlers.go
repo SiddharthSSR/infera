@@ -55,7 +55,11 @@ func (h *InstanceHandlers) handleInstances(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	response := h.listInstanceEntriesForWorkspace(currentWorkspaceID(r))
+	response, err := h.listInstanceEntriesForWorkspace(currentWorkspaceID(r))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "control_state_unavailable", "Infrastructure state is temporarily unavailable")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"instances": response, "total": len(response)})
 }
@@ -80,7 +84,11 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 			return
 		}
 		current := auth.KeyFromContext(r.Context())
-		instance, exists := h.manager.GetInstance(instanceID)
+		instance, exists, err := h.manager.GetInstanceWithError(instanceID)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "control_state_unavailable", "Infrastructure state is temporarily unavailable")
+			return
+		}
 		if !exists {
 			writeError(w, http.StatusNotFound, "not_found", "Instance not found")
 			return
@@ -97,7 +105,11 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 		}
 		current := auth.KeyFromContext(r.Context())
 		if current != nil && effectiveWorkspaceID(current) != auth.DefaultWorkspaceID {
-			instance, exists := h.manager.GetInstance(instanceID)
+			instance, exists, err := h.manager.GetInstanceWithError(instanceID)
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "control_state_unavailable", "Infrastructure state is temporarily unavailable")
+				return
+			}
 			if !exists || instance.WorkspaceID != effectiveWorkspaceID(current) {
 				writeError(w, http.StatusNotFound, "not_found", "Instance not found")
 				return
@@ -115,7 +127,11 @@ func (h *InstanceHandlers) handleInstanceByID(w http.ResponseWriter, r *http.Req
 		}
 		current := auth.KeyFromContext(r.Context())
 		if current != nil && effectiveWorkspaceID(current) != auth.DefaultWorkspaceID {
-			instance, exists := h.manager.GetInstance(instanceID)
+			instance, exists, err := h.manager.GetInstanceWithError(instanceID)
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "control_state_unavailable", "Infrastructure state is temporarily unavailable")
+				return
+			}
 			if !exists || instance.WorkspaceID != effectiveWorkspaceID(current) {
 				writeError(w, http.StatusNotFound, "not_found", "Instance not found")
 				return
@@ -506,6 +522,9 @@ func effectiveWorkspaceID(record *auth.KeyRecord) string {
 }
 
 func deploymentFailureReason(err error) string {
+	if errors.Is(err, providers.ErrControlStateUnavailable) || errors.Is(err, providers.ErrWorkerCredentialIntegrity) {
+		return "Infrastructure state is temporarily unavailable"
+	}
 	var providerErr *providers.ProviderError
 	if errors.As(err, &providerErr) && strings.TrimSpace(providerErr.Message) != "" {
 		return providerErr.Message
@@ -514,6 +533,10 @@ func deploymentFailureReason(err error) string {
 }
 
 func writeProviderActionError(w http.ResponseWriter, fallbackType string, err error) {
+	if errors.Is(err, providers.ErrControlStateUnavailable) || errors.Is(err, providers.ErrWorkerCredentialIntegrity) {
+		writeError(w, http.StatusServiceUnavailable, "control_state_unavailable", "Infrastructure state is temporarily unavailable")
+		return
+	}
 	var providerErr *providers.ProviderError
 	if !errors.As(err, &providerErr) {
 		writeError(w, http.StatusInternalServerError, fallbackType, err.Error())

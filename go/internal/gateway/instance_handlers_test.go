@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -410,6 +411,56 @@ func TestHandleInstanceByID(t *testing.T) {
 			t.Error("expected success to be true")
 		}
 	})
+}
+
+func TestProvisionControlStateFailureReturnsGenericUnavailable(t *testing.T) {
+	raw := "postgres decrypt failed password=do-not-leak"
+	provider := &failingProvider{provisionErr: fmt.Errorf("%w: %s", providers.ErrControlStateUnavailable, raw)}
+	mgr, err := providers.NewManager(providers.ManagerConfig{DefaultProvider: providers.ProviderMock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	mgr.RegisterProvider(provider)
+	h := NewInstanceHandlers(mgr)
+	req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", strings.NewReader(`{"provider":"mock","gpu_type":"RTX_4090"}`)), auth.RoleOperator)
+	rec := httptest.NewRecorder()
+	h.handleProvision(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "control_state_unavailable") || strings.Contains(rec.Body.String(), raw) {
+		t.Fatalf("unexpected provision control-state response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if reason := deploymentFailureReason(provider.provisionErr); reason != "Infrastructure state is temporarily unavailable" {
+		t.Fatalf("deployment failure leaked details: %q", reason)
+	}
+}
+
+func TestStopControlStateFailureReturnsGenericUnavailable(t *testing.T) {
+	provider := &failingProvider{provisionInstance: &providers.Instance{
+		ID: "inst-1", ProviderID: "mock-inst-1", Provider: providers.ProviderMock,
+		Status: providers.InstanceStatusRunning, CreatedAt: time.Now(),
+	}}
+	mgr, err := providers.NewManager(providers.ManagerConfig{DefaultProvider: providers.ProviderMock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	mgr.RegisterProvider(provider)
+	instance, err := mgr.Provision(context.Background(), &providers.ProvisionRequest{
+		Name: "lifecycle-unavailable", Provider: providers.ProviderMock,
+		GPUType: providers.GPURTX4090, GPUCount: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := "sql connection refused password=do-not-leak"
+	provider.stopErr = fmt.Errorf("%w: %s", providers.ErrWorkerCredentialIntegrity, raw)
+	h := NewInstanceHandlers(mgr)
+	req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/"+instance.ID+"/stop", nil), auth.RoleOperator)
+	rec := httptest.NewRecorder()
+	h.handleInstanceByID(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "control_state_unavailable") || strings.Contains(rec.Body.String(), raw) {
+		t.Fatalf("unexpected stop control-state response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestHandleStartStop(t *testing.T) {

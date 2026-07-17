@@ -93,7 +93,7 @@ func (g *Gateway) NewAgentsRuntime(store *agents.Store) (*agents.Runtime, error)
 			if g.instanceHandlers == nil {
 				return nil, fmt.Errorf("instance handlers are not configured")
 			}
-			return g.instanceHandlers.listInstanceEntriesForWorkspace(call.Run.WorkspaceID), nil
+			return g.instanceHandlers.listInstanceEntriesForWorkspace(call.Run.WorkspaceID)
 		},
 	}); err != nil {
 		return nil, err

@@ -101,6 +101,7 @@ const (
 	InstanceStatusPending      InstanceStatus = "pending"
 	InstanceStatusProvisioning InstanceStatus = "provisioning"
 	InstanceStatusRunning      InstanceStatus = "running"
+	InstanceStatusStarting     InstanceStatus = "starting"
 	InstanceStatusStopping     InstanceStatus = "stopping"
 	InstanceStatusStopped      InstanceStatus = "stopped"
 	InstanceStatusTerminating  InstanceStatus = "terminating"
@@ -175,6 +176,8 @@ type Instance struct {
 	Metadata             map[string]string `json:"metadata,omitempty"`
 	WorkerCredential     string            `json:"-"`
 	WorkerCredentialHash [sha256.Size]byte `json:"-"`
+	LifecycleVersion     int64             `json:"-"`
+	LifecycleClaimedAt   *time.Time        `json:"-"`
 
 	// Error info
 	ErrorMessage string `json:"error_message,omitempty"`

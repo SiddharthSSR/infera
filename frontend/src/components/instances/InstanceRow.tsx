@@ -59,6 +59,7 @@ export function InstanceActions({
 }) {
   const { isLoading, handleStart, handleStop, handleTerminate } = useInstanceActions(instance);
   const buttonStyle = compact ? { fontSize: '0.65rem' } : { fontSize: '0.65rem', marginRight: '1rem' };
+  const isTransitioning = ['starting', 'stopping', 'terminating'].includes(instance.status);
 
   return (
     <>
@@ -69,11 +70,11 @@ export function InstanceActions({
       {instance.status === 'running' && (
         <ActionButton style={buttonStyle} disabled={isLoading} onClick={handleStop}>STOP</ActionButton>
       )}
-      {instance.status !== 'terminating' && instance.status !== 'terminated' && (
+      {instance.status !== 'terminated' && (
         <ActionButton
           variant="destructive"
           style={{ fontSize: '0.65rem' }}
-          disabled={isLoading}
+          disabled={isLoading || isTransitioning}
           onClick={handleTerminate}
         >
           TERMINATE

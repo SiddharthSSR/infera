@@ -2,8 +2,12 @@ package providers
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"math"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -43,6 +47,183 @@ func (r workspaceConfiguredProviderResolver) ResolveProviderConfig(workspaceID s
 type instanceAwareStartProvider struct {
 	*mockTestProvider
 	startedWithInstance []string
+}
+
+type delayedRefreshProvider struct {
+	*mockTestProvider
+	snapshotTaken chan struct{}
+	release       chan struct{}
+}
+
+type lifecycleFaultStore struct {
+	instanceStore
+	mu             sync.Mutex
+	putErr         error
+	updateCalls    int
+	failUpdateCall int
+	failUpdateErr  error
+}
+
+type workspaceScopeSpyStore struct {
+	instanceStore
+	unscopedListCalls int
+	scopedListCalls   int
+	updatedIDs        []string
+	unscopedErr       error
+}
+
+func (s *workspaceScopeSpyStore) list() ([]*Instance, error) {
+	s.unscopedListCalls++
+	return nil, s.unscopedErr
+}
+
+func (s *workspaceScopeSpyStore) listByWorkspace(workspaceID string) ([]*Instance, error) {
+	s.scopedListCalls++
+	return s.instanceStore.listByWorkspace(workspaceID)
+}
+
+func (s *workspaceScopeSpyStore) update(instanceID string, apply func(*Instance)) (bool, error) {
+	s.updatedIDs = append(s.updatedIDs, instanceID)
+	return s.instanceStore.update(instanceID, apply)
+}
+
+func (s *lifecycleFaultStore) put(instance *Instance) error {
+	if s.putErr != nil {
+		return s.putErr
+	}
+	return s.instanceStore.put(instance)
+}
+
+func (s *lifecycleFaultStore) updateIfLifecycleVersion(instanceID string, expectedVersion int64, apply func(*Instance)) (bool, error) {
+	s.mu.Lock()
+	s.updateCalls++
+	call := s.updateCalls
+	s.mu.Unlock()
+	if call == s.failUpdateCall {
+		return false, s.failUpdateErr
+	}
+	return s.instanceStore.updateIfLifecycleVersion(instanceID, expectedVersion, apply)
+}
+
+type blockingLifecycleProvider struct {
+	*mockTestProvider
+	startEntered       chan struct{}
+	startRelease       chan struct{}
+	stopEntered        chan struct{}
+	stopRelease        chan struct{}
+	terminateEntered   chan struct{}
+	terminateRelease   chan struct{}
+	stopCalls          atomic.Int32
+	startCalls         atomic.Int32
+	terminateCalls     atomic.Int32
+	stopErr            error
+	startErr           error
+	terminateErr       error
+	startBeforeErr     bool
+	stopBeforeErr      bool
+	terminateBeforeErr bool
+}
+
+func (p *blockingLifecycleProvider) Start(ctx context.Context, instanceID string) error {
+	p.startCalls.Add(1)
+	if p.startEntered != nil {
+		p.startEntered <- struct{}{}
+	}
+	if p.startRelease != nil {
+		select {
+		case <-p.startRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if p.startErr != nil {
+		if p.startBeforeErr {
+			_ = p.mockTestProvider.Start(ctx, instanceID)
+		}
+		return p.startErr
+	}
+	return p.mockTestProvider.Start(ctx, instanceID)
+}
+
+func (p *blockingLifecycleProvider) Stop(ctx context.Context, instanceID string) error {
+	p.stopCalls.Add(1)
+	if p.stopEntered != nil {
+		p.stopEntered <- struct{}{}
+	}
+	if p.stopRelease != nil {
+		select {
+		case <-p.stopRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if p.stopErr != nil {
+		if p.stopBeforeErr {
+			_ = p.mockTestProvider.Stop(ctx, instanceID)
+		}
+		return p.stopErr
+	}
+	return p.mockTestProvider.Stop(ctx, instanceID)
+}
+
+func (p *blockingLifecycleProvider) Terminate(ctx context.Context, instanceID string) error {
+	p.terminateCalls.Add(1)
+	if p.terminateEntered != nil {
+		p.terminateEntered <- struct{}{}
+	}
+	if p.terminateRelease != nil {
+		select {
+		case <-p.terminateRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if p.terminateErr != nil && p.terminateBeforeErr {
+		if instance := p.findInstance(instanceID); instance != nil {
+			instance.Status = InstanceStatusTerminated
+		}
+	}
+	return p.terminateErr
+}
+
+func (p *blockingLifecycleProvider) GetInstance(ctx context.Context, instanceID string) (*Instance, error) {
+	instance := p.findInstance(instanceID)
+	if instance == nil {
+		return nil, &ProviderError{Provider: ProviderMock, Code: ProviderErrorNotFound, Message: "not found"}
+	}
+	return cloneInstance(instance), nil
+}
+
+type cleanupObservingProvider struct {
+	*mockTestProvider
+	terminateErr error
+	cleanup      chan cleanupContextObservation
+}
+
+type cleanupContextObservation struct {
+	err         error
+	hasDeadline bool
+}
+
+func (p *cleanupObservingProvider) Terminate(ctx context.Context, instanceID string) error {
+	_, hasDeadline := ctx.Deadline()
+	p.cleanup <- cleanupContextObservation{err: ctx.Err(), hasDeadline: hasDeadline}
+	return p.terminateErr
+}
+
+func (p *delayedRefreshProvider) GetInstance(ctx context.Context, instanceID string) (*Instance, error) {
+	instance := p.findInstance(instanceID)
+	if instance == nil {
+		return nil, &ProviderError{Code: ProviderErrorNotFound, Message: "not found"}
+	}
+	snapshot := cloneInstance(instance)
+	close(p.snapshotTaken)
+	select {
+	case <-p.release:
+		return snapshot, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func newMockTestProvider() *mockTestProvider {
@@ -916,6 +1097,75 @@ func TestNewManagerWithStoreUsesInjectedInstanceStore(t *testing.T) {
 	}
 }
 
+func TestListInstancesByWorkspaceRefreshesOnlyTargetTenant(t *testing.T) {
+	baseStore := newInMemoryInstanceStore()
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	for _, instance := range []*Instance{
+		{ID: "target-instance", ProviderID: "provider-target", Provider: ProviderMock, WorkspaceID: "ws-target", Status: InstanceStatusRunning, CreatedAt: now},
+		{ID: "other-instance", ProviderID: "provider-other", Provider: ProviderMock, WorkspaceID: "ws-other", Status: InstanceStatusRunning, CreatedAt: now},
+	} {
+		if err := baseStore.put(instance); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spy := &workspaceScopeSpyStore{
+		instanceStore: baseStore,
+		unscopedErr:   errors.New("another tenant's control state is unavailable"),
+	}
+	mgr, err := NewManagerWithStore(ManagerConfig{DefaultProvider: ProviderMock, Now: func() time.Time { return now }}, spy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	instances, err := mgr.ListInstancesByWorkspaceWithError("ws-target")
+	if err != nil {
+		t.Fatalf("scoped list failed due to another tenant: %v", err)
+	}
+	if len(instances) != 1 || instances[0].ID != "target-instance" {
+		t.Fatalf("scoped list crossed tenant boundary: %+v", instances)
+	}
+	if spy.unscopedListCalls != 0 {
+		t.Fatalf("workspace read invoked unscoped list %d times", spy.unscopedListCalls)
+	}
+	if spy.scopedListCalls != 2 {
+		t.Fatalf("expected scoped refresh and scoped result read, got %d calls", spy.scopedListCalls)
+	}
+	if len(spy.updatedIDs) != 1 || spy.updatedIDs[0] != "target-instance" {
+		t.Fatalf("workspace refresh updated outside target tenant: %+v", spy.updatedIDs)
+	}
+}
+
+func TestInMemoryManagerCredentialsRequireExplicitActiveStatus(t *testing.T) {
+	store := newInMemoryInstanceStore()
+	mgr, err := NewManagerWithStore(ManagerConfig{DefaultProvider: ProviderMock}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	for _, status := range []InstanceStatus{
+		InstanceStatusStarting, InstanceStatusStopping, InstanceStatusStopped, InstanceStatusTerminating,
+		InstanceStatusTerminated, InstanceStatusError, "", "future_corrupt",
+	} {
+		credential := "credential-" + string(status)
+		hash := sha256.Sum256([]byte(credential))
+		instance := &Instance{
+			ID: "instance-" + string(status), ProviderID: "provider-" + string(status),
+			Provider: ProviderMock, WorkspaceID: "ws-test", Status: status,
+			WorkerID: "worker-" + string(status), WorkerCredential: credential,
+			WorkerCredentialHash: hash, CreatedAt: time.Now().UTC(),
+		}
+		if err := store.put(instance); err != nil {
+			t.Fatal(err)
+		}
+		if authenticated, found, err := mgr.AuthenticateWorkerToken(credential); err != nil || found || authenticated != nil {
+			t.Fatalf("inactive %q authenticated: found=%v err=%v", status, found, err)
+		}
+		if outbound, found, err := mgr.WorkerCredentialForWorker(instance.WorkerID); err != nil || found || outbound != "" {
+			t.Fatalf("inactive %q returned outbound credential: found=%v err=%v", status, found, err)
+		}
+	}
+}
+
 func TestManagerStartRejectedForTerminatedInstance(t *testing.T) {
 	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
 	provider := newMockTestProvider()
@@ -965,6 +1215,604 @@ func TestManagerRefreshMarksMissingInstanceTerminated(t *testing.T) {
 	}
 	if refreshed.ErrorMessage == "" {
 		t.Fatal("expected refresh to persist missing-instance error")
+	}
+}
+
+func TestManagerRefreshDoesNotOverwriteConcurrentStopWithStaleRunningSnapshot(t *testing.T) {
+	provider := &delayedRefreshProvider{
+		mockTestProvider: newMockTestProvider(),
+		snapshotTaken:    make(chan struct{}),
+		release:          make(chan struct{}),
+	}
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(provider)
+	instance, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name: "version-fenced-refresh", Provider: ProviderMock,
+		GPUType: GPURTX4090, GPUCount: 1, Models: []string{"model-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential := provider.lastReq.WorkerToken
+	refreshResult := make(chan error, 1)
+	go func() { refreshResult <- mgr.RefreshInstances(context.Background()) }()
+	<-provider.snapshotTaken
+	if err := mgr.Stop(context.Background(), instance.ID); err != nil {
+		t.Fatalf("stop while refresh delayed: %v", err)
+	}
+	close(provider.release)
+	if err := <-refreshResult; err != nil {
+		t.Fatalf("delayed refresh: %v", err)
+	}
+	stored, found, err := mgr.GetInstanceWithError(instance.ID)
+	if err != nil || !found {
+		t.Fatalf("read stopped instance: found=%v err=%v", found, err)
+	}
+	if stored.Status != InstanceStatusStopped {
+		t.Fatalf("stale running snapshot overwrote stop: %s", stored.Status)
+	}
+	if authenticated, found, err := mgr.AuthenticateWorkerToken(credential); err != nil || found || authenticated != nil {
+		t.Fatalf("stale refresh restored stopped credential: found=%v err=%v", found, err)
+	}
+}
+
+func TestManagerRefreshAppliesProviderTransitionAcrossConcurrentWorkerHeartbeat(t *testing.T) {
+	provider := &delayedRefreshProvider{
+		mockTestProvider: newMockTestProvider(),
+		snapshotTaken:    make(chan struct{}),
+		release:          make(chan struct{}),
+	}
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(provider)
+	instance, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name: "worker-write-does-not-starve-refresh", Provider: ProviderMock,
+		GPUType: GPURTX4090, GPUCount: 1, Models: []string{"model-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.LinkWorker(instance.ID, "worker-during-refresh"); err != nil {
+		t.Fatalf("link worker before refresh: %v", err)
+	}
+	providerInstance := provider.findInstance(instance.ProviderID)
+	providerInstance.PublicIP = "203.0.113.42"
+	providerInstance.HTTPPort = 18443
+
+	refreshResult := make(chan error, 1)
+	go func() { refreshResult <- mgr.RefreshInstances(context.Background()) }()
+	<-provider.snapshotTaken
+	heartbeatAt := time.Now().UTC().Add(time.Minute)
+	updated, err := mgr.RecordWorkerHeartbeatWithError("worker-during-refresh", heartbeatAt)
+	if err != nil || !updated {
+		t.Fatalf("record heartbeat while refresh delayed: updated=%v err=%v", updated, err)
+	}
+	close(provider.release)
+	if err := <-refreshResult; err != nil {
+		t.Fatalf("delayed refresh: %v", err)
+	}
+	stored, found, err := mgr.GetInstanceWithError(instance.ID)
+	if err != nil || !found {
+		t.Fatalf("read refreshed instance: found=%v err=%v", found, err)
+	}
+	if stored.PublicIP != "203.0.113.42" || stored.HTTPPort != 18443 {
+		t.Fatalf("provider transition was not applied: %+v", stored)
+	}
+	if stored.WorkerID != "worker-during-refresh" {
+		t.Fatalf("provider refresh erased concurrent worker link: %+v", stored)
+	}
+	if stored.WorkerLastHeartbeatAt == nil || !stored.WorkerLastHeartbeatAt.Equal(heartbeatAt) {
+		t.Fatalf("provider refresh erased concurrent worker heartbeat: %+v", stored)
+	}
+}
+
+func TestManagerLifecycleClaimRejectsConflictingCrossReplicaAction(t *testing.T) {
+	store := newInMemoryInstanceStore()
+	credential := "cross-replica-lifecycle-credential"
+	credentialHash := sha256.Sum256([]byte(credential))
+	instance := &Instance{
+		ID: "cross-replica", ProviderID: "provider-cross-replica", Provider: ProviderMock,
+		Status: InstanceStatusRunning, WorkerCredential: credential, WorkerCredentialHash: credentialHash,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.put(instance); err != nil {
+		t.Fatal(err)
+	}
+	provider := &blockingLifecycleProvider{
+		mockTestProvider: newMockTestProvider(),
+		stopEntered:      make(chan struct{}, 2),
+		stopRelease:      make(chan struct{}),
+	}
+	provider.instances[instance.ID] = cloneInstance(instance)
+	mgrA, err := NewManagerWithStore(ManagerConfig{DefaultProvider: ProviderMock}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgrA.Close()
+	mgrB, err := NewManagerWithStore(ManagerConfig{DefaultProvider: ProviderMock}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgrB.Close()
+	mgrA.RegisterProvider(provider)
+	mgrB.RegisterProvider(provider)
+
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- mgrA.Stop(context.Background(), instance.ID) }()
+	<-provider.stopEntered
+	claimed, found, err := store.get(instance.ID)
+	if err != nil || !found {
+		t.Fatalf("read claimed lifecycle: found=%v err=%v", found, err)
+	}
+	if claimed.Status != InstanceStatusStopping || claimed.LifecycleClaimedAt == nil {
+		t.Fatalf("stop did not durably claim inactive transitional state: %+v", claimed)
+	}
+	if authenticated, found, err := mgrB.AuthenticateWorkerToken(credential); err != nil || found || authenticated != nil {
+		t.Fatalf("stopping credential remained active: instance=%+v found=%v err=%v", authenticated, found, err)
+	}
+	if err := mgrB.Terminate(context.Background(), instance.ID); !errors.Is(err, ErrLifecycleConflict) {
+		t.Fatalf("conflicting terminate did not lose lifecycle claim: %v", err)
+	}
+	if calls := provider.terminateCalls.Load(); calls != 0 {
+		t.Fatalf("losing replica reached provider I/O: terminate calls=%d", calls)
+	}
+	close(provider.stopRelease)
+	if err := <-stopResult; err != nil {
+		t.Fatalf("winning stop: %v", err)
+	}
+}
+
+func TestManagerStartRemainsCredentialInactiveUntilProviderAndStoreFinalize(t *testing.T) {
+	store := newInMemoryInstanceStore()
+	credential := "starting-credential"
+	credentialHash := sha256.Sum256([]byte(credential))
+	instance := &Instance{
+		ID: "starting-inactive", ProviderID: "provider-starting-inactive", Provider: ProviderMock,
+		Status: InstanceStatusStopped, WorkerCredential: credential, WorkerCredentialHash: credentialHash,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.put(instance); err != nil {
+		t.Fatal(err)
+	}
+	provider := &blockingLifecycleProvider{
+		mockTestProvider: newMockTestProvider(),
+		startEntered:     make(chan struct{}, 1),
+		startRelease:     make(chan struct{}),
+	}
+	provider.instances[instance.ID] = cloneInstance(instance)
+	mgr, err := NewManagerWithStore(ManagerConfig{DefaultProvider: ProviderMock}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	mgr.RegisterProvider(provider)
+	startResult := make(chan error, 1)
+	go func() { startResult <- mgr.Start(context.Background(), instance.ID) }()
+	<-provider.startEntered
+	claimed, found, err := store.get(instance.ID)
+	if err != nil || !found || claimed.Status != InstanceStatusStarting || claimed.LifecycleClaimedAt == nil {
+		t.Fatalf("start did not claim inactive starting state: found=%v err=%v instance=%+v", found, err, claimed)
+	}
+	if authenticated, found, err := mgr.AuthenticateWorkerToken(credential); err != nil || found || authenticated != nil {
+		t.Fatalf("starting credential became active before finalization: instance=%+v found=%v err=%v", authenticated, found, err)
+	}
+	close(provider.startRelease)
+	if err := <-startResult; err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	final, found, err := store.get(instance.ID)
+	if err != nil || !found || final.Status != InstanceStatusProvisioning || final.LifecycleClaimedAt != nil {
+		t.Fatalf("start did not finalize provisioning: found=%v err=%v instance=%+v", found, err, final)
+	}
+}
+
+func TestManagerLifecycleProviderOperationIsBounded(t *testing.T) {
+	store := newInMemoryInstanceStore()
+	instance := &Instance{
+		ID: "bounded-start", ProviderID: "provider-bounded-start", Provider: ProviderMock,
+		Status: InstanceStatusStopped, CreatedAt: time.Now().UTC(),
+	}
+	if err := store.put(instance); err != nil {
+		t.Fatal(err)
+	}
+	provider := &blockingLifecycleProvider{
+		mockTestProvider: newMockTestProvider(),
+		startEntered:     make(chan struct{}, 1),
+		startRelease:     make(chan struct{}),
+	}
+	provider.instances[instance.ID] = cloneInstance(instance)
+	mgr, err := NewManagerWithStore(ManagerConfig{
+		DefaultProvider: ProviderMock, LifecycleOperationTimeout: 25 * time.Millisecond,
+		LifecycleReconcileLease: time.Second,
+	}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	mgr.RegisterProvider(provider)
+	started := time.Now()
+	err = mgr.Start(context.Background(), instance.ID)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected bounded provider deadline, got %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("provider lifecycle operation exceeded configured bound: %v", elapsed)
+	}
+	stored, found, readErr := store.get(instance.ID)
+	if readErr != nil || !found || stored.Status != InstanceStatusStarting || stored.LifecycleClaimedAt == nil {
+		t.Fatalf("timed-out start did not remain recoverable and inactive: found=%v err=%v instance=%+v", found, readErr, stored)
+	}
+}
+
+func TestManagerLifecycleFinalizationFailureRecoversExpiredStop(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	persistErr := errors.New("final lifecycle write unavailable")
+	baseStore := newInMemoryInstanceStore()
+	store := &lifecycleFaultStore{
+		instanceStore: baseStore, failUpdateCall: 2,
+		failUpdateErr: fmt.Errorf("%w: %v", ErrControlStateUnavailable, persistErr),
+	}
+	instance := &Instance{
+		ID: "recover-stop", ProviderID: "provider-recover-stop", Provider: ProviderMock,
+		Status: InstanceStatusRunning, CreatedAt: now,
+	}
+	if err := store.put(instance); err != nil {
+		t.Fatal(err)
+	}
+	provider := &blockingLifecycleProvider{mockTestProvider: newMockTestProvider()}
+	provider.instances[instance.ID] = cloneInstance(instance)
+	mgr, err := NewManagerWithStore(ManagerConfig{
+		DefaultProvider: ProviderMock, LifecycleOperationTimeout: 30 * time.Second,
+		LifecycleReconcileLease: time.Minute,
+		Now:                     func() time.Time { return now },
+	}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	mgr.RegisterProvider(provider)
+
+	if err := mgr.Stop(context.Background(), instance.ID); !errors.Is(err, ErrControlStateUnavailable) {
+		t.Fatalf("expected final persistence failure, got %v", err)
+	}
+	transition, found, err := baseStore.get(instance.ID)
+	if err != nil || !found || transition.Status != InstanceStatusStopping || transition.LifecycleClaimedAt == nil {
+		t.Fatalf("failed finalization did not remain recoverable and inactive: found=%v err=%v instance=%+v", found, err, transition)
+	}
+	now = now.Add(2 * time.Minute)
+	if err := mgr.RefreshInstances(context.Background()); err != nil {
+		t.Fatalf("recover expired stop: %v", err)
+	}
+	recovered, found, err := baseStore.get(instance.ID)
+	if err != nil || !found || recovered.Status != InstanceStatusStopped || recovered.LifecycleClaimedAt != nil {
+		t.Fatalf("stop recovery did not finalize: found=%v err=%v instance=%+v", found, err, recovered)
+	}
+	if calls := provider.stopCalls.Load(); calls != 1 {
+		t.Fatalf("recovery duplicated an already-applied provider stop: calls=%d", calls)
+	}
+}
+
+func TestManagerExpiredTerminationRecoveryHasSingleCrossReplicaClaimer(t *testing.T) {
+	claimedAt := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	now := claimedAt.Add(30 * time.Second)
+	store := newInMemoryInstanceStore()
+	instance := &Instance{
+		ID: "recover-terminate", ProviderID: "provider-recover-terminate", Provider: ProviderMock,
+		Status: InstanceStatusTerminating, LifecycleClaimedAt: &claimedAt, CreatedAt: claimedAt,
+	}
+	if err := store.put(instance); err != nil {
+		t.Fatal(err)
+	}
+	provider := &blockingLifecycleProvider{
+		mockTestProvider: newMockTestProvider(),
+		terminateEntered: make(chan struct{}, 2),
+		terminateRelease: make(chan struct{}),
+	}
+	provider.instances[instance.ID] = &Instance{
+		ID: instance.ID, ProviderID: instance.ProviderID, Provider: ProviderMock, Status: InstanceStatusRunning,
+	}
+	config := ManagerConfig{
+		DefaultProvider: ProviderMock, LifecycleOperationTimeout: 30 * time.Second,
+		LifecycleReconcileLease: time.Minute,
+		Now:                     func() time.Time { return now },
+	}
+	mgrA, err := NewManagerWithStore(config, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgrA.Close()
+	mgrB, err := NewManagerWithStore(config, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgrB.Close()
+	mgrA.RegisterProvider(provider)
+	mgrB.RegisterProvider(provider)
+	if err := mgrB.RefreshInstances(context.Background()); err != nil {
+		t.Fatalf("refresh before recovery lease: %v", err)
+	}
+	if calls := provider.terminateCalls.Load(); calls != 0 {
+		t.Fatalf("transition was reclaimed before lease despite operation window ending: calls=%d", calls)
+	}
+	now = claimedAt.Add(2 * time.Minute)
+
+	firstResult := make(chan error, 1)
+	go func() { firstResult <- mgrA.RefreshInstances(context.Background()) }()
+	<-provider.terminateEntered
+	if err := mgrB.RefreshInstances(context.Background()); err != nil {
+		t.Fatalf("competing recovery refresh: %v", err)
+	}
+	if calls := provider.terminateCalls.Load(); calls != 1 {
+		t.Fatalf("multiple replicas performed provider termination: calls=%d", calls)
+	}
+	close(provider.terminateRelease)
+	if err := <-firstResult; err != nil {
+		t.Fatalf("winning recovery refresh: %v", err)
+	}
+	stored, found, err := store.get(instance.ID)
+	if err != nil || !found || stored.Status != InstanceStatusTerminated || stored.LifecycleClaimedAt != nil {
+		t.Fatalf("termination recovery did not finalize: found=%v err=%v instance=%+v", found, err, stored)
+	}
+}
+
+func TestManagerLifecycleRecoveryTreatsProviderNotFoundAsTerminated(t *testing.T) {
+	for _, status := range []InstanceStatus{InstanceStatusStarting, InstanceStatusStopping, InstanceStatusTerminating} {
+		t.Run(string(status), func(t *testing.T) {
+			now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+			claimedAt := now.Add(-2 * time.Minute)
+			store := newInMemoryInstanceStore()
+			instance := &Instance{
+				ID: "not-found-" + string(status), ProviderID: "provider-not-found", Provider: ProviderMock,
+				Status: status, LifecycleClaimedAt: &claimedAt, CreatedAt: claimedAt,
+			}
+			if err := store.put(instance); err != nil {
+				t.Fatal(err)
+			}
+			notFound := &ProviderError{Provider: ProviderMock, Code: ProviderErrorNotFound, Message: "gone"}
+			provider := &blockingLifecycleProvider{
+				mockTestProvider: newMockTestProvider(), startErr: notFound, stopErr: notFound, terminateErr: notFound,
+			}
+			mgr, err := NewManagerWithStore(ManagerConfig{
+				DefaultProvider: ProviderMock, LifecycleOperationTimeout: 30 * time.Second,
+				LifecycleReconcileLease: time.Minute, Now: func() time.Time { return now },
+			}, store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mgr.Close()
+			mgr.RegisterProvider(provider)
+			if err := mgr.RefreshInstances(context.Background()); err != nil {
+				t.Fatalf("recover not-found lifecycle: %v", err)
+			}
+			stored, found, err := store.get(instance.ID)
+			if err != nil || !found || stored.Status != InstanceStatusTerminated || stored.LifecycleClaimedAt != nil {
+				t.Fatalf("not-found did not finalize terminated: found=%v err=%v instance=%+v", found, err, stored)
+			}
+		})
+	}
+}
+
+func TestManagerDirectLifecycleNotFoundFinalizesTerminated(t *testing.T) {
+	for _, action := range []string{"start", "stop", "terminate"} {
+		t.Run(action, func(t *testing.T) {
+			notFound := &ProviderError{Provider: ProviderMock, Code: ProviderErrorNotFound, Message: "gone"}
+			provider := &blockingLifecycleProvider{mockTestProvider: newMockTestProvider()}
+			mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+			mgr.RegisterProvider(provider)
+			instance, err := mgr.Provision(context.Background(), &ProvisionRequest{Name: "missing-" + action, GPUType: GPURTX4090})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action == "start" {
+				if err := mgr.Stop(context.Background(), instance.ID); err != nil {
+					t.Fatalf("prepare stopped instance: %v", err)
+				}
+				provider.startErr = notFound
+				err = mgr.Start(context.Background(), instance.ID)
+			} else if action == "stop" {
+				provider.stopErr = notFound
+				err = mgr.Stop(context.Background(), instance.ID)
+			} else {
+				provider.terminateErr = notFound
+				err = mgr.Terminate(context.Background(), instance.ID)
+			}
+			if err != nil {
+				t.Fatalf("not-found %s should be idempotent success: %v", action, err)
+			}
+			stored, found, err := mgr.GetInstanceWithError(instance.ID)
+			if err != nil || !found || stored.Status != InstanceStatusTerminated || stored.LifecycleClaimedAt != nil {
+				t.Fatalf("direct not-found did not finalize terminated: found=%v err=%v instance=%+v", found, err, stored)
+			}
+		})
+	}
+}
+
+func TestManagerLifecycleRecoveryFailureRemainsInactiveForRetry(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	claimedAt := now.Add(-2 * time.Minute)
+	store := newInMemoryInstanceStore()
+	instance := &Instance{
+		ID: "retry-stop", ProviderID: "provider-retry-stop", Provider: ProviderMock,
+		Status: InstanceStatusStopping, LifecycleClaimedAt: &claimedAt, CreatedAt: claimedAt,
+	}
+	if err := store.put(instance); err != nil {
+		t.Fatal(err)
+	}
+	provider := &blockingLifecycleProvider{
+		mockTestProvider: newMockTestProvider(), stopErr: errors.New("temporary provider failure"),
+	}
+	provider.instances[instance.ID] = &Instance{
+		ID: instance.ID, ProviderID: instance.ProviderID, Provider: ProviderMock, Status: InstanceStatusRunning,
+	}
+	mgr, err := NewManagerWithStore(ManagerConfig{
+		DefaultProvider: ProviderMock, LifecycleOperationTimeout: 30 * time.Second,
+		LifecycleReconcileLease: time.Minute, Now: func() time.Time { return now },
+	}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	mgr.RegisterProvider(provider)
+	if err := mgr.RefreshInstances(context.Background()); err != nil {
+		t.Fatalf("failed recovery refresh: %v", err)
+	}
+	stored, found, err := store.get(instance.ID)
+	if err != nil || !found || stored.Status != InstanceStatusStopping || stored.LifecycleClaimedAt == nil || !stored.LifecycleClaimedAt.Equal(now) {
+		t.Fatalf("failed recovery did not remain leased and inactive: found=%v err=%v instance=%+v", found, err, stored)
+	}
+}
+
+func TestManagerAmbiguousLifecycleFailureStaysInactiveAndRecovers(t *testing.T) {
+	for _, action := range []string{"start", "stop", "terminate"} {
+		t.Run(action, func(t *testing.T) {
+			now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+			provider := &blockingLifecycleProvider{mockTestProvider: newMockTestProvider()}
+			if action == "stop" {
+				provider.stopErr = context.DeadlineExceeded
+			} else if action == "terminate" {
+				provider.terminateErr = context.DeadlineExceeded
+			}
+			mgr := newTestManager(t, ManagerConfig{
+				DefaultProvider: ProviderMock, LifecycleOperationTimeout: 30 * time.Second,
+				LifecycleReconcileLease: time.Minute, Now: func() time.Time { return now },
+			})
+			mgr.RegisterProvider(provider)
+			instance, err := mgr.Provision(context.Background(), &ProvisionRequest{Name: "ambiguous-" + action, GPUType: GPURTX4090})
+			if err != nil {
+				t.Fatal(err)
+			}
+			credential := provider.lastReq.WorkerToken
+			if action == "start" {
+				if err := mgr.Stop(context.Background(), instance.ID); err != nil {
+					t.Fatalf("prepare stopped instance: %v", err)
+				}
+				provider.startErr = context.DeadlineExceeded
+				err = mgr.Start(context.Background(), instance.ID)
+				provider.startErr = nil
+			} else if action == "stop" {
+				err = mgr.Stop(context.Background(), instance.ID)
+				provider.stopErr = nil
+			} else {
+				err = mgr.Terminate(context.Background(), instance.ID)
+				provider.terminateErr = nil
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected ambiguous provider timeout, got %v", err)
+			}
+			transition, found, readErr := mgr.instances.get(instance.ID)
+			expectedTransition := InstanceStatusStarting
+			if action == "stop" {
+				expectedTransition = InstanceStatusStopping
+			} else if action == "terminate" {
+				expectedTransition = InstanceStatusTerminating
+			}
+			if readErr != nil || !found || transition.Status != expectedTransition || transition.LifecycleClaimedAt == nil {
+				t.Fatalf("ambiguous failure did not remain transitional: found=%v err=%v instance=%+v", found, readErr, transition)
+			}
+			if authenticated, found, authErr := mgr.AuthenticateWorkerToken(credential); authErr != nil || found || authenticated != nil {
+				t.Fatalf("ambiguous failure re-enabled credential: instance=%+v found=%v err=%v", authenticated, found, authErr)
+			}
+			now = now.Add(2 * time.Minute)
+			if err := mgr.RefreshInstances(context.Background()); err != nil {
+				t.Fatalf("leased recovery: %v", err)
+			}
+			stored, found, readErr := mgr.instances.get(instance.ID)
+			expectedFinal := InstanceStatusProvisioning
+			if action == "stop" {
+				expectedFinal = InstanceStatusStopped
+			} else if action == "terminate" {
+				expectedFinal = InstanceStatusTerminated
+			}
+			if readErr != nil || !found || stored.Status != expectedFinal || stored.LifecycleClaimedAt != nil {
+				t.Fatalf("ambiguous action did not recover: found=%v err=%v instance=%+v", found, readErr, stored)
+			}
+		})
+	}
+}
+
+func TestManagerRecoveryObservesAppliedActionBeforeRetry(t *testing.T) {
+	for _, action := range []string{"start", "stop", "terminate"} {
+		t.Run(action, func(t *testing.T) {
+			now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+			provider := &blockingLifecycleProvider{mockTestProvider: newMockTestProvider()}
+			mgr := newTestManager(t, ManagerConfig{
+				DefaultProvider: ProviderMock, LifecycleOperationTimeout: 30 * time.Second,
+				LifecycleReconcileLease: time.Minute, Now: func() time.Time { return now },
+			})
+			mgr.RegisterProvider(provider)
+			instance, err := mgr.Provision(context.Background(), &ProvisionRequest{Name: "lost-response-" + action, GPUType: GPURTX4090})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action == "start" {
+				if err := mgr.Stop(context.Background(), instance.ID); err != nil {
+					t.Fatalf("prepare stopped instance: %v", err)
+				}
+				provider.startBeforeErr = true
+				provider.startErr = context.DeadlineExceeded
+				err = mgr.Start(context.Background(), instance.ID)
+			} else if action == "stop" {
+				provider.stopBeforeErr = true
+				provider.stopErr = context.DeadlineExceeded
+				err = mgr.Stop(context.Background(), instance.ID)
+			} else {
+				provider.terminateBeforeErr = true
+				provider.terminateErr = context.DeadlineExceeded
+				err = mgr.Terminate(context.Background(), instance.ID)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected lost provider response, got %v", err)
+			}
+			now = now.Add(2 * time.Minute)
+			if err := mgr.RefreshInstances(context.Background()); err != nil {
+				t.Fatalf("observe applied action: %v", err)
+			}
+			stored, found, readErr := mgr.instances.get(instance.ID)
+			if readErr != nil || !found || stored.LifecycleClaimedAt != nil {
+				t.Fatalf("observed action did not finalize: found=%v err=%v instance=%+v", found, readErr, stored)
+			}
+			switch action {
+			case "start":
+				if stored.Status != InstanceStatusProvisioning || provider.startCalls.Load() != 1 {
+					t.Fatalf("start recovery duplicated provider action or wrong status: calls=%d instance=%+v", provider.startCalls.Load(), stored)
+				}
+			case "stop":
+				if stored.Status != InstanceStatusStopped || provider.stopCalls.Load() != 1 {
+					t.Fatalf("stop recovery duplicated provider action or wrong status: calls=%d instance=%+v", provider.stopCalls.Load(), stored)
+				}
+			case "terminate":
+				if stored.Status != InstanceStatusTerminated || provider.terminateCalls.Load() != 1 {
+					t.Fatalf("terminate recovery duplicated provider action or wrong status: calls=%d instance=%+v", provider.terminateCalls.Load(), stored)
+				}
+			}
+		})
+	}
+}
+
+func TestManagerProvisionCleanupUsesIndependentBoundedContextAndJoinsErrors(t *testing.T) {
+	persistErr := errors.New("persist failed")
+	cleanupErr := errors.New("cleanup failed")
+	store := &lifecycleFaultStore{instanceStore: newInMemoryInstanceStore(), putErr: persistErr}
+	provider := &cleanupObservingProvider{
+		mockTestProvider: newMockTestProvider(), terminateErr: cleanupErr,
+		cleanup: make(chan cleanupContextObservation, 1),
+	}
+	mgr, err := NewManagerWithStore(ManagerConfig{
+		DefaultProvider: ProviderMock, ProviderCleanupTimeout: time.Second,
+	}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	mgr.RegisterProvider(provider)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = mgr.Provision(ctx, &ProvisionRequest{Name: "cleanup-orphan", GPUType: GPURTX4090})
+	if !errors.Is(err, persistErr) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("provision did not retain persistence and cleanup errors: %v", err)
+	}
+	observation := <-provider.cleanup
+	if observation.err != nil || !observation.hasDeadline {
+		t.Fatalf("cleanup reused canceled or unbounded request context: %+v", observation)
 	}
 }
 

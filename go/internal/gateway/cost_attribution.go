@@ -18,8 +18,8 @@ func (g *Gateway) requestCostAttribution(workerID string, decision types.Routing
 	if g.instanceManager == nil || workerID == "" {
 		return audit.UnavailableCostAttribution()
 	}
-	snapshot, ok := g.instanceManager.GetPriceSnapshotForWorker(workerID)
-	if !ok {
+	snapshot, ok, err := g.instanceManager.GetPriceSnapshotForWorkerWithError(workerID)
+	if err != nil || !ok {
 		return audit.UnavailableCostAttribution()
 	}
 	concurrency := int64(1)

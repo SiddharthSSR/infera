@@ -1,20 +1,32 @@
 package providers
 
 import (
+	"crypto/sha256"
 	"slices"
 	"sync"
+	"time"
 )
 
 type instanceStore interface {
-	put(instance *Instance)
-	get(instanceID string) (*Instance, bool)
-	update(instanceID string, apply func(*Instance)) bool
-	list() []*Instance
-	listByProvider(providerType ProviderType) []*Instance
-	listByWorkspace(workspaceID string) []*Instance
-	findReusableStopped(providerType ProviderType, req *ProvisionRequest) *Instance
-	findByWorker(workerID string) (*Instance, bool)
-	findByProviderRef(providerType ProviderType, providerID string) (*Instance, bool)
+	put(instance *Instance) error
+	get(instanceID string) (*Instance, bool, error)
+	update(instanceID string, apply func(*Instance)) (bool, error)
+	updateLifecycle(instanceID string, apply func(*Instance)) (bool, error)
+	updateIfLifecycleVersion(instanceID string, expectedVersion int64, apply func(*Instance)) (bool, error)
+	list() ([]*Instance, error)
+	listByProvider(providerType ProviderType) ([]*Instance, error)
+	listByWorkspace(workspaceID string) ([]*Instance, error)
+	findReusableStopped(providerType ProviderType, req *ProvisionRequest) (*Instance, error)
+	findByWorker(workerID string) (*Instance, bool, error)
+	findByProviderRef(providerType ProviderType, providerID string) (*Instance, bool, error)
+}
+
+type credentialInstanceStore interface {
+	authenticateWorkerTokenHash(hash [sha256.Size]byte) (*Instance, bool, error)
+	authorizeWorkerBinding(instanceID, workerID string) error
+	linkWorker(instanceID, workerID string, now time.Time) error
+	workerCredentialForWorker(workerID string) (string, bool, error)
+	Close() error
 }
 
 type inMemoryInstanceStore struct {
@@ -28,34 +40,63 @@ func newInMemoryInstanceStore() *inMemoryInstanceStore {
 	}
 }
 
-func (s *inMemoryInstanceStore) put(instance *Instance) {
+func (s *inMemoryInstanceStore) put(instance *Instance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.instances[instance.ID] = cloneInstance(instance)
+	stored := cloneInstance(instance)
+	if stored.LifecycleVersion <= 0 {
+		stored.LifecycleVersion = 1
+	}
+	s.instances[instance.ID] = stored
+	return nil
 }
 
-func (s *inMemoryInstanceStore) get(instanceID string) (*Instance, bool) {
+func (s *inMemoryInstanceStore) get(instanceID string) (*Instance, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	instance, exists := s.instances[instanceID]
 	if !exists {
-		return nil, false
+		return nil, false, nil
 	}
-	return cloneInstance(instance), true
+	return cloneInstance(instance), true, nil
 }
 
-func (s *inMemoryInstanceStore) update(instanceID string, apply func(*Instance)) bool {
+func (s *inMemoryInstanceStore) update(instanceID string, apply func(*Instance)) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	instance, exists := s.instances[instanceID]
 	if !exists {
-		return false
+		return false, nil
 	}
 	apply(instance)
-	return true
+	return true, nil
 }
 
-func (s *inMemoryInstanceStore) list() []*Instance {
+func (s *inMemoryInstanceStore) updateLifecycle(instanceID string, apply func(*Instance)) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	instance, exists := s.instances[instanceID]
+	if !exists {
+		return false, nil
+	}
+	apply(instance)
+	instance.LifecycleVersion++
+	return true, nil
+}
+
+func (s *inMemoryInstanceStore) updateIfLifecycleVersion(instanceID string, expectedVersion int64, apply func(*Instance)) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	instance, exists := s.instances[instanceID]
+	if !exists || instance.LifecycleVersion != expectedVersion {
+		return false, nil
+	}
+	apply(instance)
+	instance.LifecycleVersion++
+	return true, nil
+}
+
+func (s *inMemoryInstanceStore) list() ([]*Instance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -63,10 +104,10 @@ func (s *inMemoryInstanceStore) list() []*Instance {
 	for _, instance := range s.instances {
 		instances = append(instances, cloneInstance(instance))
 	}
-	return instances
+	return instances, nil
 }
 
-func (s *inMemoryInstanceStore) listByProvider(providerType ProviderType) []*Instance {
+func (s *inMemoryInstanceStore) listByProvider(providerType ProviderType) ([]*Instance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -76,10 +117,10 @@ func (s *inMemoryInstanceStore) listByProvider(providerType ProviderType) []*Ins
 			instances = append(instances, cloneInstance(instance))
 		}
 	}
-	return instances
+	return instances, nil
 }
 
-func (s *inMemoryInstanceStore) listByWorkspace(workspaceID string) []*Instance {
+func (s *inMemoryInstanceStore) listByWorkspace(workspaceID string) ([]*Instance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -89,12 +130,12 @@ func (s *inMemoryInstanceStore) listByWorkspace(workspaceID string) []*Instance 
 			instances = append(instances, cloneInstance(instance))
 		}
 	}
-	return instances
+	return instances, nil
 }
 
-func (s *inMemoryInstanceStore) findReusableStopped(providerType ProviderType, req *ProvisionRequest) *Instance {
+func (s *inMemoryInstanceStore) findReusableStopped(providerType ProviderType, req *ProvisionRequest) (*Instance, error) {
 	if len(req.Models) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	s.mu.RLock()
@@ -122,31 +163,31 @@ func (s *inMemoryInstanceStore) findReusableStopped(providerType ProviderType, r
 		}
 	}
 
-	return cloneInstance(best)
+	return cloneInstance(best), nil
 }
 
-func (s *inMemoryInstanceStore) findByWorker(workerID string) (*Instance, bool) {
+func (s *inMemoryInstanceStore) findByWorker(workerID string) (*Instance, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, instance := range s.instances {
 		if instance.WorkerID == workerID {
-			return cloneInstance(instance), true
+			return cloneInstance(instance), true, nil
 		}
 	}
-	return nil, false
+	return nil, false, nil
 }
 
-func (s *inMemoryInstanceStore) findByProviderRef(providerType ProviderType, providerID string) (*Instance, bool) {
+func (s *inMemoryInstanceStore) findByProviderRef(providerType ProviderType, providerID string) (*Instance, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, instance := range s.instances {
 		if instance.Provider == providerType && instance.ProviderID == providerID {
-			return cloneInstance(instance), true
+			return cloneInstance(instance), true, nil
 		}
 	}
-	return nil, false
+	return nil, false, nil
 }
 
 func sameModels(a, b []string) bool {
