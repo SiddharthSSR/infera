@@ -89,7 +89,9 @@
    present. Never print the DSN or place SQLite on a shared filesystem.
 2. For multiple replicas, confirm every replica uses `postgres` and the same database. Check
    PostgreSQL connectivity, TLS, connection capacity, storage, and transaction lock waits.
-3. Treat `quota_unavailable` as fail-closed protection. Restore PostgreSQL availability rather
-   than disabling hard limits or switching one replica to a local ledger.
+3. `quota_unavailable` can mean `authHandler.Store().GetWorkspaceQuota` failed against the
+   authorization/configuration store, or that the audit/PostgreSQL ledger failed during
+   reservation. Check both stores and their logs. Preserve fail-closed behavior: do not disable
+   hard limits or switch any replica to a local ledger as a workaround.
 4. For cutover or rollback, follow `docs/operations/shared-audit-ledger.md`; do not run old SQLite
    writers alongside PostgreSQL writers.

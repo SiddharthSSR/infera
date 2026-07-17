@@ -381,6 +381,9 @@ Compatibility notes:
 | `INFERA_GATEWAY_REPLICAS` | `1` | Declared gateway replica count; values above one require PostgreSQL |
 | `INFERA_AUDIT_LEDGER_BACKEND` | `sqlite` | `sqlite` for one replica or `postgres` for a shared transactional ledger |
 | `INFERA_AUDIT_LEDGER_DSN` | — | PostgreSQL connection URI; required for the `postgres` backend and should require TLS in production |
+| `INFERA_AUDIT_LEDGER_MAX_OPEN_CONNS` | `20` | Maximum PostgreSQL ledger connections per gateway replica |
+| `INFERA_AUDIT_LEDGER_MAX_IDLE_CONNS` | `5` | Maximum idle PostgreSQL ledger connections per gateway replica; cannot exceed max open |
+| `INFERA_AUDIT_LEDGER_CONN_MAX_LIFETIME` | `30m` | Positive Go duration limiting PostgreSQL ledger connection lifetime |
 | `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` | — | Base64-encoded 32-byte key used to encrypt workspace provider credentials; required outside development mode |
 | `INFERA_WORKER_IMAGE` | — | Custom worker Docker image pinned to a non-`latest` tag or full digest |
 | `INFERA_DEFAULT_MODEL` | `mistralai/Mistral-7B-Instruct-v0.2` | Default model to load |

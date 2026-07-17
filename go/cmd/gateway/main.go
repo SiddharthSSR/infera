@@ -50,6 +50,11 @@ func main() {
 		log.Error("invalid audit ledger topology", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	postgresLedgerConfig, err := auditPostgresConfigFromEnv()
+	if err != nil {
+		log.Error("invalid audit ledger pool configuration", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 
 	// Create router — batcher tuning via env vars for zero-rebuild tuning in production.
 	routerConfig := router.DefaultConfig()
@@ -285,10 +290,11 @@ func main() {
 
 	// Quota admission and usage reconciliation depend on this ledger. Production
 	// must not start in a superficially healthy state without it.
-	auditStore, err := audit.NewLedger(
+	auditStore, err := audit.NewLedgerWithPostgresConfig(
 		os.Getenv("INFERA_AUDIT_LEDGER_BACKEND"),
 		"data/audit.db",
 		os.Getenv("INFERA_AUDIT_LEDGER_DSN"),
+		postgresLedgerConfig,
 	)
 	if err != nil {
 		if !devMode {
@@ -431,6 +437,44 @@ func validateAuditLedgerTopology(rawReplicas, rawBackend, rawDSN string) error {
 		return errors.New("INFERA_AUDIT_LEDGER_DSN is required for the postgres audit ledger")
 	}
 	return nil
+}
+
+func auditPostgresConfigFromEnv() (audit.PostgresConfig, error) {
+	config := audit.DefaultPostgresConfig()
+	var err error
+	config.MaxOpenConns, err = parseOptionalIntEnv("INFERA_AUDIT_LEDGER_MAX_OPEN_CONNS", config.MaxOpenConns, false)
+	if err != nil {
+		return audit.PostgresConfig{}, err
+	}
+	config.MaxIdleConns, err = parseOptionalIntEnv("INFERA_AUDIT_LEDGER_MAX_IDLE_CONNS", config.MaxIdleConns, true)
+	if err != nil {
+		return audit.PostgresConfig{}, err
+	}
+	if raw := strings.TrimSpace(os.Getenv("INFERA_AUDIT_LEDGER_CONN_MAX_LIFETIME")); raw != "" {
+		config.ConnMaxLifetime, err = time.ParseDuration(raw)
+		if err != nil || config.ConnMaxLifetime <= 0 {
+			return audit.PostgresConfig{}, errors.New("INFERA_AUDIT_LEDGER_CONN_MAX_LIFETIME must be a positive duration")
+		}
+	}
+	if err := config.Validate(); err != nil {
+		return audit.PostgresConfig{}, err
+	}
+	return config, nil
+}
+
+func parseOptionalIntEnv(name string, fallback int, allowZero bool) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 || (!allowZero && value == 0) {
+		if allowZero {
+			return 0, fmt.Errorf("%s must be a non-negative integer", name)
+		}
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return value, nil
 }
 
 func allWorkerImagesEmpty(images map[providers.InferenceEngine]string) bool {

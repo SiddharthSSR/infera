@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 )
 
 // MigrateSQLiteHistory copies immutable audit history into a PostgreSQL
@@ -40,29 +39,20 @@ func (s *Store) MigrateSQLiteHistory(ctx context.Context, sqlitePath string) (in
 
 	var copied int64
 	for rows.Next() {
-		var rec InferenceAuditRecord
-		var timestampMS int64
-		var stream, billable int
+		var row inferenceAuditRow
 		if err := rows.Scan(
-			&timestampMS, &rec.RequestID, &rec.ClientRequestID, &rec.KeyID,
-			&rec.WorkspaceID, &rec.Model, &rec.WorkerID, &stream,
-			&rec.MessageCount, &rec.PromptTokens, &rec.CompletionTokens,
-			&rec.TokenCount, &rec.TokenSource, &billable, &rec.PromptHash,
-			&rec.Status, &rec.ErrorCode, &rec.LatencyMS,
+			&row.TimestampMS, &row.RequestID, &row.ClientRequestID, &row.KeyID,
+			&row.WorkspaceID, &row.Model, &row.WorkerID, &row.Stream,
+			&row.MessageCount, &row.PromptTokens, &row.CompletionTokens,
+			&row.TokenCount, &row.TokenSource, &row.Billable, &row.PromptHash,
+			&row.Status, &row.ErrorCode, &row.LatencyMS,
 		); err != nil {
 			return copied, err
 		}
-		rec.Timestamp = timeFromUnixMilli(timestampMS)
-		rec.Stream = stream == 1
-		rec.Billable = billable == 1
-		if err := s.AppendInference(rec); err != nil {
-			return copied, fmt.Errorf("copy execution %q: %w", rec.RequestID, err)
+		if err := s.appendInferenceRow(row, false); err != nil {
+			return copied, fmt.Errorf("copy execution %q: %w", row.RequestID, err)
 		}
 		copied++
 	}
 	return copied, rows.Err()
-}
-
-func timeFromUnixMilli(value int64) time.Time {
-	return time.UnixMilli(value).UTC()
 }

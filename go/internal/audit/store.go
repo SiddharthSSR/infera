@@ -101,14 +101,41 @@ var auditMigrations = []migrate.Migration{
 		CREATE INDEX IF NOT EXISTS idx_quota_reservations_expiry
 			ON quota_reservations(expires_at_ms);`,
 	},
+	{
+		Version:     5,
+		Description: "scope quota reservation identities by workspace",
+		SQL: `
+		CREATE TABLE quota_reservations_v5 (
+			workspace_id      TEXT NOT NULL,
+			execution_id      TEXT NOT NULL,
+			period_start_ms    INTEGER NOT NULL,
+			period_end_ms      INTEGER NOT NULL,
+			reserved_requests INTEGER NOT NULL,
+			reserved_tokens   INTEGER NOT NULL,
+			expires_at_ms      INTEGER NOT NULL,
+			created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (workspace_id, execution_id)
+		);
+		INSERT INTO quota_reservations_v5
+			(workspace_id, execution_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms, created_at)
+		SELECT workspace_id, execution_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms, created_at
+		FROM quota_reservations;
+		DROP TABLE quota_reservations;
+		ALTER TABLE quota_reservations_v5 RENAME TO quota_reservations;
+		CREATE INDEX idx_quota_reservations_workspace_period
+			ON quota_reservations(workspace_id, period_start_ms, period_end_ms);
+		CREATE INDEX idx_quota_reservations_expiry
+			ON quota_reservations(expires_at_ms);`,
+	},
 }
 
 var ErrQuotaExceeded = errors.New("workspace quota exceeded")
 
 type Store struct {
-	db                   *sql.DB
-	dialect              ledgerDialect
-	quotaSnapshotBarrier *quotaSnapshotBarrier
+	db                    *sql.DB
+	dialect               ledgerDialect
+	quotaSnapshotBarrier  *quotaSnapshotBarrier
+	quotaAdmissionBarrier func(*sql.Tx) error
 }
 
 // quotaSnapshotBarrier is test-only synchronization for proving that both
@@ -124,6 +151,34 @@ const (
 	dialectSQLite   ledgerDialect = "sqlite"
 	dialectPostgres ledgerDialect = "postgres"
 )
+
+const (
+	postgresSchemaVersion  = "5"
+	postgresWriterProtocol = "2"
+)
+
+type PostgresConfig struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+}
+
+func DefaultPostgresConfig() PostgresConfig {
+	return PostgresConfig{MaxOpenConns: 20, MaxIdleConns: 5, ConnMaxLifetime: 30 * time.Minute}
+}
+
+func (c PostgresConfig) Validate() error {
+	if c.MaxOpenConns < 1 {
+		return errors.New("postgres max open connections must be positive")
+	}
+	if c.MaxIdleConns < 0 || c.MaxIdleConns > c.MaxOpenConns {
+		return errors.New("postgres max idle connections must be between zero and max open connections")
+	}
+	if c.ConnMaxLifetime <= 0 {
+		return errors.New("postgres connection max lifetime must be positive")
+	}
+	return nil
+}
 
 // Ledger is the durable audit and quota contract used by the gateway.
 type Ledger interface {
@@ -149,6 +204,27 @@ type InferenceAuditRecord struct {
 	TokenCount       int
 	TokenSource      string
 	Billable         bool
+	PromptHash       string
+	Status           string
+	ErrorCode        string
+	LatencyMS        int64
+}
+
+type inferenceAuditRow struct {
+	TimestampMS      int64
+	RequestID        string
+	ClientRequestID  string
+	KeyID            string
+	WorkspaceID      string
+	Model            string
+	WorkerID         string
+	Stream           int64
+	MessageCount     int64
+	PromptTokens     int64
+	CompletionTokens int64
+	TokenCount       int64
+	TokenSource      string
+	Billable         int64
 	PromptHash       string
 	Status           string
 	ErrorCode        string
@@ -229,16 +305,23 @@ func NewStore(dbPath string) (*Store, error) {
 
 // NewPostgresStore opens the shared, multi-replica audit and quota ledger.
 func NewPostgresStore(dsn string) (*Store, error) {
+	return NewPostgresStoreWithConfig(dsn, DefaultPostgresConfig())
+}
+
+func NewPostgresStoreWithConfig(dsn string, config PostgresConfig) (*Store, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, errors.New("postgres audit ledger DSN is required")
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(20)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetMaxOpenConns(config.MaxOpenConns)
+	db.SetMaxIdleConns(config.MaxIdleConns)
+	db.SetConnMaxLifetime(config.ConnMaxLifetime)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -253,11 +336,15 @@ func NewPostgresStore(dsn string) (*Store, error) {
 // NewLedger selects the configured ledger without treating a filesystem path
 // as a shared multi-replica database.
 func NewLedger(backend, sqlitePath, postgresDSN string) (Ledger, error) {
+	return NewLedgerWithPostgresConfig(backend, sqlitePath, postgresDSN, DefaultPostgresConfig())
+}
+
+func NewLedgerWithPostgresConfig(backend, sqlitePath, postgresDSN string, postgresConfig PostgresConfig) (Ledger, error) {
 	switch strings.ToLower(strings.TrimSpace(backend)) {
 	case "", "sqlite":
 		return NewStore(sqlitePath)
 	case "postgres", "postgresql":
-		return NewPostgresStore(postgresDSN)
+		return NewPostgresStoreWithConfig(postgresDSN, postgresConfig)
 	default:
 		return nil, fmt.Errorf("unsupported audit ledger backend %q", backend)
 	}
@@ -272,11 +359,20 @@ func migratePostgres(db *sql.DB) error {
 	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(4242424201)`); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS audit_ledger_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
+		return err
+	}
+	var protocol string
+	err = tx.QueryRow(`SELECT value FROM audit_ledger_metadata WHERE key = 'writer_protocol'`).Scan(&protocol)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		protocol = postgresWriterProtocol
+	case err != nil:
+		return err
+	case protocol != "1" && protocol != postgresWriterProtocol:
+		return fmt.Errorf("audit ledger writer protocol %q is incompatible with this gateway", protocol)
+	}
 	ddl := `
-		CREATE TABLE IF NOT EXISTS audit_ledger_metadata (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		);
 		CREATE TABLE IF NOT EXISTS inference_audit (
 			id BIGSERIAL PRIMARY KEY,
 			ts_unix_ms BIGINT NOT NULL,
@@ -306,21 +402,18 @@ func migratePostgres(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_inference_audit_workspace_ts ON inference_audit(workspace_id, ts_unix_ms);
 		CREATE INDEX IF NOT EXISTS idx_inference_audit_workspace_client_request ON inference_audit(workspace_id, client_request_id);
 		CREATE TABLE IF NOT EXISTS quota_reservations (
-			execution_id TEXT PRIMARY KEY,
 			workspace_id TEXT NOT NULL,
+			execution_id TEXT NOT NULL,
 			period_start_ms BIGINT NOT NULL,
 			period_end_ms BIGINT NOT NULL,
 			reserved_requests BIGINT NOT NULL,
 			reserved_tokens BIGINT NOT NULL,
 			expires_at_ms BIGINT NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (workspace_id, execution_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_quota_reservations_workspace_period ON quota_reservations(workspace_id, period_start_ms, period_end_ms);
 		CREATE INDEX IF NOT EXISTS idx_quota_reservations_expiry ON quota_reservations(expires_at_ms);
-		INSERT INTO audit_ledger_metadata (key, value) VALUES ('schema_version', '4')
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
-		INSERT INTO audit_ledger_metadata (key, value) VALUES ('writer_protocol', '1')
-		ON CONFLICT (key) DO NOTHING;
 	`
 	for _, statement := range strings.Split(ddl, ";") {
 		if strings.TrimSpace(statement) == "" {
@@ -330,12 +423,43 @@ func migratePostgres(db *sql.DB) error {
 			return err
 		}
 	}
-	var protocol string
-	if err := tx.QueryRow(`SELECT value FROM audit_ledger_metadata WHERE key = 'writer_protocol'`).Scan(&protocol); err != nil {
+	var primaryKeyName string
+	if err := tx.QueryRow(`
+		SELECT conname FROM pg_constraint
+		WHERE conrelid = 'quota_reservations'::regclass AND contype = 'p'`).Scan(&primaryKeyName); err != nil {
 		return err
 	}
-	if protocol != "1" {
-		return fmt.Errorf("audit ledger writer protocol %q is incompatible with this gateway", protocol)
+	var matchingColumns, totalColumns int
+	if err := tx.QueryRow(`
+		SELECT
+			COUNT(*) FILTER (WHERE (key_column.ordinality = 1 AND attribute.attname = 'workspace_id')
+			                      OR (key_column.ordinality = 2 AND attribute.attname = 'execution_id')),
+			COUNT(*)
+		FROM pg_constraint constraint_row
+		CROSS JOIN LATERAL unnest(constraint_row.conkey) WITH ORDINALITY AS key_column(attnum, ordinality)
+		JOIN pg_attribute attribute
+		  ON attribute.attrelid = constraint_row.conrelid AND attribute.attnum = key_column.attnum
+		WHERE constraint_row.conrelid = 'quota_reservations'::regclass AND constraint_row.contype = 'p'`).Scan(&matchingColumns, &totalColumns); err != nil {
+		return err
+	}
+	if matchingColumns != 2 || totalColumns != 2 {
+		quotedConstraint := `"` + strings.ReplaceAll(primaryKeyName, `"`, `""`) + `"`
+		if _, err := tx.Exec(`ALTER TABLE quota_reservations DROP CONSTRAINT ` + quotedConstraint); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`ALTER TABLE quota_reservations ADD PRIMARY KEY (workspace_id, execution_id)`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO audit_ledger_metadata (key, value) VALUES ('schema_version', $1)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, postgresSchemaVersion); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO audit_ledger_metadata (key, value) VALUES ('writer_protocol', $1)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, postgresWriterProtocol); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -353,11 +477,11 @@ func (s *Store) bind(query string) string {
 	})
 }
 
-func (s *Store) lockExecution(tx *sql.Tx, executionID string) error {
+func (s *Store) lockExecution(tx *sql.Tx, workspaceID, executionID string) error {
 	if s.dialect != dialectPostgres {
 		return nil
 	}
-	_, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "execution:"+executionID)
+	_, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended($2, hashtextextended($1, 0)))`, workspaceID, executionID)
 	return err
 }
 
@@ -424,38 +548,36 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 		billable = 1
 	}
 
+	row := inferenceAuditRow{
+		TimestampMS: ts.UnixMilli(), RequestID: rec.RequestID,
+		ClientRequestID: strings.TrimSpace(rec.ClientRequestID), KeyID: keyID,
+		WorkspaceID: workspaceID, Model: rec.Model, WorkerID: rec.WorkerID,
+		Stream: int64(stream), MessageCount: int64(rec.MessageCount),
+		PromptTokens: int64(rec.PromptTokens), CompletionTokens: int64(rec.CompletionTokens),
+		TokenCount: int64(rec.TokenCount), TokenSource: tokenSource, Billable: int64(billable),
+		PromptHash: rec.PromptHash, Status: rec.Status, ErrorCode: rec.ErrorCode, LatencyMS: rec.LatencyMS,
+	}
+	return s.appendInferenceRow(row, true)
+}
+
+func (s *Store) appendInferenceRow(row inferenceAuditRow, finalizeReservation bool) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.lockExecution(tx, rec.RequestID); err != nil {
+	if err := s.lockExecution(tx, row.WorkspaceID, row.RequestID); err != nil {
 		return err
 	}
-
 	result, err := tx.Exec(
 		s.bind(`INSERT INTO inference_audit
 		 (ts_unix_ms, request_id, client_request_id, key_id, workspace_id, model, worker_id, stream, message_count, prompt_tokens, completion_tokens, token_count, token_source, billable, prompt_hash, status, error_code, latency_ms)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(workspace_id, request_id) DO NOTHING`),
-		ts.UnixMilli(),
-		rec.RequestID,
-		strings.TrimSpace(rec.ClientRequestID),
-		keyID,
-		workspaceID,
-		rec.Model,
-		rec.WorkerID,
-		stream,
-		rec.MessageCount,
-		rec.PromptTokens,
-		rec.CompletionTokens,
-		rec.TokenCount,
-		tokenSource,
-		billable,
-		rec.PromptHash,
-		rec.Status,
-		rec.ErrorCode,
-		rec.LatencyMS,
+		row.TimestampMS, row.RequestID, row.ClientRequestID, row.KeyID, row.WorkspaceID,
+		row.Model, row.WorkerID, row.Stream, row.MessageCount, row.PromptTokens,
+		row.CompletionTokens, row.TokenCount, row.TokenSource, row.Billable,
+		row.PromptHash, row.Status, row.ErrorCode, row.LatencyMS,
 	)
 	if err != nil {
 		return err
@@ -465,43 +587,32 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 		return err
 	}
 	if rowsAffected == 0 {
-		var existing InferenceAuditRecord
-		var existingTimestampMS int64
-		var existingStream, existingBillable int
+		var existing inferenceAuditRow
 		if err := tx.QueryRow(s.bind(`
 			SELECT ts_unix_ms, client_request_id, key_id, model, worker_id, stream,
 			       message_count, prompt_tokens, completion_tokens, token_count,
 			       token_source, billable, prompt_hash, status, error_code, latency_ms
 			FROM inference_audit WHERE workspace_id = ? AND request_id = ?`),
-			workspaceID, rec.RequestID,
+			row.WorkspaceID, row.RequestID,
 		).Scan(
-			&existingTimestampMS, &existing.ClientRequestID, &existing.KeyID,
-			&existing.Model, &existing.WorkerID, &existingStream,
+			&existing.TimestampMS, &existing.ClientRequestID, &existing.KeyID,
+			&existing.Model, &existing.WorkerID, &existing.Stream,
 			&existing.MessageCount, &existing.PromptTokens, &existing.CompletionTokens,
-			&existing.TokenCount, &existing.TokenSource, &existingBillable,
+			&existing.TokenCount, &existing.TokenSource, &existing.Billable,
 			&existing.PromptHash, &existing.Status, &existing.ErrorCode, &existing.LatencyMS,
 		); err != nil {
 			return err
 		}
-		existing.Timestamp = time.UnixMilli(existingTimestampMS).UTC()
-		existing.RequestID = rec.RequestID
-		existing.WorkspaceID = workspaceID
-		existing.Stream = existingStream == 1
-		existing.Billable = existingBillable == 1
-		candidate := rec
-		candidate.Timestamp = ts.UTC().Truncate(time.Millisecond)
-		candidate.ClientRequestID = strings.TrimSpace(candidate.ClientRequestID)
-		candidate.KeyID = keyID
-		candidate.WorkspaceID = workspaceID
-		candidate.TokenCount = rec.TokenCount
-		candidate.TokenSource = tokenSource
-		candidate.Billable = billable == 1
-		if existing != candidate {
-			return fmt.Errorf("execution identity %q already records a different inference event", rec.RequestID)
+		existing.RequestID = row.RequestID
+		existing.WorkspaceID = row.WorkspaceID
+		if existing != row {
+			return fmt.Errorf("execution identity %q already records a different inference event in workspace %q", row.RequestID, row.WorkspaceID)
 		}
 	}
-	if _, err := tx.Exec(s.bind(`DELETE FROM quota_reservations WHERE execution_id = ?`), rec.RequestID); err != nil {
-		return err
+	if finalizeReservation {
+		if _, err := tx.Exec(s.bind(`DELETE FROM quota_reservations WHERE workspace_id = ? AND execution_id = ?`), row.WorkspaceID, row.RequestID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -532,7 +643,7 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.lockExecution(tx, executionID); err != nil {
+	if err := s.lockExecution(tx, workspaceID, executionID); err != nil {
 		return err
 	}
 	if err := s.lockQuotaPeriod(tx, workspaceID, start.UnixMilli(), end.UnixMilli()); err != nil {
@@ -546,25 +657,23 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 		return err
 	}
 
-	var existingWorkspace string
 	var existingStart, existingEnd, existingRequests, existingTokens, existingExpiry int64
 	err = tx.QueryRow(s.bind(`
-		SELECT workspace_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms
-		FROM quota_reservations WHERE execution_id = ?`), executionID,
-	).Scan(&existingWorkspace, &existingStart, &existingEnd, &existingRequests, &existingTokens, &existingExpiry)
+		SELECT period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms
+		FROM quota_reservations WHERE workspace_id = ? AND execution_id = ?`), workspaceID, executionID,
+	).Scan(&existingStart, &existingEnd, &existingRequests, &existingTokens, &existingExpiry)
 	if err == nil && existingExpiry <= nowMS {
-		if _, deleteErr := tx.Exec(s.bind(`DELETE FROM quota_reservations WHERE execution_id = ?`), executionID); deleteErr != nil {
+		if _, deleteErr := tx.Exec(s.bind(`DELETE FROM quota_reservations WHERE workspace_id = ? AND execution_id = ?`), workspaceID, executionID); deleteErr != nil {
 			return deleteErr
 		}
 		err = sql.ErrNoRows
 	}
 	switch {
 	case err == nil:
-		if existingWorkspace == workspaceID && existingStart == start.UnixMilli() &&
-			existingEnd == end.UnixMilli() && existingRequests == res.ReservedRequests &&
+		if existingStart == start.UnixMilli() && existingEnd == end.UnixMilli() && existingRequests == res.ReservedRequests &&
 			existingTokens == res.ReservedTokens {
 			if expiresAt.UnixMilli() > existingExpiry {
-				if _, err := tx.Exec(s.bind(`UPDATE quota_reservations SET expires_at_ms = ? WHERE execution_id = ?`), expiresAt.UnixMilli(), executionID); err != nil {
+				if _, err := tx.Exec(s.bind(`UPDATE quota_reservations SET expires_at_ms = ? WHERE workspace_id = ? AND execution_id = ?`), expiresAt.UnixMilli(), workspaceID, executionID); err != nil {
 					return err
 				}
 			}
@@ -587,11 +696,16 @@ func (s *Store) ReserveQuota(res QuotaReservation) error {
 	if quotaWouldExceed(res.MonthlyTokenLimit, committedTokens, pendingTokens, res.ReservedTokens) {
 		return ErrQuotaExceeded
 	}
+	if s.quotaAdmissionBarrier != nil {
+		if err := s.quotaAdmissionBarrier(tx); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(s.bind(`
 		INSERT INTO quota_reservations
-		(execution_id, workspace_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms)
+		(workspace_id, execution_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`),
-		executionID, workspaceID, start.UnixMilli(), end.UnixMilli(),
+		workspaceID, executionID, start.UnixMilli(), end.UnixMilli(),
 		res.ReservedRequests, res.ReservedTokens, expiresAt.UnixMilli(),
 	); err != nil {
 		return err

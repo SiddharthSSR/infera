@@ -20,7 +20,9 @@ This is a stop-the-world data cutover. Mixed SQLite/PostgreSQL writers are inten
 supported because they have no common quota serialization point.
 
 1. Provision PostgreSQL with encrypted connections, automated backups, point-in-time recovery,
-   storage alerts, and enough connections for `20 × gateway replicas` plus operational headroom.
+   storage alerts, and enough connections for `INFERA_AUDIT_LEDGER_MAX_OPEN_CONNS × gateway replicas`
+   plus operational headroom. Tune max-open, max-idle, and connection lifetime through the
+   corresponding `INFERA_AUDIT_LEDGER_*` settings rather than rebuilding the gateway.
 2. Back up `data/audit.db` and its `-wal`/`-shm` files after stopping every gateway. Keep the
    original files read-only until the rollback window closes.
 3. Run the idempotent migration from the repository root:
@@ -49,7 +51,7 @@ accounting state.
 
 ## Rollback
 
-Application rollback is safe only to a release that supports PostgreSQL writer protocol `1`.
+Application rollback is safe only to a release that supports PostgreSQL writer protocol `2`.
 Rollback all replicas together and leave them on the same PostgreSQL ledger. Returning to SQLite
 requires a full outage and a separately reviewed PostgreSQL-to-SQLite export; this release does not
 provide that lossy reverse migration. Do not re-enable the pre-cutover SQLite copy after PostgreSQL
@@ -57,8 +59,9 @@ has accepted writes.
 
 ## Mixed-version behavior
 
-The ledger records writer protocol `1` and rejects a gateway if the database advertises a different
-protocol. Releases using protocol `1` may overlap during a rolling application deployment.
+The ledger records writer protocol `2` and rejects a gateway if the database advertises a different
+protocol. Protocol `2` scopes reservation identities by workspace; protocol `1` gateways must be
+fully drained before the schema upgrade because they assume globally unique execution IDs.
 Pre-INF-42 gateways never connect to this ledger and therefore must not overlap: drain and stop them
 before migration. Schema changes that alter reservation or idempotency semantics must introduce a
 new writer protocol and use a coordinated, non-mixed rollout.
