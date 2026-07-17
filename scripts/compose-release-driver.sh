@@ -30,6 +30,20 @@ INFERA_WORKER_IMAGE="$(value "${MANIFEST}" INFERA_WORKER_IMAGE)"
 INFERA_WORKER_PROTOCOL_VERSION="$(value "${MANIFEST}" INFERA_WORKER_PROTOCOL_VERSION)"
 export INFERA_RELEASE_ID INFERA_GATEWAY_IMAGE INFERA_WORKER_IMAGE INFERA_WORKER_PROTOCOL_VERSION
 
+# The gateway selects an engine-specific worker image before provider
+# provisioning. Pin that selector to the release manifest for both rollout and
+# rollback so a value left in .env cannot cross release-set boundaries.
+case "${INFERA_RECOVERY_WORKER_ENGINE:-vllm}" in
+  vllm) export INFERA_WORKER_IMAGE_VLLM="${INFERA_WORKER_IMAGE}" ;;
+  sglang) export INFERA_WORKER_IMAGE_SGLANG="${INFERA_WORKER_IMAGE}" ;;
+  tensorrt_llm) export INFERA_WORKER_IMAGE_TENSORRT_LLM="${INFERA_WORKER_IMAGE}" ;;
+  mock) export INFERA_WORKER_IMAGE_MOCK="${INFERA_WORKER_IMAGE}" ;;
+  *)
+    echo "ERROR: unsupported recovery worker engine: ${INFERA_RECOVERY_WORKER_ENGINE}" >&2
+    exit 2
+    ;;
+esac
+
 case "${ACTION}" in
   preflight)
     for executable_name in \

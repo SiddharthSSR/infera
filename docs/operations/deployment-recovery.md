@@ -115,7 +115,9 @@ The command performs these gates in order:
 The RunPod deployment adapter requires an explicit reviewed `INFERA_RECOVERY_WORKER_MODEL`; it does
 not select a model implicitly. It defaults to one `RTX_4090` vLLM worker, with
 `INFERA_RECOVERY_WORKER_GPU_TYPE` and `INFERA_RECOVERY_WORKER_ENGINE` available when the reviewed
-release requires different capacity. It reads the admin and RunPod keys from the environment or `INFERA_ENV_FILE`,
+release requires different capacity. The recovery driver pins the selected engine-specific gateway
+image variable to the manifest's worker image for both rollout and rollback, preventing stale `.env`
+values from mixing release sets. It reads the admin and RunPod keys from the environment or `INFERA_ENV_FILE`,
 places bearer headers only in mode-0600 temporary curl configuration files, and waits for the
 gateway-managed worker to register. Before provisioning or stopping, it reconciles only pods whose
 name exactly matches `infera-release-<release ID>`; an orphan from an interrupted attempt is
