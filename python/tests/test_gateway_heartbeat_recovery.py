@@ -1,5 +1,6 @@
 """Deterministic coverage for gateway heartbeat registration recovery."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -80,6 +81,20 @@ async def test_failed_reregistration_keeps_heartbeats_paused(mock_worker_config,
     assert server._gateway_registered is False
     assert 'status="registration_lost"' in heartbeat_metrics(server)
 
+    heartbeat_client = SimpleNamespace(post=AsyncMock())
+    monkeypatch.setattr(server, "_ensure_gateway_client", lambda: heartbeat_client)
+    monkeypatch.setattr(
+        "infera_worker.http_server.asyncio.sleep",
+        AsyncMock(side_effect=[None, asyncio.CancelledError()]),
+    )
+    register.reset_mock()
+
+    await server._heartbeat_loop()
+
+    register.assert_awaited_once()
+    heartbeat_client.post.assert_not_awaited()
+    assert server._gateway_registered is False
+
 
 @pytest.mark.asyncio
 async def test_malformed_heartbeat_ack_is_not_treated_as_success(
@@ -118,4 +133,32 @@ async def test_heartbeat_auth_rejections_still_request_shutdown(
     assert server._consecutive_auth_failures == 10
     assert server.worker._shutdown_event.is_set()
     assert server._gateway_registered is True
+    assert 'status="auth_rejected"' in heartbeat_metrics(server)
+
+
+@pytest.mark.asyncio
+async def test_registration_recovery_auth_rejections_request_shutdown(
+    mock_worker_config, monkeypatch
+):
+    registration_urls: list[str] = []
+
+    class RejectingGatewayClient:
+        is_closed = False
+
+        async def post(self, url, **_kwargs):
+            registration_urls.append(url)
+            return SimpleNamespace(status_code=403, text="forbidden")
+
+    server = HTTPServer(Worker(mock_worker_config), mock_worker_config)
+    server._gateway_registered = False
+    monkeypatch.setattr(server, "_ensure_gateway_client", lambda: RejectingGatewayClient())
+    monkeypatch.setattr("infera_worker.http_server.asyncio.sleep", AsyncMock())
+
+    await server._heartbeat_loop()
+
+    assert len(registration_urls) == 10
+    assert all(url.endswith("/api/workers/register") for url in registration_urls)
+    assert server._consecutive_auth_failures == 10
+    assert server.worker._shutdown_event.is_set()
+    assert server._gateway_registered is False
     assert 'status="auth_rejected"' in heartbeat_metrics(server)

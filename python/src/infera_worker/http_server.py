@@ -37,6 +37,15 @@ from .worker import Worker
 logger = structlog.get_logger()
 
 
+class GatewayRegistrationAuthRejectedError(RuntimeError):
+    """Raised when the gateway rejects worker registration credentials."""
+
+    def __init__(self, status_code: int, response_text: str) -> None:
+        super().__init__("Gateway auth rejected worker registration")
+        self.status_code = status_code
+        self.response_text = response_text
+
+
 def build_gateway_url(router_address: str, path: str) -> str:
     """Build a gateway URL with proper protocol.
 
@@ -343,7 +352,9 @@ class HTTPServer:
                         gateway_url=gateway_url,
                         worker_id=self.worker.worker_id,
                     )
-                    raise RuntimeError("Gateway auth rejected worker registration")
+                    raise GatewayRegistrationAuthRejectedError(
+                        response.status_code, response.text
+                    )
                 elif 400 <= response.status_code < 500:
                     self._record_gateway_registration("client_error")
                     logger.error(
@@ -453,31 +464,9 @@ class HTTPServer:
                 if response.status_code == 200:
                     await self._handle_gateway_heartbeat_ack(response, gateway_url)
                 elif response.status_code in (401, 403):
-                    self._record_gateway_heartbeat("auth_rejected")
-                    self._consecutive_auth_failures += 1
-                    logger.warning(
-                        "Heartbeat rejected by gateway auth",
-                        status=response.status_code,
-                        response=response.text,
-                        gateway_url=gateway_url,
-                        worker_id=self.worker.worker_id,
-                        consecutive_failures=self._consecutive_auth_failures,
-                    )
-                    # Warn at halfway point so operators can act before shutdown.
-                    if self._consecutive_auth_failures == 5:
-                        logger.error(
-                            "Sustained heartbeat auth failures — worker will shut down after 10 consecutive failures",
-                            worker_id=self.worker.worker_id,
-                            gateway_url=gateway_url,
-                        )
-                    if self._consecutive_auth_failures >= 10:
-                        logger.error(
-                            "Stopping heartbeat loop after repeated auth failures",
-                            worker_id=self.worker.worker_id,
-                            failures=self._consecutive_auth_failures,
-                            gateway_url=gateway_url,
-                        )
-                        self.worker.request_shutdown()
+                    if not self._handle_gateway_auth_rejection(
+                        gateway_url, response.status_code, response.text
+                    ):
                         break
                 else:
                     self._record_gateway_heartbeat("http_error")
@@ -492,9 +481,45 @@ class HTTPServer:
 
             except asyncio.CancelledError:
                 break
+            except GatewayRegistrationAuthRejectedError as exc:
+                if not self._handle_gateway_auth_rejection(
+                    gateway_url, exc.status_code, exc.response_text
+                ):
+                    break
             except Exception as e:
                 self._record_gateway_heartbeat("exception")
                 logger.debug("Heartbeat failed", error=str(e))
+
+    def _handle_gateway_auth_rejection(
+        self, gateway_url: str, status_code: int, response_text: str
+    ) -> bool:
+        """Count an auth rejection and return whether reporting should retry."""
+        self._record_gateway_heartbeat("auth_rejected")
+        self._consecutive_auth_failures += 1
+        logger.warning(
+            "Heartbeat rejected by gateway auth",
+            status=status_code,
+            response=response_text,
+            gateway_url=gateway_url,
+            worker_id=self.worker.worker_id,
+            consecutive_failures=self._consecutive_auth_failures,
+        )
+        if self._consecutive_auth_failures == 5:
+            logger.error(
+                "Sustained heartbeat auth failures — worker will shut down after 10 consecutive failures",
+                worker_id=self.worker.worker_id,
+                gateway_url=gateway_url,
+            )
+        if self._consecutive_auth_failures >= 10:
+            logger.error(
+                "Stopping heartbeat loop after repeated auth failures",
+                worker_id=self.worker.worker_id,
+                failures=self._consecutive_auth_failures,
+                gateway_url=gateway_url,
+            )
+            self.worker.request_shutdown()
+            return False
+        return True
 
     async def _handle_gateway_heartbeat_ack(self, response: httpx.Response, gateway_url: str) -> None:
         """Accept an acknowledged heartbeat or restore lost gateway registration."""
@@ -529,6 +554,14 @@ class HTTPServer:
         try:
             await self._register_with_gateway()
         except asyncio.CancelledError:
+            raise
+        except GatewayRegistrationAuthRejectedError as exc:
+            logger.warning(
+                "Gateway rejected registration recovery credentials",
+                gateway=self.config.router_address,
+                worker_id=self.worker.worker_id,
+                status=exc.status_code,
+            )
             raise
         except Exception as exc:
             logger.warning(
