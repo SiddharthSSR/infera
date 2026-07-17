@@ -22,7 +22,8 @@ func TestPostgresCrossProcessQuotaAdmission(t *testing.T) {
 		return
 	}
 
-	workspaceID := "ws_cross_process_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	testSuffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	workspaceID := "ws_cross_process_" + testSuffix
 	startFile := filepath.Join(t.TempDir(), "start")
 	commands := make([]*exec.Cmd, 2)
 	for i := range commands {
@@ -30,7 +31,7 @@ func TestPostgresCrossProcessQuotaAdmission(t *testing.T) {
 		commands[i].Env = append(os.Environ(),
 			"INFERA_QUOTA_HELPER=1",
 			"INFERA_QUOTA_WORKSPACE="+workspaceID,
-			fmt.Sprintf("INFERA_QUOTA_EXECUTION=exec_%d", i),
+			fmt.Sprintf("INFERA_QUOTA_EXECUTION=exec_%s_%d", testSuffix, i),
 			"INFERA_QUOTA_START_FILE="+startFile,
 		)
 		if err := commands[i].Start(); err != nil {
@@ -99,8 +100,11 @@ func TestPostgresQuotaSnapshotCountsReservationDuringAuditTransition(t *testing.
 	if _, err := gateConn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, barrier.releaseLockID); err != nil {
 		t.Fatalf("hold snapshot gate: %v", err)
 	}
+	gateHeld := true
 	defer func() {
-		_, _ = gateConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, barrier.releaseLockID)
+		if gateHeld {
+			_, _ = gateConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, barrier.releaseLockID)
+		}
 	}()
 
 	result := make(chan error, 1)
@@ -142,6 +146,7 @@ func TestPostgresQuotaSnapshotCountsReservationDuringAuditTransition(t *testing.
 	if _, err := gateConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, barrier.releaseLockID); err != nil {
 		t.Fatalf("release snapshot gate: %v", err)
 	}
+	gateHeld = false
 
 	select {
 	case err := <-result:
