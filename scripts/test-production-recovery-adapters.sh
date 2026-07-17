@@ -21,6 +21,7 @@ cat >"${TMP_DIR}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf 'docker:%s\n' "$*" >>"${TEST_CALLS}"
+printf 'docker-worker-vllm:%s\n' "${INFERA_WORKER_IMAGE_VLLM:-}" >>"${TEST_CALLS}"
 if [[ "${1:-}" == "cp" && -n "${TEST_CADDY_CONFIG:-}" ]]; then
   cp "$2" "${TEST_CADDY_CONFIG}"
 fi
@@ -188,6 +189,8 @@ fi
 : >"${TEST_CALLS}"
 if TEST_GATEWAY_REPLICAS=2 \
 INFERA_GATEWAY_REPLICAS=2 \
+INFERA_RECOVERY_WORKER_ENGINE=vllm \
+INFERA_WORKER_IMAGE_VLLM=example/stale-worker:old \
 INFERA_CONTROL_STATE_DSN=postgresql://control.invalid/infera \
 INFERA_AUDIT_LEDGER_BACKEND=postgres \
 INFERA_AUDIT_LEDGER_DSN=postgresql://ledger.invalid/infera \
@@ -212,6 +215,13 @@ else
   exit 1
 fi
 grep -q -- '--scale gateway=2 gateway' "${TEST_CALLS}"
+grep -q 'docker-worker-vllm:example/worker:release-1' "${TEST_CALLS}"
+
+if INFERA_RECOVERY_WORKER_ENGINE=unsupported \
+  "${REPO_ROOT}/scripts/compose-release-driver.sh" deploy-gateway "${TMP_DIR}/release.manifest"; then
+  echo "unsupported recovery worker engine must fail closed" >&2
+  exit 1
+fi
 
 if TEST_GATEWAY_NETWORKS=2 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_url' _ "${REPO_ROOT}"; then
   echo "multiple gateway network addresses must fail closed" >&2
