@@ -103,3 +103,54 @@ func TestAuditLedgerTopologyRejectsUnsafeReplicas(t *testing.T) {
 		t.Fatal("expected unsupported backend rejection")
 	}
 }
+
+func TestControlStateTopologyRequiresDurabilityInProductionAndAcrossReplicas(t *testing.T) {
+	if err := validateControlStateTopology(true, "1", ""); err != nil {
+		t.Fatalf("single-replica development should allow in-memory state: %v", err)
+	}
+	if err := validateControlStateTopology(false, "1", ""); err == nil || !strings.Contains(err.Error(), "INFERA_CONTROL_STATE_DSN") {
+		t.Fatalf("expected production DSN requirement, got %v", err)
+	}
+	if err := validateControlStateTopology(true, "2", ""); err == nil || !strings.Contains(err.Error(), "INFERA_CONTROL_STATE_DSN") {
+		t.Fatalf("expected multi-replica DSN requirement, got %v", err)
+	}
+	if err := validateControlStateTopology(false, "2", "postgres://control"); err != nil {
+		t.Fatalf("shared production control state should be valid: %v", err)
+	}
+}
+
+func TestControlStatePostgresConfigsFromEnv(t *testing.T) {
+	t.Setenv("INFERA_CONTROL_STATE_QUERY_TIMEOUT", "2s")
+	t.Setenv("INFERA_CONTROL_STATE_MAX_OPEN_CONNS", "12")
+	t.Setenv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS", "3")
+	t.Setenv("INFERA_CONTROL_STATE_CONN_MAX_LIFETIME", "10m")
+	instanceConfig, registryConfig, err := controlStatePostgresConfigsFromEnv()
+	if err != nil {
+		t.Fatalf("controlStatePostgresConfigsFromEnv: %v", err)
+	}
+	if instanceConfig.QueryTimeout != 2*time.Second || instanceConfig.MaxOpenConns != 12 || instanceConfig.MaxIdleConns != 3 || instanceConfig.ConnMaxLifetime != 10*time.Minute {
+		t.Fatalf("unexpected instance config: %+v", instanceConfig)
+	}
+	if registryConfig.QueryTimeout != instanceConfig.QueryTimeout || registryConfig.MaxOpenConns != instanceConfig.MaxOpenConns || registryConfig.MaxIdleConns != instanceConfig.MaxIdleConns || registryConfig.ConnMaxLifetime != instanceConfig.ConnMaxLifetime {
+		t.Fatalf("registry config diverged: %+v", registryConfig)
+	}
+
+	t.Setenv("INFERA_CONTROL_STATE_MAX_OPEN_CONNS", "2")
+	t.Setenv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS", "3")
+	if _, _, err := controlStatePostgresConfigsFromEnv(); err == nil {
+		t.Fatal("expected invalid pool bounds to fail")
+	}
+
+	t.Setenv("INFERA_CONTROL_STATE_MAX_OPEN_CONNS", "2")
+	t.Setenv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS", "")
+	instanceConfig, registryConfig, err = controlStatePostgresConfigsFromEnv()
+	if err != nil || instanceConfig.MaxIdleConns != 2 || registryConfig.MaxIdleConns != 2 {
+		t.Fatalf("small open pool did not clamp idle default: instance=%+v registry=%+v err=%v", instanceConfig, registryConfig, err)
+	}
+
+	t.Setenv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS", "0")
+	instanceConfig, registryConfig, err = controlStatePostgresConfigsFromEnv()
+	if err != nil || instanceConfig.MaxIdleConns != -1 || registryConfig.MaxIdleConns != -1 {
+		t.Fatalf("explicit zero idle pool was not preserved: instance=%+v registry=%+v err=%v", instanceConfig, registryConfig, err)
+	}
+}

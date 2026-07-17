@@ -33,6 +33,7 @@ trap cleanup EXIT
 : "${INFERA_WORKER_PROTOCOL_VERSION:=1}"
 : "${INFERA_GATEWAY_IMAGE:=ghcr.io/example/infera-gateway:test}"
 : "${INFERA_GATEWAY_REPLICAS:=1}"
+: "${INFERA_CONTROL_STATE_DSN:=postgres://infera:infera-smoke@control-state:5432/infera?sslmode=disable}"
 : "${INFERA_AUDIT_LEDGER_BACKEND:=sqlite}"
 : "${INFERA_AUDIT_LEDGER_DSN:=}"
 : "${INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY:=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
@@ -56,6 +57,7 @@ export INFERA_RELEASE_ID
 export INFERA_WORKER_PROTOCOL_VERSION
 export INFERA_GATEWAY_IMAGE
 export INFERA_GATEWAY_REPLICAS
+export INFERA_CONTROL_STATE_DSN
 export INFERA_AUDIT_LEDGER_BACKEND
 export INFERA_AUDIT_LEDGER_DSN
 export INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY
@@ -81,7 +83,21 @@ prepare_smoke_compose_file() {
 
   cat > "${smoke_override_file}" <<EOF
 services:
+  control-state:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: infera
+      POSTGRES_USER: infera
+      POSTGRES_PASSWORD: infera-smoke
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infera -d infera"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
   gateway:
+    depends_on:
+      control-state:
+        condition: service_healthy
     volumes:
       - ${smoke_data_dir}:/app/data
 EOF

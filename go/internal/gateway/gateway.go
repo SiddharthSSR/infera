@@ -858,6 +858,30 @@ func (g *Gateway) handleGetWorkers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type workerLoadedModelPayload struct {
+	ModelID           string    `json:"model_id"`
+	Version           string    `json:"version"`
+	LoadedAt          time.Time `json:"loaded_at"`
+	MemoryBytes       int64     `json:"memory_bytes"`
+	MaxBatchSize      int       `json:"max_batch_size"`
+	MaxSequenceLength int       `json:"max_sequence_length"`
+}
+
+func (m workerLoadedModelPayload) loadedModel(fallback time.Time) types.LoadedModel {
+	loadedAt := m.LoadedAt
+	if loadedAt.IsZero() {
+		loadedAt = fallback
+	}
+	return types.LoadedModel{
+		ModelID:           m.ModelID,
+		Version:           m.Version,
+		LoadedAt:          loadedAt,
+		MemoryBytes:       m.MemoryBytes,
+		MaxBatchSize:      m.MaxBatchSize,
+		MaxSequenceLength: m.MaxSequenceLength,
+	}
+}
+
 func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is allowed")
@@ -865,20 +889,14 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		WorkerID        string            `json:"worker_id"`
-		Address         string            `json:"address"`
-		Status          string            `json:"status"`
-		Tags            map[string]string `json:"tags"`
-		ReleaseID       string            `json:"release_id"`
-		ProtocolVersion string            `json:"protocol_version"`
-		LoadedModels    []struct {
-			ModelID           string `json:"model_id"`
-			Version           string `json:"version"`
-			MemoryBytes       int64  `json:"memory_bytes"`
-			MaxBatchSize      int    `json:"max_batch_size"`
-			MaxSequenceLength int    `json:"max_sequence_length"`
-		} `json:"loaded_models"`
-		Stats struct {
+		WorkerID        string                     `json:"worker_id"`
+		Address         string                     `json:"address"`
+		Status          string                     `json:"status"`
+		Tags            map[string]string          `json:"tags"`
+		ReleaseID       string                     `json:"release_id"`
+		ProtocolVersion string                     `json:"protocol_version"`
+		LoadedModels    []workerLoadedModelPayload `json:"loaded_models"`
+		Stats           struct {
 			QueueDepth        int     `json:"queue_depth"`
 			ActiveRequests    int     `json:"active_requests"`
 			GPUUtilization    float64 `json:"gpu_utilization"`
@@ -934,19 +952,14 @@ func (g *Gateway) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 
 	// Convert to WorkerInfo
 	loadedModels := make([]types.LoadedModel, len(req.LoadedModels))
+	loadedAtFallback := time.Now()
 	for i, m := range req.LoadedModels {
-		loadedModels[i] = types.LoadedModel{
-			ModelID:           m.ModelID,
-			Version:           m.Version,
-			MemoryBytes:       m.MemoryBytes,
-			MaxBatchSize:      m.MaxBatchSize,
-			MaxSequenceLength: m.MaxSequenceLength,
-			LoadedAt:          time.Now(),
-		}
+		loadedModels[i] = m.loadedModel(loadedAtFallback)
 	}
 
 	workerInfo := &types.WorkerInfo{
 		WorkerID:     req.WorkerID,
+		InstanceID:   principal.InstanceID,
 		WorkspaceID:  principal.WorkspaceID,
 		Address:      req.Address,
 		Status:       types.WorkerStatus(req.Status),
@@ -1047,10 +1060,7 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 			P99LatencyMS      float64 `json:"p99_latency_ms"`
 			ErrorRate         float64 `json:"error_rate"`
 		} `json:"stats"`
-		LoadedModels []struct {
-			ModelID string `json:"model_id"`
-			Version string `json:"version"`
-		} `json:"loaded_models"`
+		LoadedModels *[]workerLoadedModelPayload `json:"loaded_models"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1078,7 +1088,18 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 		UpdatedAt:         time.Now(),
 	}
 
-	if err := g.router.UpdateWorkerStats(r.Context(), req.WorkerID, stats); err != nil {
+	var models []types.LoadedModel
+	if req.LoadedModels != nil {
+		models = make([]types.LoadedModel, len(*req.LoadedModels))
+		loadedAtFallback := time.Now()
+		for i, m := range *req.LoadedModels {
+			models[i] = m.loadedModel(loadedAtFallback)
+		}
+	}
+
+	principal, _ := r.Context().Value(workerPrincipalContextKey{}).(workerPrincipal)
+	worker, err := g.router.Heartbeat(r.Context(), principal.InstanceID, req.WorkerID, stats, models, req.LoadedModels != nil)
+	if err != nil {
 		if g.writeRequestContextError(w, err) {
 			return
 		}
@@ -1097,52 +1118,9 @@ func (g *Gateway) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) 
 		g.metrics.RecordWorkerQueueDepth(req.WorkerID, req.Stats.QueueDepth)
 	}
 
-	worker, found, err := g.router.GetWorker(r.Context(), req.WorkerID)
-	if err != nil {
-		if g.writeRequestContextError(w, err) {
-			return
-		}
-		g.writeWorkerRegistryUnavailable(w)
+	if err := g.linkWorkerToInstance(worker); err != nil {
+		g.writeError(w, http.StatusServiceUnavailable, "worker_control_state_unavailable", "Worker control state is temporarily unavailable")
 		return
-	}
-	if !found {
-		g.writeJSON(w, http.StatusOK, map[string]interface{}{
-			"acknowledged": false,
-			"message":      "Worker not registered",
-		})
-		return
-	}
-	if found {
-		if err := g.linkWorkerToInstance(worker); err != nil {
-			g.writeError(w, http.StatusServiceUnavailable, "worker_control_state_unavailable", "Worker control state is temporarily unavailable")
-			return
-		}
-	}
-
-	// Sync loaded models from heartbeat (self-healing if registration missed them)
-	if len(req.LoadedModels) > 0 {
-		models := make([]types.LoadedModel, len(req.LoadedModels))
-		for i, m := range req.LoadedModels {
-			models[i] = types.LoadedModel{
-				ModelID:  m.ModelID,
-				Version:  m.Version,
-				LoadedAt: time.Now(),
-			}
-		}
-		if err := g.router.UpdateWorkerModels(r.Context(), req.WorkerID, models); err != nil {
-			if g.writeRequestContextError(w, err) {
-				return
-			}
-			if errors.Is(err, registry.ErrWorkerNotFound) {
-				g.writeJSON(w, http.StatusOK, map[string]interface{}{
-					"acknowledged": false,
-					"message":      "Worker not registered",
-				})
-				return
-			}
-			g.writeWorkerRegistryUnavailable(w)
-			return
-		}
 	}
 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{

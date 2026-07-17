@@ -13,6 +13,9 @@ failures, and the database owner approves ledger restore or point-in-time recove
   control-plane protocol match the gateway; a mismatch is not an acceptable rolling state.
 - The active ledger writer protocol must match both candidate and rollback manifests before any
   mutation. Protocol migration is a separately reviewed, stop-the-world operation.
+- Every production gateway replica must use the same PostgreSQL control-state database and provider
+  credential encryption key. An application rollback is allowed only when the target gateway is
+  compatible with the active control-state schema.
 - A candidate is last-known-good only after automated verification passes. Authentication, tenant
   isolation, quota enforcement, and the shared ledger must never be bypassed to make a rollout pass.
 - If candidate verification and rollback verification both fail, keep traffic drained and escalate.
@@ -28,6 +31,7 @@ failures, and the database owner approves ledger restore or point-in-time recove
 | --- | --- | --- | --- |
 | Gateway/worker release | 0 configuration revisions | 15 minutes | Immutable manifests and coordinated rollback |
 | PostgreSQL audit/quota ledger | Managed backup/PITR window, maximum 5 minutes | 30 minutes | PITR or custom-format dump restored to a new database |
+| PostgreSQL provider/worker control state | Managed backup/PITR window, maximum 5 minutes | 30 minutes | PITR or custom-format dump restored to a new database |
 | Required configuration/secrets | 0 approved revisions | 15 minutes | Versioned non-secret manifest plus secret-manager version rollback |
 
 If the configured database or secret-manager service cannot meet these targets, external pilot
@@ -127,11 +131,11 @@ Bearer credential. The gateway remains authoritative for validating per-instance
 credentials. This narrow control-plane exception lets replacement workers register while customer
 health and inference stay fail-closed at 503; it is not permission to expose other `/api/*` routes.
 
-The checked-in recovery adapter currently refuses `INFERA_GATEWAY_REPLICAS>1`. The PostgreSQL
-audit/quota ledger is replica-safe, but provider instance credentials and live worker/router
-registration are still process-local. Running two replicas would make registration and inference
-depend on which replica receives a request. Keep production at one replica until those worker-state
-paths are durable and shared; do not bypass this guard merely to demonstrate ledger sharing.
+The recovery adapter deploys the configured `INFERA_GATEWAY_REPLICAS` count and requires every
+container to become healthy. Multiple replicas are safe only when all replicas use the same
+`INFERA_CONTROL_STATE_DSN`, provider credential encryption key, and PostgreSQL audit ledger. Treat
+gateway and worker images as a coordinated release: rollback both together, and do not roll back to
+a gateway that cannot read the active control-state schema.
 
 Any failure after orchestration starts stops candidate workers, redeploys the old gateway, deploys
 old workers, and verifies the old release. A successful recovery still returns a nonzero command

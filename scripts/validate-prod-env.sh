@@ -13,6 +13,8 @@ required_vars=(
   INFERA_RELEASE_ID
   INFERA_WORKER_PROTOCOL_VERSION
   INFERA_GATEWAY_IMAGE
+  INFERA_CONTROL_STATE_DSN
+  INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY
   INFERA_WORKER_IMAGE
   GRAFANA_ADMIN_USER
   GRAFANA_ADMIN_PASSWORD
@@ -104,6 +106,7 @@ if (( gateway_replicas > 1 )) && [[ "${audit_backend}" == "sqlite" ]]; then
   echo "ERROR: multiple gateway replicas require INFERA_AUDIT_LEDGER_BACKEND=postgres; shared-filesystem SQLite is unsafe." >&2
   exit 1
 fi
+
 if [[ "${audit_backend}" == "postgres" || "${audit_backend}" == "postgresql" ]]; then
   if ! ledger_dsn="$(lookup_env INFERA_AUDIT_LEDGER_DSN)" || [[ -z "${ledger_dsn}" ]]; then
     echo "ERROR: INFERA_AUDIT_LEDGER_DSN is required for the PostgreSQL audit ledger." >&2

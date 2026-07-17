@@ -24,15 +24,6 @@ configured_gateway_replicas() {
   printf '1\n'
 }
 
-require_single_gateway_recovery_topology() {
-  local replicas
-  replicas="$(configured_gateway_replicas)"
-  [[ "${replicas}" == "1" ]] || {
-    echo "ERROR: recovery adapter requires one gateway until worker credentials and router registration use shared durable state" >&2
-    return 1
-  }
-}
-
 INFERA_RELEASE_ID="$(value "${MANIFEST}" INFERA_RELEASE_ID)"
 INFERA_GATEWAY_IMAGE="$(value "${MANIFEST}" INFERA_GATEWAY_IMAGE)"
 INFERA_WORKER_IMAGE="$(value "${MANIFEST}" INFERA_WORKER_IMAGE)"
@@ -41,7 +32,6 @@ export INFERA_RELEASE_ID INFERA_GATEWAY_IMAGE INFERA_WORKER_IMAGE INFERA_WORKER_
 
 case "${ACTION}" in
   preflight)
-    require_single_gateway_recovery_topology
     for executable_name in \
       INFERA_STOP_WORKERS_EXECUTABLE \
       INFERA_DEPLOY_WORKERS_EXECUTABLE \
@@ -62,14 +52,22 @@ case "${ACTION}" in
     "${INFERA_STOP_WORKERS_EXECUTABLE}" "${MANIFEST}"
     ;;
   deploy-gateway)
-    require_single_gateway_recovery_topology
-    docker compose -f "${COMPOSE_FILE}" up -d --no-deps --scale gateway=1 gateway
-    gateway_id="$(docker compose -f "${COMPOSE_FILE}" ps -q gateway)"
-    [[ -n "${gateway_id}" && "${gateway_id}" != *$'\n'* ]]
+    replicas="$(configured_gateway_replicas)"
+    [[ "${replicas}" =~ ^[1-9][0-9]*$ ]]
+    docker compose -f "${COMPOSE_FILE}" up -d --no-deps --scale "gateway=${replicas}" gateway
+    gateway_ids=()
+    while IFS= read -r gateway_id; do
+      [[ -n "${gateway_id}" ]] && gateway_ids+=("${gateway_id}")
+    done < <(docker compose -f "${COMPOSE_FILE}" ps -q gateway)
+    [[ "${#gateway_ids[@]}" == "${replicas}" ]]
     for _ in $(seq 1 "${INFERA_GATEWAY_HEALTH_ATTEMPTS:-30}"); do
-      status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${gateway_id}")"
-      [[ "${status}" == "healthy" ]] && exit 0
-      [[ "${status}" == "exited" || "${status}" == "unhealthy" ]] && exit 1
+      healthy=0
+      for gateway_id in "${gateway_ids[@]}"; do
+        status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${gateway_id}")"
+        [[ "${status}" == "exited" || "${status}" == "unhealthy" ]] && exit 1
+        [[ "${status}" == "healthy" ]] && healthy=$((healthy + 1))
+      done
+      [[ "${healthy}" == "${replicas}" ]] && exit 0
       sleep 2
     done
     exit 1

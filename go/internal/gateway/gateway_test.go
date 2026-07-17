@@ -429,6 +429,53 @@ func TestHandleWorkerHeartbeatRepairsMissingInstanceLink(t *testing.T) {
 	}
 }
 
+func TestHandleWorkerHeartbeatPreservesLoadedModelReplacementSemantics(t *testing.T) {
+	r := router.New(router.DefaultConfig())
+	t.Cleanup(r.Stop)
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
+		WorkerID: "worker-models", Status: types.WorkerStatusHealthy,
+		LoadedModels: []types.LoadedModel{{ModelID: "old", MemoryBytes: 11}},
+	}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+	g := New(DefaultConfig(), r, nil)
+
+	send := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		g.handleWorkerHeartbeat(recorder, httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(body)))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("heartbeat failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		return recorder
+	}
+	get := func() *types.WorkerInfo {
+		t.Helper()
+		worker, found, err := r.GetWorker(context.Background(), "worker-models")
+		if err != nil || !found {
+			t.Fatalf("get worker: found=%t err=%v", found, err)
+		}
+		return worker
+	}
+
+	send(`{"worker_id":"worker-models","stats":{}}`)
+	if models := get().LoadedModels; len(models) != 1 || models[0].ModelID != "old" {
+		t.Fatalf("omitted loaded_models replaced state: %+v", models)
+	}
+
+	loadedAt := "2026-07-17T18:00:00Z"
+	send(`{"worker_id":"worker-models","stats":{},"loaded_models":[{"model_id":"new","version":"v2","loaded_at":"` + loadedAt + `","memory_bytes":123,"max_batch_size":8,"max_sequence_length":4096}]}`)
+	models := get().LoadedModels
+	if len(models) != 1 || models[0].ModelID != "new" || models[0].MemoryBytes != 123 || models[0].MaxBatchSize != 8 || models[0].MaxSequenceLength != 4096 || models[0].LoadedAt.Format(time.RFC3339) != loadedAt {
+		t.Fatalf("populated loaded_models lost metadata: %+v", models)
+	}
+
+	send(`{"worker_id":"worker-models","stats":{},"loaded_models":[]}`)
+	if models := get().LoadedModels; len(models) != 0 {
+		t.Fatalf("empty loaded_models did not clear state: %+v", models)
+	}
+}
+
 func TestToInferenceRequestBuildsExplicitAffinityMetadata(t *testing.T) {
 	g := New(DefaultConfig(), nil, nil)
 

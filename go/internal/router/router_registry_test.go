@@ -92,6 +92,18 @@ func (r *stubWorkerRegistry) UpdateWorkerModels(_ context.Context, workerID stri
 	return nil
 }
 
+func (r *stubWorkerRegistry) Heartbeat(_ context.Context, _ string, workerID string, stats types.WorkerStats, models []types.LoadedModel, replaceModels bool) (*types.WorkerInfo, error) {
+	worker, ok := r.workers[workerID]
+	if !ok {
+		return nil, errors.New("worker not found")
+	}
+	worker.UpdateStats(stats)
+	if replaceModels {
+		worker.LoadedModels = models
+	}
+	return worker.Clone(), nil
+}
+
 func (r *stubWorkerRegistry) Snapshot(ctx context.Context) ([]*types.WorkerInfo, error) {
 	r.snapshotCalls.Add(1)
 	if r.blockSnapshot {

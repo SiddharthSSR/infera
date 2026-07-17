@@ -26,6 +26,7 @@ import (
 	_ "github.com/infera/infera/go/internal/providers/runpod"
 	_ "github.com/infera/infera/go/internal/providers/vastai"
 	"github.com/infera/infera/go/internal/router"
+	routerregistry "github.com/infera/infera/go/internal/router/registry"
 	"github.com/infera/infera/go/internal/vault"
 )
 
@@ -48,6 +49,16 @@ func main() {
 	}
 	if err := validateAuditLedgerTopology(os.Getenv("INFERA_GATEWAY_REPLICAS"), os.Getenv("INFERA_AUDIT_LEDGER_BACKEND"), os.Getenv("INFERA_AUDIT_LEDGER_DSN")); err != nil {
 		log.Error("invalid audit ledger topology", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	controlStateDSN := strings.TrimSpace(os.Getenv("INFERA_CONTROL_STATE_DSN"))
+	if err := validateControlStateTopology(devMode, os.Getenv("INFERA_GATEWAY_REPLICAS"), controlStateDSN); err != nil {
+		log.Error("invalid control-state topology", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	instanceStoreConfig, registryStoreConfig, err := controlStatePostgresConfigsFromEnv()
+	if err != nil {
+		log.Error("invalid control-state pool configuration", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	postgresLedgerConfig, err := auditPostgresConfigFromEnv()
@@ -80,7 +91,41 @@ func main() {
 			}
 		}
 	}
-	r := router.New(routerConfig)
+	var durableInstanceStore *providers.PostgresInstanceStore
+	var durableWorkerRegistry *routerregistry.PostgresRegistry
+	if controlStateDSN != "" {
+		encryptionKey := strings.TrimSpace(os.Getenv("INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY"))
+		if encryptionKey == "" {
+			log.Error("INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY is required with INFERA_CONTROL_STATE_DSN")
+			os.Exit(1)
+		}
+		durableInstanceStore, err = providers.NewPostgresInstanceStoreWithConfig(controlStateDSN, encryptionKey, instanceStoreConfig)
+		if err != nil {
+			log.Error("failed to initialize durable provider control state", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		durableWorkerRegistry, err = routerregistry.NewPostgresRegistry(controlStateDSN, registryStoreConfig)
+		if err != nil {
+			_ = durableInstanceStore.Close()
+			log.Error("failed to initialize durable worker registry", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), registryStoreConfig.QueryTimeout)
+		err = durableWorkerRegistry.Reconcile(reconcileCtx)
+		reconcileCancel()
+		if err != nil {
+			_ = durableWorkerRegistry.Close()
+			_ = durableInstanceStore.Close()
+			log.Error("failed to reconcile durable worker registry", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+	}
+	var r *router.Router
+	if durableWorkerRegistry != nil {
+		r = router.NewWithRegistry(routerConfig, durableWorkerRegistry)
+	} else {
+		r = router.New(routerConfig)
+	}
 
 	// Create instance manager
 	// Prefer explicitly pinned worker images for reproducible warm restarts.
@@ -104,7 +149,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	instanceMgr, err := providers.NewManager(providers.ManagerConfig{
+	managerConfig := providers.ManagerConfig{
 		DefaultProvider:           providers.ProviderMock,
 		WorkerImage:               workerImage,
 		WorkerImages:              workerImages,
@@ -113,8 +158,20 @@ func main() {
 		WorkerProtocolVersion:     workerProtocolVersion,
 		CostDBPath:                "data/costs.db",
 		WorkerRegistrationTimeout: parseDurationEnv("INFERA_WORKER_REGISTRATION_TIMEOUT", 10*time.Minute),
-	})
+	}
+	var instanceMgr *providers.Manager
+	if durableInstanceStore != nil {
+		instanceMgr, err = providers.NewManagerWithStore(managerConfig, durableInstanceStore)
+	} else {
+		instanceMgr, err = providers.NewManager(managerConfig)
+	}
 	if err != nil {
+		if durableWorkerRegistry != nil {
+			_ = durableWorkerRegistry.Close()
+		}
+		if durableInstanceStore != nil {
+			_ = durableInstanceStore.Close()
+		}
 		log.Error("failed to initialize instance manager", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
@@ -123,6 +180,13 @@ func main() {
 			log.Warn("failed to close instance manager", slog.String("error", err.Error()))
 		}
 	}()
+	if durableWorkerRegistry != nil {
+		defer func() {
+			if err := durableWorkerRegistry.Close(); err != nil {
+				log.Warn("failed to close durable worker registry", slog.String("error", err.Error()))
+			}
+		}()
+	}
 
 	if enableMockProvider {
 		instanceMgr.RegisterProvider(mock.New())
@@ -439,6 +503,63 @@ func validateAuditLedgerTopology(rawReplicas, rawBackend, rawDSN string) error {
 	return nil
 }
 
+func validateControlStateTopology(devMode bool, rawReplicas, rawDSN string) error {
+	replicas := 1
+	if value := strings.TrimSpace(rawReplicas); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			return errors.New("INFERA_GATEWAY_REPLICAS must be a positive integer")
+		}
+		replicas = parsed
+	}
+	if strings.TrimSpace(rawDSN) == "" && (!devMode || replicas > 1) {
+		return errors.New("INFERA_CONTROL_STATE_DSN is required outside development mode and for multiple gateway replicas")
+	}
+	return nil
+}
+
+func controlStatePostgresConfigsFromEnv() (providers.PostgresInstanceStoreConfig, routerregistry.PostgresRegistryConfig, error) {
+	queryTimeout, err := parseOptionalDurationEnv("INFERA_CONTROL_STATE_QUERY_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return providers.PostgresInstanceStoreConfig{}, routerregistry.PostgresRegistryConfig{}, err
+	}
+	maxOpen, err := parseOptionalIntEnv("INFERA_CONTROL_STATE_MAX_OPEN_CONNS", 20, false)
+	if err != nil {
+		return providers.PostgresInstanceStoreConfig{}, routerregistry.PostgresRegistryConfig{}, err
+	}
+	maxIdleFallback := min(5, maxOpen)
+	maxIdle, err := parseOptionalIntEnv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS", maxIdleFallback, true)
+	if err != nil {
+		return providers.PostgresInstanceStoreConfig{}, routerregistry.PostgresRegistryConfig{}, err
+	}
+	if maxIdle > maxOpen {
+		return providers.PostgresInstanceStoreConfig{}, routerregistry.PostgresRegistryConfig{}, errors.New("INFERA_CONTROL_STATE_MAX_IDLE_CONNS cannot exceed INFERA_CONTROL_STATE_MAX_OPEN_CONNS")
+	}
+	if strings.TrimSpace(os.Getenv("INFERA_CONTROL_STATE_MAX_IDLE_CONNS")) == "0" {
+		// Store normalizers use zero as "unset" and negative as the explicit
+		// zero-idle sentinel.
+		maxIdle = -1
+	}
+	connMaxLifetime, err := parseOptionalDurationEnv("INFERA_CONTROL_STATE_CONN_MAX_LIFETIME", 30*time.Minute)
+	if err != nil {
+		return providers.PostgresInstanceStoreConfig{}, routerregistry.PostgresRegistryConfig{}, err
+	}
+	instanceConfig := providers.PostgresInstanceStoreConfig{
+		QueryTimeout:    queryTimeout,
+		MaxOpenConns:    maxOpen,
+		MaxIdleConns:    maxIdle,
+		ConnMaxLifetime: connMaxLifetime,
+	}
+	registryConfig := routerregistry.PostgresRegistryConfig{
+		RegistryConfig:  routerregistry.DefaultRegistryConfig(),
+		QueryTimeout:    queryTimeout,
+		MaxOpenConns:    maxOpen,
+		MaxIdleConns:    maxIdle,
+		ConnMaxLifetime: connMaxLifetime,
+	}
+	return instanceConfig, registryConfig, nil
+}
+
 func auditPostgresConfigFromEnv() (audit.PostgresConfig, error) {
 	config := audit.DefaultPostgresConfig()
 	var err error
@@ -473,6 +594,18 @@ func parseOptionalIntEnv(name string, fallback int, allowZero bool) (int, error)
 			return 0, fmt.Errorf("%s must be a non-negative integer", name)
 		}
 		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return value, nil
+}
+
+func parseOptionalDurationEnv(name string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", name)
 	}
 	return value, nil
 }
