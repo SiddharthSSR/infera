@@ -318,7 +318,7 @@ func TestPostgresInstanceStoreUpgradesPriorV2LifecycleClaimColumn(t *testing.T) 
 	if err != nil || !found || stored.WorkerCredential != credential || stored.LifecycleClaimedAt != nil {
 		t.Fatalf("read upgraded prior v2 instance: found=%v err=%v instance=%+v", found, err, stored)
 	}
-	claimedAt := time.Now().UTC()
+	claimedAt := time.Now().UTC().Truncate(time.Microsecond)
 	updated, err := store.updateIfLifecycleVersion(instance.ID, stored.LifecycleVersion, func(current *Instance) {
 		current.Status = InstanceStatusStopping
 		current.LifecycleClaimedAt = &claimedAt
@@ -534,7 +534,7 @@ func TestPostgresInstanceStoreVersionFenceRejectsCrossConnectionStaleUpdate(t *t
 		!afterHeartbeat.WorkerLastHeartbeatAt.Equal(heartbeatAt) || afterHeartbeat.LifecycleVersion != observed.LifecycleVersion {
 		t.Fatalf("generic heartbeat changed lifecycle version or lost worker state: %+v", afterHeartbeat)
 	}
-	claimedAt := heartbeatAt.Add(time.Second)
+	claimedAt := heartbeatAt.Add(time.Second).Truncate(time.Microsecond)
 	advanced, err := storeB.updateLifecycle("version-fence", func(instance *Instance) {
 		instance.Status = InstanceStatusStopping
 		instance.LifecycleClaimedAt = &claimedAt
