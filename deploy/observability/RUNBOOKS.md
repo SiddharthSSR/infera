@@ -83,11 +83,15 @@
 6. Roll back gateway and worker images together. Do not combine a rolled-back gateway with
    workers from the failed release unless the protocol contract was explicitly proven compatible.
 
-## Multiple gateway replicas rejected
+## Audit ledger startup or quota failures
 
-1. Check `INFERA_GATEWAY_REPLICAS` and `INFERA_AUDIT_LEDGER_BACKEND` in the deployment secret set.
-2. This release supports the SQLite audit/quota ledger only and therefore requires exactly one
-   gateway replica. Do not place SQLite on a shared network filesystem as an HA workaround.
-3. Restore `INFERA_GATEWAY_REPLICAS=1` to recover service safely.
-4. Use INF-42 to track the shared transactional ledger, cross-replica quota tests, migration,
-   backup, restore, and rollback work required before enabling active-active gateways.
+1. Check `INFERA_GATEWAY_REPLICAS`, `INFERA_AUDIT_LEDGER_BACKEND`, and whether the DSN secret is
+   present. Never print the DSN or place SQLite on a shared filesystem.
+2. For multiple replicas, confirm every replica uses `postgres` and the same database. Check
+   PostgreSQL connectivity, TLS, connection capacity, storage, and transaction lock waits.
+3. `quota_unavailable` can mean `authHandler.Store().GetWorkspaceQuota` failed against the
+   authorization/configuration store, or that the audit/PostgreSQL ledger failed during
+   reservation. Check both stores and their logs. Preserve fail-closed behavior: do not disable
+   hard limits or switch any replica to a local ledger as a workaround.
+4. For cutover or rollback, follow `docs/operations/shared-audit-ledger.md`; do not run old SQLite
+   writers alongside PostgreSQL writers.

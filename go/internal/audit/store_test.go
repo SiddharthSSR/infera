@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -326,7 +327,113 @@ func TestAppendInferenceAtomicallyReconcilesReservations(t *testing.T) {
 	}
 }
 
+func TestQuotaReservationsAreWorkspaceScoped(t *testing.T) {
+	s := newTestStore(t)
+	periodStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	for _, workspaceID := range []string{"ws_alpha", "ws_beta"} {
+		if err := s.ReserveQuota(QuotaReservation{
+			ExecutionID: "exec_shared", WorkspaceID: workspaceID,
+			PeriodStart: periodStart, PeriodEnd: periodStart.AddDate(0, 1, 0),
+			ReservedRequests: 1, ExpiresAt: time.Now().UTC().Add(time.Minute),
+		}); err != nil {
+			t.Fatalf("reserve %s: %v", workspaceID, err)
+		}
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM quota_reservations WHERE execution_id = ?`, "exec_shared").Scan(&count); err != nil {
+		t.Fatalf("count shared execution reservations: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected two workspace-scoped reservations, got %d", count)
+	}
+	if err := s.AppendInference(InferenceAuditRecord{
+		Timestamp: periodStart.Add(time.Hour), RequestID: "exec_shared",
+		WorkspaceID: "ws_alpha", Model: "m1", Status: "failed",
+	}); err != nil {
+		t.Fatalf("finalize ws_alpha: %v", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM quota_reservations WHERE workspace_id = ? AND execution_id = ?`, "ws_beta", "exec_shared").Scan(&count); err != nil {
+		t.Fatalf("count ws_beta reservation: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("finalizing ws_alpha deleted ws_beta reservation")
+	}
+}
+
+func TestSQLiteQuotaReservationMigrationScopesExecutionIdentity(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "audit.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if err := migrate.Run(db, auditMigrations[:4]); err != nil {
+		_ = db.Close()
+		t.Fatalf("migrate v1-v4: %v", err)
+	}
+	periodStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := db.Exec(`
+		INSERT INTO quota_reservations
+		(execution_id, workspace_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"exec_shared", "ws_alpha", periodStart.UnixMilli(), periodStart.AddDate(0, 1, 0).UnixMilli(), 1, 0, time.Now().Add(time.Minute).UnixMilli(),
+	); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed v4 reservation: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v4 database: %v", err)
+	}
+	s, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("migrate to v5: %v", err)
+	}
+	defer s.Close()
+	if err := s.ReserveQuota(QuotaReservation{
+		ExecutionID: "exec_shared", WorkspaceID: "ws_beta",
+		PeriodStart: periodStart, PeriodEnd: periodStart.AddDate(0, 1, 0),
+		ReservedRequests: 1, ExpiresAt: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("reserve duplicate execution in second workspace: %v", err)
+	}
+}
+
+func TestReserveQuotaReusesExpiredExecutionFromAnotherPeriod(t *testing.T) {
+	s := newTestStore(t)
+	previousStart := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := s.db.Exec(`
+		INSERT INTO quota_reservations
+		(execution_id, workspace_id, period_start_ms, period_end_ms, reserved_requests, reserved_tokens, expires_at_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"exec_reused", "ws_alpha", previousStart.UnixMilli(), previousStart.AddDate(0, 1, 0).UnixMilli(),
+		1, 10, time.Now().UTC().Add(-time.Minute).UnixMilli(),
+	); err != nil {
+		t.Fatalf("seed expired reservation: %v", err)
+	}
+	currentStart := previousStart.AddDate(0, 1, 0)
+	if err := s.ReserveQuota(QuotaReservation{
+		ExecutionID: "exec_reused", WorkspaceID: "ws_alpha",
+		PeriodStart: currentStart, PeriodEnd: currentStart.AddDate(0, 1, 0),
+		ReservedRequests: 1, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("reuse expired execution identity: %v", err)
+	}
+	var periodStartMS int64
+	if err := s.db.QueryRow(`SELECT period_start_ms FROM quota_reservations WHERE workspace_id = ? AND execution_id = ?`, "ws_alpha", "exec_reused").Scan(&periodStartMS); err != nil {
+		t.Fatalf("query replacement reservation: %v", err)
+	}
+	if periodStartMS != currentStart.UnixMilli() {
+		t.Fatalf("expired reservation was not replaced: period_start_ms=%d", periodStartMS)
+	}
+}
+
 func int64Ptr(value int64) *int64 { return &value }
+
+func TestMigrateSQLiteHistoryRejectsMissingSource(t *testing.T) {
+	target := &Store{dialect: dialectPostgres}
+	if _, err := target.MigrateSQLiteHistory(context.Background(), filepath.Join(t.TempDir(), "missing.db")); err == nil {
+		t.Fatal("expected a missing SQLite source to fail instead of creating an empty ledger")
+	}
+}
 
 func TestUsageByKey(t *testing.T) {
 	s := newTestStore(t)

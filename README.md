@@ -124,6 +124,9 @@ INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY=<base64-encoded-32-byte-key>
 INFERA_WORKER_IMAGE=<registry>/infera-worker:<pinned-tag>
 INFERA_GATEWAY_REPLICAS=1
 INFERA_AUDIT_LEDGER_BACKEND=sqlite
+# For two or more replicas:
+# INFERA_AUDIT_LEDGER_BACKEND=postgres
+# INFERA_AUDIT_LEDGER_DSN=postgres://...?...sslmode=require
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD=<strong-password>
 ALERT_EMAIL_TO=alerts@your-domain.com
@@ -149,9 +152,11 @@ Notes:
 - `INFERA_MODEL_CACHE_SIZE` defaults to `2` and is enforced for both startup and runtime loads.
 - Generate `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` with `openssl rand -base64 32`, store it in your secret manager, and back it up separately from the database. Losing it makes saved provider credentials unrecoverable.
 - Use non-`latest` gateway and worker image tags or full digests in production.
-- SQLite audit/quota accounting is single-replica only. Keep `INFERA_GATEWAY_REPLICAS=1`
-  until the shared transactional ledger tracked by INF-42 is deployed; startup fails closed
-  for unsafe multi-replica settings.
+- SQLite audit/quota accounting is single-replica only. For active-active gateways, configure
+  every replica with the same PostgreSQL DSN and set `INFERA_AUDIT_LEDGER_BACKEND=postgres`.
+  Startup fails closed when a multi-replica deployment selects SQLite or PostgreSQL lacks a DSN.
+  Follow [the shared-ledger migration runbook](docs/operations/shared-audit-ledger.md) for cutover,
+  backup, restore, and rollback.
 - Validate required production env and both image pins before deploy:
 
 ```bash
@@ -373,8 +378,12 @@ Compatibility notes:
 | `INFERA_RELEASE_ID` | — | Required production release identity shared by the gateway and managed workers |
 | `INFERA_WORKER_PROTOCOL_VERSION` | — | Required production gateway/worker control-plane protocol version |
 | `INFERA_GATEWAY_IMAGE` | — | Pinned production gateway image tag or digest |
-| `INFERA_GATEWAY_REPLICAS` | `1` | Gateway replica count; values above one are rejected until INF-42 lands |
-| `INFERA_AUDIT_LEDGER_BACKEND` | `sqlite` | Audit/quota ledger backend; this release supports single-replica SQLite only |
+| `INFERA_GATEWAY_REPLICAS` | `1` | Declared gateway replica count; values above one require PostgreSQL |
+| `INFERA_AUDIT_LEDGER_BACKEND` | `sqlite` | `sqlite` for one replica or `postgres` for a shared transactional ledger |
+| `INFERA_AUDIT_LEDGER_DSN` | — | PostgreSQL connection URI; required for the `postgres` backend and should require TLS in production |
+| `INFERA_AUDIT_LEDGER_MAX_OPEN_CONNS` | `20` | Maximum PostgreSQL ledger connections per gateway replica |
+| `INFERA_AUDIT_LEDGER_MAX_IDLE_CONNS` | `5` | Maximum idle PostgreSQL ledger connections per gateway replica; cannot exceed max open |
+| `INFERA_AUDIT_LEDGER_CONN_MAX_LIFETIME` | `30m` | Positive Go duration limiting PostgreSQL ledger connection lifetime |
 | `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` | — | Base64-encoded 32-byte key used to encrypt workspace provider credentials; required outside development mode |
 | `INFERA_WORKER_IMAGE` | — | Custom worker Docker image pinned to a non-`latest` tag or full digest |
 | `INFERA_DEFAULT_MODEL` | `mistralai/Mistral-7B-Instruct-v0.2` | Default model to load |

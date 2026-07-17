@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRolloutIdentityRequiresProductionValues(t *testing.T) {
@@ -23,6 +24,56 @@ func TestRolloutIdentityRequiresProductionValues(t *testing.T) {
 	}
 }
 
+func TestAuditPostgresConfigFromEnv(t *testing.T) {
+	t.Setenv("INFERA_AUDIT_LEDGER_MAX_OPEN_CONNS", "")
+	t.Setenv("INFERA_AUDIT_LEDGER_MAX_IDLE_CONNS", "")
+	t.Setenv("INFERA_AUDIT_LEDGER_CONN_MAX_LIFETIME", "")
+	config, err := auditPostgresConfigFromEnv()
+	if err != nil {
+		t.Fatalf("defaults: %v", err)
+	}
+	if config.MaxOpenConns != 20 || config.MaxIdleConns != 5 || config.ConnMaxLifetime != 30*time.Minute {
+		t.Fatalf("unexpected defaults: %+v", config)
+	}
+	t.Setenv("INFERA_AUDIT_LEDGER_MAX_OPEN_CONNS", "12")
+	t.Setenv("INFERA_AUDIT_LEDGER_MAX_IDLE_CONNS", "3")
+	t.Setenv("INFERA_AUDIT_LEDGER_CONN_MAX_LIFETIME", "10m")
+	config, err = auditPostgresConfigFromEnv()
+	if err != nil {
+		t.Fatalf("configured values: %v", err)
+	}
+	if config.MaxOpenConns != 12 || config.MaxIdleConns != 3 || config.ConnMaxLifetime != 10*time.Minute {
+		t.Fatalf("unexpected configured values: %+v", config)
+	}
+}
+
+func TestAuditPostgresConfigRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		env   string
+		value string
+	}{
+		{name: "zero open", env: "INFERA_AUDIT_LEDGER_MAX_OPEN_CONNS", value: "0"},
+		{name: "negative idle", env: "INFERA_AUDIT_LEDGER_MAX_IDLE_CONNS", value: "-1"},
+		{name: "bad lifetime", env: "INFERA_AUDIT_LEDGER_CONN_MAX_LIFETIME", value: "forever"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.env, tt.value)
+			if _, err := auditPostgresConfigFromEnv(); err == nil {
+				t.Fatal("expected invalid pool configuration to fail")
+			}
+		})
+	}
+	t.Run("idle exceeds open", func(t *testing.T) {
+		t.Setenv("INFERA_AUDIT_LEDGER_MAX_OPEN_CONNS", "2")
+		t.Setenv("INFERA_AUDIT_LEDGER_MAX_IDLE_CONNS", "3")
+		if _, err := auditPostgresConfigFromEnv(); err == nil {
+			t.Fatal("expected max idle above max open to fail")
+		}
+	})
+}
+
 func TestRolloutIdentityUsesDevelopmentDefaults(t *testing.T) {
 	t.Setenv("INFERA_RELEASE_ID", "")
 	t.Setenv("INFERA_WORKER_PROTOCOL_VERSION", "")
@@ -36,13 +87,19 @@ func TestRolloutIdentityUsesDevelopmentDefaults(t *testing.T) {
 }
 
 func TestAuditLedgerTopologyRejectsUnsafeReplicas(t *testing.T) {
-	if err := validateAuditLedgerTopology("1", "sqlite"); err != nil {
+	if err := validateAuditLedgerTopology("1", "sqlite", ""); err != nil {
 		t.Fatalf("single-replica sqlite should be valid: %v", err)
 	}
-	if err := validateAuditLedgerTopology("2", "sqlite"); err == nil || !strings.Contains(err.Error(), "shared transactional audit ledger") {
+	if err := validateAuditLedgerTopology("2", "sqlite", ""); err == nil || !strings.Contains(err.Error(), "shared transactional audit ledger") {
 		t.Fatalf("expected shared-ledger rejection, got %v", err)
 	}
-	if err := validateAuditLedgerTopology("1", "postgres"); err == nil {
+	if err := validateAuditLedgerTopology("2", "postgres", ""); err == nil || !strings.Contains(err.Error(), "DSN") {
+		t.Fatalf("expected missing DSN rejection, got %v", err)
+	}
+	if err := validateAuditLedgerTopology("3", "postgres", "postgres://ledger"); err != nil {
+		t.Fatalf("multi-replica postgres should be valid: %v", err)
+	}
+	if err := validateAuditLedgerTopology("1", "mysql", "mysql://ledger"); err == nil {
 		t.Fatal("expected unsupported backend rejection")
 	}
 }
