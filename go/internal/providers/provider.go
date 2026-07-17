@@ -36,21 +36,22 @@ type ProviderConfig struct {
 type ProviderFactory func(config ProviderConfig) (Provider, error)
 
 const (
-	ProviderErrorUnknownProvider    = "unknown_provider"
-	ProviderErrorMissingAPIKey      = "missing_api_key"
-	ProviderErrorAuthFailed         = "auth_failed"
-	ProviderErrorInvalidConfig      = "invalid_config"
-	ProviderErrorInvalidRequest     = "invalid_request"
-	ProviderErrorNotFound           = "not_found"
-	ProviderErrorRateLimited        = "rate_limited"
-	ProviderErrorServiceUnavailable = "service_unavailable"
-	ProviderErrorTimeout            = "timeout"
-	ProviderErrorRequestFailed      = "request_failed"
-	ProviderErrorAPIError           = "api_error"
-	ProviderErrorGraphQLError       = "graphql_error"
-	ProviderErrorInstanceError      = "instance_error"
-	ProviderErrorTerminated         = "terminated"
-	ProviderErrorNotImplemented     = "not_implemented"
+	ProviderErrorUnknownProvider     = "unknown_provider"
+	ProviderErrorMissingAPIKey       = "missing_api_key"
+	ProviderErrorAuthFailed          = "auth_failed"
+	ProviderErrorInvalidConfig       = "invalid_config"
+	ProviderErrorInvalidRequest      = "invalid_request"
+	ProviderErrorNotFound            = "not_found"
+	ProviderErrorRateLimited         = "rate_limited"
+	ProviderErrorCapacityUnavailable = "capacity_unavailable"
+	ProviderErrorServiceUnavailable  = "service_unavailable"
+	ProviderErrorTimeout             = "timeout"
+	ProviderErrorRequestFailed       = "request_failed"
+	ProviderErrorAPIError            = "api_error"
+	ProviderErrorGraphQLError        = "graphql_error"
+	ProviderErrorInstanceError       = "instance_error"
+	ProviderErrorTerminated          = "terminated"
+	ProviderErrorNotImplemented      = "not_implemented"
 )
 
 // Global registry of provider factories
@@ -102,7 +103,7 @@ func (e *ProviderError) Error() string {
 
 func (e *ProviderError) IsRetryable() bool {
 	switch e.Code {
-	case ProviderErrorRateLimited, ProviderErrorServiceUnavailable, ProviderErrorTimeout, ProviderErrorRequestFailed:
+	case ProviderErrorRateLimited, ProviderErrorCapacityUnavailable, ProviderErrorServiceUnavailable, ProviderErrorTimeout, ProviderErrorRequestFailed:
 		return true
 	default:
 		return false
@@ -121,7 +122,7 @@ func (e *ProviderError) HTTPStatus(defaultStatus int) int {
 		return 429
 	case ProviderErrorMissingAPIKey, ProviderErrorAuthFailed, ProviderErrorInvalidConfig, ProviderErrorInvalidRequest:
 		return 400
-	case ProviderErrorServiceUnavailable, ProviderErrorRequestFailed, ProviderErrorTimeout, ProviderErrorResponseTooLarge, ProviderErrorAPIError, ProviderErrorGraphQLError, ProviderErrorInstanceError:
+	case ProviderErrorCapacityUnavailable, ProviderErrorServiceUnavailable, ProviderErrorRequestFailed, ProviderErrorTimeout, ProviderErrorResponseTooLarge, ProviderErrorAPIError, ProviderErrorGraphQLError, ProviderErrorInstanceError:
 		return 503
 	case ProviderErrorNotImplemented:
 		return 501
@@ -136,6 +137,8 @@ func (e *ProviderError) APIErrorType() string {
 		return "not_found"
 	case ProviderErrorRateLimited:
 		return "provider_rate_limited"
+	case ProviderErrorCapacityUnavailable:
+		return "provider_capacity_unavailable"
 	case ProviderErrorMissingAPIKey, ProviderErrorAuthFailed:
 		return "provider_auth_failed"
 	case ProviderErrorInvalidConfig, ProviderErrorInvalidRequest:

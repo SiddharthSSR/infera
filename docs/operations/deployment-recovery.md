@@ -24,6 +24,13 @@ failures, and the database owner approves ledger restore or point-in-time recove
 - While ingress is drained, the only public gateway exception is worker registration and heartbeat
   on their two exact paths. Those requests must carry a worker-token header and still pass the
   gateway's credential authentication; health, inference, and every other customer route remain 503.
+- Run exactly one recovery controller for a production stack. Production mode requires an explicit
+  absolute `INFERA_RECOVERY_STATE_DIR` and a controller scope. Use `shared-filesystem` only when
+  every operator host mounts the same state path; otherwise use `designated-single-controller` and
+  permit recovery only on that host. The controller holds an atomic state-directory lock for the
+  complete rollout and rollback. It never steals or auto-expires an existing lock; after a host
+  crash, an incident commander must verify the old process is gone and determine the actual
+  ingress/provider state before manually removing the stale lock directory.
 
 ## Targets
 
@@ -93,9 +100,12 @@ export INFERA_DASHBOARD_URL=https://dashboard.inferai.co.in
 export INFERA_SMOKE_API_KEY="$(secret-tool lookup service infera-smoke)"
 export INFERA_SMOKE_MODEL=Qwen/Qwen2.5-7B-Instruct
 export INFERA_RECOVERY_WORKER_MODEL=Qwen/Qwen2.5-7B-Instruct
+export INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,L40S,A100_40GB
+export INFERA_RECOVERY_STATE_DIR=/opt/infera/.infera-recovery
+export INFERA_RECOVERY_CONTROLLER_SCOPE=designated-single-controller
 ./scripts/release-recovery.sh deploy \
   /secure/release/candidate.manifest \
-  .infera-recovery/last-known-good.manifest
+  /opt/infera/.infera-recovery/last-known-good.manifest
 ```
 
 The command performs these gates in order:
@@ -113,19 +123,38 @@ The command performs these gates in order:
    promotion failure also restores the verified prior release set.
 
 The RunPod deployment adapter requires an explicit reviewed `INFERA_RECOVERY_WORKER_MODEL`; it does
-not select a model implicitly. It defaults to one `RTX_4090` vLLM worker, with
-`INFERA_RECOVERY_WORKER_GPU_TYPE` and `INFERA_RECOVERY_WORKER_ENGINE` available when the reviewed
-release requires different capacity. The recovery driver pins the selected engine-specific gateway
-image variable to the manifest's worker image for both rollout and rollback, preventing stale `.env`
-values from mixing release sets. It reads the admin and RunPod keys from the environment or `INFERA_ENV_FILE`,
-places bearer headers only in mode-0600 temporary curl configuration files, and waits for the
-gateway-managed worker to register. Before provisioning or stopping, it reconciles only pods whose
-name exactly matches `infera-release-<release ID>`; an orphan from an interrupted attempt is
-terminated before a replacement is created. While Caddy returns the maintenance 503,
-the verifier enumerates every configured container-private gateway address and runs health, worker
-discovery, and authenticated inference checks against each replica. The restore adapter then proves
-public `/health` reaches the expected release and worker protocol before it returns success. If that
-public validation fails, it immediately reloads and verifies the maintenance configuration.
+not select a model implicitly. It defaults to one `RTX_4090` vLLM worker. Set the ordered,
+comma-separated `INFERA_RECOVERY_WORKER_GPU_TYPES` to at most five reviewed values from
+`RTX_4090`, `RTX_4080`, `A100_40GB`, `A100_80GB`, `H100`, and `L40S`. The legacy singleton
+`INFERA_RECOVERY_WORKER_GPU_TYPE` remains supported when the ordered variable is unset; setting both
+is an error. `INFERA_RECOVERY_WORKER_ENGINE` selects the reviewed engine. The recovery driver pins
+the selected engine-specific gateway image variable to the manifest's worker image for both rollout
+and rollback, preventing stale `.env` values from mixing release sets. It reads the admin and RunPod
+keys from the environment or `INFERA_ENV_FILE`, places bearer headers only in mode-0600 temporary
+curl configuration files, and waits for the gateway-managed worker to register. Before provisioning
+or stopping, it reconciles only pods whose name exactly matches `infera-release-<release ID>`; an
+orphan from an interrupted attempt is terminated before a replacement is created. While Caddy
+returns the maintenance 503, the verifier enumerates every configured container-private gateway
+address and runs health, worker discovery, and authenticated inference checks against each replica.
+The restore adapter then proves public `/health` reaches the expected release and worker protocol
+before it returns success. If that public validation fails, it immediately reloads and verifies the
+maintenance configuration.
+
+GPU fallback is deliberately narrow. Before every provisioning POST, the adapter proves that the
+exact release-owned RunPod name has zero pods. It advances to the next reviewed GPU only when the
+gateway returns HTTP 503 with `provider=runpod`, `provider_error_code=capacity_unavailable`, and
+`retryable=true`, then removes and re-confirms zero exact-name pods. A transport error, malformed or
+unknown response, any other status/code, or any HTTP 201 is terminal for that adapter invocation;
+after a 201 it never sends another provisioning POST. Ambiguous outcomes trigger exact-name cleanup
+within a bounded slice of the rollback reserve and then fail into coordinated rollback.
+
+The coordinator uses one absolute deadline, defaulting to and capped at 900 seconds. It reserves 300
+seconds for rollback by default, stops candidate work at the soft deadline, and terminates hung
+driver/verifier process groups with the checked-in portable deadline wrapper. Worker provisioning
+POSTs default to 45 seconds and a new GPU attempt is refused without the configured minimum
+attempt-and-cleanup budget. Sanitized evidence records only fixed phase, result, GPU, attempt,
+reason, release, and step fields; raw provider/gateway responses, credentials, DSNs, and arbitrary
+child output are never copied into the evidence file.
 
 The maintenance configuration permits only `/api/workers/register` and
 `/api/workers/heartbeat` through to the gateway when the request presents `X-Worker-Token` or a

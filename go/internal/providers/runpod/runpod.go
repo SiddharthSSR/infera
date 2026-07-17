@@ -121,6 +121,9 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 			Message:  err.Error(),
 		}
 	}
+	if err := p.requireProvisionCapacity(ctx, gpuTypeID, req.GPUCount); err != nil {
+		return nil, err
+	}
 
 	// Build environment variables
 	env := []map[string]string{
@@ -311,6 +314,65 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		CreatedAt:    time.Now(),
 		Metadata:     metadata,
 	}, nil
+}
+
+func (p *Provider) requireProvisionCapacity(ctx context.Context, gpuTypeID string, requested int) error {
+	query := `
+		query GpuCapacity {
+			gpuTypes {
+				id
+				maxGpuCountCommunityCloud
+				maxGpuCountSecureCloud
+			}
+		}
+	`
+	resp, err := p.graphQL(ctx, query, nil)
+	if err != nil {
+		return err
+	}
+
+	var result struct {
+		GpuTypes []struct {
+			ID                     string `json:"id"`
+			MaxGPUCountCommunity   *int   `json:"maxGpuCountCommunityCloud"`
+			MaxGPUCountSecureCloud *int   `json:"maxGpuCountSecureCloud"`
+		} `json:"gpuTypes"`
+	}
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorGraphQLError,
+			Message:  "RunPod returned a malformed capacity response",
+		}
+	}
+
+	for _, gpu := range result.GpuTypes {
+		if gpu.ID != gpuTypeID {
+			continue
+		}
+		if gpu.MaxGPUCountCommunity == nil || gpu.MaxGPUCountSecureCloud == nil ||
+			*gpu.MaxGPUCountCommunity < 0 || *gpu.MaxGPUCountSecureCloud < 0 {
+			return &providers.ProviderError{
+				Provider: providers.ProviderRunPod,
+				Code:     providers.ProviderErrorGraphQLError,
+				Message:  "RunPod returned a malformed capacity response",
+			}
+		}
+		if *gpu.MaxGPUCountCommunity < requested && *gpu.MaxGPUCountSecureCloud < requested {
+			return &providers.ProviderError{
+				Provider: providers.ProviderRunPod,
+				Code:     providers.ProviderErrorCapacityUnavailable,
+				Message:  "RunPod has insufficient capacity for the requested GPU type",
+			}
+		}
+		return nil
+	}
+
+	return &providers.ProviderError{
+		Provider: providers.ProviderRunPod,
+		Code:     providers.ProviderErrorGraphQLError,
+		Message:  "RunPod capacity response omitted the requested GPU type",
+	}
 }
 
 func appendHuggingFaceEnv(env []map[string]string, token string) []map[string]string {
@@ -973,7 +1035,7 @@ func (p *Provider) graphQL(ctx context.Context, query string, variables map[stri
 	if len(gqlResp.Errors) > 0 {
 		return nil, &providers.ProviderError{
 			Provider: providers.ProviderRunPod,
-			Code:     "graphql_error",
+			Code:     providers.ProviderErrorGraphQLError,
 			Message:  gqlResp.Errors[0].Message,
 		}
 	}

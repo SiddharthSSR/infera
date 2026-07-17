@@ -68,6 +68,12 @@ cat >"${TMP_DIR}/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf 'curl:%s\n' "$*" >>"${TEST_CALLS}"
+output_file=""
+previous=""
+for arg in "$@"; do
+  if [[ "${previous}" == "--output" ]]; then output_file="${arg}"; fi
+  previous="${arg}"
+done
 if [[ "$*" == *"api.runpod.io/graphql"* ]]; then
   body_file=""
   for arg in "$@"; do
@@ -97,7 +103,47 @@ fi
 case "$*" in
   *"-X POST"*)
     [[ "$*" == *'"name": "infera-release-release-1"'* ]]
-    printf '%s\n' '{"instance":{"id":"instance-1"}}'
+    count=0
+    [[ ! -f "${TEST_POST_COUNT}" ]] || count="$(cat "${TEST_POST_COUNT}")"
+    count=$((count + 1))
+    printf '%s\n' "${count}" >"${TEST_POST_COUNT}"
+    mode="${TEST_PROVISION_MODE:-success}"
+    status=201
+    body='{"instance":{"id":"instance-1"}}'
+    case "${mode}:${count}" in
+      capacity_then_success:1)
+        status=503
+        body='{"error":{"provider":"runpod","provider_error_code":"capacity_unavailable","retryable":true}}'
+        ;;
+      capacity_with_orphan:1)
+        status=503
+        body='{"error":{"provider":"runpod","provider_error_code":"capacity_unavailable","retryable":true}}'
+        printf '%s\n' '[{"id":"ambiguous-1","name":"infera-release-release-1","desiredStatus":"RUNNING"}]' >"${TEST_RUNPOD_STATE}"
+        ;;
+      capacity_nonretryable:*)
+        status=503
+        body='{"error":{"provider":"runpod","provider_error_code":"capacity_unavailable","retryable":false}}'
+        ;;
+      capacity_wrong_status:*)
+        status=429
+        body='{"error":{"provider":"runpod","provider_error_code":"capacity_unavailable","retryable":true}}'
+        ;;
+      unknown:*)
+        status=503
+        body='{"error":{"provider":"runpod","provider_error_code":"service_unavailable","retryable":true}}'
+        ;;
+      malformed_201:*) body='{"instance":{}}' ;;
+      transport:*)
+        printf '%s\n' '[{"id":"ambiguous-1","name":"infera-release-release-1","desiredStatus":"RUNNING"}]' >"${TEST_RUNPOD_STATE}"
+        exit 22
+        ;;
+    esac
+    if [[ -n "${output_file}" ]]; then
+      printf '%s\n' "${body}" >"${output_file}"
+      printf '%s' "${status}"
+    else
+      printf '%s\n' "${body}"
+    fi
     ;;
   *"-X DELETE"*) printf '%s\n' '{"success":true}' ;;
   *"--write-out %{http_code}"*) printf '%s' 503 ;;
@@ -134,6 +180,7 @@ export PATH="${TMP_DIR}/bin:${PATH}"
 export TEST_CALLS="${TMP_DIR}/calls"
 export TEST_CADDY_CONFIG="${TMP_DIR}/maintenance.Caddyfile"
 export TEST_RUNPOD_STATE="${TMP_DIR}/runpod-state.json"
+export TEST_POST_COUNT="${TMP_DIR}/post-count"
 export INFERA_ENV_FILE="${TMP_DIR}/env"
 export COMPOSE_FILE="docker-compose.prod.yml"
 export INFERA_BASE_URL="https://inferai.co.in"
@@ -173,6 +220,78 @@ if grep -q 'infera-release-release-1' "${TEST_RUNPOD_STATE}"; then
 fi
 if grep -q 'test-runpod-key\|test-admin-key' "${TEST_CALLS}"; then
   echo "recovery adapter exposed a bearer token in process arguments" >&2
+  exit 1
+fi
+
+run_fallback_case() {
+  local mode="$1"
+  shift
+  printf '%s\n' '[]' >"${TEST_RUNPOD_STATE}"
+  rm -f "${TEST_POST_COUNT}"
+  : >"${TEST_CALLS}"
+  TEST_MODE=deploy TEST_PROVISION_MODE="${mode}" "$@"
+}
+
+EVIDENCE_FILE="${TMP_DIR}/worker-evidence.log"
+: >"${EVIDENCE_FILE}"
+chmod 0600 "${EVIDENCE_FILE}"
+run_fallback_case capacity_then_success env \
+  INFERA_RECOVERY_EVIDENCE_FILE="${EVIDENCE_FILE}" \
+  INFERA_RECOVERY_RELEASE_ID=release-1 \
+  INFERA_RECOVERY_STEP=rollback.deploy-workers \
+  INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \
+  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
+[[ "$(cat "${TEST_POST_COUNT}")" == "2" ]]
+first_gpu_line="$(grep -n 'gpu_type.*RTX_4090' "${TEST_CALLS}" | head -1 | cut -d: -f1)"
+second_gpu_line="$(grep -n 'gpu_type.*A100_80GB' "${TEST_CALLS}" | head -1 | cut -d: -f1)"
+[[ "${first_gpu_line}" -lt "${second_gpu_line}" ]]
+grep -q 'result=fallback gpu=RTX_4090 attempt=1 reason=capacity_unavailable' "${EVIDENCE_FILE}"
+grep -q 'result=pass gpu=A100_80GB attempt=2 reason=created' "${EVIDENCE_FILE}"
+grep -q -- '--max-time 45 -X POST' "${TEST_CALLS}"
+
+run_fallback_case capacity_with_orphan env \
+  INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \
+  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
+[[ "$(cat "${TEST_POST_COUNT}")" == "2" ]]
+[[ "$(cat "${TEST_RUNPOD_STATE}")" == "[]" ]]
+
+for terminal_mode in capacity_nonretryable capacity_wrong_status unknown malformed_201 transport; do
+  if run_fallback_case "${terminal_mode}" env \
+    INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \
+    "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
+    echo "${terminal_mode} must be terminal without GPU fallback" >&2
+    exit 1
+  fi
+  [[ "$(cat "${TEST_POST_COUNT}")" == "1" ]]
+  [[ "$(cat "${TEST_RUNPOD_STATE}")" == "[]" ]]
+done
+
+run_fallback_case success env \
+  INFERA_RECOVERY_WORKER_GPU_TYPE=L40S \
+  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
+grep -q 'gpu_type.*L40S' "${TEST_CALLS}"
+[[ "$(cat "${TEST_POST_COUNT}")" == "1" ]]
+
+for invalid_gpu_types in 'RTX_4090,RTX_4090' 'RTX_4090,unknown' 'RTX_4090,RTX_4080,A100_40GB,A100_80GB,H100,L40S'; do
+  if run_fallback_case success env INFERA_RECOVERY_WORKER_GPU_TYPES="${invalid_gpu_types}" \
+    "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
+    echo "invalid GPU type list must fail before provisioning" >&2
+    exit 1
+  fi
+  [[ ! -e "${TEST_POST_COUNT}" ]]
+done
+
+near_deadline="$(( $(date +%s) + 30 ))"
+if run_fallback_case success env \
+  INFERA_RECOVERY_DEADLINE_EPOCH="${near_deadline}" \
+  INFERA_RECOVERY_MIN_ATTEMPT_BUDGET_SECONDS=60 \
+  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
+  echo "insufficient attempt budget must fail before provisioning" >&2
+  exit 1
+fi
+[[ ! -e "${TEST_POST_COUNT}" ]]
+if grep -q 'test-runpod-key\|test-admin-key\|provider-private-payload' "${EVIDENCE_FILE}"; then
+  echo "worker recovery evidence exposed non-allowlisted content" >&2
   exit 1
 fi
 

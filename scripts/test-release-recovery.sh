@@ -26,6 +26,19 @@ cat >"${TMP_DIR}/driver" <<'EOF'
 set -eu
 release="$(awk -F= '$1 == "INFERA_RELEASE_ID" { print $2 }' "$2")"
 printf '%s:%s\n' "$1" "${release}" >>"${TEST_CALLS}"
+printf 'deadline:%s:reserve:%s:step:%s\n' \
+  "${INFERA_RECOVERY_DEADLINE_EPOCH:-missing}" \
+  "${INFERA_RECOVERY_ROLLBACK_RESERVE_SECONDS:-missing}" \
+  "${INFERA_RECOVERY_STEP:-missing}" >>"${TEST_CALLS}"
+if [[ "${BLOCK_DRIVER_STEP:-}" == "$1:${release}" ]]; then
+  [[ -z "${SIGNAL_CHILD_EXIT_MARKER:-}" ]] || trap 'touch "${SIGNAL_CHILD_EXIT_MARKER}"' EXIT
+  : >"${BLOCK_MARKER}"
+  while [[ ! -e "${BLOCK_RELEASE}" ]]; do sleep 0.1; done
+  exit 1
+fi
+if [[ "${HANG_DRIVER_STEP:-}" == "$1:${release}" ]]; then
+  sleep 30
+fi
 [[ "${FAIL_DRIVER_STEP:-}" != "$1:${release}" ]]
 EOF
 cat >"${TMP_DIR}/verifier" <<'EOF'
@@ -33,6 +46,9 @@ cat >"${TMP_DIR}/verifier" <<'EOF'
 set -eu
 release="$(awk -F= '$1 == "INFERA_RELEASE_ID" { print $2 }' "$1")"
 printf 'verify:%s\n' "${release}" >>"${TEST_CALLS}"
+if [[ "${SLEEP_VERIFY_RELEASE:-}" == "${release}" ]]; then
+  sleep "${SLEEP_VERIFY_SECONDS:?}"
+fi
 if [[ "${FAIL_PROMOTION_RELEASE:-}" == "${release}" ]]; then
   chmod 0500 "${INFERA_RECOVERY_STATE_DIR}"
 fi
@@ -42,6 +58,7 @@ chmod +x "${TMP_DIR}/driver" "${TMP_DIR}/verifier"
 
 run_recovery() {
   TEST_CALLS="${TMP_DIR}/calls" \
+  INFERA_RECOVERY_MODE=test \
   INFERA_RECOVERY_DRIVER="${TMP_DIR}/driver" \
   INFERA_RECOVERY_VERIFIER="${TMP_DIR}/verifier" \
   INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL=2 \
@@ -100,6 +117,141 @@ assert_contains "${TMP_DIR}/calls" "verify:candidate"
 assert_order "${TMP_DIR}/calls" "drain-traffic:candidate" "deploy-gateway:candidate"
 assert_order "${TMP_DIR}/calls" "verify:candidate" "restore-traffic:candidate"
 assert_contains "${TMP_DIR}/state/last-known-good.manifest" "INFERA_RELEASE_ID=candidate"
+deadline_count="$(grep '^deadline:' "${TMP_DIR}/calls" | cut -d: -f2 | sort -u | wc -l | tr -d ' ')"
+[[ "${deadline_count}" == "1" ]]
+if grep -q 'deadline:missing\|reserve:missing\|step:missing' "${TMP_DIR}/calls"; then
+  echo "shared recovery deadline context was not propagated" >&2
+  exit 1
+fi
+
+# The state-directory lock is atomic and cannot be stolen by a second
+# controller while the first controller is active.
+rm -f "${TMP_DIR}/calls" "${TMP_DIR}/block-marker" "${TMP_DIR}/block-release"
+BLOCK_DRIVER_STEP=preflight:candidate \
+BLOCK_MARKER="${TMP_DIR}/block-marker" BLOCK_RELEASE="${TMP_DIR}/block-release" \
+run_recovery "${TMP_DIR}/candidate.manifest" &
+blocked_pid=$!
+for _ in $(seq 1 50); do
+  [[ -e "${TMP_DIR}/block-marker" ]] && break
+  sleep 0.1
+done
+[[ -e "${TMP_DIR}/block-marker" ]]
+if run_recovery "${TMP_DIR}/candidate.manifest"; then
+  echo "concurrent recovery controller stole the active lock" >&2
+  exit 1
+fi
+touch "${TMP_DIR}/block-release"
+if wait "${blocked_pid}"; then
+  echo "blocked controller should reject its injected preflight" >&2
+  exit 1
+fi
+[[ ! -e "${TMP_DIR}/state/recovery.lock" ]]
+
+# TERM and session HUP reap the mutating child before releasing the lock.
+for controller_signal in TERM HUP; do
+  rm -f "${TMP_DIR}/calls" "${TMP_DIR}/block-marker" "${TMP_DIR}/block-release" \
+    "${TMP_DIR}/child-exit" "${TMP_DIR}/lock-removed-first"
+  env \
+    TEST_CALLS="${TMP_DIR}/calls" \
+    INFERA_RECOVERY_MODE=test \
+    INFERA_RECOVERY_DRIVER="${TMP_DIR}/driver" \
+    INFERA_RECOVERY_VERIFIER="${TMP_DIR}/verifier" \
+    INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL=2 \
+    INFERA_RECOVERY_STATE_DIR="${TMP_DIR}/state" \
+    INFERA_RECOVERY_EVIDENCE_DIR="${TMP_DIR}/evidence" \
+    BLOCK_DRIVER_STEP=preflight:candidate \
+    BLOCK_MARKER="${TMP_DIR}/block-marker" \
+    BLOCK_RELEASE="${TMP_DIR}/block-release" \
+    SIGNAL_CHILD_EXIT_MARKER="${TMP_DIR}/child-exit" \
+    "${REPO_ROOT}/scripts/release-recovery.sh" deploy \
+      "${TMP_DIR}/candidate.manifest" "${TMP_DIR}/stable.manifest" &
+  interrupted_pid=$!
+  for _ in $(seq 1 50); do
+    [[ -e "${TMP_DIR}/block-marker" && -d "${TMP_DIR}/state/recovery.lock" ]] && break
+    sleep 0.1
+  done
+  [[ -e "${TMP_DIR}/block-marker" && -d "${TMP_DIR}/state/recovery.lock" ]]
+  (
+    while [[ -d "${TMP_DIR}/state/recovery.lock" ]]; do sleep 0.01; done
+    [[ -e "${TMP_DIR}/child-exit" ]] || : >"${TMP_DIR}/lock-removed-first"
+  ) &
+  lock_watcher_pid=$!
+  kill -s "${controller_signal}" "${interrupted_pid}"
+  if wait "${interrupted_pid}"; then
+    echo "${controller_signal}-interrupted controller must return failure" >&2
+    exit 1
+  fi
+  wait "${lock_watcher_pid}"
+  [[ -e "${TMP_DIR}/child-exit" && ! -e "${TMP_DIR}/lock-removed-first" ]]
+done
+
+# A hung candidate worker deployment is killed before the global deadline;
+# rollback retains enough of the shared deadline to restore the stable set.
+rm -f "${TMP_DIR}/calls"
+started_epoch="$(date +%s)"
+if HANG_DRIVER_STEP=deploy-workers:candidate \
+  INFERA_RECOVERY_TIMEOUT_SECONDS=24 \
+  INFERA_RECOVERY_ROLLBACK_RESERVE_SECONDS=16 \
+  INFERA_RECOVERY_AMBIGUOUS_CLEANUP_SECONDS=2 \
+  INFERA_RECOVERY_CANDIDATE_RESTORE_SECONDS=3 \
+  INFERA_RECOVERY_MIN_ROLLBACK_STAGE_SECONDS=3 \
+  run_recovery "${TMP_DIR}/candidate.manifest"; then
+  echo "hung candidate worker deployment must reject the candidate" >&2
+  exit 1
+fi
+elapsed="$(( $(date +%s) - started_epoch ))"
+(( elapsed <= 24 ))
+assert_contains "${TMP_DIR}/calls" "deploy-gateway:stable"
+assert_contains "${TMP_DIR}/calls" "deploy-workers:stable"
+assert_contains "${TMP_DIR}/calls" "restore-traffic:stable"
+
+# A hung early rollback stage cannot consume the downstream restore slices.
+rm -f "${TMP_DIR}/calls"
+if FAIL_VERIFY_RELEASE=candidate HANG_DRIVER_STEP=stop-workers:candidate \
+  INFERA_RECOVERY_TIMEOUT_SECONDS=24 \
+  INFERA_RECOVERY_ROLLBACK_RESERVE_SECONDS=16 \
+  INFERA_RECOVERY_AMBIGUOUS_CLEANUP_SECONDS=2 \
+  INFERA_RECOVERY_CANDIDATE_RESTORE_SECONDS=3 \
+  INFERA_RECOVERY_MIN_ROLLBACK_STAGE_SECONDS=3 \
+  run_recovery "${TMP_DIR}/candidate.manifest"; then
+  echo "hung rollback cleanup must fail closed" >&2
+  exit 1
+fi
+assert_contains "${TMP_DIR}/calls" "deploy-gateway:stable"
+assert_contains "${TMP_DIR}/calls" "deploy-workers:stable"
+assert_contains "${TMP_DIR}/calls" "restore-traffic:stable"
+
+# Promotion is refused when verification leaves too little candidate restore budget.
+cp "${TMP_DIR}/stable.manifest" "${TMP_DIR}/state/last-known-good.manifest"
+rm -f "${TMP_DIR}/calls"
+if SLEEP_VERIFY_RELEASE=candidate SLEEP_VERIFY_SECONDS=5 \
+  INFERA_RECOVERY_TIMEOUT_SECONDS=25 \
+  INFERA_RECOVERY_ROLLBACK_RESERVE_SECONDS=15 \
+  INFERA_RECOVERY_AMBIGUOUS_CLEANUP_SECONDS=2 \
+  INFERA_RECOVERY_CANDIDATE_RESTORE_SECONDS=6 \
+  INFERA_RECOVERY_MIN_ROLLBACK_STAGE_SECONDS=3 \
+  run_recovery "${TMP_DIR}/candidate.manifest"; then
+  echo "insufficient restore budget must refuse promotion" >&2
+  exit 1
+fi
+assert_contains "${TMP_DIR}/state/last-known-good.manifest" "INFERA_RELEASE_ID=stable"
+assert_contains "${TMP_DIR}/calls" "restore-traffic:stable"
+
+# Production mode refuses an implicit/relative lock before any recovery mutation.
+rm -f "${TMP_DIR}/calls"
+if env -u INFERA_RECOVERY_STATE_DIR \
+  TEST_CALLS="${TMP_DIR}/calls" \
+  INFERA_RECOVERY_MODE=production \
+  INFERA_RECOVERY_DRIVER="${TMP_DIR}/driver" \
+  INFERA_RECOVERY_VERIFIER="${TMP_DIR}/verifier" \
+  INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL=2 \
+  INFERA_RECOVERY_EVIDENCE_DIR="${TMP_DIR}/evidence" \
+  "${REPO_ROOT}/scripts/release-recovery.sh" deploy \
+    "${TMP_DIR}/candidate.manifest" "${TMP_DIR}/stable.manifest"; then
+  echo "production recovery must require an explicit absolute shared state path" >&2
+  exit 1
+fi
+[[ ! -e "${TMP_DIR}/calls" ]]
 
 rm -f "${TMP_DIR}/calls"
 if FAIL_DRIVER_STEP=drain-traffic:candidate run_recovery "${TMP_DIR}/candidate.manifest"; then
@@ -165,6 +317,7 @@ if FAIL_PROMOTION_RELEASE=candidate run_recovery "${TMP_DIR}/candidate.manifest"
   exit 1
 fi
 chmod 0700 "${TMP_DIR}/state"
+rm -rf "${TMP_DIR}/state/recovery.lock"
 assert_contains "${TMP_DIR}/state/last-known-good.manifest" "INFERA_RELEASE_ID=stable"
 assert_order "${TMP_DIR}/calls" "verify:candidate" "deploy-gateway:stable"
 assert_order "${TMP_DIR}/calls" "verify:stable" "restore-traffic:stable"
