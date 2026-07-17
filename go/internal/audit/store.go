@@ -18,6 +18,12 @@ const (
 	TokenSourceEstimated = "estimated"
 	TokenSourceMixed     = "mixed"
 	TokenSourceUnknown   = "unknown"
+
+	CostAccuracyExact       = "exact"
+	CostAccuracyEstimated   = "estimated"
+	CostAccuracyUnavailable = "unavailable"
+
+	CostMethodActiveInstanceTimeShareV1 = "active_instance_time_share_v1"
 )
 
 var auditMigrations = []migrate.Migration{
@@ -127,6 +133,22 @@ var auditMigrations = []migrate.Migration{
 		CREATE INDEX idx_quota_reservations_expiry
 			ON quota_reservations(expires_at_ms);`,
 	},
+	{
+		Version:     6,
+		Description: "add immutable provider price snapshots and request cost attribution",
+		SQL: `
+		ALTER TABLE inference_audit ADD COLUMN cost_provider TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN cost_instance_id TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN price_snapshot_version TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN price_amount_nano INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE inference_audit ADD COLUMN price_currency TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN price_time_unit TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN price_captured_at_ms INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE inference_audit ADD COLUMN cost_nano INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE inference_audit ADD COLUMN cost_accuracy TEXT NOT NULL DEFAULT 'unavailable';
+		ALTER TABLE inference_audit ADD COLUMN cost_attribution_method TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN cost_observed_concurrency INTEGER NOT NULL DEFAULT 0;`,
+	},
 }
 
 var ErrQuotaExceeded = errors.New("workspace quota exceeded")
@@ -153,7 +175,7 @@ const (
 )
 
 const (
-	postgresSchemaVersion  = "5"
+	postgresSchemaVersion  = "6"
 	postgresWriterProtocol = "2"
 )
 
@@ -208,27 +230,59 @@ type InferenceAuditRecord struct {
 	Status           string
 	ErrorCode        string
 	LatencyMS        int64
+	Cost             CostAttribution
+}
+
+// CostAttribution is persisted as part of the immutable inference identity.
+// PriceAmountNano is nanocurrency per PriceTimeUnit; CostNano is nanocurrency.
+type CostAttribution struct {
+	Provider                  string
+	InstanceID                string
+	PriceSnapshotVersion      string
+	PriceAmountNano           int64
+	PriceCurrency             string
+	PriceTimeUnit             string
+	PriceCapturedAt           time.Time
+	CostNano                  int64
+	CostAccuracy              string
+	CostAttributionMethod     string
+	ObservedActiveConcurrency int64
+}
+
+func UnavailableCostAttribution() CostAttribution {
+	return CostAttribution{CostAccuracy: CostAccuracyUnavailable}
 }
 
 type inferenceAuditRow struct {
-	TimestampMS      int64
-	RequestID        string
-	ClientRequestID  string
-	KeyID            string
-	WorkspaceID      string
-	Model            string
-	WorkerID         string
-	Stream           int64
-	MessageCount     int64
-	PromptTokens     int64
-	CompletionTokens int64
-	TokenCount       int64
-	TokenSource      string
-	Billable         int64
-	PromptHash       string
-	Status           string
-	ErrorCode        string
-	LatencyMS        int64
+	TimestampMS             int64
+	RequestID               string
+	ClientRequestID         string
+	KeyID                   string
+	WorkspaceID             string
+	Model                   string
+	WorkerID                string
+	Stream                  int64
+	MessageCount            int64
+	PromptTokens            int64
+	CompletionTokens        int64
+	TokenCount              int64
+	TokenSource             string
+	Billable                int64
+	PromptHash              string
+	Status                  string
+	ErrorCode               string
+	LatencyMS               int64
+	CostProvider            string
+	CostInstanceID          string
+	PriceSnapshotVersion    string
+	PriceAmountNano         int64
+	PriceCurrency           string
+	PriceTimeUnit           string
+	PriceCapturedAtMS       int64
+	CostNano                int64
+	CostAccuracy            string
+	CostAttributionMethod   string
+	CostObservedConcurrency int64
 }
 
 type QuotaReservation struct {
@@ -265,6 +319,11 @@ type UsageRow struct {
 	EstimatedTokenCount   int64
 	SuccessCount          int64
 	ErrorCount            int64
+	CostNano              int64
+	CostedTokenCount      int64
+	ExactCostCount        int64
+	EstimatedCostCount    int64
+	UnavailableCostCount  int64
 }
 
 type UsageSummaryQuery struct {
@@ -283,6 +342,11 @@ type UsageSummary struct {
 	EstimatedTokenCount   int64 `json:"estimated_token_count"`
 	SuccessCount          int64 `json:"success_count"`
 	ErrorCount            int64 `json:"error_count"`
+	CostNano              int64 `json:"cost_nano"`
+	CostedTokenCount      int64 `json:"costed_token_count"`
+	ExactCostCount        int64 `json:"exact_cost_count"`
+	EstimatedCostCount    int64 `json:"estimated_cost_count"`
+	UnavailableCostCount  int64 `json:"unavailable_cost_count"`
 }
 
 func NewStore(dbPath string) (*Store, error) {
@@ -393,6 +457,17 @@ func migratePostgres(db *sql.DB) error {
 			status TEXT NOT NULL,
 			error_code TEXT NOT NULL DEFAULT '',
 			latency_ms BIGINT NOT NULL DEFAULT 0,
+			cost_provider TEXT NOT NULL DEFAULT '',
+			cost_instance_id TEXT NOT NULL DEFAULT '',
+			price_snapshot_version TEXT NOT NULL DEFAULT '',
+			price_amount_nano BIGINT NOT NULL DEFAULT 0,
+			price_currency TEXT NOT NULL DEFAULT '',
+			price_time_unit TEXT NOT NULL DEFAULT '',
+			price_captured_at_ms BIGINT NOT NULL DEFAULT 0,
+			cost_nano BIGINT NOT NULL DEFAULT 0,
+			cost_accuracy TEXT NOT NULL DEFAULT 'unavailable',
+			cost_attribution_method TEXT NOT NULL DEFAULT '',
+			cost_observed_concurrency BIGINT NOT NULL DEFAULT 0,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE (workspace_id, request_id)
 		);
@@ -401,6 +476,17 @@ func migratePostgres(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_inference_audit_model_ts ON inference_audit(model, ts_unix_ms);
 		CREATE INDEX IF NOT EXISTS idx_inference_audit_workspace_ts ON inference_audit(workspace_id, ts_unix_ms);
 		CREATE INDEX IF NOT EXISTS idx_inference_audit_workspace_client_request ON inference_audit(workspace_id, client_request_id);
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS cost_provider TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS cost_instance_id TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS price_snapshot_version TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS price_amount_nano BIGINT NOT NULL DEFAULT 0;
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS price_currency TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS price_time_unit TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS price_captured_at_ms BIGINT NOT NULL DEFAULT 0;
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS cost_nano BIGINT NOT NULL DEFAULT 0;
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS cost_accuracy TEXT NOT NULL DEFAULT 'unavailable';
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS cost_attribution_method TEXT NOT NULL DEFAULT '';
+		ALTER TABLE inference_audit ADD COLUMN IF NOT EXISTS cost_observed_concurrency BIGINT NOT NULL DEFAULT 0;
 		CREATE TABLE IF NOT EXISTS quota_reservations (
 			workspace_id TEXT NOT NULL,
 			execution_id TEXT NOT NULL,
@@ -543,6 +629,25 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 	default:
 		return fmt.Errorf("invalid token_source %q", rec.TokenSource)
 	}
+	cost := rec.Cost
+	costAccuracy := strings.ToLower(strings.TrimSpace(cost.CostAccuracy))
+	if costAccuracy == "" {
+		costAccuracy = CostAccuracyUnavailable
+	}
+	switch costAccuracy {
+	case CostAccuracyExact, CostAccuracyEstimated, CostAccuracyUnavailable:
+	default:
+		return fmt.Errorf("invalid cost_accuracy %q", cost.CostAccuracy)
+	}
+	if cost.PriceAmountNano < 0 || cost.CostNano < 0 || cost.ObservedActiveConcurrency < 0 {
+		return fmt.Errorf("cost and price values cannot be negative")
+	}
+	if costAccuracy == CostAccuracyUnavailable {
+		cost = UnavailableCostAttribution()
+	} else if strings.TrimSpace(cost.PriceCurrency) == "" || strings.TrimSpace(cost.PriceTimeUnit) == "" ||
+		strings.TrimSpace(cost.PriceSnapshotVersion) == "" || cost.PriceAmountNano <= 0 || cost.ObservedActiveConcurrency <= 0 {
+		return fmt.Errorf("available cost attribution requires a versioned price with explicit units and positive concurrency")
+	}
 	billable := 0
 	if rec.Billable || rec.Status == "success" {
 		billable = 1
@@ -556,6 +661,15 @@ func (s *Store) AppendInference(rec InferenceAuditRecord) error {
 		PromptTokens: int64(rec.PromptTokens), CompletionTokens: int64(rec.CompletionTokens),
 		TokenCount: int64(rec.TokenCount), TokenSource: tokenSource, Billable: int64(billable),
 		PromptHash: rec.PromptHash, Status: rec.Status, ErrorCode: rec.ErrorCode, LatencyMS: rec.LatencyMS,
+		CostProvider: strings.TrimSpace(cost.Provider), CostInstanceID: strings.TrimSpace(cost.InstanceID),
+		PriceSnapshotVersion: strings.TrimSpace(cost.PriceSnapshotVersion), PriceAmountNano: cost.PriceAmountNano,
+		PriceCurrency: strings.TrimSpace(cost.PriceCurrency), PriceTimeUnit: strings.TrimSpace(cost.PriceTimeUnit),
+		PriceCapturedAtMS: cost.PriceCapturedAt.UTC().UnixMilli(), CostNano: cost.CostNano,
+		CostAccuracy: costAccuracy, CostAttributionMethod: strings.TrimSpace(cost.CostAttributionMethod),
+		CostObservedConcurrency: cost.ObservedActiveConcurrency,
+	}
+	if cost.PriceCapturedAt.IsZero() {
+		row.PriceCapturedAtMS = 0
 	}
 	return s.appendInferenceRow(row, true)
 }
@@ -571,13 +685,17 @@ func (s *Store) appendInferenceRow(row inferenceAuditRow, finalizeReservation bo
 	}
 	result, err := tx.Exec(
 		s.bind(`INSERT INTO inference_audit
-		 (ts_unix_ms, request_id, client_request_id, key_id, workspace_id, model, worker_id, stream, message_count, prompt_tokens, completion_tokens, token_count, token_source, billable, prompt_hash, status, error_code, latency_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (ts_unix_ms, request_id, client_request_id, key_id, workspace_id, model, worker_id, stream, message_count, prompt_tokens, completion_tokens, token_count, token_source, billable, prompt_hash, status, error_code, latency_ms,
+		  cost_provider, cost_instance_id, price_snapshot_version, price_amount_nano, price_currency, price_time_unit, price_captured_at_ms, cost_nano, cost_accuracy, cost_attribution_method, cost_observed_concurrency)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(workspace_id, request_id) DO NOTHING`),
 		row.TimestampMS, row.RequestID, row.ClientRequestID, row.KeyID, row.WorkspaceID,
 		row.Model, row.WorkerID, row.Stream, row.MessageCount, row.PromptTokens,
 		row.CompletionTokens, row.TokenCount, row.TokenSource, row.Billable,
 		row.PromptHash, row.Status, row.ErrorCode, row.LatencyMS,
+		row.CostProvider, row.CostInstanceID, row.PriceSnapshotVersion, row.PriceAmountNano,
+		row.PriceCurrency, row.PriceTimeUnit, row.PriceCapturedAtMS, row.CostNano,
+		row.CostAccuracy, row.CostAttributionMethod, row.CostObservedConcurrency,
 	)
 	if err != nil {
 		return err
@@ -591,7 +709,10 @@ func (s *Store) appendInferenceRow(row inferenceAuditRow, finalizeReservation bo
 		if err := tx.QueryRow(s.bind(`
 			SELECT ts_unix_ms, client_request_id, key_id, model, worker_id, stream,
 			       message_count, prompt_tokens, completion_tokens, token_count,
-			       token_source, billable, prompt_hash, status, error_code, latency_ms
+			       token_source, billable, prompt_hash, status, error_code, latency_ms,
+			       cost_provider, cost_instance_id, price_snapshot_version, price_amount_nano,
+			       price_currency, price_time_unit, price_captured_at_ms, cost_nano,
+			       cost_accuracy, cost_attribution_method, cost_observed_concurrency
 			FROM inference_audit WHERE workspace_id = ? AND request_id = ?`),
 			row.WorkspaceID, row.RequestID,
 		).Scan(
@@ -600,6 +721,10 @@ func (s *Store) appendInferenceRow(row inferenceAuditRow, finalizeReservation bo
 			&existing.MessageCount, &existing.PromptTokens, &existing.CompletionTokens,
 			&existing.TokenCount, &existing.TokenSource, &existing.Billable,
 			&existing.PromptHash, &existing.Status, &existing.ErrorCode, &existing.LatencyMS,
+			&existing.CostProvider, &existing.CostInstanceID, &existing.PriceSnapshotVersion,
+			&existing.PriceAmountNano, &existing.PriceCurrency, &existing.PriceTimeUnit,
+			&existing.PriceCapturedAtMS, &existing.CostNano, &existing.CostAccuracy,
+			&existing.CostAttributionMethod, &existing.CostObservedConcurrency,
 		); err != nil {
 			return err
 		}
@@ -825,7 +950,12 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 		COALESCE(SUM(CASE WHEN billable = 1 AND token_source = 'exact' THEN token_count ELSE 0 END), 0) AS exact_token_count,
 		COALESCE(SUM(CASE WHEN billable = 1 AND token_source <> 'exact' THEN token_count ELSE 0 END), 0) AS estimated_token_count,
 		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
-		COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS error_count
+		COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS error_count,
+		COALESCE(SUM(cost_nano), 0) AS cost_nano,
+		COALESCE(SUM(CASE WHEN cost_accuracy <> 'unavailable' THEN token_count ELSE 0 END), 0) AS costed_token_count,
+		COALESCE(SUM(CASE WHEN cost_accuracy = 'exact' THEN 1 ELSE 0 END), 0) AS exact_cost_count,
+		COALESCE(SUM(CASE WHEN cost_accuracy = 'estimated' THEN 1 ELSE 0 END), 0) AS estimated_cost_count,
+		COALESCE(SUM(CASE WHEN cost_accuracy = 'unavailable' THEN 1 ELSE 0 END), 0) AS unavailable_cost_count
 	FROM inference_audit
 	WHERE ts_unix_ms >= ? AND ts_unix_ms < ?`
 
@@ -867,6 +997,11 @@ func (s *Store) UsageByKey(q UsageQuery) ([]UsageRow, error) {
 			&row.EstimatedTokenCount,
 			&row.SuccessCount,
 			&row.ErrorCount,
+			&row.CostNano,
+			&row.CostedTokenCount,
+			&row.ExactCostCount,
+			&row.EstimatedCostCount,
+			&row.UnavailableCostCount,
 		); err != nil {
 			return nil, err
 		}
@@ -899,7 +1034,12 @@ func (s *Store) UsageSummary(q UsageSummaryQuery) (*UsageSummary, error) {
 		COALESCE(SUM(CASE WHEN billable = 1 AND token_source = 'exact' THEN token_count ELSE 0 END), 0) AS exact_token_count,
 		COALESCE(SUM(CASE WHEN billable = 1 AND token_source <> 'exact' THEN token_count ELSE 0 END), 0) AS estimated_token_count,
 		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
-		COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS error_count
+		COALESCE(SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END), 0) AS error_count,
+		COALESCE(SUM(cost_nano), 0) AS cost_nano,
+		COALESCE(SUM(CASE WHEN cost_accuracy <> 'unavailable' THEN token_count ELSE 0 END), 0) AS costed_token_count,
+		COALESCE(SUM(CASE WHEN cost_accuracy = 'exact' THEN 1 ELSE 0 END), 0) AS exact_cost_count,
+		COALESCE(SUM(CASE WHEN cost_accuracy = 'estimated' THEN 1 ELSE 0 END), 0) AS estimated_cost_count,
+		COALESCE(SUM(CASE WHEN cost_accuracy = 'unavailable' THEN 1 ELSE 0 END), 0) AS unavailable_cost_count
 	FROM inference_audit
 	WHERE ts_unix_ms >= ? AND ts_unix_ms < ?`
 	args := []any{start.UnixMilli(), end.UnixMilli()}
@@ -919,6 +1059,11 @@ func (s *Store) UsageSummary(q UsageSummaryQuery) (*UsageSummary, error) {
 		&summary.EstimatedTokenCount,
 		&summary.SuccessCount,
 		&summary.ErrorCount,
+		&summary.CostNano,
+		&summary.CostedTokenCount,
+		&summary.ExactCostCount,
+		&summary.EstimatedCostCount,
+		&summary.UnavailableCostCount,
 	); err != nil {
 		return nil, err
 	}

@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from infera_bench.results import compare_result_indexes, format_comparison_markdown
+import json
+
+from infera_bench.results import (
+    compare_result_indexes,
+    format_comparison_markdown,
+    summarize_warm_output,
+)
 from infera_bench.schema import ExperimentResultIndex, ExperimentResultRecord, WarmMetricSummary
 
 
@@ -63,6 +69,38 @@ def test_compare_result_indexes_ranks_best_latency_first() -> None:
 
     assert comparison.entries[0].run_id == "fast"
     assert comparison.entries[1].run_id == "slow"
+
+
+def test_warm_summary_exposes_cost_units_and_accuracy(tmp_path) -> None:
+    path = tmp_path / "warm.json"
+    path.write_text(
+        json.dumps(
+            {
+                "presets": {
+                    "short": [
+                        {
+                            "ttft_ms": 10,
+                            "stream_total_ms": 20,
+                            "non_stream_total_ms": 30,
+                            "cost_query_usd": 0.002,
+                            "cost_per_token_usd": 0.00001,
+                            "cost_per_1m_tokens_usd": 10.0,
+                            "cost_accuracy": "estimated",
+                            "cost_attribution_method": "active_instance_group_time_share_v1",
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_warm_output(path, "none")
+
+    assert summary.cost_per_request_usd == 0.002
+    assert summary.cost_per_token_usd == 0.00001
+    assert summary.cost_per_1m_tokens_usd == 10.0
+    assert summary.cost_accuracy == "estimated"
 
 
 def test_format_comparison_markdown_includes_ranking_and_group_winners() -> None:

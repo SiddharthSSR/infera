@@ -30,7 +30,10 @@ func (s *Store) MigrateSQLiteHistory(ctx context.Context, sqlitePath string) (in
 		SELECT ts_unix_ms, request_id, client_request_id, key_id, workspace_id,
 		       model, worker_id, stream, message_count, prompt_tokens,
 		       completion_tokens, token_count, token_source, billable,
-		       prompt_hash, status, error_code, latency_ms
+		       prompt_hash, status, error_code, latency_ms,
+		       cost_provider, cost_instance_id, price_snapshot_version, price_amount_nano,
+		       price_currency, price_time_unit, price_captured_at_ms, cost_nano,
+		       cost_accuracy, cost_attribution_method, cost_observed_concurrency
 		FROM inference_audit ORDER BY id`)
 	if err != nil {
 		return 0, err
@@ -45,7 +48,11 @@ func (s *Store) MigrateSQLiteHistory(ctx context.Context, sqlitePath string) (in
 			&row.WorkspaceID, &row.Model, &row.WorkerID, &row.Stream,
 			&row.MessageCount, &row.PromptTokens, &row.CompletionTokens,
 			&row.TokenCount, &row.TokenSource, &row.Billable, &row.PromptHash,
-			&row.Status, &row.ErrorCode, &row.LatencyMS,
+			&row.Status, &row.ErrorCode, &row.LatencyMS, &row.CostProvider,
+			&row.CostInstanceID, &row.PriceSnapshotVersion, &row.PriceAmountNano,
+			&row.PriceCurrency, &row.PriceTimeUnit, &row.PriceCapturedAtMS,
+			&row.CostNano, &row.CostAccuracy, &row.CostAttributionMethod,
+			&row.CostObservedConcurrency,
 		); err != nil {
 			return copied, err
 		}

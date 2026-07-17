@@ -563,11 +563,13 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 	auditTokenCount := 0
 	auditUsage := usageMeasurement{TokenSource: audit.TokenSourceUnknown}
 	auditWorkerID := ""
+	auditRoutingDecision := types.RoutingDecision{}
 	auditErrorCode := ""
 	sloModel := ""
 	sloStrategy := ""
 	defer func() {
-		latencyMS := time.Since(requestStart).Milliseconds()
+		elapsed := time.Since(requestStart)
+		latencyMS := elapsed.Milliseconds()
 		attrs := []any{
 			slog.String("request_id", requestID),
 			slog.String("key_id", keyID),
@@ -605,6 +607,7 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 				Status:           auditStatus,
 				ErrorCode:        auditErrorCode,
 				LatencyMS:        latencyMS,
+				Cost:             g.requestCostAttribution(auditWorkerID, auditRoutingDecision, elapsed),
 			}
 			if err := g.enqueueAuditRecord(rec); err != nil {
 				g.log.Error("inference.audit_persist_failed", slog.String("request_id", requestID), slog.String("error", err.Error()))
@@ -663,6 +666,7 @@ func (g *Gateway) handleStreamingChatCompletion(w http.ResponseWriter, r *http.R
 	g.logRouteDecision(routed.RoutingDecision)
 	sloModel = req.Model
 	sloStrategy = string(routed.RoutingDecision.Strategy)
+	auditRoutingDecision = routed.RoutingDecision
 	setRouteDecisionHeader(w, r, routed.RoutingDecision)
 
 	auditWorkerID = routed.WorkerID
@@ -1225,18 +1229,19 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type usageRow struct {
-		BucketStart       string `json:"bucket_start"`
-		WorkspaceID       string `json:"workspace_id"`
-		KeyID             string `json:"key_id"`
-		Attempts          int64  `json:"attempts"`
-		Requests          int64  `json:"requests"`
-		Tokens            int64  `json:"tokens"`
-		ExactRequests     int64  `json:"exact_requests"`
-		EstimatedRequests int64  `json:"estimated_requests"`
-		ExactTokens       int64  `json:"exact_tokens"`
-		EstimatedTokens   int64  `json:"estimated_tokens"`
-		Successes         int64  `json:"successes"`
-		Errors            int64  `json:"errors"`
+		BucketStart       string      `json:"bucket_start"`
+		WorkspaceID       string      `json:"workspace_id"`
+		KeyID             string      `json:"key_id"`
+		Attempts          int64       `json:"attempts"`
+		Requests          int64       `json:"requests"`
+		Tokens            int64       `json:"tokens"`
+		ExactRequests     int64       `json:"exact_requests"`
+		EstimatedRequests int64       `json:"estimated_requests"`
+		ExactTokens       int64       `json:"exact_tokens"`
+		EstimatedTokens   int64       `json:"estimated_tokens"`
+		Successes         int64       `json:"successes"`
+		Errors            int64       `json:"errors"`
+		Cost              costMetrics `json:"cost"`
 	}
 
 	out := make([]usageRow, 0, len(rows))
@@ -1254,6 +1259,7 @@ func (g *Gateway) handleGetAuditUsage(w http.ResponseWriter, r *http.Request) {
 			EstimatedTokens:   row.EstimatedTokenCount,
 			Successes:         row.SuccessCount,
 			Errors:            row.ErrorCount,
+			Cost:              buildCostMetrics(row.CostNano, row.CostedTokenCount, row.ExactCostCount, row.EstimatedCostCount, row.UnavailableCostCount),
 		})
 	}
 

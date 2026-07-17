@@ -72,6 +72,7 @@ func reconcileUsageRows(rows []audit.UsageRow) usageReconciliation {
 	var successes, errors int64
 	var exactRequests, estimatedRequests int64
 	var exactTokens, estimatedTokens int64
+	var exactCosts, estimatedCosts, unavailableCosts int64
 	for _, row := range rows {
 		attempts += row.AttemptCount
 		requests += row.RequestCount
@@ -82,6 +83,9 @@ func reconcileUsageRows(rows []audit.UsageRow) usageReconciliation {
 		estimatedRequests += row.EstimatedRequestCount
 		exactTokens += row.ExactTokenCount
 		estimatedTokens += row.EstimatedTokenCount
+		exactCosts += row.ExactCostCount
+		estimatedCosts += row.EstimatedCostCount
+		unavailableCosts += row.UnavailableCostCount
 	}
 
 	discrepancies := make([]string, 0, 3)
@@ -93,6 +97,12 @@ func reconcileUsageRows(rows []audit.UsageRow) usageReconciliation {
 	}
 	if tokens != exactTokens+estimatedTokens {
 		discrepancies = append(discrepancies, "token_accuracy_mismatch")
+	}
+	// Zero means an older/stub summary did not populate cost metadata. Durable
+	// ledger queries always classify every row, including unavailable prices.
+	classifiedCosts := exactCosts + estimatedCosts + unavailableCosts
+	if classifiedCosts != 0 && attempts != classifiedCosts {
+		discrepancies = append(discrepancies, "cost_accuracy_mismatch")
 	}
 	status := "ok"
 	if len(discrepancies) > 0 {
@@ -112,5 +122,39 @@ func reconcileUsageSummary(summary audit.UsageSummary) usageReconciliation {
 		EstimatedTokenCount:   summary.EstimatedTokenCount,
 		SuccessCount:          summary.SuccessCount,
 		ErrorCount:            summary.ErrorCount,
+		ExactCostCount:        summary.ExactCostCount,
+		EstimatedCostCount:    summary.EstimatedCostCount,
+		UnavailableCostCount:  summary.UnavailableCostCount,
 	}})
+}
+
+type costMetrics struct {
+	Currency             string  `json:"currency"`
+	CostUSD              float64 `json:"cost_usd"`
+	CostPerRequestUSD    float64 `json:"cost_per_request_usd"`
+	CostPerTokenUSD      float64 `json:"cost_per_token_usd"`
+	CostPerMillionTokens float64 `json:"cost_per_1m_tokens_usd"`
+	CostedRequests       int64   `json:"costed_requests"`
+	CostedTokens         int64   `json:"costed_tokens"`
+	ExactRequests        int64   `json:"exact_requests"`
+	EstimatedRequests    int64   `json:"estimated_requests"`
+	UnavailableRequests  int64   `json:"unavailable_requests"`
+}
+
+func buildCostMetrics(costNano, costedTokens, exact, estimated, unavailable int64) costMetrics {
+	costedRequests := exact + estimated
+	costUSD := float64(costNano) / 1_000_000_000
+	metrics := costMetrics{
+		Currency: "USD", CostUSD: costUSD, CostedRequests: costedRequests,
+		CostedTokens: costedTokens, ExactRequests: exact,
+		EstimatedRequests: estimated, UnavailableRequests: unavailable,
+	}
+	if costedRequests > 0 {
+		metrics.CostPerRequestUSD = costUSD / float64(costedRequests)
+	}
+	if costedTokens > 0 {
+		metrics.CostPerTokenUSD = costUSD / float64(costedTokens)
+		metrics.CostPerMillionTokens = metrics.CostPerTokenUSD * 1_000_000
+	}
+	return metrics
 }

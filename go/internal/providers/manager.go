@@ -663,6 +663,34 @@ func (m *Manager) GetInstanceByWorker(workerID string) (*Instance, bool) {
 	return m.instances.findByWorker(workerID)
 }
 
+// GetPriceSnapshotForWorker captures the provisioned instance price that was
+// recorded when the worker's instance was created. Provider refreshes may
+// affect future instances, but never mutate an audit row that has persisted
+// this snapshot.
+func (m *Manager) GetPriceSnapshotForWorker(workerID string) (PriceSnapshot, bool) {
+	instance, found := m.instances.findByWorker(workerID)
+	if !found || instance == nil || instance.CostPerHour <= 0 {
+		return PriceSnapshot{}, false
+	}
+	amountNano := int64(instance.CostPerHour*1_000_000_000 + 0.5)
+	if amountNano <= 0 {
+		return PriceSnapshot{}, false
+	}
+	capturedAt := instance.CreatedAt.UTC()
+	if capturedAt.IsZero() {
+		capturedAt = m.now().UTC()
+	}
+	return PriceSnapshot{
+		Version:    PriceSnapshotVersionV1,
+		Provider:   instance.Provider,
+		InstanceID: instance.ID,
+		AmountNano: amountNano,
+		Currency:   PriceCurrencyUSD,
+		TimeUnit:   PriceTimeUnitHour,
+		CapturedAt: capturedAt,
+	}, true
+}
+
 // WorkerCredentialForWorker returns the deployment-bound credential for a
 // linked worker. It intentionally fails closed for unknown or legacy records.
 func (m *Manager) WorkerCredentialForWorker(workerID string) (string, bool) {

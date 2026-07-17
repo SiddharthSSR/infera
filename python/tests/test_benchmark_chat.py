@@ -124,6 +124,9 @@ def test_build_result_row_computes_cost_and_throughput():
     )
 
     row = module.build_result_row(2, 3, 4, stream, non_stream, 0.79)
+    rows = [dict(row, client_index=index) for index in range(1, 5)]
+    module.annotate_group_metrics(rows, None, 0.79)
+    row = rows[2]
 
     assert row["run"] == 2
     assert row["group_run"] == 2
@@ -133,6 +136,10 @@ def test_build_result_row_computes_cost_and_throughput():
     assert row["decode_tok_s"] == 50.0
     assert row["total_tok_s"] == 50.0
     assert row["cost_query_usd"] > 0
+    assert row["cost_accuracy"] == "estimated"
+    assert row["cost_observed_concurrency"] == 4
+    assert row["cost_per_token_usd"] > 0
+    assert row["cost_per_1m_tokens_usd"] == row["cost_per_token_usd"] * 1_000_000
     assert row["decode_tok_s_per_dollar_hour"] > 0
 
 
@@ -296,4 +303,12 @@ def test_write_json_output_creates_parent_directories(tmp_path):
     assert payload["engine"] == "vllm"
     assert payload["provider"] == "runpod"
     assert payload["gpu_type"] == "A100_80GB"
+    assert payload["price_snapshot"] == {
+        "version": "benchmark-cli-hourly-v1",
+        "amount": 0.79,
+        "currency": "USD",
+        "time_unit": "hour",
+        "accuracy": "estimated",
+        "attribution_method": "active_instance_group_time_share_v1",
+    }
     assert json.loads(output.read_text(encoding="utf-8")) == payload

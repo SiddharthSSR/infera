@@ -113,6 +113,31 @@ func TestManagerProvisionSetsDefaultGatewayAddress(t *testing.T) {
 	}
 }
 
+func TestManagerPriceSnapshotIsVersionedAndDefensive(t *testing.T) {
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.RegisterProvider(provider)
+	instance, err := mgr.Provision(context.Background(), &ProvisionRequest{Name: "priced", GPUType: GPURTX4090})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if err := mgr.LinkWorker(instance.ID, "priced-worker"); err != nil {
+		t.Fatalf("LinkWorker: %v", err)
+	}
+	snapshot, ok := mgr.GetPriceSnapshotForWorker("priced-worker")
+	if !ok {
+		t.Fatal("expected price snapshot")
+	}
+	if snapshot.Version != PriceSnapshotVersionV1 || snapshot.Currency != PriceCurrencyUSD || snapshot.TimeUnit != PriceTimeUnitHour || snapshot.AmountNano != 1_000_000_000 {
+		t.Fatalf("unexpected snapshot: %+v", snapshot)
+	}
+	snapshot.AmountNano = 99
+	again, ok := mgr.GetPriceSnapshotForWorker("priced-worker")
+	if !ok || again.AmountNano != 1_000_000_000 {
+		t.Fatalf("caller mutated stored price: %+v", again)
+	}
+}
+
 func TestManagerSurfacesRunningInstanceWithoutNetwork(t *testing.T) {
 	provider := newMockTestProvider()
 	mgr := newTestManager(t, ManagerConfig{

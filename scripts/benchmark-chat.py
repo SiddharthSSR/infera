@@ -7,7 +7,7 @@ Measures:
 - total stream latency
 - prompt/completion/total token counts
 - approximate decode tokens/sec
-- optional cost/query and tokens/sec/$ when hourly cost is supplied
+- estimated USD cost/request and cost/token with explicit accuracy metadata
 """
 
 from __future__ import annotations
@@ -237,7 +237,7 @@ def parse_args() -> argparse.Namespace:
         "--cost-per-hour",
         type=float,
         default=None,
-        help="Optional hourly infra cost to estimate cost/query and tokens/sec/$",
+        help="Optional active-instance price in USD/hour for amortized cost metrics",
     )
     parser.add_argument(
         "--json-output",
@@ -574,9 +574,14 @@ def build_result_row(
         "stream_event_count": len(stream.event_intervals_ms) + (1 if stream.content else 0),
     }
     if cost_per_hour is not None:
-        query_cost = cost_per_hour * (non_stream.total_ms / 1000.0) / 3600.0
-        row["cost_query_usd"] = round(query_cost, 8)
+        row["cost_accuracy"] = "estimated"
+        row["cost_attribution_method"] = "active_instance_group_time_share_v1"
+        row["price_currency"] = "USD"
+        row["price_time_unit"] = "hour"
+        row["price_amount"] = cost_per_hour
         row["decode_tok_s_per_dollar_hour"] = round(decode_tok_s / cost_per_hour, 4) if cost_per_hour > 0 else 0.0
+    else:
+        row["cost_accuracy"] = "unavailable"
     return row
 
 
@@ -625,6 +630,7 @@ def _run_phase_concurrently(
 def annotate_group_metrics(
     rows: list[dict[str, float | int | str]],
     health_summary: HealthSamplingSummary | None,
+    cost_per_hour: float | None = None,
 ) -> None:
     if not rows:
         return
@@ -636,10 +642,27 @@ def annotate_group_metrics(
     )
     isolated_decode_tok_s = sum(float(row["decode_tok_s"]) for row in rows)
     contention_ratio = aggregate_decode_tok_s / isolated_decode_tok_s if isolated_decode_tok_s > 0 else 0.0
+    group_cost_usd = 0.0
+    cost_per_request_usd = 0.0
+    cost_per_token_usd = 0.0
+    if cost_per_hour is not None and cost_per_hour >= 0:
+        # Concurrent requests share one active instance. Charge the group once
+        # for its wall-clock window, then amortize evenly across requests.
+        group_window_s = max(float(row["non_stream_total_ms"]) for row in rows) / 1000.0
+        group_cost_usd = cost_per_hour * group_window_s / 3600.0
+        cost_per_request_usd = group_cost_usd / len(rows)
+        total_tokens = sum(int(row["total_tokens"]) for row in rows)
+        cost_per_token_usd = group_cost_usd / total_tokens if total_tokens > 0 else 0.0
     for row in rows:
         row["aggregate_decode_tok_s"] = round(aggregate_decode_tok_s, 4)
         row["aggregate_total_tok_s"] = round(aggregate_total_tok_s, 4)
         row["contention_ratio"] = round(contention_ratio, 4)
+        if cost_per_hour is not None:
+            row["cost_query_usd"] = round(cost_per_request_usd, 9)
+            row["cost_per_token_usd"] = round(cost_per_token_usd, 12)
+            row["cost_per_1m_tokens_usd"] = round(cost_per_token_usd * 1_000_000, 6)
+            row["cost_group_usd"] = round(group_cost_usd, 9)
+            row["cost_observed_concurrency"] = len(rows)
         if health_summary is not None:
             row["peak_memory_used_bytes"] = health_summary.peak_memory_used_bytes
             row["health_sample_count"] = health_summary.sample_count
@@ -718,7 +741,7 @@ def run_benchmark_group(
         for client_index, non_stream_result in non_stream_results
     ]
     health_summary = sampler.stop() if sampler is not None else HealthSamplingSummary()
-    annotate_group_metrics(rows, health_summary)
+    annotate_group_metrics(rows, health_summary, cost_per_hour)
     if return_health_summary:
         return rows, health_summary
     return rows
@@ -750,6 +773,16 @@ def build_output_payload(
         "cache_reuse_mode": cache_reuse_mode,
         "presets": results,
         "cost_per_hour": cost_per_hour,
+        "price_snapshot": ({
+            "version": "benchmark-cli-hourly-v1",
+            "amount": cost_per_hour,
+            "currency": "USD",
+            "time_unit": "hour",
+            "accuracy": "estimated",
+            "attribution_method": "active_instance_group_time_share_v1",
+        } if cost_per_hour is not None else {
+            "accuracy": "unavailable",
+        }),
         "health_sampling": health_sampling or {},
     }
 
