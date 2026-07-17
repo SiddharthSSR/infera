@@ -53,7 +53,8 @@ the bundle to a clean operator host, verify its checksum, select the recorded se
 --quiet`. The drill passes only when both commands succeed without substituting defaults or printing
 secret values.
 
-Provider-specific executables receive one manifest path and must be idempotent:
+Provider-specific executables receive one manifest path and must be idempotent. The checked-in
+RunPod and Caddy adapters are suitable for the production Compose topology:
 
 - `INFERA_STOP_WORKERS_EXECUTABLE`: drain requests, then stop every worker in that release set.
 - `INFERA_DEPLOY_WORKERS_EXECUTABLE`: create/reprovision workers with the manifest's pinned image,
@@ -74,13 +75,17 @@ Export the existing production secrets without printing them, then run:
 ```bash
 export INFERA_RECOVERY_DRIVER="$PWD/scripts/compose-release-driver.sh"
 export INFERA_RECOVERY_VERIFIER="$PWD/scripts/verify-release-manifest.sh"
-export INFERA_STOP_WORKERS_EXECUTABLE=/opt/infera/bin/stop-release-workers
-export INFERA_DEPLOY_WORKERS_EXECUTABLE=/opt/infera/bin/deploy-release-workers
-export INFERA_DRAIN_TRAFFIC_EXECUTABLE=/opt/infera/bin/drain-release-traffic
-export INFERA_RESTORE_TRAFFIC_EXECUTABLE=/opt/infera/bin/restore-release-traffic
+export INFERA_STOP_WORKERS_EXECUTABLE="$PWD/scripts/runpod-stop-workers.sh"
+export INFERA_DEPLOY_WORKERS_EXECUTABLE="$PWD/scripts/runpod-deploy-workers.sh"
+export INFERA_DRAIN_TRAFFIC_EXECUTABLE="$PWD/scripts/caddy-drain-traffic.sh"
+export INFERA_RESTORE_TRAFFIC_EXECUTABLE="$PWD/scripts/caddy-restore-traffic.sh"
 export INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL=2
+export INFERA_EXPECT_TRAFFIC_DRAINED=1
+export INFERA_BASE_URL=https://inferai.co.in
+export INFERA_DASHBOARD_URL=https://dashboard.inferai.co.in
 export INFERA_SMOKE_API_KEY="$(secret-tool lookup service infera-smoke)"
 export INFERA_SMOKE_MODEL=Qwen/Qwen2.5-7B-Instruct
+export INFERA_RECOVERY_WORKER_MODEL=Qwen/Qwen2.5-7B-Instruct
 ./scripts/release-recovery.sh deploy \
   /secure/release/candidate.manifest \
   .infera-recovery/last-known-good.manifest
@@ -99,6 +104,25 @@ The command performs these gates in order:
 7. Atomically replace `.infera-recovery/last-known-good.manifest`, then restore public ingress. If
    either state promotion or ingress restore fails, the command fails with traffic still drained;
    promotion failure also restores the verified prior release set.
+
+The RunPod deployment adapter requires an explicit reviewed `INFERA_RECOVERY_WORKER_MODEL`; it does
+not select a model implicitly. It defaults to one `RTX_4090` vLLM worker, with
+`INFERA_RECOVERY_WORKER_GPU_TYPE` and `INFERA_RECOVERY_WORKER_ENGINE` available when the reviewed
+release requires different capacity. It reads the admin and RunPod keys from the environment or `INFERA_ENV_FILE`,
+places bearer headers only in mode-0600 temporary curl configuration files, and waits for the
+gateway-managed worker to register. Before provisioning or stopping, it reconciles only pods whose
+name exactly matches `infera-release-<release ID>`; an orphan from an interrupted attempt is
+terminated before a replacement is created. While Caddy returns the maintenance 503,
+the verifier derives a current container-private gateway address and runs health, worker discovery,
+and authenticated inference checks there. The restore adapter then proves public `/health` reaches
+the expected release and worker protocol before it returns success. If that public validation fails,
+it immediately reloads and verifies the maintenance configuration.
+
+The checked-in recovery adapter currently refuses `INFERA_GATEWAY_REPLICAS>1`. The PostgreSQL
+audit/quota ledger is replica-safe, but provider instance credentials and live worker/router
+registration are still process-local. Running two replicas would make registration and inference
+depend on which replica receives a request. Keep production at one replica until those worker-state
+paths are durable and shared; do not bypass this guard merely to demonstrate ledger sharing.
 
 Any failure after orchestration starts stops candidate workers, redeploys the old gateway, deploys
 old workers, and verifies the old release. A successful recovery still returns a nonzero command
@@ -153,15 +177,17 @@ Run the deterministic failure-injection suite on the reviewed commit:
 
 ```bash
 bash ./scripts/test-release-recovery.sh
+bash ./scripts/test-production-recovery-adapters.sh
 bash -n ./scripts/release-recovery.sh ./scripts/compose-release-driver.sh \
-  ./scripts/verify-release-manifest.sh ./scripts/audit-ledger-recovery-drill.sh
+  ./scripts/verify-release-manifest.sh ./scripts/audit-ledger-recovery-drill.sh \
+  ./scripts/runpod-stop-workers.sh ./scripts/runpod-deploy-workers.sh \
+  ./scripts/caddy-drain-traffic.sh ./scripts/caddy-restore-traffic.sh
 ```
 
 For a production drill, attach the sanitized recovery and ledger evidence logs, start/end times,
 release IDs, image digests, actual RPO/RTO, incident owner, and final decision. Review every file for
 secrets and tenant data before attaching it to a pilot-readiness review.
 
-The checked-in Compose driver intentionally delegates provider worker lifecycle and ingress control
-to environment-owned executable adapters. INF-46 remains **In Progress** until a real production
-drill exercises those exact adapters and demonstrates the stated RPO/RTO; deterministic CI coverage
-alone is not pilot-readiness evidence.
+INF-46 remains **In Progress** until a real production drill exercises the checked-in RunPod and
+Caddy adapters and demonstrates the stated RPO/RTO; deterministic CI coverage alone is not
+pilot-readiness evidence.
