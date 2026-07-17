@@ -850,11 +850,13 @@ func workerHealthURL(instance *Instance) string {
 	if instance == nil {
 		return ""
 	}
-	if instance.Provider == ProviderRunPod && strings.TrimSpace(instance.ProviderID) != "" {
-		return fmt.Sprintf("https://%s-8081.proxy.runpod.net/health", strings.TrimSpace(instance.ProviderID))
+	providerID := strings.TrimSpace(instance.ProviderID)
+	publicIP := strings.TrimSpace(instance.PublicIP)
+	if instance.Provider == ProviderRunPod && providerID != "" {
+		return fmt.Sprintf("https://%s-8081.proxy.runpod.net/health", providerID)
 	}
-	if strings.TrimSpace(instance.PublicIP) != "" && instance.HTTPPort > 0 {
-		return fmt.Sprintf("http://%s:%d/health", strings.TrimSpace(instance.PublicIP), instance.HTTPPort)
+	if publicIP != "" && instance.HTTPPort > 0 {
+		return fmt.Sprintf("http://%s:%d/health", publicIP, instance.HTTPPort)
 	}
 	return ""
 }
