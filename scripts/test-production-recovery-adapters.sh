@@ -179,11 +179,19 @@ case "$*" in
     ;;
   *"/health"*)
     if [[ "${TEST_BAD_RECOVERY_PROTOCOL:-0}" == "1" ]]; then
-      printf '%s\n' '{"status":"healthy","release_id":"release-1","worker_protocol_version":"1","recovery_api_protocol_version":"0"}'
+      printf '%s\n' '{"status":"healthy","release_id":"release-1","worker_protocol_version":"1","recovery_api_protocol_version":"0","workers":1,"healthy_workers":1}'
     elif [[ "${TEST_BAD_HEALTH:-0}" == "1" ]]; then
-      printf '%s\n' '{"release_id":"wrong-release","worker_protocol_version":"1","recovery_api_protocol_version":"1"}'
+      printf '%s\n' '{"release_id":"wrong-release","worker_protocol_version":"1","recovery_api_protocol_version":"1","workers":1,"healthy_workers":1}'
+    elif [[ "${TEST_HEALTH_COUNT_MODE:-}" == "missing" ]]; then
+      printf '%s\n' '{"status":"healthy","release_id":"release-1","worker_protocol_version":"1","recovery_api_protocol_version":"1","workers":1}'
+    elif [[ "${TEST_HEALTH_COUNT_MODE:-}" == "boolean" ]]; then
+      printf '%s\n' '{"status":"healthy","release_id":"release-1","worker_protocol_version":"1","recovery_api_protocol_version":"1","workers":1,"healthy_workers":true}'
+    elif [[ "${TEST_HEALTH_COUNT_MODE:-}" == "negative" ]]; then
+      printf '%s\n' '{"status":"degraded","release_id":"release-1","worker_protocol_version":"1","recovery_api_protocol_version":"1","workers":0,"healthy_workers":-1}'
+    elif [[ "${TEST_ZERO_HEALTH:-0}" == "1" ]]; then
+      printf '%s\n' '{"status":"degraded","release_id":"release-1","worker_protocol_version":"1","recovery_api_protocol_version":"1","workers":0,"healthy_workers":0}'
     else
-      printf '%s\n' '{"status":"healthy","release_id":"release-1","worker_protocol_version":"1","recovery_api_protocol_version":"1"}'
+      printf '%s\n' '{"status":"healthy","release_id":"release-1","worker_protocol_version":"1","recovery_api_protocol_version":"1","workers":1,"healthy_workers":1}'
     fi
     ;;
   *)
@@ -510,6 +518,75 @@ INFERA_SMOKE_MODEL=test-model \
 "${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"
 grep -q 'http://172.20.0.9:8080/v1/models' "${TEST_CALLS}"
 grep -q 'http://172.20.0.10:8080/v1/models' "${TEST_CALLS}"
+
+: >"${TEST_CALLS}"
+if TEST_ZERO_HEALTH=1 \
+INFERA_EXPECT_TRAFFIC_DRAINED=1 \
+INFERA_SMOKE_API_KEY=test-smoke-key \
+INFERA_SMOKE_MODEL=test-model \
+"${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"; then
+  echo "serving release verification must reject zero healthy workers" >&2
+  exit 1
+fi
+if grep -q '/internal/prometheus/worker-targets\|/v1/chat/completions' "${TEST_CALLS}"; then
+  echo "zero-worker serving failure must stop before worker-dependent checks" >&2
+  exit 1
+fi
+
+: >"${TEST_CALLS}"
+TEST_ZERO_HEALTH=1 \
+INFERA_RELEASE_WORKER_MODE=cost-saving \
+INFERA_EXPECT_TRAFFIC_DRAINED=1 \
+INFERA_SMOKE_API_KEY=test-smoke-key \
+INFERA_SMOKE_MODEL=test-model \
+"${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"
+grep -q '/v1/models' "${TEST_CALLS}"
+if grep -q '/internal/prometheus/worker-targets\|/v1/chat/completions' "${TEST_CALLS}"; then
+  echo "cost-saving verification must skip worker discovery and inference" >&2
+  exit 1
+fi
+
+: >"${TEST_CALLS}"
+if INFERA_RELEASE_WORKER_MODE=invalid \
+INFERA_EXPECT_TRAFFIC_DRAINED=1 \
+INFERA_SMOKE_API_KEY=test-smoke-key \
+INFERA_SMOKE_MODEL=test-model \
+"${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"; then
+  echo "unknown release worker mode must fail closed" >&2
+  exit 1
+fi
+[[ ! -s "${TEST_CALLS}" ]]
+
+for health_count_mode in missing boolean negative; do
+  : >"${TEST_CALLS}"
+  if TEST_HEALTH_COUNT_MODE="${health_count_mode}" \
+  INFERA_EXPECT_TRAFFIC_DRAINED=1 \
+  INFERA_SMOKE_API_KEY=test-smoke-key \
+  INFERA_SMOKE_MODEL=test-model \
+  "${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"; then
+    echo "${health_count_mode} healthy-worker count must fail closed" >&2
+    exit 1
+  fi
+  if grep -q '/internal/prometheus/worker-targets\|/v1/models\|/v1/chat/completions' "${TEST_CALLS}"; then
+    echo "invalid healthy-worker count must stop before worker-dependent checks" >&2
+    exit 1
+  fi
+done
+
+: >"${TEST_CALLS}"
+if INFERA_RELEASE_WORKER_MODE=cost-saving \
+INFERA_EXPECT_TRAFFIC_DRAINED=1 \
+INFERA_SMOKE_API_KEY=test-smoke-key \
+INFERA_SMOKE_MODEL=test-model \
+"${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"; then
+  echo "cost-saving verification must reject active healthy workers" >&2
+  exit 1
+fi
+if grep -q '/internal/prometheus/worker-targets\|/v1/models\|/v1/chat/completions' "${TEST_CALLS}"; then
+  echo "cost-saving worker-count mismatch must stop before worker-dependent checks" >&2
+  exit 1
+fi
+
 if TEST_GATEWAY_REPLICAS=2 \
 INFERA_GATEWAY_REPLICAS=2 \
 INFERA_EXPECT_TRAFFIC_DRAINED=1 \
