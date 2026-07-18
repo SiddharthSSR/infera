@@ -36,4 +36,9 @@ This is an allocation estimate, not a provider invoice. Stale worker concurrency
 - Streaming uses final worker usage when emitted; otherwise it estimates missing token components from the prompt and delivered text. Partial/failed streams retain the best observed usage and elapsed cost. Non-streaming uses worker usage with the same mixed/estimated fallback rules.
 - Usage aggregates include failure cost in total request cost. The cost-per-token denominator includes tokens observed on cost-attributed attempts; unavailable-price attempts are excluded from both cost and that denominator, and their count remains visible in accuracy metadata.
 
-Cost evidence is measurement only. Routing policy must not consume it until the separate cost-aware routing work is implemented and validated.
+Durable request-cost attribution remains measurement evidence; routing does not
+turn attributed request cost into a predictive cost-per-token estimate. The
+`min_cost_under_latency_slo` strategy may consume only the immutable,
+versioned provider instance price snapshot (USD/hour) resolved by authoritative
+worker ID. Its separate trust, freshness, and fallback contract is documented
+in `docs/optimization/cost-slo-routing.md`.
