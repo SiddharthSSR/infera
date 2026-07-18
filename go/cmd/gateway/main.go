@@ -85,12 +85,8 @@ func main() {
 		if err != nil || !found {
 			return router.CostEvidence{}, false, err
 		}
-		if snapshot.Version != providers.PriceSnapshotVersionV1 ||
-			snapshot.Currency != providers.PriceCurrencyUSD || snapshot.TimeUnit != providers.PriceTimeUnitHour ||
-			snapshot.AmountNano <= 0 {
-			return router.CostEvidence{}, false, nil
-		}
-		return router.CostEvidence{AmountNanoPerHour: snapshot.AmountNano, CapturedAt: snapshot.CapturedAt}, true, nil
+		evidence, trusted := trustedRoutingCostEvidence(snapshot)
+		return evidence, trusted, nil
 	}
 	if v := strings.TrimSpace(os.Getenv("INFERA_ENABLE_BATCHING")); v != "" {
 		routerConfig.EnableBatching = parseBoolEnv(v, routerConfig.EnableBatching)
@@ -523,6 +519,15 @@ func routingConfigFromEnv(config router.Config) (router.Config, error) {
 	}
 	config.EvidenceMaxAge = maxAge
 	return config, nil
+}
+
+func trustedRoutingCostEvidence(snapshot providers.PriceSnapshot) (router.CostEvidence, bool) {
+	if snapshot.Version != providers.PriceSnapshotVersionV1 ||
+		snapshot.Currency != providers.PriceCurrencyUSD || snapshot.TimeUnit != providers.PriceTimeUnitHour ||
+		snapshot.AmountNano <= 0 {
+		return router.CostEvidence{}, false
+	}
+	return router.CostEvidence{AmountNanoPerHour: snapshot.AmountNano, CapturedAt: snapshot.CapturedAt}, true
 }
 
 func validateAuditLedgerTopology(rawReplicas, rawBackend, rawDSN string) error {

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infera/infera/go/internal/providers"
 	"github.com/infera/infera/go/internal/router"
 	"github.com/infera/infera/go/pkg/types"
 )
@@ -76,6 +77,37 @@ func TestRoutingConfigRejectsInvalidValues(t *testing.T) {
 			t.Setenv(tt.env, tt.value)
 			if _, err := routingConfigFromEnv(router.DefaultConfig()); err == nil {
 				t.Fatal("expected invalid routing configuration to fail")
+			}
+		})
+	}
+}
+
+func TestTrustedRoutingCostEvidenceRequiresCurrentProviderContract(t *testing.T) {
+	capturedAt := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	valid := providers.PriceSnapshot{
+		Version: providers.PriceSnapshotVersionV1, AmountNano: 500_000_000,
+		Currency: providers.PriceCurrencyUSD, TimeUnit: providers.PriceTimeUnitHour, CapturedAt: capturedAt,
+	}
+	evidence, trusted := trustedRoutingCostEvidence(valid)
+	if !trusted || evidence.AmountNanoPerHour != valid.AmountNano || !evidence.CapturedAt.Equal(capturedAt) {
+		t.Fatalf("valid snapshot was not preserved: evidence=%+v trusted=%v", evidence, trusted)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*providers.PriceSnapshot)
+	}{
+		{name: "unknown version", mutate: func(snapshot *providers.PriceSnapshot) { snapshot.Version = "future-v2" }},
+		{name: "wrong currency", mutate: func(snapshot *providers.PriceSnapshot) { snapshot.Currency = "EUR" }},
+		{name: "wrong time unit", mutate: func(snapshot *providers.PriceSnapshot) { snapshot.TimeUnit = "second" }},
+		{name: "non-positive amount", mutate: func(snapshot *providers.PriceSnapshot) { snapshot.AmountNano = 0 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot := valid
+			tt.mutate(&snapshot)
+			if _, trusted := trustedRoutingCostEvidence(snapshot); trusted {
+				t.Fatal("expected malformed snapshot to be rejected")
 			}
 		})
 	}
