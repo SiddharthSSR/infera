@@ -130,6 +130,13 @@ The command performs these gates in order:
    either state promotion or ingress restore fails, the command fails with traffic still drained;
    promotion failure also restores the verified prior release set.
 
+Release verification defaults to `INFERA_RELEASE_WORKER_MODE=serving` and rejects a reachable
+gateway when `/health` reports `healthy_workers=0`. A deliberately scaled-to-zero release must set
+`INFERA_RELEASE_WORKER_MODE=cost-saving`; that mode requires exactly zero healthy workers, skips
+worker discovery and chat inference, but still verifies rollout identity, dashboard health,
+authentication, and the model-list response contract. Any other mode or malformed worker count
+fails closed. Never use cost-saving mode to bypass a failed worker rollout.
+
 The RunPod deployment adapter requires an explicit reviewed `INFERA_RECOVERY_WORKER_MODEL`; it does
 not select a model implicitly. It defaults to one `RTX_4090` vLLM worker. Set the ordered,
 comma-separated `INFERA_RECOVERY_WORKER_GPU_TYPES` to at most five reviewed values from
