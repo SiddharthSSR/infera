@@ -123,6 +123,7 @@ describe('useDashboardViewState', () => {
     }));
 
     expect(result.current.gatewayDown).toBe(false);
+    expect(result.current.providerGatewayMismatch).toBeNull();
     expect(result.current.servingVerifiedCount).toBe(1);
     expect(result.current.workspaceMaturity.state).toBe('serving_verified');
     expect(result.current.liveWorkspaceOperations.show).toBe(true);
@@ -171,6 +172,84 @@ describe('useDashboardViewState', () => {
     expect(result.current.billingAttention.some((item) => item.id === 'quota-exceeded')).toBe(true);
     expect(result.current.attentionQueue.some((item) => item.id === 'provider-cost-concentration')).toBe(true);
     expect(result.current.quickConfigFields.find((field) => field.key === 'monthly_request_limit')?.value).toBe('100');
+  });
+
+  it('surfaces active provider capacity with no gateway registrations', () => {
+    const { result } = renderHook(() => useDashboardViewState({
+      isLoading: false,
+      errorWorkers: false,
+      workers: [],
+      errorStats: false,
+      stats,
+      instances: [],
+      costs: undefined,
+      models: [],
+      providers: [provider],
+      deploymentAttempts: [],
+      quota: null,
+      usageRows: [],
+      workspaceInvites: [],
+      workspaceServiceAccounts: [],
+    }));
+
+    expect(result.current.providerGatewayMismatch).toEqual({
+      kind: 'provider_active_without_workers',
+      activeProviderInstances: 1,
+      registeredWorkers: 0,
+    });
+    expect(result.current.attentionQueue).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'provider-active-workers-missing', severity: 'critical' }),
+    ]));
+  });
+
+  it('surfaces gateway registrations when all provider capacity is stopped', () => {
+    const { result } = renderHook(() => useDashboardViewState({
+      isLoading: false,
+      errorWorkers: false,
+      workers: [worker],
+      errorStats: false,
+      stats,
+      instances: [],
+      costs: undefined,
+      models: [],
+      providers: [{ ...provider, active_instances: 0 }],
+      deploymentAttempts: [],
+      quota: null,
+      usageRows: [],
+      workspaceInvites: [],
+      workspaceServiceAccounts: [],
+    }));
+
+    expect(result.current.providerGatewayMismatch).toEqual({
+      kind: 'workers_without_provider_capacity',
+      activeProviderInstances: 0,
+      registeredWorkers: 1,
+    });
+    expect(result.current.attentionQueue).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'workers-provider-capacity-missing', severity: 'warning' }),
+    ]));
+  });
+
+  it('does not infer a mismatch without connected provider observations', () => {
+    const { result } = renderHook(() => useDashboardViewState({
+      isLoading: false,
+      errorWorkers: false,
+      workers: [worker],
+      errorStats: false,
+      stats,
+      instances: [],
+      costs: undefined,
+      models: [],
+      providers: [{ ...provider, connected: false, active_instances: 0 }],
+      deploymentAttempts: [],
+      quota: null,
+      usageRows: [],
+      workspaceInvites: [],
+      workspaceServiceAccounts: [],
+    }));
+
+    expect(result.current.providerGatewayMismatch).toBeNull();
+    expect(result.current.attentionQueue.some((item) => item.id.includes('provider-capacity'))).toBe(false);
   });
 
   it('keeps a new workspace on the setup checklist path', () => {

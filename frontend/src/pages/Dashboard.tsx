@@ -95,6 +95,7 @@ export function Dashboard() {
 
   const {
     gatewayDown,
+    providerGatewayMismatch,
     healthyWorkers,
     loadedModels,
     billingAttention,
@@ -230,7 +231,9 @@ export function Dashboard() {
         <GridRow>
           <Cell span={4}>
             <div className="help-callout" role="alert">
-              No healthy inference workers are registered. The gateway is reachable, but inference requests will fail until a worker is restored.
+              {providerGatewayMismatch?.kind === 'provider_active_without_workers'
+                ? `Connected providers report ${providerGatewayMismatch.activeProviderInstances} active instance${providerGatewayMismatch.activeProviderInstances === 1 ? '' : 's'}, but the gateway has no registered workers. Check worker startup, shared authentication, and gateway registration.`
+                : 'No healthy inference workers are registered. The gateway is reachable, but inference requests will fail until a worker is restored.'}
             </div>
           </Cell>
         </GridRow>

@@ -183,6 +183,21 @@ describe('Dashboard', () => {
     )
   })
 
+  it('explains when provider capacity exists without gateway workers', () => {
+    mocks.workers = { data: [], isLoading: false, isError: false }
+    mocks.providers = {
+      data: [{ provider: 'runpod', connected: true, active_instances: 2 }],
+      isLoading: false,
+    }
+
+    render(<Dashboard />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Connected providers report 2 active instances, but the gateway has no registered workers.',
+    )
+    expect(screen.getAllByText('Provider capacity is not registered').length).toBeGreaterThan(0)
+  })
+
   it('renders dashboard serving summary from deployment history', async () => {
     mocks.deploymentAttempts = { data: [
       {
