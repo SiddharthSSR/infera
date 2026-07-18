@@ -230,6 +230,76 @@ func TestLatencyBased(t *testing.T) {
 	})
 }
 
+func TestMinCostUnderLatencySLO(t *testing.T) {
+	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	costs := map[string]int64{"cheap": 500_000_000, "fast": 900_000_000, "over-slo": 100_000_000}
+	strategy := NewMinCostUnderLatencySLO(EngineOptions{
+		LatencySLOMS:   500,
+		EvidenceMaxAge: time.Minute,
+		CostResolver: func(workerID string) (CostEvidence, bool, error) {
+			amount, ok := costs[workerID]
+			return CostEvidence{AmountNanoPerHour: amount}, ok, nil
+		},
+	})
+	strategy.now = func() time.Time { return now }
+
+	worker := func(id string, p99 float64, updatedAt time.Time) *types.WorkerInfo {
+		w := makeWorker(id, 0.2, 1, p99/2)
+		w.Stats.P99LatencyMS = p99
+		w.Stats.UpdatedAt = updatedAt
+		return w
+	}
+
+	t.Run("selects cheapest candidate under SLO", func(t *testing.T) {
+		selection, err := strategy.Select(makeRequest("model"), []*types.WorkerInfo{
+			worker("fast", 100, now), worker("cheap", 400, now), worker("over-slo", 501, now),
+		})
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if selection.Worker.WorkerID != "cheap" {
+			t.Fatalf("expected cheap worker, got %s", selection.Worker.WorkerID)
+		}
+		if selection.Decision.SelectedCostNanoPerHour == nil || *selection.Decision.SelectedCostNanoPerHour != costs["cheap"] {
+			t.Fatalf("unexpected selected cost: %#v", selection.Decision.SelectedCostNanoPerHour)
+		}
+		if selection.Decision.CostSLOEligibleCandidates == nil || *selection.Decision.CostSLOEligibleCandidates != 2 {
+			t.Fatalf("expected two eligible candidates, got %#v", selection.Decision.CostSLOEligibleCandidates)
+		}
+	})
+
+	t.Run("rejects stale telemetry and missing cost then falls back", func(t *testing.T) {
+		missingCost := worker("missing", 100, now)
+		stale := worker("cheap", 100, now.Add(-2*time.Minute))
+		fallback := worker("fallback", 0, time.Time{})
+		fallback.Stats.GPUUtilization = 0.01
+		selection, err := strategy.Select(makeRequest("model"), []*types.WorkerInfo{stale, missingCost, fallback})
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if selection.Worker.WorkerID != "fallback" || selection.Decision.FallbackReason != fallbackMissingEvidence {
+			t.Fatalf("unexpected fallback selection: %+v", selection)
+		}
+		if selection.Decision.Strategy != types.StrategyMinCostUnderLatencySLO {
+			t.Fatalf("fallback obscured configured strategy: %s", selection.Decision.Strategy)
+		}
+	})
+
+	t.Run("breaks equal-cost ties deterministically", func(t *testing.T) {
+		costs["a"] = 500_000_000
+		costs["b"] = 500_000_000
+		selection, err := strategy.Select(makeRequest("model"), []*types.WorkerInfo{
+			worker("b", 200, now), worker("a", 200, now),
+		})
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if selection.Worker.WorkerID != "a" {
+			t.Fatalf("expected stable worker-id tie break, got %s", selection.Worker.WorkerID)
+		}
+	})
+}
+
 // ============================================================================
 // Engine
 // ============================================================================
@@ -245,8 +315,8 @@ func TestEngine(t *testing.T) {
 
 	t.Run("available strategies", func(t *testing.T) {
 		strategies := e.AvailableStrategies()
-		if len(strategies) != 3 {
-			t.Errorf("expected 3 strategies, got %d", len(strategies))
+		if len(strategies) != 4 {
+			t.Errorf("expected 4 strategies, got %d", len(strategies))
 		}
 	})
 
