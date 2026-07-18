@@ -147,6 +147,12 @@ case "$*" in
       runtime_active_no_registration:1)
         printf '%s\n' '[{"id":"active-1","name":"infera-release-release-1","desiredStatus":"RUNNING","runtime":{"uptimeInSeconds":10}}]' >"${TEST_RUNPOD_STATE}"
         ;;
+      runtime_zero_no_registration:1)
+        printf '%s\n' '[{"id":"active-1","name":"infera-release-release-1","desiredStatus":"RUNNING","runtime":{"uptimeInSeconds":0}}]' >"${TEST_RUNPOD_STATE}"
+        ;;
+      runtime_unknown_uptime_no_registration:1)
+        printf '%s\n' '[{"id":"active-1","name":"infera-release-release-1","desiredStatus":"RUNNING","runtime":{}}]' >"${TEST_RUNPOD_STATE}"
+        ;;
     esac
     if [[ -n "${output_file}" ]]; then
       printf '%s\n' "${body}" >"${output_file}"
@@ -185,7 +191,7 @@ case "$*" in
       printf '%s\n' '{"instances":[{"id":"runpod-1","provider":"runpod","status":"running"},{"id":"vast-1","provider":"vastai","status":"running"}]}'
     elif [[ "${TEST_PROVISION_MODE:-}" == "runtime_attach_then_success" && "$(cat "${TEST_POST_COUNT}" 2>/dev/null || printf 0)" == "1" ]]; then
       printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"provisioning"}]}'
-    elif [[ "${TEST_PROVISION_MODE:-}" == "runtime_active_no_registration" ]]; then
+    elif [[ "${TEST_PROVISION_MODE:-}" == runtime_*_no_registration ]]; then
       printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"provisioning"}]}'
     else
       printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"running","worker_id":"worker-1"}]}'
@@ -314,6 +320,9 @@ grep -q 'gpu_type.*L40S' "${TEST_CALLS}"
 [[ "$(cat "${TEST_POST_COUNT}")" == "1" ]]
 
 run_fallback_case runtime_attach_then_success env \
+  INFERA_RECOVERY_EVIDENCE_FILE="${EVIDENCE_FILE}" \
+  INFERA_RECOVERY_RELEASE_ID=release-1 \
+  INFERA_RECOVERY_STEP=rollback.deploy-workers \
   INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=1 \
   INFERA_RECOVERY_WORKER_GPU_TYPES=L40S,H100 \
   "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
@@ -325,15 +334,18 @@ second_post_line="$(grep -n -- '-X POST' "${TEST_CALLS}" | sed -n '2s/:.*//p')"
 [[ "${first_post_line}" -lt "${delete_line}" && "${delete_line}" -lt "${terminate_line}" && "${terminate_line}" -lt "${second_post_line}" ]]
 awk -v terminate="${terminate_line}" -v second_post="${second_post_line}" \
   'NR > terminate && NR < second_post && /curl-graphql:GetPods/ { found=1 } END { exit !found }' "${TEST_CALLS}"
+grep -q 'event=registration result=fallback gpu=L40S attempt=1 reason=runtime_attachment_timeout' "${EVIDENCE_FILE}"
 
-if run_fallback_case runtime_active_no_registration env \
-  INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=1 \
-  INFERA_RECOVERY_WORKER_GPU_TYPES=L40S,H100 \
-  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
-  echo "an attached runtime without registration must remain terminal" >&2
-  exit 1
-fi
-[[ "$(cat "${TEST_POST_COUNT}")" == "1" ]]
+for attached_runtime_mode in runtime_active_no_registration runtime_zero_no_registration runtime_unknown_uptime_no_registration; do
+  if run_fallback_case "${attached_runtime_mode}" env \
+    INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=1 \
+    INFERA_RECOVERY_WORKER_GPU_TYPES=L40S,H100 \
+    "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
+    echo "${attached_runtime_mode} must remain terminal without GPU fallback" >&2
+    exit 1
+  fi
+  [[ "$(cat "${TEST_POST_COUNT}")" == "1" ]]
+done
 
 if run_fallback_case runtime_attach_then_success env \
   TEST_GATEWAY_DELETE_FAIL=1 \

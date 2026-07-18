@@ -177,8 +177,9 @@ all as `key=value`. Allowed events are `candidate_selected`, `provision_response
 `registration`; allowed results are `start`, `pass`, `fail`, `fallback`, and `terminal`; allowed
 reasons are `none`, `capacity_unavailable`, `created`, `registered`, `deadline_exhausted`,
 `invalid_response`, `unknown_failure`, `transport_failure`, `state_not_empty`, `cleanup_failed`, and
-`registration_timeout`. Raw provider/gateway responses, credentials, DSNs, configured filesystem
-paths, and arbitrary child output are never copied into the evidence file.
+`registration_timeout`, and `runtime_attachment_timeout`. Raw provider/gateway responses,
+credentials, DSNs, configured filesystem paths, and arbitrary child output are never copied into
+the evidence file.
 
 The maintenance configuration permits only `/api/workers/register` and
 `/api/workers/heartbeat` through to the gateway when the request presents `X-Worker-Token` or a

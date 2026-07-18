@@ -309,7 +309,7 @@ pods = [
 if len(pods) != 1:
     raise SystemExit(1)
 runtime = pods[0].get("runtime")
-if runtime is None or runtime.get("uptimeInSeconds") in (None, 0):
+if runtime is None:
     print("attaching")
     raise SystemExit(0)
 raise SystemExit(1)
