@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -182,6 +183,31 @@ func TestRouteMinCostUnderLatencySLOUsesTrustedResolver(t *testing.T) {
 	decision := routed.RoutingDecision
 	if decision.SelectedCostNanoPerHour == nil || *decision.SelectedCostNanoPerHour != costs["worker-cheap"] {
 		t.Fatalf("unexpected cost evidence: %+v", decision)
+	}
+}
+
+func TestRouteMinCostUnderLatencySLOReturnsOverloadedWhenAllWorkersExceedSLO(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableBatching = false
+	cfg.DefaultStrategy = types.StrategyMinCostUnderLatencySLO
+	cfg.LatencySLOMS = 100
+	cfg.CostResolver = func(string) (CostEvidence, bool, error) {
+		return CostEvidence{AmountNanoPerHour: 400_000_000}, true, nil
+	}
+	r := New(cfg)
+	defer r.Stop()
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
+		WorkerID: "worker-over-slo", Address: "worker:8081", Status: types.WorkerStatusHealthy,
+		LoadedModels: []types.LoadedModel{{ModelID: "model-1"}},
+		Stats:        types.WorkerStats{P99LatencyMS: 101, UpdatedAt: time.Now().UTC()},
+	}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	_, err := r.Route(context.Background(), &types.InferenceRequest{RequestID: "req-over-slo", ModelID: "model-1"})
+	var inferaErr *types.InferaError
+	if !errors.As(err, &inferaErr) || inferaErr.Code != types.ErrorCodeModelOverloaded {
+		t.Fatalf("expected model_overloaded, got %T: %v", err, err)
 	}
 }
 

@@ -31,11 +31,15 @@ load, then worker ID.
 ## Availability fallback
 
 Missing, stale, or temporarily unavailable evidence does not take inference
-offline. If no candidate has both trusted cost and qualifying latency evidence,
-the strategy falls back to the existing least-loaded selector. The route
-decision retains `min_cost_under_latency_slo` as the configured strategy and
-records the bounded fallback reason
+offline. When an otherwise eligible candidate lacks complete evidence, the
+strategy falls back to the existing least-loaded selector while excluding any
+worker already known to exceed the SLO. The route decision retains
+`min_cost_under_latency_slo` as the configured strategy and records the bounded fallback reason
 `no_candidate_with_trusted_cost_and_fresh_latency_under_slo`.
+
+When every healthy capacity-valid candidate has fresh evidence showing it
+exceeds the SLO, the strategy returns `model_overloaded` instead of knowingly
+routing to a violating worker.
 
 Affinity remains authoritative for an existing valid sticky binding. A route
 served through affinity records `affinity`, matching the existing routing

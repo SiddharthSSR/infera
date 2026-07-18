@@ -449,6 +449,13 @@ func (r *Router) selectWorker(request *types.InferenceRequest, snapshot []*types
 	candidates := filterWorkers(workersForWorkspace(snapshot, request.WorkspaceID), request.ModelID, true)
 	selection, err := r.strategyEngine.SelectWorker(request, candidates)
 	if err != nil {
+		var noEligible *strategy.NoEligibleWorkersError
+		if errors.As(err, &noEligible) {
+			return nil, types.NewInferaError(
+				types.ErrorCodeModelOverloaded,
+				fmt.Sprintf("no workers satisfy the configured routing constraints for model %s", request.ModelID),
+			).WithRequestID(request.RequestID)
+		}
 		return nil, types.NewInferaError(
 			types.ErrorCodeInternalError,
 			fmt.Sprintf("failed to select worker: %v", err),

@@ -54,8 +54,21 @@ func (s *MinCostUnderLatencySLO) Select(request *types.InferenceRequest, candida
 	var best *types.WorkerInfo
 	var bestCost int64
 	eligibleCount := 0
+	availableCount := 0
+	overSLOCount := 0
+	fallbackCandidates := make([]*types.WorkerInfo, 0, len(candidates))
 	for _, worker := range candidates {
-		if worker == nil || !worker.IsHealthy() || !worker.HasCapacity() || !s.reliableLatency(worker.Stats, now) {
+		if worker == nil || !worker.IsHealthy() || !worker.HasCapacity() {
+			continue
+		}
+		availableCount++
+		freshLatency := s.freshLatencyEvidence(worker.Stats, now)
+		if freshLatency && worker.Stats.P99LatencyMS > s.latencySLOMS {
+			overSLOCount++
+			continue
+		}
+		fallbackCandidates = append(fallbackCandidates, worker)
+		if !freshLatency {
 			continue
 		}
 		cost, ok := s.trustedCost(worker.WorkerID)
@@ -82,12 +95,19 @@ func (s *MinCostUnderLatencySLO) Select(request *types.InferenceRequest, candida
 			},
 		}, nil
 	}
+	if availableCount > 0 && overSLOCount == availableCount {
+		return nil, &NoEligibleWorkersError{
+			ModelID: request.ModelID,
+			Reason:  "all workers with fresh latency evidence exceed the configured SLO",
+		}
+	}
 
-	selection, err := s.fallback.Select(request, candidates)
+	selection, err := s.fallback.Select(request, fallbackCandidates)
 	if err != nil {
 		return nil, err
 	}
 	selection.Decision.Strategy = types.StrategyMinCostUnderLatencySLO
+	selection.Decision.CandidatesEvaluated = len(candidates)
 	selection.Decision.Reason = "fell back to least-loaded routing because cost or latency evidence was incomplete"
 	selection.Decision.LatencySLOMS = &slo
 	selection.Decision.CostSLOEligibleCandidates = &eligibleCount
@@ -95,9 +115,9 @@ func (s *MinCostUnderLatencySLO) Select(request *types.InferenceRequest, candida
 	return selection, nil
 }
 
-func (s *MinCostUnderLatencySLO) reliableLatency(stats types.WorkerStats, now time.Time) bool {
+func (s *MinCostUnderLatencySLO) freshLatencyEvidence(stats types.WorkerStats, now time.Time) bool {
 	p99 := stats.P99LatencyMS
-	if p99 <= 0 || p99 > s.latencySLOMS || math.IsNaN(p99) || math.IsInf(p99, 0) || stats.UpdatedAt.IsZero() {
+	if p99 <= 0 || math.IsNaN(p99) || math.IsInf(p99, 0) || stats.UpdatedAt.IsZero() {
 		return false
 	}
 	updatedAt := stats.UpdatedAt.UTC()

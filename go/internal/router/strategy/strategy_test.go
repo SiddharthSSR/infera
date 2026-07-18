@@ -1,6 +1,8 @@
 package strategy
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -282,6 +284,33 @@ func TestMinCostUnderLatencySLO(t *testing.T) {
 		}
 		if selection.Decision.Strategy != types.StrategyMinCostUnderLatencySLO {
 			t.Fatalf("fallback obscured configured strategy: %s", selection.Decision.Strategy)
+		}
+	})
+
+	t.Run("does not route when every fresh candidate exceeds the SLO", func(t *testing.T) {
+		_, err := strategy.Select(makeRequest("model"), []*types.WorkerInfo{
+			worker("cheap", 600, now), worker("fast", 700, now),
+		})
+		var noEligible *NoEligibleWorkersError
+		if !errors.As(err, &noEligible) {
+			t.Fatalf("expected NoEligibleWorkersError, got %T: %v", err, err)
+		}
+		if !strings.Contains(noEligible.Reason, "exceed the configured SLO") {
+			t.Fatalf("unexpected reason: %q", noEligible.Reason)
+		}
+	})
+
+	t.Run("excludes known over-SLO worker from missing-evidence fallback", func(t *testing.T) {
+		unknown := worker("unknown", 0, time.Time{})
+		unknown.Stats.GPUUtilization = 0.8
+		knownOverSLO := worker("cheap", 600, now)
+		knownOverSLO.Stats.GPUUtilization = 0.01
+		selection, err := strategy.Select(makeRequest("model"), []*types.WorkerInfo{knownOverSLO, unknown})
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if selection.Worker.WorkerID != "unknown" {
+			t.Fatalf("known over-SLO worker entered fallback: %s", selection.Worker.WorkerID)
 		}
 	})
 

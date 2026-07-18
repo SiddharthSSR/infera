@@ -139,13 +139,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	var r *router.Router
-	if durableWorkerRegistry != nil {
-		r = router.NewWithRegistry(routerConfig, durableWorkerRegistry)
-	} else {
-		r = router.New(routerConfig)
-	}
-
 	// Create instance manager
 	// Prefer explicitly pinned worker images for reproducible warm restarts.
 	workerImage := strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE"))
@@ -204,6 +197,12 @@ func main() {
 				log.Warn("failed to close durable worker registry", slog.String("error", err.Error()))
 			}
 		}()
+	}
+	var r *router.Router
+	if durableWorkerRegistry != nil {
+		r = router.NewWithRegistry(routerConfig, durableWorkerRegistry)
+	} else {
+		r = router.New(routerConfig)
 	}
 
 	if enableMockProvider {
