@@ -28,7 +28,8 @@ INFERA_RELEASE_ID="$(value "${MANIFEST}" INFERA_RELEASE_ID)"
 INFERA_GATEWAY_IMAGE="$(value "${MANIFEST}" INFERA_GATEWAY_IMAGE)"
 INFERA_WORKER_IMAGE="$(value "${MANIFEST}" INFERA_WORKER_IMAGE)"
 INFERA_WORKER_PROTOCOL_VERSION="$(value "${MANIFEST}" INFERA_WORKER_PROTOCOL_VERSION)"
-export INFERA_RELEASE_ID INFERA_GATEWAY_IMAGE INFERA_WORKER_IMAGE INFERA_WORKER_PROTOCOL_VERSION
+INFERA_RECOVERY_API_PROTOCOL_VERSION="$(value "${MANIFEST}" INFERA_RECOVERY_API_PROTOCOL_VERSION)"
+export INFERA_RELEASE_ID INFERA_GATEWAY_IMAGE INFERA_WORKER_IMAGE INFERA_WORKER_PROTOCOL_VERSION INFERA_RECOVERY_API_PROTOCOL_VERSION
 
 # The gateway selects an engine-specific worker image before provider
 # provisioning. Pin that selector to the release manifest for both rollout and
@@ -81,7 +82,12 @@ case "${ACTION}" in
         [[ "${status}" == "exited" || "${status}" == "unhealthy" ]] && exit 1
         [[ "${status}" == "healthy" ]] && healthy=$((healthy + 1))
       done
-      [[ "${healthy}" == "${replicas}" ]] && exit 0
+      if [[ "${healthy}" == "${replicas}" ]]; then
+        # shellcheck source=recovery-adapter-common.sh
+        source "$(dirname "$0")/recovery-adapter-common.sh"
+        recovery_assert_gateway_identity "${MANIFEST}" && exit 0
+        exit 1
+      fi
       sleep 2
     done
     exit 1

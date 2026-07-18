@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -85,6 +86,24 @@ func newGatewayWithWorkerRegistry(t *testing.T, workerState *failingWorkerRegist
 	r := router.NewWithRegistry(config, workerState)
 	t.Cleanup(r.Stop)
 	return New(DefaultConfig(), r, nil)
+}
+
+func TestHealthReportsCompiledRecoveryAPIProtocol(t *testing.T) {
+	g := newGatewayWithWorkerRegistry(t, &failingWorkerRegistry{})
+	g.config.ReleaseID = "release-1"
+	g.config.WorkerProtocolVersion = "1"
+	recorder := httptest.NewRecorder()
+	g.handleHealth(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	if got := payload["recovery_api_protocol_version"]; got != recoveryAPIProtocolVersion {
+		t.Fatalf("expected compiled recovery protocol %q, got %#v", recoveryAPIProtocolVersion, got)
+	}
 }
 
 func TestGatewayWorkerRegistryReadsFailClosed(t *testing.T) {

@@ -34,15 +34,26 @@ fi
 POST_TIMEOUT_SECONDS="${INFERA_RECOVERY_PROVISION_POST_TIMEOUT_SECONDS:-45}"
 MIN_ATTEMPT_BUDGET_SECONDS="${INFERA_RECOVERY_MIN_ATTEMPT_BUDGET_SECONDS:-60}"
 AMBIGUOUS_CLEANUP_SECONDS="${INFERA_RECOVERY_AMBIGUOUS_CLEANUP_SECONDS:-60}"
+REGISTRATION_ATTEMPT_SECONDS="${INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS:-180}"
+POST_201_CLEANUP_SECONDS="${INFERA_RECOVERY_POST_201_CLEANUP_SECONDS:-60}"
 [[ "${POST_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ && "${POST_TIMEOUT_SECONDS}" -le 120 ]] || exit 2
 [[ "${MIN_ATTEMPT_BUDGET_SECONDS}" =~ ^[1-9][0-9]*$ ]] || exit 2
 [[ "${AMBIGUOUS_CLEANUP_SECONDS}" =~ ^[1-9][0-9]*$ ]] || exit 2
+[[ "${REGISTRATION_ATTEMPT_SECONDS}" =~ ^[1-9][0-9]*$ && "${REGISTRATION_ATTEMPT_SECONDS}" -le 600 ]] || exit 2
+[[ "${POST_201_CLEANUP_SECONDS}" =~ ^[1-9][0-9]*$ && "${POST_201_CLEANUP_SECONDS}" -le 120 ]] || exit 2
 if (( CLEANUP_RESERVE_SECONDS > 0 && AMBIGUOUS_CLEANUP_SECONDS >= CLEANUP_RESERVE_SECONDS )); then
   echo "ERROR: ambiguous cleanup slice must preserve part of the rollback reserve" >&2
   exit 2
 fi
 export INFERA_RECOVERY_CLEANUP_RESERVE_SECONDS="${CLEANUP_RESERVE_SECONDS}"
 export INFERA_RECOVERY_RELEASE_ID="${INFERA_RECOVERY_RELEASE_ID:-${RELEASE_ID}}"
+
+# Provider mutation is safe only when every live gateway implements the exact
+# recovery contract declared by the release being restored.
+recovery_assert_gateway_identity "${MANIFEST}" || {
+  echo "ERROR: gateway recovery contract does not match the release manifest" >&2
+  exit 1
+}
 
 if [[ -n "${INFERA_RECOVERY_WORKER_GPU_TYPES:-}" && -n "${INFERA_RECOVERY_WORKER_GPU_TYPE:-}" ]]; then
   echo "ERROR: set either INFERA_RECOVERY_WORKER_GPU_TYPES or legacy INFERA_RECOVERY_WORKER_GPU_TYPE, not both" >&2
@@ -139,9 +150,15 @@ PY
 }
 
 wait_for_registration() {
-  local instance_id="$1" timeout instances_json
+  local instance_id="$1" attempt_seconds="$2" timeout instances_json now attempt_deadline local_remaining
+  now="$(recovery_now_epoch)"
+  attempt_deadline=$((now + attempt_seconds))
   while recovery_remaining_seconds "${CLEANUP_RESERVE_SECONDS}" >/dev/null; do
+    now="$(recovery_now_epoch)"
+    local_remaining=$((attempt_deadline - now))
+    (( local_remaining > 0 )) || return 1
     timeout="$(recovery_bounded_timeout 15 "${CLEANUP_RESERVE_SECONDS}")" || return 1
+    (( timeout > local_remaining )) && timeout="${local_remaining}"
     if instances_json="$(curl --fail --silent --show-error --max-time "${timeout}" \
       --config "${ADMIN_CONFIG}" "${GATEWAY_URL}/api/instances")"; then
       if INSTANCE_ID="${instance_id}" INSTANCES_JSON="${instances_json}" python3 - <<'PY'
@@ -159,9 +176,20 @@ PY
         return 0
       fi
     fi
+    now="$(recovery_now_epoch)"
+    (( attempt_deadline - now > 5 )) || return 1
     recovery_deadline_sleep 5 "${CLEANUP_RESERVE_SECONDS}" || return 1
   done
   return 1
+}
+
+cleanup_created_instance() {
+  local instance_id="$1" timeout
+  timeout="$(recovery_bounded_timeout 30 "${CLEANUP_RESERVE_SECONDS}")" || return 1
+  curl --fail --silent --show-error --max-time "${timeout}" -X DELETE \
+    --config "${ADMIN_CONFIG}" "${GATEWAY_URL}/api/instances/${instance_id}" >/dev/null || return 1
+  recovery_runpod_remove_named_pods "${POD_NAME}" "${RUNPOD_CONFIG}" >/dev/null || return 1
+  recovery_runpod_confirm_named_pods_absent "${POD_NAME}" "${RUNPOD_CONFIG}"
 }
 
 # A prior attempt cannot be adopted because its deployment-bound credential is
@@ -237,13 +265,51 @@ PY
       exit 1
     fi
     record_evidence provision_response pass "${gpu}" "${attempt}" created
-    if wait_for_registration "${instance_id}"; then
+    remaining="$(recovery_remaining_seconds "${CLEANUP_RESERVE_SECONDS}")" || remaining=0
+    registration_seconds=$((remaining - POST_201_CLEANUP_SECONDS))
+    if (( attempt < ${#GPU_CANDIDATES[@]} && registration_seconds > REGISTRATION_ATTEMPT_SECONDS )); then
+      registration_seconds="${REGISTRATION_ATTEMPT_SECONDS}"
+    fi
+    if (( registration_seconds <= 0 )); then
+      if cleanup_created_instance "${instance_id}"; then
+        record_evidence reconcile pass "${gpu}" "${attempt}" none || true
+      else
+        record_evidence reconcile fail "${gpu}" "${attempt}" cleanup_failed || true
+      fi
+      record_evidence registration terminal "${gpu}" "${attempt}" deadline_exhausted || true
+      echo "ERROR: insufficient registration and cleanup budget after provisioning" >&2
+      exit 1
+    fi
+    if wait_for_registration "${instance_id}" "${registration_seconds}"; then
       record_evidence registration pass "${gpu}" "${attempt}" registered
       echo "RunPod worker registered for release ${RELEASE_ID}"
       exit 0
     fi
-    safe_reconcile_terminal "${gpu}" "${attempt}" registration_timeout || true
-    echo "ERROR: RunPod worker did not register before the recovery deadline" >&2
+    attachment_state="$(recovery_runpod_named_pod_attachment_state "${POD_NAME}" "${RUNPOD_CONFIG}" 2>/dev/null || true)"
+    if [[ "${attachment_state}" == "attaching" && "${attempt}" -lt "${#GPU_CANDIDATES[@]}" ]]; then
+      if ! cleanup_created_instance "${instance_id}"; then
+        record_evidence reconcile fail "${gpu}" "${attempt}" cleanup_failed || true
+        record_evidence registration terminal "${gpu}" "${attempt}" registration_timeout || true
+        echo "ERROR: post-create cleanup could not be proven" >&2
+        exit 1
+      fi
+      record_evidence reconcile pass "${gpu}" "${attempt}" none || true
+      remaining="$(recovery_remaining_seconds "${CLEANUP_RESERVE_SECONDS}" 2>/dev/null || printf '0')"
+      if (( remaining >= MIN_ATTEMPT_BUDGET_SECONDS )); then
+        record_evidence registration fallback "${gpu}" "${attempt}" runtime_attachment_timeout
+        continue
+      fi
+      record_evidence registration terminal "${gpu}" "${attempt}" deadline_exhausted || true
+      echo "ERROR: post-create cleanup passed but fallback budget is exhausted" >&2
+      exit 1
+    fi
+    if cleanup_created_instance "${instance_id}"; then
+      record_evidence reconcile pass "${gpu}" "${attempt}" none || true
+    else
+      record_evidence reconcile fail "${gpu}" "${attempt}" cleanup_failed || true
+    fi
+    record_evidence registration terminal "${gpu}" "${attempt}" registration_timeout || true
+    echo "ERROR: RunPod worker did not register; GPU fallback was not proven safe" >&2
     exit 1
   fi
 

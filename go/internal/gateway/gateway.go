@@ -29,6 +29,8 @@ import (
 
 type workerPrincipalContextKey struct{}
 
+const recoveryAPIProtocolVersion = "1"
+
 type workerPrincipal struct{ InstanceID, WorkspaceID string }
 
 // Gateway is the HTTP API server.
@@ -1389,13 +1391,14 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":                  status,
-		"version":                 "0.1.0",
-		"release_id":              g.config.ReleaseID,
-		"worker_protocol_version": g.config.WorkerProtocolVersion,
-		"uptime_seconds":          int64(time.Since(g.startedAt).Seconds()),
-		"workers":                 stats.TotalWorkers,
-		"healthy_workers":         stats.HealthyWorkers,
+		"status":                        status,
+		"version":                       "0.1.0",
+		"release_id":                    g.config.ReleaseID,
+		"worker_protocol_version":       g.config.WorkerProtocolVersion,
+		"recovery_api_protocol_version": recoveryAPIProtocolVersion,
+		"uptime_seconds":                int64(time.Since(g.startedAt).Seconds()),
+		"workers":                       stats.TotalWorkers,
+		"healthy_workers":               stats.HealthyWorkers,
 	})
 }
 

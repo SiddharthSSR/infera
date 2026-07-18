@@ -32,6 +32,7 @@ Release manifests contain exactly these non-secret KEY=value fields:
   INFERA_GATEWAY_IMAGE
   INFERA_WORKER_IMAGE
   INFERA_WORKER_PROTOCOL_VERSION
+  INFERA_RECOVERY_API_PROTOCOL_VERSION
   INFERA_AUDIT_LEDGER_WRITER_PROTOCOL
 EOF
   exit 2
@@ -108,14 +109,14 @@ validate_manifest() {
   local manifest="$1"
   local key
   local value
-  local allowed='^(INFERA_RELEASE_ID|INFERA_GATEWAY_IMAGE|INFERA_WORKER_IMAGE|INFERA_WORKER_PROTOCOL_VERSION|INFERA_AUDIT_LEDGER_WRITER_PROTOCOL)='
+  local allowed='^(INFERA_RELEASE_ID|INFERA_GATEWAY_IMAGE|INFERA_WORKER_IMAGE|INFERA_WORKER_PROTOCOL_VERSION|INFERA_RECOVERY_API_PROTOCOL_VERSION|INFERA_AUDIT_LEDGER_WRITER_PROTOCOL)='
 
   [[ -f "${manifest}" ]] || { echo "ERROR: release manifest not found: ${manifest}" >&2; return 1; }
   if grep -Ev "${allowed}|^[[:space:]]*$|^#" "${manifest}" | grep -q .; then
     echo "ERROR: ${manifest} contains unsupported fields" >&2
     return 1
   fi
-  for key in INFERA_RELEASE_ID INFERA_GATEWAY_IMAGE INFERA_WORKER_IMAGE INFERA_WORKER_PROTOCOL_VERSION INFERA_AUDIT_LEDGER_WRITER_PROTOCOL; do
+  for key in INFERA_RELEASE_ID INFERA_GATEWAY_IMAGE INFERA_WORKER_IMAGE INFERA_WORKER_PROTOCOL_VERSION INFERA_RECOVERY_API_PROTOCOL_VERSION INFERA_AUDIT_LEDGER_WRITER_PROTOCOL; do
     if ! value="$(manifest_value "${manifest}" "${key}")" || [[ ! "${value}" =~ ^[A-Za-z0-9._:/@+-]+$ ]]; then
       echo "ERROR: ${manifest} must contain one safe, non-empty ${key}" >&2
       return 1

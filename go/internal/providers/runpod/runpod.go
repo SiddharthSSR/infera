@@ -223,6 +223,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 	input := map[string]interface{}{
 		"name":              req.Name,
 		"imageName":         dockerImage,
+		"cloudType":         "ALL",
 		"gpuTypeId":         gpuTypeID,
 		"gpuCount":          req.GPUCount,
 		"containerDiskInGb": containerDiskSize,

@@ -31,6 +31,7 @@ trap cleanup EXIT
 : "${INFERA_WORKER_SHARED_TOKEN:=test-worker-token}"
 : "${INFERA_RELEASE_ID:=smoke-release}"
 : "${INFERA_WORKER_PROTOCOL_VERSION:=1}"
+: "${INFERA_RECOVERY_API_PROTOCOL_VERSION:=1}"
 : "${INFERA_GATEWAY_IMAGE:=ghcr.io/example/infera-gateway:test}"
 : "${INFERA_GATEWAY_REPLICAS:=1}"
 : "${INFERA_CONTROL_STATE_DSN:=postgres://infera:infera-smoke@control-state:5432/infera?sslmode=disable}"
@@ -55,6 +56,7 @@ export INFERA_GATEWAY_ADDRESS
 export INFERA_WORKER_SHARED_TOKEN
 export INFERA_RELEASE_ID
 export INFERA_WORKER_PROTOCOL_VERSION
+export INFERA_RECOVERY_API_PROTOCOL_VERSION
 export INFERA_GATEWAY_IMAGE
 export INFERA_GATEWAY_REPLICAS
 export INFERA_CONTROL_STATE_DSN
@@ -232,6 +234,8 @@ if payload.get("release_id") != os.environ["INFERA_RELEASE_ID"]:
     raise SystemExit("/health release identity does not match the smoke release")
 if payload.get("worker_protocol_version") != os.environ["INFERA_WORKER_PROTOCOL_VERSION"]:
     raise SystemExit("/health worker protocol does not match the smoke protocol")
+if payload.get("recovery_api_protocol_version") != os.environ["INFERA_RECOVERY_API_PROTOCOL_VERSION"]:
+    raise SystemExit("/health recovery API protocol does not match the smoke protocol")
 PY
 
 echo "Checking authenticated ingress /v1/models"

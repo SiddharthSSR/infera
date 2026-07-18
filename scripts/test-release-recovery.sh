@@ -20,6 +20,7 @@ make_manifest() {
     "INFERA_GATEWAY_IMAGE=ghcr.io/example/gateway:${release}" \
     "INFERA_WORKER_IMAGE=ghcr.io/example/worker:${release}" \
     "INFERA_WORKER_PROTOCOL_VERSION=${worker_protocol}" \
+    "INFERA_RECOVERY_API_PROTOCOL_VERSION=1" \
     "INFERA_AUDIT_LEDGER_WRITER_PROTOCOL=${ledger_protocol}" >"${path}"
 }
 
@@ -76,6 +77,14 @@ run_recovery() {
   INFERA_RECOVERY_EVIDENCE_DIR="${TMP_DIR}/evidence" \
   "${REPO_ROOT}/scripts/release-recovery.sh" deploy "$1" "${TMP_DIR}/stable.manifest"
 }
+
+grep -v '^INFERA_RECOVERY_API_PROTOCOL_VERSION=' "${TMP_DIR}/candidate.manifest" >"${TMP_DIR}/legacy.manifest"
+: >"${TMP_DIR}/calls"
+if run_recovery "${TMP_DIR}/legacy.manifest"; then
+  echo "legacy manifest without recovery API protocol must be rejected" >&2
+  exit 1
+fi
+[[ ! -s "${TMP_DIR}/calls" ]]
 
 if INFERA_RECOVERY_TIMEOUT_SECONDS=30 \
   INFERA_RECOVERY_ROLLBACK_RESERVE_SECONDS=16 \

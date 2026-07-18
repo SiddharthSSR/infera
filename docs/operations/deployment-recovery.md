@@ -51,6 +51,12 @@ Copy `deploy/releases/release.manifest.example` to an incident/release workspace
 checkout. Use exact image tags or digests built from the same reviewed commit. The manifest must not
 contain DSNs, tokens, API keys, tenant identifiers, or credentials.
 
+`INFERA_RECOVERY_API_PROTOCOL_VERSION` is a required compatibility boundary between the recovery
+adapters and the gateway binary. Before making a release eligible as last-known-good, verify that
+every gateway replica reports the same value from `/health`. Older manifests without this field are
+intentionally rejected; bootstrap them by deploying and verifying a protocol-bearing gateway with
+the previously reviewed orchestration, then record that release as the new last-known-good target.
+
 Keep the current proven manifest at `.infera-recovery/last-known-good.manifest`. Confirm both files:
 
 ```bash
@@ -100,7 +106,9 @@ export INFERA_DASHBOARD_URL=https://dashboard.inferai.co.in
 export INFERA_SMOKE_API_KEY="$(secret-tool lookup service infera-smoke)"
 export INFERA_SMOKE_MODEL=Qwen/Qwen2.5-7B-Instruct
 export INFERA_RECOVERY_WORKER_MODEL=Qwen/Qwen2.5-7B-Instruct
-export INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,L40S,A100_40GB
+export INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB,H100
+export INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=180
+export INFERA_RECOVERY_POST_201_CLEANUP_SECONDS=60
 export INFERA_RECOVERY_STATE_DIR=/opt/infera/.infera-recovery
 export INFERA_RECOVERY_CONTROLLER_SCOPE=designated-single-controller
 ./scripts/release-recovery.sh deploy \
@@ -133,12 +141,18 @@ and rollback, preventing stale `.env` values from mixing release sets. It reads 
 keys from the environment or `INFERA_ENV_FILE`, places bearer headers only in mode-0600 temporary
 curl configuration files, and waits for the gateway-managed worker to register. Before provisioning
 or stopping, it reconciles only pods whose name exactly matches `infera-release-<release ID>`; an
-orphan from an interrupted attempt is terminated before a replacement is created. While Caddy
+orphan from an interrupted attempt is terminated before a replacement is created. A non-final GPU
+that has not attached a RunPod runtime within the
+reviewed registration slice may fall back only after the gateway instance is deleted, the exact-name
+pod is removed, and a second query proves zero matching pods. An attached runtime that fails gateway
+registration remains terminal because it indicates a model, credential, or network failure rather
+than placement capacity. The final GPU receives the remaining registration budget while preserving
+the configured post-create cleanup slice. While Caddy
 returns the maintenance 503, the verifier enumerates every configured container-private gateway
 address and runs health, worker discovery, and authenticated inference checks against each replica.
-The restore adapter then proves public `/health` reaches the expected release and worker protocol
-before it returns success. If that public validation fails, it immediately reloads and verifies the
-maintenance configuration.
+The restore adapter then proves public `/health` reaches the expected release, worker protocol, and
+recovery API protocol before it returns success. If that public validation fails, it immediately
+reloads and verifies the maintenance configuration.
 
 GPU fallback is deliberately narrow. Before every provisioning POST, the adapter proves that the
 exact release-owned RunPod name has zero pods. It advances to the next reviewed GPU only when the
@@ -163,8 +177,9 @@ all as `key=value`. Allowed events are `candidate_selected`, `provision_response
 `registration`; allowed results are `start`, `pass`, `fail`, `fallback`, and `terminal`; allowed
 reasons are `none`, `capacity_unavailable`, `created`, `registered`, `deadline_exhausted`,
 `invalid_response`, `unknown_failure`, `transport_failure`, `state_not_empty`, `cleanup_failed`, and
-`registration_timeout`. Raw provider/gateway responses, credentials, DSNs, configured filesystem
-paths, and arbitrary child output are never copied into the evidence file.
+`registration_timeout`, and `runtime_attachment_timeout`. Raw provider/gateway responses,
+credentials, DSNs, configured filesystem paths, and arbitrary child output are never copied into
+the evidence file.
 
 The maintenance configuration permits only `/api/workers/register` and
 `/api/workers/heartbeat` through to the gateway when the request presents `X-Worker-Token` or a

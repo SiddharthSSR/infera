@@ -46,10 +46,13 @@ import os
 payload = json.loads(os.environ["GATEWAY_HEALTH_BODY"])
 expected_release = os.environ.get("INFERA_RELEASE_ID", "").strip()
 expected_protocol = os.environ.get("INFERA_WORKER_PROTOCOL_VERSION", "").strip()
+expected_recovery_protocol = os.environ.get("INFERA_RECOVERY_API_PROTOCOL_VERSION", "").strip()
 if expected_release and payload.get("release_id") != expected_release:
     raise SystemExit("gateway release identity does not match INFERA_RELEASE_ID")
 if expected_protocol and payload.get("worker_protocol_version") != expected_protocol:
     raise SystemExit("gateway worker protocol does not match INFERA_WORKER_PROTOCOL_VERSION")
+if expected_recovery_protocol and payload.get("recovery_api_protocol_version") != expected_recovery_protocol:
+    raise SystemExit("gateway recovery API protocol does not match INFERA_RECOVERY_API_PROTOCOL_VERSION")
 PY
 echo "   OK: /health responds with expected rollout identity"
 

@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/recovery-adapter-common.sh"
 RELEASE_ID="$(recovery_manifest_value "${MANIFEST}" INFERA_RELEASE_ID)"
 WORKER_PROTOCOL="$(recovery_manifest_value "${MANIFEST}" INFERA_WORKER_PROTOCOL_VERSION)"
+RECOVERY_PROTOCOL="$(recovery_manifest_value "${MANIFEST}" INFERA_RECOVERY_API_PROTOCOL_VERSION)"
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 TRAFFIC_OPEN=0
@@ -44,7 +45,7 @@ TRAFFIC_OPEN=1
 
 HEALTH_BODY="$(curl --fail --silent --show-error --max-time 15 \
   "${INFERA_BASE_URL:-https://inferai.co.in}/health")"
-HEALTH_BODY="${HEALTH_BODY}" RELEASE_ID="${RELEASE_ID}" WORKER_PROTOCOL="${WORKER_PROTOCOL}" python3 - <<'PY'
+HEALTH_BODY="${HEALTH_BODY}" RELEASE_ID="${RELEASE_ID}" WORKER_PROTOCOL="${WORKER_PROTOCOL}" RECOVERY_PROTOCOL="${RECOVERY_PROTOCOL}" python3 - <<'PY'
 import json
 import os
 
@@ -53,6 +54,8 @@ if payload.get("release_id") != os.environ["RELEASE_ID"]:
     raise SystemExit("public ingress reached an unexpected gateway release")
 if payload.get("worker_protocol_version") != os.environ["WORKER_PROTOCOL"]:
     raise SystemExit("public ingress reached an unexpected worker protocol")
+if payload.get("recovery_api_protocol_version") != os.environ["RECOVERY_PROTOCOL"]:
+    raise SystemExit("public ingress reached an unexpected recovery API protocol")
 PY
 TRAFFIC_OPEN=0
 trap - EXIT
