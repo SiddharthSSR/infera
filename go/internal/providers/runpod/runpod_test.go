@@ -169,6 +169,54 @@ func TestGetStatusPreservesProviderErrorCode(t *testing.T) {
 	}
 }
 
+func TestGetStatusCountsOnlyRunningPods(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if strings.Contains(string(body), "query GetPods") {
+			return httpResponse(http.StatusOK, `{"data":{"myself":{"pods":[{"id":"running","desiredStatus":"RUNNING"},{"id":"stopped","desiredStatus":"EXITED"}]}}}`), nil
+		}
+		return httpResponse(http.StatusOK, `{"data":{"myself":{"id":"account-1","currentSpendPerHr":1.5,"machineQuota":4}}}`), nil
+	})
+
+	status, err := provider.GetStatus(context.Background())
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if !status.Connected || status.ActiveCount != 1 {
+		t.Fatalf("expected one active pod, got %+v", status)
+	}
+}
+
+func TestGetStatusFailsClosedWhenPodInventoryIsUnavailable(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	requestCount := 0
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requestCount++
+		if requestCount == 1 {
+			return httpResponse(http.StatusOK, `{"data":{"myself":{"id":"account-1","currentSpendPerHr":1.5,"machineQuota":4}}}`), nil
+		}
+		return httpResponse(http.StatusTooManyRequests, `{"errors":[{"message":"too many requests"}]}`), nil
+	})
+
+	status, err := provider.GetStatus(context.Background())
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if status.Connected || status.ErrorCode != providers.ProviderErrorRateLimited {
+		t.Fatalf("expected unavailable inventory to fail closed, got %+v", status)
+	}
+}
+
 func TestGetInstanceReturnsNotFoundWhenPodMissing(t *testing.T) {
 	provider, err := New(Config{APIKey: "test-key"})
 	if err != nil {

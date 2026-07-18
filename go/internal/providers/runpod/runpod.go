@@ -901,16 +901,36 @@ func (p *Provider) GetStatus(ctx context.Context) (*providers.ProviderStatus, er
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	// Get pod count from ListInstances instead
-	pods, _ := p.ListInstances(ctx)
-	podCount := len(pods)
+	pods, err := p.ListInstances(ctx)
+	if err != nil {
+		status := &providers.ProviderStatus{
+			Provider:     providers.ProviderRunPod,
+			Connected:    false,
+			AccountID:    result.Myself.ID,
+			Balance:      result.Myself.CurrentSpendHr,
+			QuotaLimit:   result.Myself.MachineQuota,
+			ErrorMessage: err.Error(),
+		}
+		var providerErr *providers.ProviderError
+		if errors.As(err, &providerErr) {
+			status.ErrorCode = providerErr.Code
+		}
+		return status, nil
+	}
+
+	activeCount := 0
+	for _, pod := range pods {
+		if pod.Status == providers.InstanceStatusRunning {
+			activeCount++
+		}
+	}
 
 	return &providers.ProviderStatus{
 		Provider:    providers.ProviderRunPod,
 		Connected:   true,
 		AccountID:   result.Myself.ID,
 		Balance:     result.Myself.CurrentSpendHr, // This is spend, not balance
-		ActiveCount: podCount,
+		ActiveCount: activeCount,
 		QuotaLimit:  result.Myself.MachineQuota,
 		Capabilities: providers.ProviderCapabilities{
 			SupportsSpot:            false,

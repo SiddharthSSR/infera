@@ -21,6 +21,38 @@ import type { Instance, Model, ProviderStatus, Stats, Worker } from '../types';
 type ModelServingState = 'not_deployed' | 'runtime_pending' | 'serving_unverified' | 'serving_verified' | 'serving_failed' | 'degraded';
 type AttentionAction = 'open_clusters' | 'open_models' | 'open_workspace' | 'verify_now';
 
+export type ProviderGatewayMismatch = {
+  kind: 'provider_active_without_workers' | 'workers_without_provider_capacity';
+  activeProviderInstances: number;
+  registeredWorkers: number;
+};
+
+function deriveProviderGatewayMismatch(
+  providers: ProviderStatus[] | undefined,
+  workers: Worker[] | undefined,
+): ProviderGatewayMismatch | null {
+  if (!providers || !workers) return null;
+
+  const connectedProviders = providers.filter((provider) => (
+    isInventoryProviderType(provider.provider) && provider.connected
+  ));
+  if (connectedProviders.length === 0) return null;
+
+  const activeProviderInstances = connectedProviders.reduce(
+    (total, provider) => total + Math.max(0, provider.active_instances),
+    0,
+  );
+  const registeredWorkers = workers.length;
+
+  if (activeProviderInstances > 0 && registeredWorkers === 0) {
+    return { kind: 'provider_active_without_workers', activeProviderInstances, registeredWorkers };
+  }
+  if (activeProviderInstances === 0 && registeredWorkers > 0) {
+    return { kind: 'workers_without_provider_capacity', activeProviderInstances, registeredWorkers };
+  }
+  return null;
+}
+
 function deriveModelServingState(
   model: Model,
   instances: Instance[],
@@ -67,6 +99,7 @@ function buildOperationalAttentionQueue(
   workers: Worker[] | undefined,
   activeInstances: Instance[],
   servingUnverifiedCount: number,
+  providerGatewayMismatch: ProviderGatewayMismatch | null,
 ) {
   const items: Array<{
     id: string;
@@ -97,7 +130,25 @@ function buildOperationalAttentionQueue(
     });
   }
 
-  if ((workers?.length || 0) === 0 && activeInstances.length > 0) {
+  if (providerGatewayMismatch?.kind === 'provider_active_without_workers') {
+    items.push({
+      id: 'provider-active-workers-missing',
+      severity: 'critical',
+      title: 'Provider capacity is not registered',
+      detail: `Connected providers report ${providerGatewayMismatch.activeProviderInstances} active instance${providerGatewayMismatch.activeProviderInstances === 1 ? '' : 's'}, but the gateway reports no registered workers. Check worker startup, shared authentication, and gateway registration.`,
+      actionLabel: 'OPEN NODES',
+      action: 'open_clusters',
+    });
+  } else if (providerGatewayMismatch?.kind === 'workers_without_provider_capacity') {
+    items.push({
+      id: 'workers-provider-capacity-missing',
+      severity: 'warning',
+      title: 'Gateway workers lack active provider capacity',
+      detail: `The gateway reports ${providerGatewayMismatch.registeredWorkers} registered worker${providerGatewayMismatch.registeredWorkers === 1 ? '' : 's'}, but connected providers report no active instances. Reconcile provider state before routing traffic or changing capacity.`,
+      actionLabel: 'OPEN NODES',
+      action: 'open_clusters',
+    });
+  } else if ((workers?.length || 0) === 0 && activeInstances.length > 0) {
     items.push({
       id: 'workers-offline',
       severity: 'critical',
@@ -298,6 +349,7 @@ export function useDashboardViewState({
     const loadedModels = models?.filter((model) => model.loaded !== false) || [];
     const visibleProviders = (providers || []).filter((provider) => isInventoryProviderType(provider.provider));
     const connectedProviders = visibleProviders.filter((provider) => provider.connected);
+    const providerGatewayMismatch = deriveProviderGatewayMismatch(providers, workers);
     const deploymentSummaries = deploymentAttempts.map((attempt) => summarizeDeploymentAttempt(attempt, instances || [], workers)).slice(0, 5);
     const modelServingStates = (models || []).map((model) => deriveModelServingState(model, instances || [], workers, deploymentAttempts));
     const servingVerifiedCount = modelServingStates.filter((state) => state === 'serving_verified').length;
@@ -324,6 +376,7 @@ export function useDashboardViewState({
       workers,
       activeInstances,
       servingUnverifiedCount,
+      providerGatewayMismatch,
     );
     const attentionQueue = [...operationalAttentionQueue, ...billingAttention].slice(0, 6);
 
@@ -478,6 +531,7 @@ export function useDashboardViewState({
 
     return {
       gatewayDown,
+      providerGatewayMismatch,
       activeInstances,
       healthyWorkers,
       loadedModels,
