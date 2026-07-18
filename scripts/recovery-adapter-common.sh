@@ -68,7 +68,7 @@ allowed_results = {"start", "pass", "fail", "fallback", "terminal"}
 allowed_reasons = {
     "none", "capacity_unavailable", "created", "registered", "deadline_exhausted",
     "invalid_response", "unknown_failure", "transport_failure", "state_not_empty",
-    "cleanup_failed", "registration_timeout",
+    "cleanup_failed", "registration_timeout", "runtime_attachment_timeout",
 }
 if event not in allowed_events or result not in allowed_results or reason not in allowed_reasons:
     raise SystemExit(1)
@@ -175,6 +175,36 @@ recovery_gateway_url() {
   printf '%s\n' "${gateway_urls%%$'\n'*}"
 }
 
+recovery_assert_gateway_identity() {
+  local manifest="$1" expected_release expected_worker_protocol expected_recovery_protocol
+  local gateway_url gateway_urls timeout health_body checked=0
+  expected_release="$(recovery_manifest_value "${manifest}" INFERA_RELEASE_ID)" || return 1
+  expected_worker_protocol="$(recovery_manifest_value "${manifest}" INFERA_WORKER_PROTOCOL_VERSION)" || return 1
+  expected_recovery_protocol="$(recovery_manifest_value "${manifest}" INFERA_RECOVERY_API_PROTOCOL_VERSION)" || return 1
+  gateway_urls="$(recovery_gateway_urls)" || return 1
+  while IFS= read -r gateway_url; do
+    [[ -n "${gateway_url}" ]] || continue
+    checked=$((checked + 1))
+    timeout="$(recovery_bounded_timeout 15 "${INFERA_RECOVERY_CLEANUP_RESERVE_SECONDS:-0}")" || return 1
+    health_body="$(curl --fail --silent --show-error --max-time "${timeout}" "${gateway_url}/health")" || return 1
+    HEALTH_BODY="${health_body}" EXPECTED_RELEASE="${expected_release}" \
+      EXPECTED_WORKER_PROTOCOL="${expected_worker_protocol}" \
+      EXPECTED_RECOVERY_PROTOCOL="${expected_recovery_protocol}" python3 - <<'PY' || return 1
+import json
+import os
+
+payload = json.loads(os.environ["HEALTH_BODY"])
+if payload.get("release_id") != os.environ["EXPECTED_RELEASE"]:
+    raise SystemExit("gateway release does not match recovery manifest")
+if payload.get("worker_protocol_version") != os.environ["EXPECTED_WORKER_PROTOCOL"]:
+    raise SystemExit("gateway worker protocol does not match recovery manifest")
+if payload.get("recovery_api_protocol_version") != os.environ["EXPECTED_RECOVERY_PROTOCOL"]:
+    raise SystemExit("gateway recovery API protocol does not match recovery manifest")
+PY
+  done <<<"${gateway_urls}"
+  (( checked > 0 ))
+}
+
 recovery_https_host() {
   local url="$1"
   URL="${url}" python3 - <<'PY'
@@ -218,7 +248,7 @@ recovery_runpod_ids_by_name() {
   local curl_config="$2"
   local payload response timeout
   payload="$(mktemp)"
-  QUERY='query GetPods { myself { pods { id name desiredStatus } } }' python3 - <<'PY' >"${payload}"
+  QUERY='query GetPods { myself { pods { id name desiredStatus runtime { uptimeInSeconds } } } }' python3 - <<'PY' >"${payload}"
 import json
 import os
 
@@ -242,6 +272,47 @@ if payload.get("errors"):
 for pod in payload.get("data", {}).get("myself", {}).get("pods", []):
     if pod.get("name") == os.environ["POD_NAME"]:
         print(pod["id"])
+PY
+}
+
+# Print "attaching" only when exactly one exact-name pod exists and RunPod has
+# not attached a runtime. Every other state is ambiguous to the recovery
+# controller and therefore ineligible for GPU fallback.
+recovery_runpod_named_pod_attachment_state() {
+  local name="$1" curl_config="$2" payload response timeout
+  payload="$(mktemp)"
+  QUERY='query GetPods { myself { pods { id name desiredStatus runtime { uptimeInSeconds } } } }' python3 - <<'PY' >"${payload}"
+import json
+import os
+
+print(json.dumps({"query": os.environ["QUERY"]}))
+PY
+  timeout="$(recovery_bounded_timeout 30 "${INFERA_RECOVERY_CLEANUP_RESERVE_SECONDS:-0}")" || { rm -f "${payload}"; return 1; }
+  if ! response="$(curl --fail --silent --show-error --max-time "${timeout}" \
+    --config "${curl_config}" -H 'Content-Type: application/json' \
+    --data-binary "@${payload}" https://api.runpod.io/graphql)"; then
+    rm -f "${payload}"
+    return 1
+  fi
+  rm -f "${payload}"
+  RESPONSE="${response}" POD_NAME="${name}" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["RESPONSE"])
+if payload.get("errors"):
+    raise SystemExit(1)
+pods = [
+    pod for pod in payload.get("data", {}).get("myself", {}).get("pods", [])
+    if pod.get("name") == os.environ["POD_NAME"]
+]
+if len(pods) != 1:
+    raise SystemExit(1)
+runtime = pods[0].get("runtime")
+if runtime is None or runtime.get("uptimeInSeconds") in (None, 0):
+    print("attaching")
+    raise SystemExit(0)
+raise SystemExit(1)
 PY
 }
 

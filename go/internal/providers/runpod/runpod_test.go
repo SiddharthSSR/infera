@@ -352,6 +352,9 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	if got := input["imageName"]; got != "custom/worker:v1" {
 		t.Fatalf("expected custom image, got %#v", got)
 	}
+	if got := input["cloudType"]; got != "ALL" {
+		t.Fatalf("expected all reviewed RunPod cloud tiers, got %#v", got)
+	}
 	if got := input["volumeMountPath"]; got != "/workspace" {
 		t.Fatalf("expected persistent workspace mount, got %#v", got)
 	}

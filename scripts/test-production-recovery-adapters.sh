@@ -13,6 +13,7 @@ INFERA_RELEASE_ID=release-1
 INFERA_GATEWAY_IMAGE=example/gateway:release-1
 INFERA_WORKER_IMAGE=example/worker:release-1
 INFERA_WORKER_PROTOCOL_VERSION=1
+INFERA_RECOVERY_API_PROTOCOL_VERSION=1
 INFERA_AUDIT_LEDGER_WRITER_PROTOCOL=2
 EOF
 printf '%s\n' 'INFERA_ADMIN_KEY=test-admin-key' 'RUNPOD_API_KEY=test-runpod-key' >"${TMP_DIR}/env"
@@ -81,11 +82,13 @@ if [[ "$*" == *"api.runpod.io/graphql"* ]]; then
   done
   [[ -n "${body_file}" ]]
   if grep -q 'GetPods' "${body_file}"; then
+    printf 'curl-graphql:GetPods\n' >>"${TEST_CALLS}"
     [[ "${TEST_RUNPOD_QUERY_FAIL:-0}" != "1" ]] || exit 22
     printf '{"data":{"myself":{"pods":'
     cat "${TEST_RUNPOD_STATE}"
     printf '}}}\n'
   else
+    printf 'curl-graphql:podTerminate\n' >>"${TEST_CALLS}"
     [[ "${TEST_RUNPOD_TERMINATE_FAIL:-0}" != "1" ]] || exit 22
     python3 - "${TEST_RUNPOD_STATE}" "${body_file}" <<'PY'
 import json
@@ -138,6 +141,12 @@ case "$*" in
         printf '%s\n' '[{"id":"ambiguous-1","name":"infera-release-release-1","desiredStatus":"RUNNING"}]' >"${TEST_RUNPOD_STATE}"
         exit 22
         ;;
+      runtime_attach_then_success:1)
+        printf '%s\n' '[{"id":"attaching-1","name":"infera-release-release-1","desiredStatus":"RUNNING","runtime":null}]' >"${TEST_RUNPOD_STATE}"
+        ;;
+      runtime_active_no_registration:1)
+        printf '%s\n' '[{"id":"active-1","name":"infera-release-release-1","desiredStatus":"RUNNING","runtime":{"uptimeInSeconds":10}}]' >"${TEST_RUNPOD_STATE}"
+        ;;
     esac
     if [[ -n "${output_file}" ]]; then
       printf '%s\n' "${body}" >"${output_file}"
@@ -146,7 +155,10 @@ case "$*" in
       printf '%s\n' "${body}"
     fi
     ;;
-  *"-X DELETE"*) printf '%s\n' '{"success":true}' ;;
+  *"-X DELETE"*)
+    [[ "${TEST_GATEWAY_DELETE_FAIL:-0}" != "1" ]] || exit 22
+    printf '%s\n' '{"success":true}'
+    ;;
   *"--write-out %{http_code}"*) printf '%s' 503 ;;
   *"/internal/prometheus/worker-targets"*) printf '%s\n' '[{"targets":["worker:8081"]}]' ;;
   *"/v1/models"*) printf '%s\n' '{"data":[]}' ;;
@@ -160,15 +172,21 @@ case "$*" in
     fi
     ;;
   *"/health"*)
-    if [[ "${TEST_BAD_HEALTH:-0}" == "1" ]]; then
-      printf '%s\n' '{"release_id":"wrong-release","worker_protocol_version":"1"}'
+    if [[ "${TEST_BAD_RECOVERY_PROTOCOL:-0}" == "1" ]]; then
+      printf '%s\n' '{"status":"healthy","release_id":"release-1","worker_protocol_version":"1","recovery_api_protocol_version":"0"}'
+    elif [[ "${TEST_BAD_HEALTH:-0}" == "1" ]]; then
+      printf '%s\n' '{"release_id":"wrong-release","worker_protocol_version":"1","recovery_api_protocol_version":"1"}'
     else
-      printf '%s\n' '{"status":"healthy","release_id":"release-1","worker_protocol_version":"1"}'
+      printf '%s\n' '{"status":"healthy","release_id":"release-1","worker_protocol_version":"1","recovery_api_protocol_version":"1"}'
     fi
     ;;
   *)
     if [[ "${TEST_MODE}" == "stop" ]]; then
       printf '%s\n' '{"instances":[{"id":"runpod-1","provider":"runpod","status":"running"},{"id":"vast-1","provider":"vastai","status":"running"}]}'
+    elif [[ "${TEST_PROVISION_MODE:-}" == "runtime_attach_then_success" && "$(cat "${TEST_POST_COUNT}" 2>/dev/null || printf 0)" == "1" ]]; then
+      printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"provisioning"}]}'
+    elif [[ "${TEST_PROVISION_MODE:-}" == "runtime_active_no_registration" ]]; then
+      printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"provisioning"}]}'
     else
       printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"running","worker_id":"worker-1"}]}'
     fi
@@ -295,6 +313,47 @@ run_fallback_case success env \
 grep -q 'gpu_type.*L40S' "${TEST_CALLS}"
 [[ "$(cat "${TEST_POST_COUNT}")" == "1" ]]
 
+run_fallback_case runtime_attach_then_success env \
+  INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=1 \
+  INFERA_RECOVERY_WORKER_GPU_TYPES=L40S,H100 \
+  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
+[[ "$(cat "${TEST_POST_COUNT}")" == "2" ]]
+first_post_line="$(grep -n -- '-X POST' "${TEST_CALLS}" | sed -n '1s/:.*//p')"
+delete_line="$(grep -n -- '-X DELETE' "${TEST_CALLS}" | sed -n '1s/:.*//p')"
+terminate_line="$(grep -n 'curl-graphql:podTerminate' "${TEST_CALLS}" | sed -n '1s/:.*//p')"
+second_post_line="$(grep -n -- '-X POST' "${TEST_CALLS}" | sed -n '2s/:.*//p')"
+[[ "${first_post_line}" -lt "${delete_line}" && "${delete_line}" -lt "${terminate_line}" && "${terminate_line}" -lt "${second_post_line}" ]]
+awk -v terminate="${terminate_line}" -v second_post="${second_post_line}" \
+  'NR > terminate && NR < second_post && /curl-graphql:GetPods/ { found=1 } END { exit !found }' "${TEST_CALLS}"
+
+if run_fallback_case runtime_active_no_registration env \
+  INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=1 \
+  INFERA_RECOVERY_WORKER_GPU_TYPES=L40S,H100 \
+  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
+  echo "an attached runtime without registration must remain terminal" >&2
+  exit 1
+fi
+[[ "$(cat "${TEST_POST_COUNT}")" == "1" ]]
+
+if run_fallback_case runtime_attach_then_success env \
+  TEST_GATEWAY_DELETE_FAIL=1 \
+  INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=1 \
+  INFERA_RECOVERY_WORKER_GPU_TYPES=L40S,H100 \
+  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
+  echo "gateway instance deletion failure must forbid fallback" >&2
+  exit 1
+fi
+[[ "$(cat "${TEST_POST_COUNT}")" == "1" ]]
+
+printf '%s\n' '[]' >"${TEST_RUNPOD_STATE}"
+rm -f "${TEST_POST_COUNT}"
+if TEST_BAD_RECOVERY_PROTOCOL=1 TEST_MODE=deploy \
+  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
+  echo "gateway recovery protocol mismatch must fail before provider mutation" >&2
+  exit 1
+fi
+[[ ! -e "${TEST_POST_COUNT}" ]]
+
 for invalid_gpu_types in 'RTX_4090,RTX_4090' 'RTX_4090,unknown' 'RTX_4090,RTX_4080,A100_40GB,A100_80GB,H100,L40S'; do
   if run_fallback_case success env INFERA_RECOVERY_WORKER_GPU_TYPES="${invalid_gpu_types}" \
     "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
@@ -327,7 +386,7 @@ pattern = re.compile(
     r"result=(start|pass|fail|fallback|terminal) "
     r"gpu=(RTX_4090|RTX_4080|A100_40GB|A100_80GB|H100|L40S|-) "
     r"attempt=\d+ "
-    r"reason=(none|capacity_unavailable|created|registered|deadline_exhausted|invalid_response|unknown_failure|transport_failure|state_not_empty|cleanup_failed|registration_timeout) "
+    r"reason=(none|capacity_unavailable|created|registered|deadline_exhausted|invalid_response|unknown_failure|transport_failure|state_not_empty|cleanup_failed|registration_timeout|runtime_attachment_timeout) "
     r"release=[A-Za-z0-9._:+/@-]+ step=[A-Za-z0-9._-]+$"
 )
 for line in open(sys.argv[1], encoding="ascii"):
@@ -375,6 +434,29 @@ else
 fi
 grep -q -- '--scale gateway=2 gateway' "${TEST_CALLS}"
 grep -q 'docker-worker-vllm:example/worker:release-1' "${TEST_CALLS}"
+
+if TEST_BAD_RECOVERY_PROTOCOL=1 \
+INFERA_CONTROL_STATE_DSN=postgresql://control.invalid/infera \
+INFERA_AUDIT_LEDGER_BACKEND=postgres \
+INFERA_AUDIT_LEDGER_DSN=postgresql://ledger.invalid/infera \
+INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+INFERA_ADMIN_KEY=test-admin \
+INFERA_ALLOWED_ORIGINS=https://example.com \
+INFERA_GATEWAY_ADDRESS=https://example.com \
+INFERA_WORKER_SHARED_TOKEN=test-worker \
+INFERA_WORKER_IMAGE=example/worker:release-1 \
+INFERA_GATEWAY_IMAGE=example/gateway:release-1 \
+GRAFANA_ADMIN_USER=admin \
+GRAFANA_ADMIN_PASSWORD=test-grafana \
+ALERT_EMAIL_TO=alerts@example.com \
+ALERT_SMTP_FROM=alerts@example.com \
+ALERT_SMTP_SMARTHOST=smtp.example.com:587 \
+ALERT_SMTP_USERNAME=alerts@example.com \
+ALERT_SMTP_PASSWORD=test-smtp \
+"${REPO_ROOT}/scripts/compose-release-driver.sh" deploy-gateway "${TMP_DIR}/release.manifest"; then
+  echo "gateway deployment must reject an incompatible recovery API protocol" >&2
+  exit 1
+fi
 
 if INFERA_RECOVERY_WORKER_ENGINE=unsupported \
   "${REPO_ROOT}/scripts/compose-release-driver.sh" deploy-gateway "${TMP_DIR}/release.manifest"; then
