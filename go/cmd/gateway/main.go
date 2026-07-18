@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"github.com/infera/infera/go/internal/router"
 	routerregistry "github.com/infera/infera/go/internal/router/registry"
 	"github.com/infera/infera/go/internal/vault"
+	"github.com/infera/infera/go/pkg/types"
 )
 
 func main() {
@@ -66,9 +68,26 @@ func main() {
 		log.Error("invalid audit ledger pool configuration", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	var instanceMgr *providers.Manager
 
 	// Create router — batcher tuning via env vars for zero-rebuild tuning in production.
 	routerConfig := router.DefaultConfig()
+	routerConfig, err = routingConfigFromEnv(routerConfig)
+	if err != nil {
+		log.Error("invalid routing configuration", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	routerConfig.CostResolver = func(workerID string) (router.CostEvidence, bool, error) {
+		if instanceMgr == nil {
+			return router.CostEvidence{}, false, nil
+		}
+		snapshot, found, err := instanceMgr.GetPriceSnapshotForWorkerWithError(workerID)
+		if err != nil || !found {
+			return router.CostEvidence{}, false, err
+		}
+		evidence, trusted := trustedRoutingCostEvidence(snapshot)
+		return evidence, trusted, nil
+	}
 	if v := strings.TrimSpace(os.Getenv("INFERA_ENABLE_BATCHING")); v != "" {
 		routerConfig.EnableBatching = parseBoolEnv(v, routerConfig.EnableBatching)
 	}
@@ -120,13 +139,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	var r *router.Router
-	if durableWorkerRegistry != nil {
-		r = router.NewWithRegistry(routerConfig, durableWorkerRegistry)
-	} else {
-		r = router.New(routerConfig)
-	}
-
 	// Create instance manager
 	// Prefer explicitly pinned worker images for reproducible warm restarts.
 	workerImage := strings.TrimSpace(os.Getenv("INFERA_WORKER_IMAGE"))
@@ -159,7 +171,6 @@ func main() {
 		CostDBPath:                "data/costs.db",
 		WorkerRegistrationTimeout: parseDurationEnv("INFERA_WORKER_REGISTRATION_TIMEOUT", 10*time.Minute),
 	}
-	var instanceMgr *providers.Manager
 	if durableInstanceStore != nil {
 		instanceMgr, err = providers.NewManagerWithStore(managerConfig, durableInstanceStore)
 	} else {
@@ -186,6 +197,12 @@ func main() {
 				log.Warn("failed to close durable worker registry", slog.String("error", err.Error()))
 			}
 		}()
+	}
+	var r *router.Router
+	if durableWorkerRegistry != nil {
+		r = router.NewWithRegistry(routerConfig, durableWorkerRegistry)
+	} else {
+		r = router.New(routerConfig)
 	}
 
 	if enableMockProvider {
@@ -476,6 +493,40 @@ func rolloutIdentityFromEnv(devMode bool) (string, string, error) {
 		return "", "", errors.New("INFERA_WORKER_PROTOCOL_VERSION is required outside development mode")
 	}
 	return releaseID, protocolVersion, nil
+}
+
+func routingConfigFromEnv(config router.Config) (router.Config, error) {
+	if raw := strings.TrimSpace(os.Getenv("INFERA_ROUTING_STRATEGY")); raw != "" {
+		strategyType := types.StrategyType(strings.ToLower(raw))
+		switch strategyType {
+		case types.StrategyLeastLoaded, types.StrategyRoundRobin, types.StrategyLatencyBased, types.StrategyMinCostUnderLatencySLO:
+			config.DefaultStrategy = strategyType
+		default:
+			return router.Config{}, fmt.Errorf("INFERA_ROUTING_STRATEGY %q is not supported", raw)
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("INFERA_ROUTING_LATENCY_SLO_MS")); raw != "" {
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil || value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return router.Config{}, errors.New("INFERA_ROUTING_LATENCY_SLO_MS must be a positive finite number")
+		}
+		config.LatencySLOMS = value
+	}
+	maxAge, err := parseOptionalDurationEnv("INFERA_ROUTING_EVIDENCE_MAX_AGE", config.EvidenceMaxAge)
+	if err != nil {
+		return router.Config{}, err
+	}
+	config.EvidenceMaxAge = maxAge
+	return config, nil
+}
+
+func trustedRoutingCostEvidence(snapshot providers.PriceSnapshot) (router.CostEvidence, bool) {
+	if snapshot.Version != providers.PriceSnapshotVersionV1 ||
+		snapshot.Currency != providers.PriceCurrencyUSD || snapshot.TimeUnit != providers.PriceTimeUnitHour ||
+		snapshot.AmountNano <= 0 {
+		return router.CostEvidence{}, false
+	}
+	return router.CostEvidence{AmountNanoPerHour: snapshot.AmountNano, CapturedAt: snapshot.CapturedAt}, true
 }
 
 func validateAuditLedgerTopology(rawReplicas, rawBackend, rawDSN string) error {

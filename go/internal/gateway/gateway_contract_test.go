@@ -465,6 +465,28 @@ func TestHandleChatCompletionsRouteDecisionHeaderAbsentByDefault(t *testing.T) {
 	}
 }
 
+func TestRouteDecisionHeaderIncludesSafeCostSLOEvidence(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set(headerDebugRouteDecision, "true")
+	rec := httptest.NewRecorder()
+	slo, cost, eligible := 500.0, int64(400_000_000), 2
+	setRouteDecisionHeader(rec, req, types.RoutingDecision{
+		Strategy:     types.StrategyMinCostUnderLatencySLO,
+		LatencySLOMS: &slo, SelectedCostNanoPerHour: &cost, CostSLOEligibleCandidates: &eligible,
+		FallbackReason: "",
+	})
+	metadata, rawJSON := decodeRouteDecisionHeader(t, rec.Header().Get(headerRouteDecision))
+	if metadata["latency_slo_ms"] != slo || metadata["selected_cost_nano_per_hour"] != float64(cost) || metadata["cost_slo_eligible_candidates"] != float64(eligible) {
+		t.Fatalf("unexpected safe cost/SLO metadata: %s", rawJSON)
+	}
+	for _, forbidden := range []string{"provider-instance-hourly-v1", "instance_id", "credential"} {
+		if strings.Contains(rawJSON, forbidden) {
+			t.Fatalf("route decision header leaked %q in %s", forbidden, rawJSON)
+		}
+	}
+}
+
 func TestHandleChatCompletionsRouteDecisionHeaderWhenRequestedIsSafe(t *testing.T) {
 	t.Parallel()
 

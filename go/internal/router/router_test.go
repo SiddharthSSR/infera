@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +132,82 @@ func TestRouteDecisionIncludesSelectedWorkerSignals(t *testing.T) {
 	}
 	if decision.DecisionTimestamp.IsZero() {
 		t.Fatalf("expected decision timestamp")
+	}
+}
+
+func TestRouteMinCostUnderLatencySLOUsesTrustedResolver(t *testing.T) {
+	now := time.Now().UTC()
+	costs := map[string]int64{"worker-cheap": 400_000_000, "worker-fast": 900_000_000}
+	resolved := make(map[string]int)
+	cfg := DefaultConfig()
+	cfg.EnableBatching = false
+	cfg.DefaultStrategy = types.StrategyMinCostUnderLatencySLO
+	cfg.LatencySLOMS = 500
+	cfg.CostResolver = func(workerID string) (CostEvidence, bool, error) {
+		resolved[workerID]++
+		amount, ok := costs[workerID]
+		return CostEvidence{AmountNanoPerHour: amount}, ok, nil
+	}
+
+	r := New(cfg)
+	defer r.Stop()
+	for _, worker := range []*types.WorkerInfo{
+		{
+			WorkerID: "worker-fast", Address: "fast:8081", Status: types.WorkerStatusHealthy,
+			LoadedModels: []types.LoadedModel{{ModelID: "model-1"}},
+			Stats:        types.WorkerStats{P99LatencyMS: 100, UpdatedAt: now},
+			Tags:         map[string]string{"hourly_cost": "0.01"},
+		},
+		{
+			WorkerID: "worker-cheap", Address: "cheap:8081", Status: types.WorkerStatusHealthy,
+			LoadedModels: []types.LoadedModel{{ModelID: "model-1"}},
+			Stats:        types.WorkerStats{P99LatencyMS: 450, UpdatedAt: now},
+			Tags:         map[string]string{"hourly_cost": "9999"},
+		},
+	} {
+		if err := r.RegisterWorker(context.Background(), worker); err != nil {
+			t.Fatalf("register %s: %v", worker.WorkerID, err)
+		}
+	}
+
+	routed, err := r.Route(context.Background(), &types.InferenceRequest{RequestID: "req-cost", ModelID: "model-1"})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if routed.WorkerID != "worker-cheap" {
+		t.Fatalf("expected trusted resolver to select worker-cheap, got %s", routed.WorkerID)
+	}
+	if resolved["worker-cheap"] != 1 || resolved["worker-fast"] != 1 {
+		t.Fatalf("expected authoritative lookup for both candidates, got %#v", resolved)
+	}
+	decision := routed.RoutingDecision
+	if decision.SelectedCostNanoPerHour == nil || *decision.SelectedCostNanoPerHour != costs["worker-cheap"] {
+		t.Fatalf("unexpected cost evidence: %+v", decision)
+	}
+}
+
+func TestRouteMinCostUnderLatencySLOReturnsOverloadedWhenAllWorkersExceedSLO(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableBatching = false
+	cfg.DefaultStrategy = types.StrategyMinCostUnderLatencySLO
+	cfg.LatencySLOMS = 100
+	cfg.CostResolver = func(string) (CostEvidence, bool, error) {
+		return CostEvidence{AmountNanoPerHour: 400_000_000}, true, nil
+	}
+	r := New(cfg)
+	defer r.Stop()
+	if err := r.RegisterWorker(context.Background(), &types.WorkerInfo{
+		WorkerID: "worker-over-slo", Address: "worker:8081", Status: types.WorkerStatusHealthy,
+		LoadedModels: []types.LoadedModel{{ModelID: "model-1"}},
+		Stats:        types.WorkerStats{P99LatencyMS: 101, UpdatedAt: time.Now().UTC()},
+	}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	_, err := r.Route(context.Background(), &types.InferenceRequest{RequestID: "req-over-slo", ModelID: "model-1"})
+	var inferaErr *types.InferaError
+	if !errors.As(err, &inferaErr) || inferaErr.Code != types.ErrorCodeModelOverloaded {
+		t.Fatalf("expected model_overloaded, got %T: %v", err, err)
 	}
 }
 

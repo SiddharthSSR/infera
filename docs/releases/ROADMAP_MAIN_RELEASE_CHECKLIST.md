@@ -73,11 +73,15 @@ These should be confirmed before merging `roadmap` into `main`:
    - `ALERT_SMTP_PASSWORD`
 
 3. Decide the intended production values for optional runtime tuning env vars.
-   These currently default blank if unset:
+   Blank values use application defaults; the production compose file pins
+   explicit defaults for the cost-aware routing controls:
    - `INFERA_ENABLE_BATCHING`
    - `INFERA_MAX_BATCH_SIZE`
    - `INFERA_MAX_BATCH_WAIT_MS`
    - `INFERA_AFFINITY_TTL_SECONDS`
+   - `INFERA_ROUTING_STRATEGY`
+   - `INFERA_ROUTING_LATENCY_SLO_MS`
+   - `INFERA_ROUTING_EVIDENCE_MAX_AGE`
    - `INFERA_RATE_LIMIT_REQUESTS_PER_MINUTE`
    - `INFERA_RATE_LIMIT_BURST_SIZE`
    - `INFERA_MAX_IN_FLIGHT_REQUESTS`

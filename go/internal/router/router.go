@@ -15,9 +15,16 @@ import (
 	"github.com/infera/infera/go/pkg/types"
 )
 
+// CostEvidence is trusted gateway-owned hourly price evidence used by
+// evidence-aware routing strategies.
+type CostEvidence = strategy.CostEvidence
+
 // Config configures the router.
 type Config struct {
 	DefaultStrategy  types.StrategyType
+	LatencySLOMS     float64
+	EvidenceMaxAge   time.Duration
+	CostResolver     strategy.CostResolver
 	EnableBatching   bool
 	MaxBatchSize     int
 	MaxBatchWaitMS   int
@@ -30,6 +37,8 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		DefaultStrategy:  types.StrategyLeastLoaded,
+		LatencySLOMS:     2000,
+		EvidenceMaxAge:   2 * time.Minute,
 		EnableBatching:   true,
 		MaxBatchSize:     8,
 		MaxBatchWaitMS:   50,
@@ -97,9 +106,11 @@ func NewWithRegistry(config Config, workerState workerRegistry) *Router {
 	}
 
 	r := &Router{
-		config:         config,
-		registry:       workerState,
-		strategyEngine: strategy.NewEngine(config.DefaultStrategy),
+		config:   config,
+		registry: workerState,
+		strategyEngine: strategy.NewEngineWithOptions(config.DefaultStrategy, strategy.EngineOptions{
+			LatencySLOMS: config.LatencySLOMS, EvidenceMaxAge: config.EvidenceMaxAge, CostResolver: config.CostResolver,
+		}),
 		batchManager: batcher.NewManager(batcher.Config{
 			MaxBatchSize:      config.MaxBatchSize,
 			MaxWaitMS:         config.MaxBatchWaitMS,
@@ -438,6 +449,13 @@ func (r *Router) selectWorker(request *types.InferenceRequest, snapshot []*types
 	candidates := filterWorkers(workersForWorkspace(snapshot, request.WorkspaceID), request.ModelID, true)
 	selection, err := r.strategyEngine.SelectWorker(request, candidates)
 	if err != nil {
+		var noEligible *strategy.NoEligibleWorkersError
+		if errors.As(err, &noEligible) {
+			return nil, types.NewInferaError(
+				types.ErrorCodeModelOverloaded,
+				fmt.Sprintf("no workers satisfy the configured routing constraints for model %s", request.ModelID),
+			).WithRequestID(request.RequestID)
+		}
 		return nil, types.NewInferaError(
 			types.ErrorCodeInternalError,
 			fmt.Sprintf("failed to select worker: %v", err),

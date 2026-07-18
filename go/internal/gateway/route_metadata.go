@@ -45,6 +45,18 @@ func (g *Gateway) logRouteDecision(decision types.RoutingDecision) {
 	if decision.WorkerLoad != nil {
 		attrs = append(attrs, slog.Float64("worker_load", *decision.WorkerLoad))
 	}
+	if decision.LatencySLOMS != nil {
+		attrs = append(attrs, slog.Float64("latency_slo_ms", *decision.LatencySLOMS))
+	}
+	if decision.SelectedCostNanoPerHour != nil {
+		attrs = append(attrs, slog.Int64("selected_cost_nano_per_hour", *decision.SelectedCostNanoPerHour))
+	}
+	if decision.CostSLOEligibleCandidates != nil {
+		attrs = append(attrs, slog.Int("cost_slo_eligible_candidates", *decision.CostSLOEligibleCandidates))
+	}
+	if decision.FallbackReason != "" {
+		attrs = append(attrs, slog.String("fallback_reason", decision.FallbackReason))
+	}
 	if !decision.DecisionTimestamp.IsZero() {
 		attrs = append(attrs, slog.Time("decision_timestamp", decision.DecisionTimestamp))
 	}
@@ -77,21 +89,25 @@ const (
 )
 
 type safeRouteDecisionMetadata struct {
-	RequestID            string             `json:"request_id,omitempty"`
-	Model                string             `json:"model,omitempty"`
-	Strategy             types.StrategyType `json:"strategy,omitempty"`
-	SelectedWorker       string             `json:"selected_worker,omitempty"`
-	SelectedProvider     string             `json:"selected_provider,omitempty"`
-	SelectedGPUType      string             `json:"selected_gpu_type,omitempty"`
-	Reason               string             `json:"reason,omitempty"`
-	CandidatesEvaluated  *int               `json:"candidates_evaluated,omitempty"`
-	WorkerQueueDepth     *int               `json:"worker_queue_depth,omitempty"`
-	WorkerActiveRequests *int               `json:"worker_active_requests,omitempty"`
-	WorkerP50LatencyMS   *float64           `json:"worker_p50_latency_ms,omitempty"`
-	WorkerP95LatencyMS   *float64           `json:"worker_p95_latency_ms,omitempty"`
-	WorkerP99LatencyMS   *float64           `json:"worker_p99_latency_ms,omitempty"`
-	WorkerLoad           *float64           `json:"worker_load,omitempty"`
-	DecisionTimestamp    *time.Time         `json:"decision_timestamp,omitempty"`
+	RequestID                 string             `json:"request_id,omitempty"`
+	Model                     string             `json:"model,omitempty"`
+	Strategy                  types.StrategyType `json:"strategy,omitempty"`
+	SelectedWorker            string             `json:"selected_worker,omitempty"`
+	SelectedProvider          string             `json:"selected_provider,omitempty"`
+	SelectedGPUType           string             `json:"selected_gpu_type,omitempty"`
+	Reason                    string             `json:"reason,omitempty"`
+	CandidatesEvaluated       *int               `json:"candidates_evaluated,omitempty"`
+	WorkerQueueDepth          *int               `json:"worker_queue_depth,omitempty"`
+	WorkerActiveRequests      *int               `json:"worker_active_requests,omitempty"`
+	WorkerP50LatencyMS        *float64           `json:"worker_p50_latency_ms,omitempty"`
+	WorkerP95LatencyMS        *float64           `json:"worker_p95_latency_ms,omitempty"`
+	WorkerP99LatencyMS        *float64           `json:"worker_p99_latency_ms,omitempty"`
+	WorkerLoad                *float64           `json:"worker_load,omitempty"`
+	DecisionTimestamp         *time.Time         `json:"decision_timestamp,omitempty"`
+	LatencySLOMS              *float64           `json:"latency_slo_ms,omitempty"`
+	SelectedCostNanoPerHour   *int64             `json:"selected_cost_nano_per_hour,omitempty"`
+	CostSLOEligibleCandidates *int               `json:"cost_slo_eligible_candidates,omitempty"`
+	FallbackReason            string             `json:"fallback_reason,omitempty"`
 }
 
 func routeDecisionMetadataRequested(r *http.Request) bool {
@@ -104,20 +120,24 @@ func setRouteDecisionHeader(w http.ResponseWriter, r *http.Request, decision typ
 	}
 	candidatesEvaluated := decision.CandidatesEvaluated
 	metadata := safeRouteDecisionMetadata{
-		RequestID:            decision.RequestID,
-		Model:                decision.Model,
-		Strategy:             decision.Strategy,
-		SelectedWorker:       decision.SelectedWorker,
-		SelectedProvider:     decision.SelectedProvider,
-		SelectedGPUType:      decision.SelectedGPUType,
-		Reason:               decision.Reason,
-		CandidatesEvaluated:  &candidatesEvaluated,
-		WorkerQueueDepth:     decision.WorkerQueueDepth,
-		WorkerActiveRequests: decision.WorkerActiveRequests,
-		WorkerP50LatencyMS:   decision.WorkerP50LatencyMS,
-		WorkerP95LatencyMS:   decision.WorkerP95LatencyMS,
-		WorkerP99LatencyMS:   decision.WorkerP99LatencyMS,
-		WorkerLoad:           decision.WorkerLoad,
+		RequestID:                 decision.RequestID,
+		Model:                     decision.Model,
+		Strategy:                  decision.Strategy,
+		SelectedWorker:            decision.SelectedWorker,
+		SelectedProvider:          decision.SelectedProvider,
+		SelectedGPUType:           decision.SelectedGPUType,
+		Reason:                    decision.Reason,
+		CandidatesEvaluated:       &candidatesEvaluated,
+		WorkerQueueDepth:          decision.WorkerQueueDepth,
+		WorkerActiveRequests:      decision.WorkerActiveRequests,
+		WorkerP50LatencyMS:        decision.WorkerP50LatencyMS,
+		WorkerP95LatencyMS:        decision.WorkerP95LatencyMS,
+		WorkerP99LatencyMS:        decision.WorkerP99LatencyMS,
+		WorkerLoad:                decision.WorkerLoad,
+		LatencySLOMS:              decision.LatencySLOMS,
+		SelectedCostNanoPerHour:   decision.SelectedCostNanoPerHour,
+		CostSLOEligibleCandidates: decision.CostSLOEligibleCandidates,
+		FallbackReason:            decision.FallbackReason,
 	}
 	if !decision.DecisionTimestamp.IsZero() {
 		ts := decision.DecisionTimestamp.UTC()

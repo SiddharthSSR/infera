@@ -16,6 +16,11 @@ type Engine struct {
 
 // NewEngine creates a new strategy engine with default strategy.
 func NewEngine(defaultStrategy types.StrategyType) *Engine {
+	return NewEngineWithOptions(defaultStrategy, EngineOptions{})
+}
+
+// NewEngineWithOptions creates an engine with evidence-aware strategy options.
+func NewEngineWithOptions(defaultStrategy types.StrategyType, options EngineOptions) *Engine {
 	e := &Engine{
 		strategies:      make(map[types.StrategyType]Strategy),
 		defaultStrategy: defaultStrategy,
@@ -24,6 +29,7 @@ func NewEngine(defaultStrategy types.StrategyType) *Engine {
 	e.Register(NewLeastLoaded())
 	e.Register(NewRoundRobin())
 	e.Register(NewLatencyBased())
+	e.Register(NewMinCostUnderLatencySLO(options))
 
 	return e
 }

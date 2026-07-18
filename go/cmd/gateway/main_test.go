@@ -4,6 +4,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/infera/infera/go/internal/providers"
+	"github.com/infera/infera/go/internal/router"
+	"github.com/infera/infera/go/pkg/types"
 )
 
 func TestRolloutIdentityRequiresProductionValues(t *testing.T) {
@@ -44,6 +48,68 @@ func TestAuditPostgresConfigFromEnv(t *testing.T) {
 	}
 	if config.MaxOpenConns != 12 || config.MaxIdleConns != 3 || config.ConnMaxLifetime != 10*time.Minute {
 		t.Fatalf("unexpected configured values: %+v", config)
+	}
+}
+
+func TestRoutingConfigFromEnv(t *testing.T) {
+	t.Setenv("INFERA_ROUTING_STRATEGY", "min_cost_under_latency_slo")
+	t.Setenv("INFERA_ROUTING_LATENCY_SLO_MS", "750.5")
+	t.Setenv("INFERA_ROUTING_EVIDENCE_MAX_AGE", "90s")
+
+	config, err := routingConfigFromEnv(router.DefaultConfig())
+	if err != nil {
+		t.Fatalf("routingConfigFromEnv: %v", err)
+	}
+	if config.DefaultStrategy != types.StrategyMinCostUnderLatencySLO || config.LatencySLOMS != 750.5 || config.EvidenceMaxAge != 90*time.Second {
+		t.Fatalf("unexpected routing config: %+v", config)
+	}
+}
+
+func TestRoutingConfigRejectsInvalidValues(t *testing.T) {
+	tests := []struct{ name, env, value string }{
+		{name: "unknown strategy", env: "INFERA_ROUTING_STRATEGY", value: "cheapest"},
+		{name: "zero slo", env: "INFERA_ROUTING_LATENCY_SLO_MS", value: "0"},
+		{name: "non-finite slo", env: "INFERA_ROUTING_LATENCY_SLO_MS", value: "NaN"},
+		{name: "invalid evidence age", env: "INFERA_ROUTING_EVIDENCE_MAX_AGE", value: "old"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.env, tt.value)
+			if _, err := routingConfigFromEnv(router.DefaultConfig()); err == nil {
+				t.Fatal("expected invalid routing configuration to fail")
+			}
+		})
+	}
+}
+
+func TestTrustedRoutingCostEvidenceRequiresCurrentProviderContract(t *testing.T) {
+	capturedAt := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	valid := providers.PriceSnapshot{
+		Version: providers.PriceSnapshotVersionV1, AmountNano: 500_000_000,
+		Currency: providers.PriceCurrencyUSD, TimeUnit: providers.PriceTimeUnitHour, CapturedAt: capturedAt,
+	}
+	evidence, trusted := trustedRoutingCostEvidence(valid)
+	if !trusted || evidence.AmountNanoPerHour != valid.AmountNano || !evidence.CapturedAt.Equal(capturedAt) {
+		t.Fatalf("valid snapshot was not preserved: evidence=%+v trusted=%v", evidence, trusted)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*providers.PriceSnapshot)
+	}{
+		{name: "unknown version", mutate: func(snapshot *providers.PriceSnapshot) { snapshot.Version = "future-v2" }},
+		{name: "wrong currency", mutate: func(snapshot *providers.PriceSnapshot) { snapshot.Currency = "EUR" }},
+		{name: "wrong time unit", mutate: func(snapshot *providers.PriceSnapshot) { snapshot.TimeUnit = "second" }},
+		{name: "non-positive amount", mutate: func(snapshot *providers.PriceSnapshot) { snapshot.AmountNano = 0 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot := valid
+			tt.mutate(&snapshot)
+			if _, trusted := trustedRoutingCostEvidence(snapshot); trusted {
+				t.Fatal("expected malformed snapshot to be rejected")
+			}
+		})
 	}
 }
 
