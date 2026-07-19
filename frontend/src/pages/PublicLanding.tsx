@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell, PublicFooter, PublicNav, TrustStatus } from '../components/shared';
 import { OperatorWorkflow } from '../components/public/OperatorWorkflow';
@@ -46,14 +46,21 @@ client = OpenAI(
 
 export function PublicLanding() {
   const [copyStatus, setCopyStatus] = useState('');
+  const copyResetTimer = useRef<number>();
+
+  useEffect(() => () => window.clearTimeout(copyResetTimer.current), []);
 
   const copyExample = async () => {
+    window.clearTimeout(copyResetTimer.current);
+
     try {
       await navigator.clipboard.writeText(pythonExample);
       setCopyStatus('Copied to clipboard.');
     } catch {
       setCopyStatus('Copy failed. Select the code to copy it manually.');
     }
+
+    copyResetTimer.current = window.setTimeout(() => setCopyStatus(''), 3000);
   };
 
   return (
@@ -84,10 +91,18 @@ export function PublicLanding() {
             <div className="landing-proof-body">
               <h2>Change the endpoint. Keep the client workflow.</h2>
               <div className="landing-code-shell">
-                <button type="button" className="landing-copy-button" onClick={() => void copyExample()}>Copy</button>
+                <button
+                  type="button"
+                  className="landing-copy-button"
+                  data-copy-state={copyStatus ? (copyStatus.startsWith('Copied') ? 'success' : 'error') : 'idle'}
+                  aria-describedby="landing-copy-status"
+                  onClick={() => void copyExample()}
+                >
+                  {copyStatus.startsWith('Copied') ? 'Copied' : copyStatus ? 'Try again' : 'Copy'}
+                </button>
                 <pre tabIndex={0}><code>{pythonExample}</code></pre>
               </div>
-              <div className="landing-copy-status" role="status" aria-live="polite">{copyStatus}</div>
+              <div id="landing-copy-status" className="landing-copy-status" role="status" aria-live="polite">{copyStatus}</div>
             </div>
             <dl className="landing-proof-list">
               <div><dt>Discover</dt><dd>Read live model IDs from <code>/v1/models</code>.</dd></div>

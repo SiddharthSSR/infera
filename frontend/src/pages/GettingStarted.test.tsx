@@ -5,6 +5,19 @@ import { describe, expect, it } from 'vitest';
 import { GettingStarted } from './GettingStarted';
 
 describe('GettingStarted', () => {
+  it('provides one named main landmark with a skip target and page heading', () => {
+    render(
+      <MemoryRouter>
+        <GettingStarted />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveAttribute('href', '#main-content');
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+    expect(screen.getByRole('heading', { level: 1, name: 'From API key to first model response.' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'On this page' })).toBeInTheDocument();
+  });
+
   it('distinguishes machine credentials from human dashboard sessions', () => {
     render(
       <MemoryRouter>

@@ -125,13 +125,15 @@ for await (const chunk of resp) {
 export function PublicApiDocs() {
   return (
     <AppShell variant="public">
+        <a className="public-skip-link" href="#main-content">Skip to main content</a>
         <PublicNav title="PUBLIC API DOCS" />
 
+        <main id="main-content">
         <section className="docs-hero">
           <div className="docs-kicker">OpenAI-compatible gateway</div>
           <div className="docs-hero-grid">
             <div>
-              <div className="docs-title">Build against Infera without rewriting your client.</div>
+              <h1 className="docs-title">Build against Infera without rewriting your client.</h1>
               <p className="docs-subtitle">
                 Infera gives you a production inference gateway with an OpenAI-style interface. The public surface stays focused: discover models, send chat requests, and stream tokens with the same client flow your team already understands.
               </p>
@@ -161,7 +163,7 @@ export function PublicApiDocs() {
         <div className="docs-layout">
           <aside className="docs-sidebar">
             <LabelText as="div">ON THIS PAGE</LabelText>
-            <nav className="docs-sidebar-nav">
+            <nav className="docs-sidebar-nav" aria-label="On this page">
               <a className="docs-sidebar-link" href="#quickstart">Quickstart flow</a>
               <a className="docs-sidebar-link" href="#endpoints">Endpoints</a>
               <a className="docs-sidebar-link" href="#authentication">Authentication</a>
@@ -176,7 +178,7 @@ export function PublicApiDocs() {
             </div>
           </aside>
 
-          <main className="docs-main">
+          <div className="docs-main">
             <section className="docs-section" id="quickstart">
               <div className="docs-section-head">
                 <div>
@@ -315,8 +317,9 @@ export function PublicApiDocs() {
                 If you are testing streaming, make sure your client reads the full SSE stream and waits for the final <span className="docs-inline-code">data: [DONE]</span> marker before treating the response as complete.
               </div>
             </section>
-          </main>
+          </div>
         </div>
+        </main>
     </AppShell>
   );
 }

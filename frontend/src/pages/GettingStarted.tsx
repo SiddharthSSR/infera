@@ -117,13 +117,15 @@ const failureChecks = [
 export function GettingStarted() {
   return (
     <AppShell variant="public">
+        <a className="public-skip-link" href="#main-content">Skip to main content</a>
         <PublicNav title="GETTING STARTED" />
 
+        <main id="main-content">
         <section className="docs-hero">
           <div className="docs-kicker">First successful request</div>
           <div className="docs-hero-grid">
             <div>
-              <div className="docs-title">From API key to first model response.</div>
+              <h1 className="docs-title">From API key to first model response.</h1>
               <p className="docs-subtitle">
                 This page is the shortest production path into Infera. Keep the first call boring: validate auth, read the live model list, ship one unary request, then move to streaming once the basics are proven.
               </p>
@@ -152,7 +154,7 @@ export function GettingStarted() {
         <div className="docs-layout">
           <aside className="docs-sidebar">
             <LabelText as="div">QUICK NAV</LabelText>
-            <nav className="docs-sidebar-nav">
+            <nav className="docs-sidebar-nav" aria-label="On this page">
               <a className="docs-sidebar-link" href="#runbook">Runbook</a>
               <a className="docs-sidebar-link" href="#credentials">Choose a credential</a>
               <a className="docs-sidebar-link" href="#copy-run">Copy and run</a>
@@ -168,7 +170,7 @@ export function GettingStarted() {
             </div>
           </aside>
 
-          <main className="docs-main">
+          <div className="docs-main">
             <section className="docs-section tone" id="credentials">
               <div className="docs-section-head">
                 <div>
@@ -336,8 +338,9 @@ export function GettingStarted() {
                 </div>
               </div>
             </section>
-          </main>
+          </div>
         </div>
+        </main>
     </AppShell>
   );
 }
