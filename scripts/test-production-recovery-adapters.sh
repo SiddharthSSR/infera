@@ -119,6 +119,10 @@ case "$*" in
         status=503
         body='{"error":{"provider":"runpod","provider_error_code":"capacity_unavailable","retryable":true}}'
         ;;
+      legacy_capacity_then_success:1)
+        status=503
+        body='{"error":{"provider":"runpod","provider_error_code":"graphql_error","retryable":false,"message":"This machine does not have the resources to deploy your pod. Please try a different machine"}}'
+        ;;
       capacity_with_orphan:1)
         status=503
         body='{"error":{"provider":"runpod","provider_error_code":"capacity_unavailable","retryable":true}}'
@@ -303,6 +307,11 @@ second_gpu_line="$(grep -n 'gpu_type.*A100_80GB' "${TEST_CALLS}" | head -1 | cut
 grep -q 'result=fallback gpu=RTX_4090 attempt=1 reason=capacity_unavailable' "${EVIDENCE_FILE}"
 grep -q 'result=pass gpu=A100_80GB attempt=2 reason=created' "${EVIDENCE_FILE}"
 grep -q -- '--max-time 45 -X POST' "${TEST_CALLS}"
+
+run_fallback_case legacy_capacity_then_success env \
+  INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \
+  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
+[[ "$(cat "${TEST_POST_COUNT}")" == "2" ]]
 
 run_fallback_case capacity_with_orphan env \
   INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \

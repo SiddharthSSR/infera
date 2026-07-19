@@ -121,11 +121,19 @@ except (OSError, ValueError):
 error = payload.get("error")
 if not isinstance(error, dict):
     raise SystemExit(1)
-if (
+canonical_capacity = (
     error.get("provider") == "runpod"
     and error.get("provider_error_code") == "capacity_unavailable"
     and error.get("retryable") is True
-):
+)
+legacy_capacity = (
+    error.get("provider") == "runpod"
+    and error.get("provider_error_code") == "graphql_error"
+    and error.get("retryable") is False
+    and error.get("message")
+    == "This machine does not have the resources to deploy your pod. Please try a different machine"
+)
+if canonical_capacity or legacy_capacity:
     print("capacity_unavailable")
     raise SystemExit(0)
 raise SystemExit(1)
