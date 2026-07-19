@@ -50,6 +50,8 @@ describe('Login', () => {
     })
 
     expect(screen.getByText('INFERA')).toBeInTheDocument()
+    expect(screen.getByText('PUBLIC SOURCE')).toBeInTheDocument()
+    expect(screen.queryByText(/open source/i)).not.toBeInTheDocument()
     expect(screen.getByText('API key')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('inf_...')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /connect/i })).toBeInTheDocument()

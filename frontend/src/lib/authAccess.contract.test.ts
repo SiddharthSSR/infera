@@ -13,6 +13,7 @@ import {
   switchSessionWorkspace,
 } from './api';
 import {
+  getInvitationRecoveryGuidance,
   parseApiKeyCreateResponse,
   parseApiKeysResponse,
   parseSessionResponse,
@@ -192,5 +193,19 @@ describe('auth access contract fixtures', () => {
     expect(JSON.parse(String(mockFetch.mock.calls[0]?.[1]?.body))).toEqual(sessionCreateRequest);
     expect(JSON.parse(String(mockFetch.mock.calls[2]?.[1]?.body))).toEqual(sessionSwitchRequest);
     expect(JSON.parse(String(mockFetch.mock.calls[5]?.[1]?.body))).toEqual(apiKeyCreateRequest);
+  });
+});
+
+describe('invitation recovery guidance', () => {
+  it('explains how to recover from an expired token', () => {
+    expect(getInvitationRecoveryGuidance(new Error('Invitation expired'))).toBe(
+      'Ask the workspace admin for a new invitation. Expired invitation tokens cannot be reused.',
+    );
+  });
+
+  it('preserves retry guidance for network failures', () => {
+    expect(getInvitationRecoveryGuidance(new Error('Failed to fetch'))).toContain(
+      'Your invitation token remains in the field.',
+    );
   });
 });

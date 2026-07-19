@@ -9,6 +9,26 @@ import type {
 
 type JSONRecord = Record<string, unknown>;
 
+export function getInvitationRecoveryGuidance(error: unknown): string {
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+
+  if (message.includes('expired')) {
+    return 'Ask the workspace admin for a new invitation. Expired invitation tokens cannot be reused.';
+  }
+  if (
+    message.includes('invalid')
+    || message.includes('revoked')
+    || message.includes('already accepted')
+    || message.includes('not found')
+  ) {
+    return 'Confirm that you pasted the complete token. If it still fails, ask the workspace admin for a new invitation.';
+  }
+  if (message.includes('network') || message.includes('failed to fetch')) {
+    return 'Check your connection and retry. Your invitation token remains in the field.';
+  }
+  return 'Retry once. If the problem continues, ask the workspace admin to confirm the invitation is still active.';
+}
+
 function expectRecord(value: unknown, label: string): JSONRecord {
   if (value == null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Invalid ${label}`);

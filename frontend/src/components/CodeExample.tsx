@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 type CodeLanguage = 'shell' | 'python' | 'typescript' | 'text';
 
@@ -64,14 +64,25 @@ function renderLine(line: string, language: CodeLanguage): ReactNode[] {
 }
 
 export function CodeExample({ code, language = 'text', className = '', style }: CodeExampleProps) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'success' | 'error'>('idle');
+  const copyStatusId = useId();
+  const resetTimer = useRef<number>();
   const classes = ['code-block', 'docs-code-block', className].filter(Boolean).join(' ');
   const lines = code.split('\n');
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  useEffect(() => () => window.clearTimeout(resetTimer.current), []);
+
+  const handleCopy = async () => {
+    window.clearTimeout(resetTimer.current);
+
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopyState('success');
+    } catch {
+      setCopyState('error');
+    }
+
+    resetTimer.current = window.setTimeout(() => setCopyState('idle'), 3000);
   };
 
   return (
@@ -86,11 +97,20 @@ export function CodeExample({ code, language = 'text', className = '', style }: 
       </pre>
       <button
         type="button"
-        className={`code-copy-btn${copied ? ' copied' : ''}`}
-        onClick={handleCopy}
+        className={`code-copy-btn${copyState === 'success' ? ' copied' : ''}${copyState === 'error' ? ' copy-failed' : ''}`}
+        data-copy-state={copyState}
+        aria-describedby={copyStatusId}
+        onClick={() => void handleCopy()}
       >
-        {copied ? 'COPIED' : 'COPY'}
+        {copyState === 'success' ? 'COPIED' : copyState === 'error' ? 'TRY AGAIN' : 'COPY'}
       </button>
+      <span id={copyStatusId} className="sr-only" role="status" aria-live="polite">
+        {copyState === 'success'
+          ? 'Copied to clipboard.'
+          : copyState === 'error'
+            ? 'Copy failed. Select the code to copy it manually.'
+            : ''}
+      </span>
     </div>
   );
 }

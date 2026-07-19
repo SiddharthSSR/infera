@@ -24,10 +24,10 @@ export function buildFirstWorkspaceChecklist(input: {
       detail: input.providerConnected
         ? 'A live inventory source is connected and returning current capacity.'
         : input.providerReady
-          ? 'A provider path exists, but the workspace still needs a healthy live connection.'
-          : 'Connect RunPod, Vast.ai, or a local inventory source before trying to deploy.',
+          ? 'Start here: the provider path exists, but this workspace still needs a healthy live connection.'
+          : 'Start here after sign-in: connect RunPod, Vast.ai, or a local inventory source before trying to deploy.',
       done: input.providerConnected,
-      actionLabel: 'OPEN WORKSPACE',
+      actionLabel: 'CONNECT PROVIDER',
       action: 'open_workspace',
     },
     {
@@ -55,7 +55,7 @@ export function buildFirstWorkspaceChecklist(input: {
       label: 'Verify first inference',
       detail: input.inferenceVerified
         ? 'A real chat-completions request already passed for this workspace.'
-        : 'Run or wait for the first inference verification after a deployment becomes ready.',
+        : 'After a deployment is ready, verify one non-streaming request before testing streaming.',
       done: input.inferenceVerified,
       actionLabel: 'OPEN NODES',
       action: 'open_clusters',
@@ -64,8 +64,8 @@ export function buildFirstWorkspaceChecklist(input: {
       id: 'collaboration',
       label: 'Add a teammate or automation identity',
       detail: input.collaborationReady
-        ? 'This workspace already has an invite or service-account path set up.'
-        : 'Create a service account for automation or send the first invite for another human teammate.',
+        ? 'This workspace already has a human invitation or machine service-account path set up.'
+        : 'Invite a human for dashboard access, or create a service account for unattended automation. Keep those credentials separate.',
       done: input.collaborationReady,
       actionLabel: 'OPEN WORKSPACE',
       action: 'open_workspace',

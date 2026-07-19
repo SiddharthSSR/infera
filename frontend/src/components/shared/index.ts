@@ -1,5 +1,7 @@
 export { AppShell, type AppShellProps, type AppShellVariant } from './AppShell';
 export { PublicNav, type PublicNavProps, type PublicNavLink } from './PublicNav';
+export { PublicFooter } from './PublicFooter';
+export { TrustStatus, type TrustStatusProps, type TrustStatusTone } from './TrustStatus';
 export { PageHeader, type PageHeaderProps } from './PageHeader';
 export { DisplayHeader, type DisplayHeaderProps } from './DisplayHeader';
 export { GridRow, type GridRowProps, Cell, type CellProps } from './GridRow';
