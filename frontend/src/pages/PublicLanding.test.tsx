@@ -25,52 +25,62 @@ describe('PublicLanding', () => {
     });
   });
 
-  it('separates product evaluation from sign in with one dominant migration path', () => {
+  it('leads with a concise compatible-client promise and one dominant quickstart path', () => {
     renderLanding();
 
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
-    expect(screen.getByRole('heading', { name: 'Run open models behind the client you already ship.' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Run the migration quickstart' })).toHaveAttribute('href', '/getting-started');
+    expect(screen.getByRole('heading', { name: 'Run open models. Keep your OpenAI client.' })).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Run the quickstart' })[0]).toHaveAttribute('href', '/getting-started');
+    expect(screen.getByRole('link', { name: 'Explore registry models' })).toHaveAttribute('href', '#models');
     expect(screen.getByRole('link', { name: 'SIGN IN' })).toHaveAttribute('href', '/sign-in');
     expect(screen.getByRole('link', { name: /GITHUB/ })).toHaveAttribute('href', 'https://github.com/SiddharthSSR/infera');
   });
 
-  it('exposes the complete migration sequence and factual API boundary', () => {
+  it('presents source-backed registry examples without implying live serving', () => {
     renderLanding();
 
-    const migrationSection = screen.getByRole('heading', { name: 'First response before first surprise.' }).closest('section');
-    expect(migrationSection).not.toBeNull();
-    expect(within(migrationSection as HTMLElement).getAllByRole('listitem')).toHaveLength(4);
-    expect(screen.getByText('Confirm auth')).toBeInTheDocument();
-    expect(screen.getByText('List live models')).toBeInTheDocument();
-    expect(screen.getByText('Send one chat')).toBeInTheDocument();
-    expect(screen.getByText('Promote to stream')).toBeInTheDocument();
-    expect(screen.getByText('Error types are Infera-specific.')).toBeInTheDocument();
-    expect(screen.getByText(/legacy completions and embeddings are not currently exposed/i)).toBeInTheDocument();
-    expect(screen.getByText('Base URL, workspace credential, and model ID from live discovery')).toBeInTheDocument();
+    const modelSection = screen.getByRole('heading', { name: 'Put open models behind one endpoint.' }).closest('section');
+    expect(modelSection).not.toBeNull();
+    expect(within(modelSection as HTMLElement).getAllByRole('article')).toHaveLength(6);
+    expect(screen.getByRole('heading', { name: 'Mistral 7B Instruct v0.3' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Llama 3.1 8B Instruct' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Qwen2.5 7B Instruct' })).toBeInTheDocument();
+    expect(screen.getByText('A registry entry does not mean serving.')).toBeInTheDocument();
+    expect(screen.getByText(/live serving still requires a healthy worker/i)).toBeInTheDocument();
   });
 
-  it('keeps the migration-first reading order before technical proof and operator workflow', () => {
+  it('keeps the shortest migration sequence and factual API boundary', () => {
+    renderLanding();
+
+    const migrationSection = screen.getByRole('heading', { name: 'Discover. Request. Operate.' }).closest('section');
+    expect(migrationSection).not.toBeNull();
+    expect(within(migrationSection as HTMLElement).getAllByRole('listitem')).toHaveLength(3);
+    expect(within(migrationSection as HTMLElement).getByRole('heading', { name: 'Discover' })).toBeInTheDocument();
+    expect(within(migrationSection as HTMLElement).getByRole('heading', { name: 'Request' })).toBeInTheDocument();
+    expect(within(migrationSection as HTMLElement).getByRole('heading', { name: 'Operate' })).toBeInTheDocument();
+    expect(screen.getByText('Error types are Infera-specific.')).toBeInTheDocument();
+    expect(screen.getByText('No legacy completions or embeddings endpoint.')).toBeInTheDocument();
+  });
+
+  it('keeps the model proof before the short migration and control-plane story', () => {
     const { container } = renderLanding();
     const sectionIDs = Array.from(container.querySelectorAll('main > section[id]')).map((section) => section.id);
 
     expect(sectionIDs).toEqual([
+      'models',
       'migration',
-      'architecture',
-      'operator-loop',
       'product',
       'proof',
-      'trust',
     ]);
   });
 
-  it('keeps the migration CTA primary while exposing the bounded trust record', () => {
+  it('keeps the quickstart primary while linking to the API and trust records', () => {
     renderLanding();
 
-    expect(screen.getByRole('heading', { name: 'Public evidence, with the gaps left visible.' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open the trust record →' })).toHaveAttribute('href', '/trust');
-    expect(screen.getByText('The repository has no license file or SECURITY file. The site does not infer rights or assurances from README copy.')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: /quickstart/i }).length).toBeGreaterThanOrEqual(3);
+    expect(screen.getByRole('heading', { name: 'Small surface. Clear limits.' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Inspect the trust record →' })).toHaveAttribute('href', '/trust');
+    expect(screen.getByRole('link', { name: 'Read the API contract →' })).toHaveAttribute('href', '/docs');
+    expect(screen.getAllByRole('link', { name: /quickstart/i }).length).toBeGreaterThanOrEqual(2);
   });
 
   it('copies the migration example and announces success', async () => {

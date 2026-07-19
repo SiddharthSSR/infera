@@ -1,40 +1,76 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AppShell, PublicFooter, PublicNav, TrustStatus } from '../components/shared';
-import { OperatorWorkflow } from '../components/public/OperatorWorkflow';
-import { TechnicalProof } from '../components/public/TechnicalProof';
+import { AppShell, PublicFooter, PublicNav } from '../components/shared';
 
 const migrationSteps = [
   {
     number: '01',
-    title: 'Confirm auth',
-    description: 'Use a workspace-scoped Bearer token. Browser sign-in and machine access stay separate.',
+    title: 'Discover',
+    description: 'Read the model IDs currently exposed by your workspace.',
   },
   {
     number: '02',
-    title: 'List live models',
-    description: 'Call /v1/models and use the returned model ID as the source of truth for the request.',
+    title: 'Request',
+    description: 'Point an OpenAI-compatible client at the Infera gateway.',
   },
   {
     number: '03',
-    title: 'Send one chat',
-    description: 'Start with a small non-streaming request so auth, routing, and availability are easy to isolate.',
-  },
-  {
-    number: '04',
-    title: 'Promote to stream',
-    description: 'Turn on SSE after the unary path works, then read through the final [DONE] marker.',
+    title: 'Operate',
+    description: 'Verify the worker, test the route, and inspect the outcome.',
   },
 ];
 
 const productSurfaces = [
-  { label: 'Models', title: 'Know what can serve', description: 'Inspect the available model surface before clients depend on it.' },
-  { label: 'Nodes', title: 'See runtime capacity', description: 'Keep instance readiness near the models those nodes support.' },
-  { label: 'Playground', title: 'Test the real route', description: 'Exercise a workspace request before changing application traffic.' },
-  { label: 'Logs', title: 'Trace request behavior', description: 'Separate authentication, routing, runtime, and model issues.' },
-  { label: 'API keys', title: 'Scope machine access', description: 'Keep service credentials distinct from human dashboard sessions.' },
-  { label: 'Workspace', title: 'Operate as a team', description: 'Centralize access and settings around the serving workspace.' },
+  { label: 'Models', title: 'Know what can serve', description: 'Separate registry availability from verified serving.' },
+  { label: 'Nodes', title: 'See runtime capacity', description: 'Keep workers, GPUs, and model readiness in view.' },
+  { label: 'Playground', title: 'Test the real route', description: 'Send a workspace request before moving traffic.' },
+  { label: 'Logs', title: 'Trace the outcome', description: 'Isolate auth, routing, runtime, and model failures.' },
 ];
+
+const registryModels = [
+  {
+    mark: 'MI',
+    tag: 'GENERAL',
+    name: 'Mistral 7B Instruct v0.3',
+    source: 'mistralai/Mistral-7B-Instruct-v0.3',
+    description: 'General-purpose chat and instruction following.',
+  },
+  {
+    mark: 'L3',
+    tag: '8B',
+    name: 'Llama 3.1 8B Instruct',
+    source: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+    description: 'Instruction-tuned model for chat and coding workflows.',
+  },
+  {
+    mark: 'P3',
+    tag: 'COMPACT',
+    name: 'Phi-3 Mini 4K Instruct',
+    source: 'microsoft/Phi-3-mini-4k-instruct',
+    description: 'Compact instruction model with a smaller runtime footprint.',
+  },
+  {
+    mark: 'Q2',
+    tag: '7B',
+    name: 'Qwen2.5 7B Instruct',
+    source: 'Qwen/Qwen2.5-7B-Instruct',
+    description: 'Multilingual chat and instruction model.',
+  },
+  {
+    mark: 'Q3',
+    tag: 'REASONING',
+    name: 'Qwen3 4B Thinking 2507',
+    source: 'Qwen/Qwen3-4B-Thinking-2507',
+    description: 'Compact reasoning-oriented model from the seeded registry.',
+  },
+  {
+    mark: 'CL',
+    tag: '13B',
+    name: 'CodeLlama 13B Instruct',
+    source: 'codellama/CodeLlama-13b-Instruct-hf',
+    description: 'Instruction-tuned model for code-focused workloads.',
+  },
+] as const;
 
 const baseUrl = window.location.origin;
 const pythonExample = `from openai import OpenAI
@@ -71,15 +107,14 @@ export function PublicLanding() {
       <main id="main-content">
         <section className="landing-hero" aria-labelledby="landing-title">
           <div className="landing-hero-copy">
-            <div className="landing-eyebrow">OpenAI-compatible inference control plane</div>
-            <h1 id="landing-title">Run open models behind the client you already ship.</h1>
+            <div className="landing-eyebrow">Open model gateway + control plane</div>
+            <h1 id="landing-title">Run open models. Keep your OpenAI client.</h1>
             <p className="landing-lede">
-              Infera gives infrastructure teams an OpenAI-style gateway for model discovery, chat completions,
-              and streaming, with the operator surfaces needed to keep that path working.
+              One compatible endpoint for model discovery, chat, and streaming—plus the operator controls to keep it serving.
             </p>
             <div className="landing-actions">
-              <Link className="landing-button landing-button-primary" to="/getting-started">Run the migration quickstart</Link>
-              <a className="landing-button landing-button-secondary" href="#product">See the control plane</a>
+              <Link className="landing-button landing-button-primary" to="/getting-started">Run the quickstart</Link>
+              <a className="landing-button landing-button-secondary" href="#models">Explore registry models</a>
             </div>
           </div>
 
@@ -89,7 +124,7 @@ export function PublicLanding() {
               <span className="landing-meta landing-status">OpenAI SDK flow</span>
             </div>
             <div className="landing-proof-body">
-              <h2>Change the endpoint. Keep the client workflow.</h2>
+              <h2>Two lines change. Your client flow stays.</h2>
               <div className="landing-code-shell">
                 <button
                   type="button"
@@ -106,47 +141,62 @@ export function PublicLanding() {
             </div>
             <dl className="landing-proof-list">
               <div><dt>Discover</dt><dd>Read live model IDs from <code>/v1/models</code>.</dd></div>
-              <div><dt>Request</dt><dd>Send OpenAI-style chat completion payloads.</dd></div>
-              <div><dt>Stream</dt><dd>Receive SSE chunks through the same client flow.</dd></div>
+              <div><dt>Run</dt><dd>Send unary or streaming chat completions.</dd></div>
             </dl>
           </aside>
         </section>
 
         <section className="landing-signal-strip" aria-label="Current product surface">
-          <div><span>01 / Gateway</span><strong>Workspace-scoped auth</strong></div>
-          <div><span>02 / API</span><strong>Model discovery</strong></div>
-          <div><span>03 / Requests</span><strong>Unary + streaming</strong></div>
-          <div><span>04 / Operate</span><strong>Models, nodes, logs</strong></div>
+          <div><span>01 / Discover</span><strong>Live model IDs</strong></div>
+          <div><span>02 / Connect</span><strong>OpenAI-style client</strong></div>
+          <div><span>03 / Serve</span><strong>Unary + streaming</strong></div>
+          <div><span>04 / Inspect</span><strong>Workers, routes, usage</strong></div>
         </section>
 
-        <section className="landing-section" id="migration" aria-labelledby="migration-heading">
+        <section className="landing-section landing-model-library" id="models" aria-labelledby="models-heading">
           <div className="landing-section-heading">
-            <div><span className="landing-meta">Migration runbook</span><h2 id="migration-heading">First response before first surprise.</h2></div>
-            <p>A deliberately narrow path from key to working request. Each step removes one source of uncertainty before the next.</p>
+            <div><span className="landing-meta">Seeded registry</span><h2 id="models-heading">Put open models behind one endpoint.</h2></div>
+            <div className="landing-section-aside">
+              <p>Start from the built-in registry or register another model source. Live serving still requires a healthy worker.</p>
+              <Link className="landing-inline-link" to="/getting-started#copy-run">See model discovery →</Link>
+            </div>
           </div>
-          <ol className="landing-step-grid">
+          <div className="landing-model-grid">
+            {registryModels.map((model) => (
+              <article key={model.source}>
+                <div className="landing-model-meta">
+                  <span className="landing-model-mark" aria-hidden="true">{model.mark}</span>
+                  <span className="landing-model-tag">{model.tag}</span>
+                </div>
+                <h3>{model.name}</h3>
+                <p>{model.description}</p>
+                <code>{model.source}</code>
+              </article>
+            ))}
+          </div>
+          <p className="landing-model-note"><strong>A registry entry does not mean serving.</strong> Use <code>GET /v1/models</code> and worker health as the source of truth before sending traffic.</p>
+        </section>
+
+        <section className="landing-section landing-section-tone" id="migration" aria-labelledby="migration-heading">
+          <div className="landing-section-heading landing-section-heading-compact">
+            <div><span className="landing-meta">Shortest path</span><h2 id="migration-heading">Discover. Request. Operate.</h2></div>
+            <p>Move from a live model ID to an inspectable response without rebuilding your client integration.</p>
+          </div>
+          <ol className="landing-step-grid landing-step-grid-compact">
             {migrationSteps.map((step) => (
               <li key={step.number}>
-                <span className="landing-meta">Step {step.number}</span>
+                <span className="landing-meta">{step.number}</span>
                 <h3>{step.title}</h3>
                 <p>{step.description}</p>
               </li>
             ))}
           </ol>
-          <div className="landing-actions">
-            <Link className="landing-button landing-button-primary" to="/getting-started">Open the full quickstart</Link>
-            <Link className="landing-button landing-button-secondary" to="/docs">Read API boundaries</Link>
-          </div>
         </section>
-
-        <TechnicalProof />
-
-        <OperatorWorkflow />
 
         <section className="landing-section" id="product" aria-labelledby="product-heading">
           <div className="landing-section-heading">
-            <div><span className="landing-meta">Product</span><h2 id="product-heading">The gateway is the entry point. The control plane is the product.</h2></div>
-            <p>The same workspace that serves the compatible endpoint gives operators a place to inspect the serving path and manage access.</p>
+            <div><span className="landing-meta">Control plane</span><h2 id="product-heading">Operate the route, not just the endpoint.</h2></div>
+            <p>One workspace connects the model registry, runtime capacity, real requests, and their outcomes.</p>
           </div>
           <div className="landing-surface-grid">
             {productSurfaces.map((surface) => (
@@ -159,10 +209,10 @@ export function PublicLanding() {
           </div>
         </section>
 
-        <section className="landing-section landing-section-tone" id="proof" aria-labelledby="proof-heading">
+        <section className="landing-section landing-section-tone landing-boundary-section" id="proof" aria-labelledby="proof-heading">
           <div className="landing-section-heading">
-            <div><span className="landing-meta">Public API boundary</span><h2 id="proof-heading">A small contract, stated plainly.</h2></div>
-            <p>Evaluate the interface and its known differences directly, without unsupported performance or adoption claims.</p>
+            <div><span className="landing-meta">Public API boundary</span><h2 id="proof-heading">Small surface. Clear limits.</h2></div>
+            <p>Use the compatibility that exists today, with no implied support for endpoints that are not shipped.</p>
           </div>
           <div className="landing-boundary-grid">
             <div>
@@ -178,38 +228,13 @@ export function PublicLanding() {
               <dl>
                 <div><dt>Errors</dt><dd>Error types are Infera-specific.</dd></div>
                 <div><dt>Metadata</dt><dd>Model discovery may expose extra safe operator metadata.</dd></div>
-                <div><dt>Surface</dt><dd>Chat completions are supported; legacy completions and embeddings are not currently exposed.</dd></div>
+                <div><dt>Surface</dt><dd>No legacy completions or embeddings endpoint.</dd></div>
               </dl>
             </div>
           </div>
-          <div className="landing-migration-boundary" aria-label="Concrete client migration boundary">
-            <div><span className="landing-meta">Keep</span><strong>OpenAI SDK, message shape, unary and streaming client flow</strong></div>
-            <div><span className="landing-meta">Change</span><strong>Base URL, workspace credential, and model ID from live discovery</strong></div>
-            <div><span className="landing-meta">Verify</span><strong>Supported request fields, Infera error types, and extra model metadata</strong></div>
-          </div>
-        </section>
-
-        <section className="landing-section landing-section-tone" id="trust" aria-labelledby="trust-heading">
-          <div className="landing-section-heading">
-            <div><span className="landing-meta">Trust record</span><h2 id="trust-heading">Public evidence, with the gaps left visible.</h2></div>
-            <p>Inspect the source and published runbooks directly. License, security policy, public status, company details, and private contact paths are labeled unavailable until authoritative sources exist.</p>
-          </div>
-          <div className="landing-trust-grid">
-            <article>
-              <TrustStatus tone="available">Available</TrustStatus>
-              <h3>Public source repository</h3>
-              <p>Review the gateway, worker, frontend, deployment assets, and project history on GitHub.</p>
-            </article>
-            <article>
-              <TrustStatus tone="unavailable">Not published</TrustStatus>
-              <h3>License and formal security policy</h3>
-              <p>The repository has no license file or SECURITY file. The site does not infer rights or assurances from README copy.</p>
-            </article>
-            <article className="landing-trust-action">
-              <span className="landing-meta">Full record</span>
-              <h3>See every source and blocker.</h3>
-              <Link className="trust-evidence-link" to="/trust">Open the trust record →</Link>
-            </article>
+          <div className="landing-proof-links">
+            <Link to="/docs">Read the API contract →</Link>
+            <Link to="/trust">Inspect the trust record →</Link>
           </div>
         </section>
 
