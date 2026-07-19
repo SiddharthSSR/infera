@@ -191,13 +191,13 @@ export function GettingStarted() {
                   </div>
                 ))}
               </div>
-              <div className="docs-card" style={{ marginTop: '1rem' }}>
+              <div className="docs-card docs-recovery-card">
                 <LabelText as="div">NO KEY OR WRONG WORKSPACE?</LabelText>
-                <div style={{ marginTop: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+                <div className="docs-recovery-copy">
                   Ask a workspace admin for an invitation if you need human access. If you already belong to the workspace, sign in and create a service-account key from API Keys for automation. After sign-in, your first setup action is to connect provider access in Workspace.
                 </div>
-                <div className="docs-actions" style={{ marginTop: '1rem' }}>
-                  <Link className="btn-primary" to="/sign-in" style={{ textDecoration: 'none' }}>SIGN IN</Link>
+                <div className="docs-actions docs-recovery-actions">
+                  <Link className="btn-primary docs-action-link" to="/sign-in">SIGN IN</Link>
                   <Link className="btn-quiet" to="/accept-invite">ACCEPT AN INVITATION</Link>
                 </div>
               </div>

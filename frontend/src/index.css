@@ -11,6 +11,13 @@
   --color-warning: #F9A825;
   --color-error: #C62828;
   --color-info: #1565C0;
+  --status-success-text: #246629;
+  --status-success-bg: #eef7ee;
+  --status-error-text: #852f28;
+  --status-error-bg: #fff1ed;
+  --status-warning-text: #5e4a20;
+  --status-warning-border: #a66b00;
+  --status-warning-bg: #fff9e8;
   --grid-line: 1px solid var(--border-color);
   --font-main: "DM Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "Space Mono", monospace;
@@ -1415,6 +1422,30 @@ h1, h2, h3, h4 {
   line-height: 1.65;
 }
 
+.invitation-display-header {
+  font-size: 4.5rem;
+}
+
+.invitation-token-form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.invitation-form-error {
+  color: var(--color-error);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.invitation-session-error {
+  margin-top: 0.9rem;
+}
+
+.invitation-recovery {
+  margin-top: 0.35rem;
+}
+
 .help-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1828,6 +1859,7 @@ input[type="range"]::-webkit-slider-thumb {
   --public-motion-duration-fast: 160ms;
   --public-motion-duration-base: 360ms;
   --public-motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
   min-height: 100vh;
   scroll-behavior: smooth;
   background:
@@ -2119,6 +2151,24 @@ input[type="range"]::-webkit-slider-thumb {
 
 .docs-card strong {
   font-weight: 700;
+}
+
+.docs-recovery-card {
+  margin-top: 1rem;
+}
+
+.docs-recovery-copy {
+  margin-top: 0.7rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.docs-recovery-actions {
+  margin-top: 1rem;
+}
+
+.docs-action-link {
+  text-decoration: none;
 }
 
 .docs-inline-code {
@@ -2660,6 +2710,11 @@ input[type="range"]::-webkit-slider-thumb {
     font-size: 2.2rem;
     padding: 0.9rem 0 0.8rem;
     letter-spacing: -0.03em;
+  }
+
+  .invitation-display-header {
+    font-size: 2.2rem;
+    overflow-wrap: anywhere;
   }
 
   /* Compact help callout on mobile — hide the long copy, keep actions */
@@ -5809,6 +5864,7 @@ html {
 
 .public-landing-shell {
   --landing-max: 1680px;
+
   color: var(--text-primary);
   background: rgba(253, 251, 248, 0.96);
   overflow: clip;
@@ -5976,20 +6032,20 @@ html {
   min-height: 1.75rem;
   width: fit-content;
   padding: 0.25rem 0.55rem;
-  border: 1px solid currentColor;
+  border: 1px solid currentcolor;
   font: 700 0.62rem/1.2 var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .trust-status-available {
-  color: #246629;
-  background: #eef7ee;
+  color: var(--status-success-text);
+  background: var(--status-success-bg);
 }
 
 .trust-status-unavailable {
-  color: #852f28;
-  background: #fff1ed;
+  color: var(--status-error-text);
+  background: var(--status-error-bg);
 }
 
 .trust-shell {
@@ -6270,8 +6326,8 @@ html {
 .trust-caution {
   margin-top: 1.5rem;
   padding: 1.5rem;
-  border: 1px solid #a66b00;
-  background: #fff9e8;
+  border: 1px solid var(--status-warning-border);
+  background: var(--status-warning-bg);
 }
 
 .trust-caution strong {
@@ -6281,7 +6337,7 @@ html {
 .trust-caution p {
   max-width: 56rem;
   margin-top: 0.65rem;
-  color: #5e4a20;
+  color: var(--status-warning-text);
   line-height: 1.65;
 }
 
@@ -6362,7 +6418,7 @@ html {
   justify-content: center;
   min-height: 3rem;
   padding: 0.75rem 1.2rem;
-  border: 1px solid currentColor;
+  border: 1px solid currentcolor;
   color: inherit;
   background: transparent;
   text-decoration: none;

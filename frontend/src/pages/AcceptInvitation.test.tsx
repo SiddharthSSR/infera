@@ -85,6 +85,7 @@ describe('AcceptInvitation', () => {
   it('labels the token input and gives recovery guidance for an empty submission', () => {
     renderInvitation();
 
+    expect(screen.getByRole('link', { name: 'LOGIN' })).toHaveAttribute('href', '/sign-in');
     expect(screen.getByLabelText('INVITATION TOKEN')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'LOAD INVITATION' }));
 

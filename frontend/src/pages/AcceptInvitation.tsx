@@ -150,14 +150,14 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
           title="INVITATION ACCEPTANCE"
           links={[
             { path: '/getting-started', label: 'GETTING STARTED' },
-            { path: '/', label: 'LOGIN' },
+            { path: '/sign-in', label: 'LOGIN' },
           ]}
           style={{ alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}
         />
 
         <GridRow columns="1fr 1fr">
           <Cell style={{ padding: '3rem 2rem' }}>
-            <DisplayHeader align="left" noBorder padding="0" fontSize="4.5rem">
+            <DisplayHeader className="invitation-display-header" align="left" noBorder padding="0">
               JOIN WORKSPACE
             </DisplayHeader>
             <p style={{ marginTop: '1rem', color: 'var(--text-secondary)', maxWidth: 620, fontSize: '1rem', lineHeight: 1.6 }}>
@@ -169,7 +169,7 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
                 Accepting an invitation creates a one-time human key for that workspace. Continuing starts a browser session in the invited workspace and makes it your active dashboard context. It does not email anyone automatically and it does not change any existing service-account keys.
               </div>
             </div>
-            <form onSubmit={handleLoadPreview} style={{ marginTop: '2rem', display: 'grid', gap: '1rem' }} noValidate>
+            <form className="invitation-token-form" onSubmit={handleLoadPreview} noValidate>
               <div>
                 <LabelText as="label" htmlFor="invitation-token">INVITATION TOKEN</LabelText>
                 <ControlInput
@@ -197,9 +197,9 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
                 {loadingPreview ? 'LOADING...' : 'LOAD INVITATION'}
               </ActionButton>
               {error && errorContext === 'invitation' && (
-                <div role="alert" style={{ color: '#B3261E', fontSize: '0.9rem', lineHeight: 1.5 }}>
+                <div className="invitation-form-error" role="alert">
                   <div id="invitation-error">{error}</div>
-                  {recoveryGuidance && <div id="invitation-recovery" style={{ marginTop: '0.35rem' }}>{recoveryGuidance}</div>}
+                  {recoveryGuidance && <div className="invitation-recovery" id="invitation-recovery">{recoveryGuidance}</div>}
                 </div>
               )}
             </form>
@@ -273,9 +273,9 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
                 Continuing starts a browser session for <strong>{preview?.workspace_name || 'this workspace'}</strong>, makes it active, and opens Workspace so you can review access and connect the first provider.
               </div>
               {error && errorContext === 'session' && (
-                <div role="alert" style={{ marginTop: '0.9rem', color: '#B3261E', fontSize: '0.9rem', lineHeight: 1.5 }}>
+                <div className="invitation-form-error invitation-session-error" role="alert">
                   <div>{error}</div>
-                  {recoveryGuidance && <div style={{ marginTop: '0.35rem' }}>{recoveryGuidance}</div>}
+                  {recoveryGuidance && <div className="invitation-recovery">{recoveryGuidance}</div>}
                 </div>
               )}
             </Cell>

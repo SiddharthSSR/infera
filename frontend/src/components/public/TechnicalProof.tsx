@@ -83,7 +83,9 @@ export function TechnicalProof() {
             source.internal ? (
               <Link key={source.href} to={source.href}>{source.label}</Link>
             ) : (
-              <a key={source.href} href={source.href} target="_blank" rel="noreferrer">{source.label}</a>
+              <a key={source.href} href={source.href} target="_blank" rel="noreferrer">
+                {source.label}<span className="sr-only"> (opens in a new tab)</span>
+              </a>
             )
           ))}
         </div>

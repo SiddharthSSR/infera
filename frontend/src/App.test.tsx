@@ -103,6 +103,41 @@ describe('App public routing', () => {
   });
 });
 
+describe('App authenticated public routing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSession.mockResolvedValue(baseSession);
+    mockFetchWorkspaces.mockResolvedValue([
+      { id: 'ws_alpha', slug: 'alpha-team', name: 'Alpha Team', created_at: '2026-03-15T00:00:00Z', status: 'active' },
+    ]);
+  });
+
+  it('redirects authenticated sign-in visits to the dashboard', async () => {
+    render(
+      <MemoryRouter initialEntries={['/sign-in']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('DASHBOARD PAGE')).toBeInTheDocument();
+    expect(screen.queryByText('SIGN IN PAGE')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['/trust', 'TRUST PAGE'],
+    ['/company', 'COMPANY PAGE'],
+    ['/security', 'SECURITY PAGE'],
+  ] as const)('renders %s for an authenticated session', async (path, expected) => {
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+  });
+});
+
 describe('App workspace switcher', () => {
   beforeEach(() => {
     vi.clearAllMocks();

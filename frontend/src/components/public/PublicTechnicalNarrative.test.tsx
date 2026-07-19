@@ -27,11 +27,13 @@ describe('public technical narrative', () => {
     expect(stages[1]).toHaveTextContent('Authenticate and route');
     expect(stages[2]).toHaveTextContent('Run the model');
     expect(stages[3]).toHaveTextContent('Keep the outcome inspectable');
-    expect(screen.getByRole('link', { name: 'Read the compatibility contract' })).toHaveAttribute('href', '/docs');
-    expect(screen.getByRole('link', { name: 'Inspect the gateway request path' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Read the compatibility contract', exact: true })).toHaveAttribute('href', '/docs');
+    expect(screen.getByRole('link', { name: 'Read the compatibility contract', exact: true })).not.toHaveAttribute('target');
+    expect(screen.getByRole('link', { name: 'Inspect the gateway request path (opens in a new tab)' })).toHaveAttribute(
       'href',
       expect.stringContaining('17d0e16233d6db13691e7f3c288d3d39d78eec37/go/internal/gateway/inference_service.go'),
     );
+    expect(screen.getByRole('link', { name: 'Inspect the gateway request path (opens in a new tab)' })).toHaveAttribute('target', '_blank');
   });
 
   it('states the operator loop and the logs-to-audit boundary without invented proof', () => {
