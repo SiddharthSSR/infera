@@ -151,6 +151,9 @@ case "$*" in
       runtime_active_no_registration:1)
         printf '%s\n' '[{"id":"active-1","name":"infera-release-release-1","desiredStatus":"RUNNING","runtime":{"uptimeInSeconds":10}}]' >"${TEST_RUNPOD_STATE}"
         ;;
+      runtime_active_then_success:1)
+        printf '%s\n' '[{"id":"active-1","name":"infera-release-release-1","desiredStatus":"RUNNING","runtime":{"uptimeInSeconds":10}}]' >"${TEST_RUNPOD_STATE}"
+        ;;
       runtime_zero_no_registration:1)
         printf '%s\n' '[{"id":"active-1","name":"infera-release-release-1","desiredStatus":"RUNNING","runtime":{"uptimeInSeconds":0}}]' >"${TEST_RUNPOD_STATE}"
         ;;
@@ -205,6 +208,16 @@ case "$*" in
       printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"provisioning"}]}'
     elif [[ "${TEST_PROVISION_MODE:-}" == runtime_*_no_registration ]]; then
       printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"provisioning"}]}'
+    elif [[ "${TEST_PROVISION_MODE:-}" == "runtime_active_then_success" ]]; then
+      count=0
+      [[ ! -f "${TEST_INSTANCE_QUERY_COUNT}" ]] || count="$(cat "${TEST_INSTANCE_QUERY_COUNT}")"
+      count=$((count + 1))
+      printf '%s\n' "${count}" >"${TEST_INSTANCE_QUERY_COUNT}"
+      if [[ "${count}" == "1" ]]; then
+        printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"provisioning"}]}'
+      else
+        printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"running","worker_id":"worker-1"}]}'
+      fi
     else
       printf '%s\n' '{"instances":[{"id":"instance-1","provider":"runpod","status":"running","worker_id":"worker-1"}]}'
     fi
@@ -218,6 +231,7 @@ export TEST_CALLS="${TMP_DIR}/calls"
 export TEST_CADDY_CONFIG="${TMP_DIR}/maintenance.Caddyfile"
 export TEST_RUNPOD_STATE="${TMP_DIR}/runpod-state.json"
 export TEST_POST_COUNT="${TMP_DIR}/post-count"
+export TEST_INSTANCE_QUERY_COUNT="${TMP_DIR}/instance-query-count"
 export INFERA_ENV_FILE="${TMP_DIR}/env"
 export COMPOSE_FILE="docker-compose.prod.yml"
 export INFERA_BASE_URL="https://inferai.co.in"
@@ -287,6 +301,7 @@ run_fallback_case() {
   shift
   printf '%s\n' '[]' >"${TEST_RUNPOD_STATE}"
   rm -f "${TEST_POST_COUNT}"
+  rm -f "${TEST_INSTANCE_QUERY_COUNT}"
   : >"${TEST_CALLS}"
   TEST_MODE=deploy TEST_PROVISION_MODE="${mode}" "$@"
 }
@@ -353,8 +368,22 @@ awk -v terminate="${terminate_line}" -v second_post="${second_post_line}" \
   'NR > terminate && NR < second_post && /curl-graphql:GetPods/ { found=1 } END { exit !found }' "${TEST_CALLS}"
 grep -q 'event=registration result=fallback gpu=L40S attempt=1 reason=runtime_attachment_timeout' "${EVIDENCE_FILE}"
 
+run_fallback_case runtime_active_then_success env \
+  INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=1 \
+  INFERA_RECOVERY_WORKER_GPU_TYPES=L40S,H100 \
+  "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
+[[ "$(cat "${TEST_POST_COUNT}")" == "1" ]]
+[[ "$(cat "${TEST_INSTANCE_QUERY_COUNT}")" == "2" ]]
+if grep -q -- '-X DELETE' "${TEST_CALLS}" || grep -q 'curl-graphql:podTerminate' "${TEST_CALLS}"; then
+  echo "attached runtime must use the remaining registration budget before cleanup" >&2
+  exit 1
+fi
+
 for attached_runtime_mode in runtime_active_no_registration runtime_zero_no_registration runtime_unknown_uptime_no_registration; do
   if run_fallback_case "${attached_runtime_mode}" env \
+    INFERA_RECOVERY_TIMEOUT_SECONDS=3 \
+    INFERA_RECOVERY_MIN_ATTEMPT_BUDGET_SECONDS=1 \
+    INFERA_RECOVERY_POST_201_CLEANUP_SECONDS=1 \
     INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=1 \
     INFERA_RECOVERY_WORKER_GPU_TYPES=L40S,H100 \
     "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then

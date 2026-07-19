@@ -311,6 +311,18 @@ PY
       echo "ERROR: post-create cleanup passed but fallback budget is exhausted" >&2
       exit 1
     fi
+    if [[ "${attachment_state}" == "attached" && "${attempt}" -lt "${#GPU_CANDIDATES[@]}" ]]; then
+      remaining="$(recovery_remaining_seconds "${CLEANUP_RESERVE_SECONDS}" 2>/dev/null || printf '0')"
+      registration_seconds=$((remaining - POST_201_CLEANUP_SECONDS))
+      if (( registration_seconds > 0 )); then
+        record_evidence registration start "${gpu}" "${attempt}" none || true
+        if wait_for_registration "${instance_id}" "${registration_seconds}"; then
+          record_evidence registration pass "${gpu}" "${attempt}" registered
+          echo "RunPod worker registered for release ${RELEASE_ID}"
+          exit 0
+        fi
+      fi
+    fi
     if cleanup_created_instance "${instance_id}"; then
       record_evidence reconcile pass "${gpu}" "${attempt}" none || true
     else
