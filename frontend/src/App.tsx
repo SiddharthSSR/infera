@@ -19,6 +19,9 @@ const Login = lazyWithRetry(() => import('./pages/Login').then((module) => ({ de
 const PublicLanding = lazyWithRetry(() => import('./pages/PublicLanding').then((module) => ({ default: module.PublicLanding })), 'public-landing');
 const PublicApiDocs = lazyWithRetry(() => import('./pages/PublicApiDocs').then((module) => ({ default: module.PublicApiDocs })), 'docs');
 const GettingStarted = lazyWithRetry(() => import('./pages/GettingStarted').then((module) => ({ default: module.GettingStarted })), 'getting-started');
+const Trust = lazyWithRetry(() => import('./pages/Trust').then((module) => ({ default: module.Trust })), 'trust');
+const Company = lazyWithRetry(() => import('./pages/Company').then((module) => ({ default: module.Company })), 'company');
+const Security = lazyWithRetry(() => import('./pages/Security').then((module) => ({ default: module.Security })), 'security');
 const AcceptInvitation = lazyWithRetry(() => import('./pages/AcceptInvitation').then((module) => ({ default: module.AcceptInvitation })), 'accept-invite');
 const Dashboard = lazyWithRetry(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })), 'dashboard');
 const Playground = lazyWithRetry(() => import('./pages/Playground').then((module) => ({ default: module.Playground })), 'playground');
@@ -489,6 +492,9 @@ function AppContent() {
           <Route path="/sign-in" element={<Login onAuthenticated={(nextSession: SessionInfo) => setSession(nextSession)} />} />
           <Route path="/docs" element={<PublicApiDocs />} />
           <Route path="/getting-started" element={<GettingStarted />} />
+          <Route path="/trust" element={<Trust />} />
+          <Route path="/company" element={<Company />} />
+          <Route path="/security" element={<Security />} />
           <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -502,7 +508,7 @@ function AppContent() {
     eyebrow: 'Workspace console',
     description: 'Monitor the platform, operating state, and user-facing surfaces from one place.',
   };
-  const docsRoutes = ['/docs', '/getting-started'];
+  const docsRoutes = ['/docs', '/getting-started', '/trust', '/company', '/security'];
   const hideAppChrome = docsRoutes.includes(location.pathname);
   const hideDisplayHeader = hideAppChrome || location.pathname === '/playground';
 
@@ -562,6 +568,9 @@ function AppContent() {
               <Route path="/workspace" element={<WorkspaceAdmin />} />
               <Route path="/docs" element={<PublicApiDocs />} />
               <Route path="/getting-started" element={<GettingStarted />} />
+              <Route path="/trust" element={<Trust />} />
+              <Route path="/company" element={<Company />} />
+              <Route path="/security" element={<Security />} />
               <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
               <Route path="/sign-in" element={<Navigate to="/" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />

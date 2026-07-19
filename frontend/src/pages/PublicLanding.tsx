@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AppShell, PublicNav } from '../components/shared';
+import { AppShell, PublicFooter, PublicNav, TrustStatus } from '../components/shared';
 import { OperatorWorkflow } from '../components/public/OperatorWorkflow';
 import { TechnicalProof } from '../components/public/TechnicalProof';
 
@@ -174,16 +174,37 @@ export function PublicLanding() {
           </div>
         </section>
 
+        <section className="landing-section landing-section-tone" id="trust" aria-labelledby="trust-heading">
+          <div className="landing-section-heading">
+            <div><span className="landing-meta">Trust record</span><h2 id="trust-heading">Public evidence, with the gaps left visible.</h2></div>
+            <p>Inspect the source and published runbooks directly. License, security policy, public status, company details, and private contact paths are labeled unavailable until authoritative sources exist.</p>
+          </div>
+          <div className="landing-trust-grid">
+            <article>
+              <TrustStatus tone="available">Available</TrustStatus>
+              <h3>Public source repository</h3>
+              <p>Review the gateway, worker, frontend, deployment assets, and project history on GitHub.</p>
+            </article>
+            <article>
+              <TrustStatus tone="unavailable">Not published</TrustStatus>
+              <h3>License and formal security policy</h3>
+              <p>The repository has no license file or SECURITY file. The site does not infer rights or assurances from README copy.</p>
+            </article>
+            <article className="landing-trust-action">
+              <span className="landing-meta">Full record</span>
+              <h3>See every source and blocker.</h3>
+              <Link className="trust-evidence-link" to="/trust">Open the trust record →</Link>
+            </article>
+          </div>
+        </section>
+
         <section className="landing-final-cta" aria-labelledby="final-cta-heading">
           <h2 id="final-cta-heading">Start with one compatible request.</h2>
           <Link className="landing-button" to="/getting-started">Run the quickstart</Link>
         </section>
       </main>
 
-      <footer className="landing-footer">
-        <span>INFERA.AI</span>
-        <span>Open-source inference gateway</span>
-      </footer>
+      <PublicFooter />
     </AppShell>
   );
 }

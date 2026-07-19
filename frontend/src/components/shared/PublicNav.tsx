@@ -23,6 +23,7 @@ const defaultPublicLinks: PublicNavLink[] = [
   { href: '/#product', label: 'PRODUCT' },
   { href: '/#migration', label: 'OPENAI MIGRATION' },
   { path: '/docs', label: 'DOCS' },
+  { path: '/trust', label: 'TRUST' },
   { href: 'https://github.com/SiddharthSSR/infera', label: 'GITHUB', external: true },
   { path: '/sign-in', label: 'SIGN IN' },
 ];

@@ -63,6 +63,15 @@ describe('PublicLanding', () => {
     ]);
   });
 
+  it('keeps the migration CTA primary while exposing the bounded trust record', () => {
+    renderLanding();
+
+    expect(screen.getByRole('heading', { name: 'Public evidence, with the gaps left visible.' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open the trust record →' })).toHaveAttribute('href', '/trust');
+    expect(screen.getByText('The repository has no license file or SECURITY file. The site does not infer rights or assurances from README copy.')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: /quickstart/i }).length).toBeGreaterThanOrEqual(3);
+  });
+
   it('copies the migration example and announces success', async () => {
     renderLanding();
 
