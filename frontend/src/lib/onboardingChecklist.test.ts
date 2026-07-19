@@ -26,9 +26,16 @@ describe('buildFirstWorkspaceChecklist', () => {
     });
 
     expect(checklist[0]).toMatchObject({ done: false, action: 'open_workspace' });
+    expect(checklist[0]).toMatchObject({
+      label: 'Add provider access',
+      actionLabel: 'CONNECT PROVIDER',
+    });
+    expect(checklist[0]?.detail).toContain('Start here');
     expect(checklist[1]).toMatchObject({ done: false, action: 'open_models' });
     expect(checklist[2]).toMatchObject({ done: false, action: 'open_clusters' });
     expect(checklist[3]).toMatchObject({ done: false, action: 'open_clusters' });
     expect(checklist[4]).toMatchObject({ done: false, action: 'open_workspace' });
+    expect(checklist[4]?.detail).toContain('Invite a human for dashboard access');
+    expect(checklist[4]?.detail).toContain('service account for unattended automation');
   });
 });

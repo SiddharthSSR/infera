@@ -19,6 +19,17 @@ const prepCards = [
   },
 ];
 
+const credentialPaths = [
+  {
+    label: 'Machine request',
+    value: 'Use a workspace API key in the Authorization header. Prefer a service-account key for scripts, servers, and production automation.',
+  },
+  {
+    label: 'Human dashboard session',
+    value: 'Sign in with your human key to create a browser session. The session is for operating the workspace; it is not the credential your deployed client sends to /v1.',
+  },
+];
+
 const steps = [
   {
     number: '01',
@@ -124,6 +135,7 @@ export function GettingStarted() {
               <div className="docs-actions">
                 <a className="btn-primary" href="#runbook" style={{ textDecoration: 'none' }}>RUN THE FLOW</a>
                 <Link className="btn-quiet" to="/docs">OPEN FULL API DOCS</Link>
+                <Link className="btn-quiet" to="/">SIGN IN TO DASHBOARD</Link>
               </div>
             </div>
             <div className="docs-summary">
@@ -142,6 +154,7 @@ export function GettingStarted() {
             <LabelText as="div">QUICK NAV</LabelText>
             <nav className="docs-sidebar-nav">
               <a className="docs-sidebar-link" href="#runbook">Runbook</a>
+              <a className="docs-sidebar-link" href="#credentials">Choose a credential</a>
               <a className="docs-sidebar-link" href="#copy-run">Copy and run</a>
               <a className="docs-sidebar-link" href="#sdk-examples">SDK examples</a>
               <a className="docs-sidebar-link" href="#streaming">Streaming</a>
@@ -156,6 +169,38 @@ export function GettingStarted() {
           </aside>
 
           <main className="docs-main">
+            <section className="docs-section tone" id="credentials">
+              <div className="docs-section-head">
+                <div>
+                  <LabelText as="div">BEFORE YOU START</LabelText>
+                  <h2 className="docs-section-title">Choose the credential for the job.</h2>
+                </div>
+                <div className="docs-section-copy">
+                  An API key can establish access, but a machine request and a human browser session are different trust contexts. Do not put a human dashboard key into unattended production code.
+                </div>
+              </div>
+              <div className="docs-card-grid">
+                {credentialPaths.map((path) => (
+                  <div key={path.label} className="docs-card">
+                    <LabelText as="div">{path.label}</LabelText>
+                    <div style={{ marginTop: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+                      {path.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="docs-card" style={{ marginTop: '1rem' }}>
+                <LabelText as="div">NO KEY OR WRONG WORKSPACE?</LabelText>
+                <div style={{ marginTop: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+                  Ask a workspace admin for an invitation if you need human access. If you already belong to the workspace, sign in and create a service-account key from API Keys for automation. After sign-in, your first setup action is to connect provider access in Workspace.
+                </div>
+                <div className="docs-actions" style={{ marginTop: '1rem' }}>
+                  <Link className="btn-primary" to="/" style={{ textDecoration: 'none' }}>SIGN IN</Link>
+                  <Link className="btn-quiet" to="/accept-invite">ACCEPT AN INVITATION</Link>
+                </div>
+              </div>
+            </section>
+
             <section className="docs-section" id="runbook">
               <div className="docs-section-head">
                 <div>

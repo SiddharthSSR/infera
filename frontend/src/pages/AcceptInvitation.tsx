@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
@@ -6,6 +6,7 @@ import {
   createSession,
   fetchInvitationPreview,
 } from '../lib/authAccessClient';
+import { getInvitationRecoveryGuidance } from '../lib/authAccess';
 import { DisplayHeader, GridRow, Cell, LabelText, ActionButton, ControlInput, AppShell, PublicNav } from '../components/shared';
 import type { SessionInfo, WorkspaceInvitationPreview } from '../types';
 
@@ -26,41 +27,61 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
   const [accepting, setAccepting] = useState(false);
   const [sessionStarting, setSessionStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recoveryGuidance, setRecoveryGuidance] = useState<string | null>(null);
+  const [errorContext, setErrorContext] = useState<'invitation' | 'session' | null>(null);
+  const loadedPreviewTokenRef = useRef('');
 
   const canAccept = Boolean(preview && !acceptedKey && !accepting);
-  const effectiveDisplayName = useMemo(() => displayName.trim(), [displayName]);
+  const effectiveDisplayName = displayName.trim();
 
   useEffect(() => {
     if (!initialToken) return;
+    if (loadedPreviewTokenRef.current === initialToken) {
+      setLoadingPreview(false);
+      return;
+    }
+    loadedPreviewTokenRef.current = initialToken;
     fetchInvitationPreview(initialToken)
       .then((invitation) => {
         setPreview(invitation);
         setDisplayName(invitation.display_name || '');
         setError(null);
+        setRecoveryGuidance(null);
+        setErrorContext(null);
       })
       .catch((err) => {
         setPreview(null);
         setError(err instanceof Error ? err.message : 'Failed to load invitation');
+        setRecoveryGuidance(getInvitationRecoveryGuidance(err));
+        setErrorContext('invitation');
       })
       .finally(() => setLoadingPreview(false));
   }, [initialToken]);
 
-  const handleLoadPreview = async () => {
+  const handleLoadPreview = async (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
     const trimmed = tokenInput.trim();
     if (!trimmed) {
       setError('Invitation token is required.');
+      setRecoveryGuidance('Paste the complete token from your invitation link, or ask the workspace admin to send a new invitation.');
+      setErrorContext('invitation');
       return;
     }
     setLoadingPreview(true);
     try {
       const invitation = await fetchInvitationPreview(trimmed);
+      loadedPreviewTokenRef.current = trimmed;
       setSearchParams({ token: trimmed });
       setPreview(invitation);
       setDisplayName(invitation.display_name || '');
       setError(null);
+      setRecoveryGuidance(null);
+      setErrorContext(null);
     } catch (err) {
       setPreview(null);
       setError(err instanceof Error ? err.message : 'Failed to load invitation');
+      setRecoveryGuidance(getInvitationRecoveryGuidance(err));
+      setErrorContext('invitation');
     } finally {
       setLoadingPreview(false);
     }
@@ -70,6 +91,8 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
     const token = (searchParams.get('token') || tokenInput).trim();
     if (!token) {
       setError('Invitation token is required.');
+      setRecoveryGuidance('Paste the complete token from your invitation link, or ask the workspace admin to send a new invitation.');
+      setErrorContext('invitation');
       return;
     }
     setAccepting(true);
@@ -77,23 +100,44 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
       const result = await acceptWorkspaceInvitation(token, effectiveDisplayName || undefined);
       setAcceptedKey(result.key);
       setError(null);
+      setRecoveryGuidance(null);
+      setErrorContext(null);
       toast.success('Invitation accepted. Copy your key before continuing.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to accept invitation');
+      setRecoveryGuidance(getInvitationRecoveryGuidance(err));
+      setErrorContext('invitation');
     } finally {
       setAccepting(false);
+    }
+  };
+
+  const handleCopyKey = async () => {
+    if (!acceptedKey) return;
+    try {
+      await navigator.clipboard.writeText(acceptedKey);
+      toast.success('Invitation key copied.');
+    } catch {
+      setError('Could not copy the human key automatically.');
+      setRecoveryGuidance('Select the key shown above and copy it manually before leaving this page.');
+      setErrorContext('session');
     }
   };
 
   const handleContinue = async () => {
     if (!acceptedKey) return;
     setSessionStarting(true);
+    setError(null);
+    setRecoveryGuidance(null);
+    setErrorContext(null);
     try {
       const session = await createSession(acceptedKey);
       onAccepted(session);
       navigate('/workspace', { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create dashboard session');
+      setRecoveryGuidance('Your human key is still shown below. Copy it, then retry. If needed, return to Sign in and paste the same key there.');
+      setErrorContext('session');
     } finally {
       setSessionStarting(false);
     }
@@ -125,24 +169,40 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
                 Accepting an invitation creates a one-time human key for that workspace. Continuing starts a browser session in the invited workspace and makes it your active dashboard context. It does not email anyone automatically and it does not change any existing service-account keys.
               </div>
             </div>
-            <div style={{ marginTop: '2rem', display: 'grid', gap: '1rem' }}>
+            <form onSubmit={handleLoadPreview} style={{ marginTop: '2rem', display: 'grid', gap: '1rem' }} noValidate>
               <div>
-                <LabelText as="div">INVITATION TOKEN</LabelText>
+                <LabelText as="label" htmlFor="invitation-token">INVITATION TOKEN</LabelText>
                 <ControlInput
+                  id="invitation-token"
+                  name="invitation-token"
                   value={tokenInput}
-                  onChange={(e) => setTokenInput(e.target.value)}
+                  onChange={(e) => {
+                    setTokenInput(e.target.value);
+                    if (errorContext === 'invitation') {
+                      setError(null);
+                      setRecoveryGuidance(null);
+                      setErrorContext(null);
+                    }
+                  }}
                   placeholder="invite_..."
+                  autoComplete="off"
+                  aria-describedby={errorContext === 'invitation' ? 'invitation-error invitation-recovery' : 'invitation-token-help'}
+                  aria-invalid={errorContext === 'invitation'}
                 />
+                <div id="invitation-token-help" style={{ marginTop: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                  The token is used only to preview and accept this invitation.
+                </div>
               </div>
-              <ActionButton variant="primary" disabled={loadingPreview} onClick={handleLoadPreview}>
+              <ActionButton type="submit" variant="primary" disabled={loadingPreview} minHeight={44}>
                 {loadingPreview ? 'LOADING...' : 'LOAD INVITATION'}
               </ActionButton>
-              {error && (
-                <div style={{ color: '#B3261E', fontSize: '0.9rem', lineHeight: 1.5 }}>
-                  {error}
+              {error && errorContext === 'invitation' && (
+                <div role="alert" style={{ color: '#B3261E', fontSize: '0.9rem', lineHeight: 1.5 }}>
+                  <div id="invitation-error">{error}</div>
+                  {recoveryGuidance && <div id="invitation-recovery" style={{ marginTop: '0.35rem' }}>{recoveryGuidance}</div>}
                 </div>
               )}
-            </div>
+            </form>
           </Cell>
 
           <Cell style={{ padding: '3rem 2rem', background: 'rgba(0,0,0,0.02)' }}>
@@ -163,8 +223,10 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
                   <div className="value-text" style={{ fontSize: '1rem', marginTop: '0.35rem' }}>{preview.email}</div>
                 </div>
                 <div>
-                  <LabelText as="div">DISPLAY NAME</LabelText>
+                  <LabelText as="label" htmlFor="invitation-display-name">DISPLAY NAME</LabelText>
                   <ControlInput
+                    id="invitation-display-name"
+                    name="display-name"
                     value={displayName}
                     disabled={Boolean(acceptedKey)}
                     onChange={(e) => setDisplayName(e.target.value)}
@@ -175,7 +237,7 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
                   <LabelText as="div">EXPIRES</LabelText>
                   <div className="value-text" style={{ fontSize: '1rem', marginTop: '0.35rem' }}>{new Date(preview.expires_at).toLocaleString()}</div>
                 </div>
-                <ActionButton variant="primary" disabled={!canAccept} onClick={handleAccept}>
+                <ActionButton variant="primary" disabled={!canAccept} onClick={handleAccept} minHeight={44}>
                   {accepting ? 'ACCEPTING...' : 'ACCEPT INVITATION'}
                 </ActionButton>
               </div>
@@ -190,22 +252,32 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
         {acceptedKey && (
           <GridRow columns="1fr">
             <Cell bg="#E8F5E9">
-              <LabelText as="div">ONE-TIME API KEY — COPY NOW</LabelText>
+              <LabelText as="div">ONE-TIME HUMAN KEY — COPY NOW</LabelText>
               <pre className="code-block" style={{ marginTop: '1rem' }}>{acceptedKey}</pre>
+              <div style={{ marginTop: '0.9rem', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.6 }}>
+                This human key starts your dashboard session. Store it securely for sign-in recovery, and create a separate service-account key for scripts or production automation.
+              </div>
               <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                 <ActionButton
                   variant="primary"
-                  onClick={() => navigator.clipboard.writeText(acceptedKey).then(() => toast.success('Invitation key copied.'))}
+                  minHeight={44}
+                  onClick={handleCopyKey}
                 >
                   COPY KEY
                 </ActionButton>
-                <ActionButton variant="secondary" disabled={sessionStarting} onClick={handleContinue}>
-                  {sessionStarting ? 'STARTING SESSION...' : 'CONTINUE AND SWITCH WORKSPACE'}
+                <ActionButton variant="secondary" minHeight={44} disabled={sessionStarting} onClick={handleContinue}>
+                  {sessionStarting ? 'STARTING SESSION...' : 'CONTINUE TO WORKSPACE SETUP'}
                 </ActionButton>
               </div>
               <div style={{ marginTop: '0.9rem', color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.6 }}>
-                Continuing will start a dashboard session for <strong>{preview?.workspace_name || 'this workspace'}</strong> and make it your active workspace.
+                Continuing starts a browser session for <strong>{preview?.workspace_name || 'this workspace'}</strong>, makes it active, and opens Workspace so you can review access and connect the first provider.
               </div>
+              {error && errorContext === 'session' && (
+                <div role="alert" style={{ marginTop: '0.9rem', color: '#B3261E', fontSize: '0.9rem', lineHeight: 1.5 }}>
+                  <div>{error}</div>
+                  {recoveryGuidance && <div style={{ marginTop: '0.35rem' }}>{recoveryGuidance}</div>}
+                </div>
+              )}
             </Cell>
           </GridRow>
         )}
