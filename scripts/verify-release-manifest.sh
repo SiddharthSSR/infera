@@ -12,6 +12,14 @@ source "${SCRIPT_DIR}/recovery-adapter-common.sh"
 export INFERA_SMOKE_STREAM=1
 export SKIP_CHAT_CHECKS=0
 
+case "${INFERA_RELEASE_WORKER_MODE:-serving}" in
+  serving|cost-saving) ;;
+  *)
+    echo "INFERA_RELEASE_WORKER_MODE must be serving or cost-saving" >&2
+    exit 2
+    ;;
+esac
+
 value() {
   awk -F= -v wanted="$2" '$1 == wanted { count++; value=substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$1"
 }
