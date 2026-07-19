@@ -102,6 +102,31 @@ func TestGraphQLDoesNotClassifyCapacityFromUnstructuredMessage(t *testing.T) {
 	}
 }
 
+func TestGraphQLMapsKnownMachineResourceExhaustionToCapacityUnavailable(t *testing.T) {
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusOK, `{"errors":[{"message":"This machine does not have the resources to deploy your pod. Please try a different machine"}]}`), nil
+	})
+
+	_, err = provider.graphQL(context.Background(), "mutation { podFindAndDeployOnDemand { id } }", nil)
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != providers.ProviderErrorCapacityUnavailable {
+		t.Fatalf("expected capacity_unavailable, got %q", providerErr.Code)
+	}
+	if !providerErr.IsRetryable() {
+		t.Fatal("known RunPod resource exhaustion must enable bounded capacity fallback")
+	}
+	if providerErr.HTTPStatus(http.StatusInternalServerError) != http.StatusServiceUnavailable {
+		t.Fatalf("expected HTTP 503, got %d", providerErr.HTTPStatus(http.StatusInternalServerError))
+	}
+}
+
 func TestGraphQLMapsUnauthorizedToAuthFailed(t *testing.T) {
 	provider, err := New(Config{APIKey: "invalid-key"})
 	if err != nil {
