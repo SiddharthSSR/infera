@@ -165,10 +165,12 @@ or stopping, it reconciles only pods whose name exactly matches `infera-release-
 orphan from an interrupted attempt is terminated before a replacement is created. A non-final GPU
 that has not attached a RunPod runtime within the
 reviewed registration slice may fall back only after the gateway instance is deleted, the exact-name
-pod is removed, and a second query proves zero matching pods. An attached runtime that fails gateway
-registration remains terminal because it indicates a model, credential, or network failure rather
-than placement capacity. The final GPU receives the remaining registration budget while preserving
-the configured post-create cleanup slice. While Caddy
+pod is removed, and a second query proves zero matching pods. An attached runtime is never eligible
+for GPU fallback because it may indicate a model, credential, or network failure rather than
+placement capacity. If it has not registered by the end of the first GPU's reviewed registration
+slice, the adapter keeps waiting with the remaining candidate budget while preserving the configured
+post-create cleanup slice. It becomes terminal only if that extended wait also expires. The final GPU
+receives the remaining registration budget while preserving the same cleanup slice. While Caddy
 returns the maintenance 503, the verifier enumerates every configured container-private gateway
 address and runs health, worker discovery, and authenticated inference checks against each replica.
 The restore adapter then proves public `/health` reaches the expected release, worker protocol, and
