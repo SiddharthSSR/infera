@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell, PublicNav } from '../components/shared';
+import { OperatorWorkflow } from '../components/public/OperatorWorkflow';
+import { TechnicalProof } from '../components/public/TechnicalProof';
 
 const migrationSteps = [
   {
@@ -122,7 +124,11 @@ export function PublicLanding() {
           </div>
         </section>
 
-        <section className="landing-section landing-section-tone" id="product" aria-labelledby="product-heading">
+        <TechnicalProof />
+
+        <OperatorWorkflow />
+
+        <section className="landing-section" id="product" aria-labelledby="product-heading">
           <div className="landing-section-heading">
             <div><span className="landing-meta">Product</span><h2 id="product-heading">The gateway is the entry point. The control plane is the product.</h2></div>
             <p>The same workspace that serves the compatible endpoint gives operators a place to inspect the serving path and manage access.</p>
@@ -138,7 +144,7 @@ export function PublicLanding() {
           </div>
         </section>
 
-        <section className="landing-section" id="proof" aria-labelledby="proof-heading">
+        <section className="landing-section landing-section-tone" id="proof" aria-labelledby="proof-heading">
           <div className="landing-section-heading">
             <div><span className="landing-meta">Public API boundary</span><h2 id="proof-heading">A small contract, stated plainly.</h2></div>
             <p>Evaluate the interface and its known differences directly, without unsupported performance or adoption claims.</p>
@@ -157,9 +163,14 @@ export function PublicLanding() {
               <dl>
                 <div><dt>Errors</dt><dd>Error types are Infera-specific.</dd></div>
                 <div><dt>Metadata</dt><dd>Model discovery may expose extra safe operator metadata.</dd></div>
-                <div><dt>Auth</dt><dd>Public API keys and browser sessions are separate concerns.</dd></div>
+                <div><dt>Surface</dt><dd>Chat completions are supported; legacy completions and embeddings are not currently exposed.</dd></div>
               </dl>
             </div>
+          </div>
+          <div className="landing-migration-boundary" aria-label="Concrete client migration boundary">
+            <div><span className="landing-meta">Keep</span><strong>OpenAI SDK, message shape, unary and streaming client flow</strong></div>
+            <div><span className="landing-meta">Change</span><strong>Base URL, workspace credential, and model ID from live discovery</strong></div>
+            <div><span className="landing-meta">Verify</span><strong>Supported request fields, Infera error types, and extra model metadata</strong></div>
           </div>
         </section>
 

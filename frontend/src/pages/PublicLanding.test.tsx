@@ -1,6 +1,6 @@
 /// <reference types="vitest/globals" />
 /// <reference types="@testing-library/jest-dom" />
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PublicLanding } from './PublicLanding';
@@ -38,12 +38,29 @@ describe('PublicLanding', () => {
   it('exposes the complete migration sequence and factual API boundary', () => {
     renderLanding();
 
-    expect(screen.getAllByRole('listitem')).toHaveLength(4);
+    const migrationSection = screen.getByRole('heading', { name: 'First response before first surprise.' }).closest('section');
+    expect(migrationSection).not.toBeNull();
+    expect(within(migrationSection as HTMLElement).getAllByRole('listitem')).toHaveLength(4);
     expect(screen.getByText('Confirm auth')).toBeInTheDocument();
     expect(screen.getByText('List live models')).toBeInTheDocument();
     expect(screen.getByText('Send one chat')).toBeInTheDocument();
     expect(screen.getByText('Promote to stream')).toBeInTheDocument();
     expect(screen.getByText('Error types are Infera-specific.')).toBeInTheDocument();
+    expect(screen.getByText(/legacy completions and embeddings are not currently exposed/i)).toBeInTheDocument();
+    expect(screen.getByText('Base URL, workspace credential, and model ID from live discovery')).toBeInTheDocument();
+  });
+
+  it('keeps the migration-first reading order before technical proof and operator workflow', () => {
+    const { container } = renderLanding();
+    const sectionIDs = Array.from(container.querySelectorAll('main > section[id]')).map((section) => section.id);
+
+    expect(sectionIDs).toEqual([
+      'migration',
+      'architecture',
+      'operator-loop',
+      'product',
+      'proof',
+    ]);
   });
 
   it('copies the migration example and announces success', async () => {

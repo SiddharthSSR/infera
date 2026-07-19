@@ -6121,6 +6121,190 @@ html {
   line-height: 1.55;
 }
 
+.landing-architecture-flow,
+.landing-operator-rail {
+  list-style: none;
+}
+
+.landing-architecture-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: var(--grid-line);
+  background: var(--bg-paper);
+}
+
+.landing-architecture-flow li {
+  position: relative;
+  min-width: 0;
+  min-height: 22rem;
+  border-right: var(--grid-line);
+}
+
+.landing-architecture-flow li:last-child {
+  border-right: 0;
+}
+
+.landing-architecture-flow li:not(:last-child)::after {
+  content: '→';
+  position: absolute;
+  z-index: 1;
+  inset: 2rem -0.7rem auto auto;
+  display: grid;
+  width: 1.4rem;
+  height: 1.4rem;
+  place-items: center;
+  border: var(--grid-line);
+  border-radius: 50%;
+  background: var(--bg-paper);
+  font: 0.75rem/1 var(--font-mono);
+}
+
+.landing-architecture-index {
+  padding: 1.25rem 1.5rem;
+  border-bottom: var(--grid-line);
+  color: var(--text-secondary);
+  font: 600 0.7rem/1 var(--font-mono);
+  letter-spacing: 0.12em;
+}
+
+.landing-architecture-copy {
+  display: flex;
+  height: calc(100% - 3.2rem);
+  padding: 1.5rem;
+  flex-direction: column;
+}
+
+.landing-architecture-copy h3,
+.landing-operator-copy h3 {
+  margin-top: 1.5rem;
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.landing-architecture-copy p,
+.landing-operator-copy p {
+  margin-top: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+.landing-architecture-copy code {
+  display: block;
+  margin-top: auto;
+  padding-top: 2rem;
+  color: var(--text-secondary);
+  font: 0.68rem/1.6 var(--font-mono);
+}
+
+.landing-source-row {
+  display: grid;
+  grid-template-columns: 10rem minmax(0, 1fr);
+  gap: 1.5rem;
+  padding: 1.25rem 1.5rem;
+  border: var(--grid-line);
+  border-top: 0;
+  align-items: start;
+}
+
+.landing-source-row > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.5rem;
+}
+
+.landing-source-row a {
+  color: inherit;
+  font-size: 0.86rem;
+  text-underline-offset: 0.25rem;
+}
+
+.landing-source-row a::after {
+  content: ' ↗';
+  font-family: var(--font-mono);
+}
+
+.landing-operator-rail {
+  border-top: var(--grid-line);
+}
+
+.landing-operator-rail li {
+  display: grid;
+  grid-template-columns: 5rem minmax(11rem, 0.65fr) minmax(0, 1.35fr);
+  border-right: var(--grid-line);
+  border-bottom: var(--grid-line);
+  border-left: var(--grid-line);
+  background: var(--bg-paper);
+}
+
+.landing-operator-marker {
+  display: grid;
+  min-height: 12rem;
+  place-items: center;
+  border-right: var(--grid-line);
+}
+
+.landing-operator-marker span {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: var(--grid-line);
+  border-radius: 50%;
+  font: 600 0.68rem/1 var(--font-mono);
+}
+
+.landing-operator-phase,
+.landing-operator-copy {
+  padding: 1.5rem;
+}
+
+.landing-operator-phase {
+  border-right: var(--grid-line);
+}
+
+.landing-operator-phase strong {
+  display: block;
+  margin-top: 2.25rem;
+  font: 600 0.76rem/1.6 var(--font-mono);
+}
+
+.landing-operator-copy h3 {
+  margin-top: 0;
+}
+
+.landing-operator-check {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: var(--grid-line);
+  color: var(--text-secondary);
+  font: 0.7rem/1.6 var(--font-mono);
+}
+
+.landing-migration-boundary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: var(--grid-line);
+  border-top: 0;
+}
+
+.landing-migration-boundary > div {
+  min-width: 0;
+  padding: 1.4rem 1.5rem;
+  border-right: var(--grid-line);
+}
+
+.landing-migration-boundary > div:last-child {
+  border-right: 0;
+}
+
+.landing-migration-boundary strong {
+  display: block;
+  margin-top: 0.8rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
 .landing-final-cta {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -6215,6 +6399,27 @@ html {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .landing-architecture-flow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .landing-architecture-flow li {
+    border-bottom: var(--grid-line);
+  }
+
+  .landing-architecture-flow li:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .landing-architecture-flow li:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
+  .landing-architecture-flow li:nth-child(2)::after {
+    content: '↓';
+    inset: auto calc(50% - 0.7rem) -0.7rem auto;
+  }
+
   .landing-step-grid li:nth-child(2) {
     border-right: 0;
   }
@@ -6286,8 +6491,71 @@ html {
   .landing-step-grid,
   .landing-surface-grid,
   .landing-boundary-grid,
+  .landing-architecture-flow,
+  .landing-migration-boundary,
   .landing-final-cta {
     grid-template-columns: 1fr;
+  }
+
+  .landing-architecture-flow li,
+  .landing-architecture-flow li:nth-child(2n),
+  .landing-architecture-flow li:nth-last-child(-n + 2) {
+    min-height: auto;
+    border-right: 0;
+    border-bottom: var(--grid-line);
+  }
+
+  .landing-architecture-flow li:last-child {
+    border-bottom: 0;
+  }
+
+  .landing-architecture-flow li:not(:last-child)::after,
+  .landing-architecture-flow li:nth-child(2)::after {
+    content: '↓';
+    inset: auto calc(50% - 0.7rem) -0.7rem auto;
+  }
+
+  .landing-architecture-copy code {
+    margin-top: 2rem;
+  }
+
+  .landing-source-row {
+    grid-template-columns: 1fr;
+    gap: 0.8rem;
+  }
+
+  .landing-source-row > div {
+    flex-direction: column;
+  }
+
+  .landing-operator-rail li {
+    grid-template-columns: 3.5rem minmax(0, 1fr);
+  }
+
+  .landing-operator-marker {
+    grid-row: 1 / span 2;
+  }
+
+  .landing-operator-phase {
+    border-right: 0;
+    border-bottom: var(--grid-line);
+  }
+
+  .landing-operator-phase strong {
+    margin-top: 0.8rem;
+  }
+
+  .landing-operator-copy {
+    grid-column: 2;
+  }
+
+  .landing-migration-boundary > div {
+    border-right: 0;
+    border-bottom: var(--grid-line);
+  }
+
+  .landing-migration-boundary > div:last-child {
+    border-bottom: 0;
   }
 
   .landing-step-grid li,
