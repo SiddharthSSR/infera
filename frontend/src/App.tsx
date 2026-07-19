@@ -16,6 +16,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { PageTransition } from './components/PageTransition';
 
 const Login = lazyWithRetry(() => import('./pages/Login').then((module) => ({ default: module.Login })), 'login');
+const PublicLanding = lazyWithRetry(() => import('./pages/PublicLanding').then((module) => ({ default: module.PublicLanding })), 'public-landing');
 const PublicApiDocs = lazyWithRetry(() => import('./pages/PublicApiDocs').then((module) => ({ default: module.PublicApiDocs })), 'docs');
 const GettingStarted = lazyWithRetry(() => import('./pages/GettingStarted').then((module) => ({ default: module.GettingStarted })), 'getting-started');
 const AcceptInvitation = lazyWithRetry(() => import('./pages/AcceptInvitation').then((module) => ({ default: module.AcceptInvitation })), 'accept-invite');
@@ -484,10 +485,12 @@ function AppContent() {
     return (
       <Suspense fallback={<RouteLoader />}>
         <Routes>
+          <Route path="/" element={<PublicLanding />} />
+          <Route path="/sign-in" element={<Login onAuthenticated={(nextSession: SessionInfo) => setSession(nextSession)} />} />
           <Route path="/docs" element={<PublicApiDocs />} />
           <Route path="/getting-started" element={<GettingStarted />} />
           <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
-          <Route path="*" element={<Login onAuthenticated={(nextSession: SessionInfo) => setSession(nextSession)} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
     );
@@ -560,6 +563,7 @@ function AppContent() {
               <Route path="/docs" element={<PublicApiDocs />} />
               <Route path="/getting-started" element={<GettingStarted />} />
               <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
+              <Route path="/sign-in" element={<Navigate to="/" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </PageTransition>

@@ -15,6 +15,9 @@ vi.mock('./pages/ApiKeys', () => ({ ApiKeys: () => <div>API KEYS PAGE</div> }));
 vi.mock('./pages/WorkspaceAdmin', () => ({ WorkspaceAdmin: () => <div>WORKSPACE PAGE</div> }));
 vi.mock('./pages/PublicApiDocs', () => ({ PublicApiDocs: () => <div className="top-nav">PUBLIC DOCS PAGE</div> }));
 vi.mock('./pages/GettingStarted', () => ({ GettingStarted: () => <div className="top-nav">GETTING STARTED PAGE</div> }));
+vi.mock('./pages/PublicLanding', () => ({ PublicLanding: () => <div>PUBLIC LANDING PAGE</div> }));
+vi.mock('./pages/Login', () => ({ Login: () => <div>SIGN IN PAGE</div> }));
+vi.mock('./pages/AcceptInvitation', () => ({ AcceptInvitation: () => <div>ACCEPT INVITATION PAGE</div> }));
 vi.mock('./hooks/useIsMobile', () => ({ useIsMobile: vi.fn(() => false) }));
 
 vi.mock('./lib/authAccessClient', () => ({
@@ -55,6 +58,44 @@ function renderApp() {
     </MemoryRouter>,
   );
 }
+
+describe('App public routing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSession.mockResolvedValue(null);
+  });
+
+  it('uses distinct landing and sign-in routes when signed out', async () => {
+    const { unmount } = renderApp();
+    expect(await screen.findByText('PUBLIC LANDING PAGE')).toBeInTheDocument();
+    unmount();
+
+    render(
+      <MemoryRouter initialEntries={['/sign-in']}>
+        <App />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('SIGN IN PAGE')).toBeInTheDocument();
+  });
+
+  it('preserves public docs, quickstart, and invitation routes', async () => {
+    const routes = [
+      ['/docs', 'PUBLIC DOCS PAGE'],
+      ['/getting-started', 'GETTING STARTED PAGE'],
+      ['/accept-invite', 'ACCEPT INVITATION PAGE'],
+    ] as const;
+
+    for (const [path, expected] of routes) {
+      const view = render(
+        <MemoryRouter initialEntries={[path]}>
+          <App />
+        </MemoryRouter>,
+      );
+      expect(await screen.findByText(expected)).toBeInTheDocument();
+      view.unmount();
+    }
+  });
+});
 
 describe('App workspace switcher', () => {
   beforeEach(() => {
