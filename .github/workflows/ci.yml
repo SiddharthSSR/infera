@@ -158,7 +158,9 @@ jobs:
         run: docker compose -f docker-compose.prod.yml config
 
       - name: Test deployment recovery behavior
-        run: bash ./scripts/test-release-recovery.sh
+        run: |
+          bash ./scripts/test-release-recovery.sh
+          bash ./scripts/test-last-known-good-drift.sh
 
       - name: Validate Prometheus SLO rules
         run: >-
