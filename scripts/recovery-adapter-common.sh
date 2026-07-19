@@ -275,9 +275,9 @@ for pod in payload.get("data", {}).get("myself", {}).get("pods", []):
 PY
 }
 
-# Print "attaching" only when exactly one exact-name pod exists and RunPod has
-# not attached a runtime. Every other state is ambiguous to the recovery
-# controller and therefore ineligible for GPU fallback.
+# Print the runtime attachment state only when exactly one exact-name pod
+# exists. An attached runtime is never eligible for GPU fallback, but callers
+# may use its remaining release budget to keep waiting for registration.
 recovery_runpod_named_pod_attachment_state() {
   local name="$1" curl_config="$2" payload response timeout
   payload="$(mktemp)"
@@ -311,6 +311,9 @@ if len(pods) != 1:
 runtime = pods[0].get("runtime")
 if runtime is None:
     print("attaching")
+    raise SystemExit(0)
+if isinstance(runtime, dict):
+    print("attached")
     raise SystemExit(0)
 raise SystemExit(1)
 PY
