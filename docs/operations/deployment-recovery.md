@@ -9,6 +9,11 @@ failures, and the database owner approves ledger restore or point-in-time recove
 
 - A release set is one immutable manifest containing pinned gateway and worker images, one release
   ID, one worker protocol, and one audit-ledger writer protocol. Never mix fields from two manifests.
+- The current immutable release set does not include the Compose frontend image. A coordinated
+  gateway/worker rollout therefore does not promote or roll back frontend source. For a release
+  containing frontend changes, use the separately recorded frontend canary and promotion procedure
+  in `docs/releases/FRONTEND_RELEASE_BASELINE.md`; do not infer frontend identity from the gateway
+  release ID.
 - Stop/drain old workers before changing the gateway. Workers register only when their release and
   control-plane protocol match the gateway; a mismatch is not an acceptable rolling state.
 - The active ledger writer protocol must match both candidate and rollback manifests before any
