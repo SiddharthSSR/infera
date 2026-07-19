@@ -160,6 +160,7 @@ jobs:
       - name: Test deployment recovery behavior
         run: |
           bash ./scripts/test-release-recovery.sh
+          bash ./scripts/test-production-recovery-adapters.sh
           bash ./scripts/test-last-known-good-drift.sh
 
       - name: Validate Prometheus SLO rules
