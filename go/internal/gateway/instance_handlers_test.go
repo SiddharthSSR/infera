@@ -716,6 +716,42 @@ func TestHandleProvisionMapsProviderErrors(t *testing.T) {
 	}
 }
 
+func TestHandleProvisionExposesRetryableCapacityContract(t *testing.T) {
+	mgr, err := providers.NewManager(providers.ManagerConfig{DefaultProvider: providers.ProviderMock})
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	mgr.RegisterProvider(&failingProvider{
+		provisionErr: &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorCapacityUnavailable,
+			Message:  "provider capacity unavailable",
+		},
+	})
+	h := NewInstanceHandlers(mgr)
+
+	bodyBytes, _ := json.Marshal(map[string]interface{}{
+		"name": "recovery-worker", "provider": "mock", "gpu_type": "RTX_4090",
+	})
+	req := authedRequest(httptest.NewRequest(http.MethodPost, "/api/instances/provision", bytes.NewReader(bodyBytes)), auth.RoleOperator)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.handleProvision(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"]["provider_error_code"] != providers.ProviderErrorCapacityUnavailable || resp["error"]["retryable"] != true {
+		t.Fatalf("expected retryable capacity contract, got %#v", resp)
+	}
+}
+
 func TestHandleDeployments(t *testing.T) {
 	h := setupTestHandlers(t)
 	store := newTestDeploymentStore(t)

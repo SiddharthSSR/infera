@@ -20,11 +20,12 @@ import (
 )
 
 const (
-	defaultEndpoint             = "https://api.runpod.io/graphql"
-	pollInterval                = 5 * time.Second
-	readyTimeout                = 10 * time.Minute
-	workspaceMountPath          = "/workspace"
-	metadataAllowedCudaVersions = "allowed_cuda_versions"
+	defaultEndpoint              = "https://api.runpod.io/graphql"
+	pollInterval                 = 5 * time.Second
+	readyTimeout                 = 10 * time.Minute
+	workspaceMountPath           = "/workspace"
+	metadataAllowedCudaVersions  = "allowed_cuda_versions"
+	insufficientMachineResources = "This machine does not have the resources to deploy your pod. Please try a different machine"
 )
 
 // Provider implements the RunPod GPU provider.
@@ -1054,10 +1055,15 @@ func (p *Provider) graphQL(ctx context.Context, query string, variables map[stri
 	}
 
 	if len(gqlResp.Errors) > 0 {
+		message := strings.TrimSpace(gqlResp.Errors[0].Message)
+		code := providers.ProviderErrorGraphQLError
+		if strings.EqualFold(message, insufficientMachineResources) {
+			code = providers.ProviderErrorCapacityUnavailable
+		}
 		return nil, &providers.ProviderError{
 			Provider: providers.ProviderRunPod,
-			Code:     providers.ProviderErrorGraphQLError,
-			Message:  gqlResp.Errors[0].Message,
+			Code:     code,
+			Message:  message,
 		}
 	}
 
