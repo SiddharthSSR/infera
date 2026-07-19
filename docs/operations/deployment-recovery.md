@@ -66,8 +66,17 @@ Keep the current proven manifest at `.infera-recovery/last-known-good.manifest`.
 
 ```bash
 diff -u .infera-recovery/last-known-good.manifest /secure/release/candidate.manifest
+INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL=2 \
+  ./scripts/check-last-known-good.sh .infera-recovery/last-known-good.manifest
 ./scripts/validate-prod-env.sh
 ```
+
+Run the last-known-good check after every production release and before starting a recovery drill.
+It compares the recorded release and protocol identity with every live gateway replica, verifies the
+running immutable gateway image, and verifies the selected immutable worker image configured in each
+gateway. A mismatch is release drift: do not copy the candidate over the manifest manually. Promote
+the candidate only through the coordinated recovery command below after its full verification gate
+passes.
 
 Back up required configuration as a release bundle before rollout: the candidate and last-known-good
 manifests, the production `.env` template containing secret *names* only, and the selected immutable
