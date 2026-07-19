@@ -137,7 +137,7 @@ export function GettingStarted() {
               <div className="docs-actions">
                 <a className="btn-primary" href="#runbook" style={{ textDecoration: 'none' }}>RUN THE FLOW</a>
                 <Link className="btn-quiet" to="/docs">OPEN FULL API DOCS</Link>
-                <Link className="btn-quiet" to="/">SIGN IN TO DASHBOARD</Link>
+                <Link className="btn-quiet" to="/sign-in">SIGN IN TO DASHBOARD</Link>
               </div>
             </div>
             <div className="docs-summary">
@@ -197,7 +197,7 @@ export function GettingStarted() {
                   Ask a workspace admin for an invitation if you need human access. If you already belong to the workspace, sign in and create a service-account key from API Keys for automation. After sign-in, your first setup action is to connect provider access in Workspace.
                 </div>
                 <div className="docs-actions" style={{ marginTop: '1rem' }}>
-                  <Link className="btn-primary" to="/" style={{ textDecoration: 'none' }}>SIGN IN</Link>
+                  <Link className="btn-primary" to="/sign-in" style={{ textDecoration: 'none' }}>SIGN IN</Link>
                   <Link className="btn-quiet" to="/accept-invite">ACCEPT AN INVITATION</Link>
                 </div>
               </div>

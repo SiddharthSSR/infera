@@ -18,4 +18,3 @@ describe('PublicApiDocs', () => {
     expect(screen.getByRole('navigation', { name: 'On this page' })).toBeInTheDocument();
   });
 });
-

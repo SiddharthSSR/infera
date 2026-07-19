@@ -101,9 +101,9 @@ export function Login({ onAuthenticated }: LoginProps) {
   const featureHighlights = [
     {
       index: '01',
-      label: 'OPEN SOURCE',
-      desc: 'Run anywhere: cloud, bare metal, or hybrid. Keep the control plane in your hands.',
-      meta: 'Own the control surface',
+      label: 'PUBLIC SOURCE',
+      desc: 'Inspect the public gateway, worker, frontend, and deployment code before adopting the control plane.',
+      meta: 'Verify the implementation',
     },
     {
       index: '02',
@@ -218,7 +218,7 @@ export function Login({ onAuthenticated }: LoginProps) {
             <LabelText className="mono">
             {healthData?.version ? `v${healthData.version}` : 'v0.1.0'}
             </LabelText>
-            <LabelText>Open source inference gateway</LabelText>
+            <LabelText>Public repository available</LabelText>
           </div>
         </section>
 

@@ -60,6 +60,7 @@ describe('PublicLanding', () => {
       'operator-loop',
       'product',
       'proof',
+      'trust',
     ]);
   });
 
