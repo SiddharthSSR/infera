@@ -6623,6 +6623,109 @@ html {
   line-height: 1.7;
 }
 
+.landing-section-aside {
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.landing-inline-link,
+.landing-proof-links a {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  color: var(--text-primary);
+  font: 700 0.7rem/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-underline-offset: 0.3rem;
+  text-transform: uppercase;
+}
+
+.landing-inline-link {
+  margin-top: 0.8rem;
+}
+
+.landing-model-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: var(--grid-line);
+  border-left: var(--grid-line);
+}
+
+.landing-model-grid article {
+  display: flex;
+  min-width: 0;
+  min-height: 17rem;
+  padding: 1.5rem;
+  flex-direction: column;
+  border-right: var(--grid-line);
+  border-bottom: var(--grid-line);
+  background: var(--bg-paper);
+}
+
+.landing-model-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.landing-model-mark {
+  display: grid;
+  width: 2.8rem;
+  height: 2.8rem;
+  place-items: center;
+  border: 1px solid var(--text-primary);
+  border-radius: 50%;
+  background: var(--text-primary);
+  color: var(--bg-paper);
+  font: 700 0.7rem/1 var(--font-mono);
+  letter-spacing: -0.02em;
+}
+
+.landing-model-tag {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--text-secondary);
+  color: var(--text-secondary);
+  font: 700 0.62rem/1 var(--font-mono);
+  letter-spacing: 0.08em;
+}
+
+.landing-model-grid h3 {
+  margin-top: 1.3rem;
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.landing-model-grid p {
+  margin-top: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.landing-model-grid code {
+  margin-top: auto;
+  padding-top: 1.5rem;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font: 0.66rem/1.5 var(--font-mono);
+}
+
+.landing-model-note {
+  padding: 1.1rem 1.5rem;
+  border-right: var(--grid-line);
+  border-bottom: var(--grid-line);
+  border-left: var(--grid-line);
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.landing-model-note strong {
+  color: var(--text-primary);
+}
+
 .landing-step-grid,
 .landing-surface-grid {
   display: grid;
@@ -6632,6 +6735,14 @@ html {
 
 .landing-step-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.landing-step-grid-compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.landing-step-grid-compact li {
+  min-height: 12rem;
 }
 
 .landing-step-grid li {
@@ -6660,7 +6771,7 @@ html {
 }
 
 .landing-surface-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .landing-surface-grid article {
@@ -6671,11 +6782,25 @@ html {
 }
 
 .landing-surface-grid article:nth-child(3n) {
+  border-right: var(--grid-line);
+}
+
+.landing-surface-grid article:nth-child(4n) {
   border-right: 0;
 }
 
-.landing-surface-grid article:nth-last-child(-n + 3) {
+.landing-surface-grid article:nth-last-child(-n + 4) {
   border-bottom: 0;
+}
+
+.landing-proof-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 2rem;
+  padding: 1rem 1.5rem;
+  border-right: var(--grid-line);
+  border-bottom: var(--grid-line);
+  border-left: var(--grid-line);
 }
 
 .landing-boundary-grid {
@@ -6936,6 +7061,8 @@ html {
 .code-copy-btn:focus-visible,
 .landing-copy-button:focus-visible,
 .landing-button:focus-visible,
+.landing-inline-link:focus-visible,
+.landing-proof-links a:focus-visible,
 .public-skip-link:focus-visible,
 .landing-code-shell pre:focus-visible {
   outline: 3px solid var(--color-info);
@@ -7017,6 +7144,22 @@ html {
 
   .landing-step-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .landing-model-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .landing-step-grid-compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .landing-step-grid-compact li {
+    border-bottom: 0;
+  }
+
+  .landing-step-grid-compact li:nth-child(2) {
+    border-right: var(--grid-line);
   }
 
   .landing-architecture-flow {
@@ -7173,12 +7316,21 @@ html {
   }
 
   .landing-step-grid,
+  .landing-model-grid,
   .landing-surface-grid,
   .landing-boundary-grid,
   .landing-architecture-flow,
   .landing-migration-boundary,
   .landing-final-cta {
     grid-template-columns: 1fr;
+  }
+
+  .landing-step-grid-compact {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-model-grid article {
+    min-height: 14.5rem;
   }
 
   .landing-architecture-flow li,
