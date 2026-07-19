@@ -1,5 +1,5 @@
 /// <reference types="vitest/globals" />
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { GettingStarted } from './GettingStarted';
@@ -24,8 +24,11 @@ describe('GettingStarted', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('link', { name: 'SIGN IN' })).toHaveAttribute('href', '/');
-    expect(screen.getByRole('link', { name: 'ACCEPT AN INVITATION' })).toHaveAttribute('href', '/accept-invite');
+    const recoveryCard = screen.getByText('NO KEY OR WRONG WORKSPACE?').closest('.docs-card');
+
+    expect(recoveryCard).not.toBeNull();
+    expect(within(recoveryCard!).getByRole('link', { name: 'SIGN IN' })).toHaveAttribute('href', '/');
+    expect(within(recoveryCard!).getByRole('link', { name: 'ACCEPT AN INVITATION' })).toHaveAttribute('href', '/accept-invite');
     expect(screen.getByText(/first setup action is to connect provider access in Workspace/i)).toBeInTheDocument();
   });
 });
