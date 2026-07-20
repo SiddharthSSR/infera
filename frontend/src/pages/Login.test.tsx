@@ -6,9 +6,18 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { Login } from './Login'
 
+const analyticsMocks = vi.hoisted(() => ({
+  track: vi.fn(),
+  trackFirst: vi.fn(),
+}))
+
 // Mock the api module
 vi.mock('../lib/authAccessClient', () => ({
   createSession: vi.fn(),
+}))
+
+vi.mock('../lib/publicAnalytics', () => ({
+  publicAnalytics: analyticsMocks,
 }))
 
 import { createSession } from '../lib/authAccessClient'
@@ -157,6 +166,9 @@ describe('Login', () => {
 
     await waitFor(() => {
       expect(mockCreateSession).toHaveBeenCalledWith('inf_validkey123')
+    })
+    expect(analyticsMocks.track).toHaveBeenCalledWith('public_sign_in_intent', {
+      source: 'sign_in_form',
     })
 
     // onAuthenticated fires after 500ms timeout

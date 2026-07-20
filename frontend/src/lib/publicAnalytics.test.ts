@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createPublicAnalytics,
   createPublicAnalyticsFromEnv,
+  createSameOriginPublicAnalyticsTransport,
   isPublicAnalyticsEnabled,
 } from './publicAnalytics';
 import {
@@ -191,6 +192,37 @@ describe('public analytics failure isolation', () => {
 
     expect(unhandledRejection).not.toHaveBeenCalled();
     window.removeEventListener('unhandledrejection', unhandledRejection);
+  });
+});
+
+describe('same-origin public analytics transport', () => {
+  it('posts only the sanitized event without credentials', async () => {
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, status: 204 });
+    const transport = createSameOriginPublicAnalyticsTransport(fetcher as typeof fetch);
+    const event: PublicAnalyticsEvent = {
+      name: 'public_sign_in_intent',
+      properties: { source: 'public_navigation' },
+    };
+
+    await transport.send(event);
+
+    expect(fetcher).toHaveBeenCalledWith('/api/public-analytics/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(event),
+      credentials: 'omit',
+      keepalive: true,
+    });
+  });
+
+  it('rejects non-success responses so the adapter can consume the failure', async () => {
+    const fetcher = vi.fn().mockResolvedValue({ ok: false, status: 429 });
+    const transport = createSameOriginPublicAnalyticsTransport(fetcher as typeof fetch);
+
+    await expect(transport.send({
+      name: 'public_landing_view',
+      properties: { surface: 'migration_landing' },
+    })).rejects.toThrow('Analytics endpoint returned 429');
   });
 });
 

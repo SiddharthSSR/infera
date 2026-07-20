@@ -5,6 +5,15 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PublicLanding } from './PublicLanding';
 
+const analyticsMocks = vi.hoisted(() => ({
+  track: vi.fn(),
+  trackFirst: vi.fn(),
+}));
+
+vi.mock('../lib/publicAnalytics', () => ({
+  publicAnalytics: analyticsMocks,
+}));
+
 function renderLanding() {
   return render(
     <MemoryRouter>
@@ -17,11 +26,36 @@ describe('PublicLanding', () => {
   const writeText = vi.fn();
 
   beforeEach(() => {
+    vi.clearAllMocks();
     writeText.mockReset();
     writeText.mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText },
+    });
+  });
+
+  it('records the landing view and both quickstart placements with bounded properties', () => {
+    renderLanding();
+
+    expect(analyticsMocks.track).toHaveBeenCalledWith('public_landing_view', {
+      surface: 'migration_landing',
+    });
+
+    fireEvent.click(screen.getAllByRole('link', { name: 'Run the quickstart' })[0]);
+    fireEvent.click(screen.getAllByRole('link', { name: 'Run the quickstart' })[1]);
+
+    expect(analyticsMocks.track).toHaveBeenCalledWith('public_primary_cta_clicked', {
+      action: 'start_building',
+      placement: 'hero',
+    });
+    expect(analyticsMocks.track).toHaveBeenCalledWith('public_primary_cta_clicked', {
+      action: 'start_building',
+      placement: 'closing',
+    });
+    expect(analyticsMocks.track).toHaveBeenCalledWith('public_resource_opened', {
+      resource: 'quickstart',
+      source: 'landing',
     });
   });
 

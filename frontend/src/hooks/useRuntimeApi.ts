@@ -3,6 +3,7 @@ import { fetchAgents } from '../lib/agentsClient';
 import { createVisibilityAwarePollingOptions, POLLING_INTERVALS_MS } from '../lib/polling';
 import { fetchModels, fetchStats, fetchWorkers } from '../lib/runtimeClient';
 import { stabilizeWorkerSnapshot } from '../lib/stableWorkers';
+import { publicAnalytics } from '../lib/publicAnalytics';
 
 export function useWorkers(workspaceID?: string) {
   return useQuery({
@@ -15,7 +16,11 @@ export function useWorkers(workspaceID?: string) {
 export function useModels() {
   return useQuery({
     queryKey: ['models'],
-    queryFn: fetchModels,
+    queryFn: async () => {
+      const models = await fetchModels();
+      publicAnalytics.trackFirst('activation_first_model_list_succeeded', { surface: 'model_catalog' });
+      return models;
+    },
     ...createVisibilityAwarePollingOptions(POLLING_INTERVALS_MS.models),
   });
 }

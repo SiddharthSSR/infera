@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { CodeExample } from '../components/CodeExample';
 import { LabelText, Badge, AppShell, PublicNav } from '../components/shared';
+import { publicAnalytics } from '../lib/publicAnalytics';
 
 const BASE_URL = typeof window !== 'undefined' ? window.location.origin : 'https://inferai.co.in';
 
@@ -136,8 +137,8 @@ export function GettingStarted() {
               </div>
               <div className="docs-actions">
                 <a className="btn-primary" href="#runbook" style={{ textDecoration: 'none' }}>RUN THE FLOW</a>
-                <Link className="btn-quiet" to="/docs">OPEN FULL API DOCS</Link>
-                <Link className="btn-quiet" to="/sign-in">SIGN IN TO DASHBOARD</Link>
+                <Link className="btn-quiet" to="/docs" onClick={() => publicAnalytics.track('public_resource_opened', { resource: 'api_docs', source: 'onboarding' })}>OPEN FULL API DOCS</Link>
+                <Link className="btn-quiet" to="/sign-in" onClick={() => publicAnalytics.track('public_sign_in_intent', { source: 'onboarding' })}>SIGN IN TO DASHBOARD</Link>
               </div>
             </div>
             <div className="docs-summary">
@@ -197,7 +198,7 @@ export function GettingStarted() {
                   Ask a workspace admin for an invitation if you need human access. If you already belong to the workspace, sign in and create a service-account key from API Keys for automation. After sign-in, your first setup action is to connect provider access in Workspace.
                 </div>
                 <div className="docs-actions docs-recovery-actions">
-                  <Link className="btn-primary docs-action-link" to="/sign-in">SIGN IN</Link>
+                  <Link className="btn-primary docs-action-link" to="/sign-in" onClick={() => publicAnalytics.track('public_sign_in_intent', { source: 'onboarding' })}>SIGN IN</Link>
                   <Link className="btn-quiet" to="/accept-invite">ACCEPT AN INVITATION</Link>
                 </div>
               </div>
@@ -331,7 +332,12 @@ export function GettingStarted() {
                     If the first request works, move to the full docs for supported fields, compatibility boundaries, and SDK examples.
                   </div>
                   <div className="docs-actions" style={{ marginTop: '1rem' }}>
-                    <Link className="btn-primary" to="/docs" style={{ textDecoration: 'none' }}>
+                    <Link
+                      className="btn-primary"
+                      to="/docs"
+                      style={{ textDecoration: 'none' }}
+                      onClick={() => publicAnalytics.track('public_resource_opened', { resource: 'api_docs', source: 'onboarding' })}
+                    >
                       OPEN API DOCS
                     </Link>
                   </div>

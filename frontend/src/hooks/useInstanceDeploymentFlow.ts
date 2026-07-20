@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { sendChatCompletion } from '../lib/chatClient';
+import { publicAnalytics } from '../lib/publicAnalytics';
 import {
   summarizeDeploymentAttempt,
   type DeploymentAttemptRecord,
@@ -87,6 +88,8 @@ export function useInstanceDeploymentFlow({
         temperature: 0,
         max_tokens: 16,
       });
+
+      publicAnalytics.trackFirst('activation_first_unary_inference_succeeded', { surface: 'onboarding' });
 
       const latencyMs = Date.now() - startedAt;
       const content = response.choices?.[0]?.message?.content?.trim() || '';

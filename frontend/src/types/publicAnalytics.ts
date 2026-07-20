@@ -19,13 +19,13 @@ export const PUBLIC_ANALYTICS_SCHEMA = {
     source: ['landing', 'public_navigation', 'onboarding'],
   },
   public_sign_in_intent: {
-    source: ['landing', 'public_navigation', 'onboarding', 'invitation'],
+    source: ['landing', 'public_navigation', 'onboarding', 'invitation', 'sign_in_form'],
   },
   activation_first_model_list_succeeded: {
     surface: ['onboarding', 'model_catalog'],
   },
   activation_first_unary_inference_succeeded: {
-    surface: ['onboarding', 'playground'],
+    surface: ['onboarding', 'playground', 'model_catalog'],
   },
   activation_first_streaming_inference_succeeded: {
     surface: ['onboarding', 'playground'],

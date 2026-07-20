@@ -14,6 +14,11 @@ const apiMocks = vi.hoisted(() => ({
   uploadAgentAttachment: vi.fn(),
 }));
 
+const analyticsMocks = vi.hoisted(() => ({
+  track: vi.fn(),
+  trackFirst: vi.fn(),
+}));
+
 vi.mock('../lib/chatClient', () => ({
   streamChatCompletion: apiMocks.streamChatCompletion,
 }));
@@ -23,6 +28,10 @@ vi.mock('../lib/agentsClient', () => ({
   fetchAgentRunDetail: apiMocks.fetchAgentRunDetail,
   cancelAgentRun: apiMocks.cancelAgentRun,
   uploadAgentAttachment: apiMocks.uploadAgentAttachment,
+}));
+
+vi.mock('../lib/publicAnalytics', () => ({
+  publicAnalytics: analyticsMocks,
 }));
 
 vi.mock('sonner', () => ({
@@ -114,6 +123,10 @@ describe('usePlaygroundExecutionState', () => {
       tokensPerSec: expect.any(Number),
     });
     expect(historyUpdates).toHaveLength(1);
+    expect(analyticsMocks.trackFirst).toHaveBeenCalledWith(
+      'activation_first_streaming_inference_succeeded',
+      { surface: 'playground' },
+    );
     const historyUpdate = historyUpdates[0];
     expect(typeof historyUpdate).toBe('function');
     const nextHistory = (historyUpdate as (prev: PlaygroundHistoryEntry[]) => PlaygroundHistoryEntry[])([]);

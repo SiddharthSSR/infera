@@ -7499,6 +7499,9 @@ html {
     scroll-behavior: auto;
   }
 
+  .public-landing-shell *,
+  .public-landing-shell *::before,
+  .public-landing-shell *::after,
   .docs-page *,
   .docs-page *::before,
   .docs-page *::after {
