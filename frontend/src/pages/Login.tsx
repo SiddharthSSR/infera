@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { createSession } from '../lib/authAccessClient';
+import { publicAnalytics } from '../lib/publicAnalytics';
 import { LabelText, StatusDot, ControlInput, ActionButton } from '../components/shared';
 import type { SessionInfo } from '../types';
 
@@ -74,6 +75,7 @@ export function Login({ onAuthenticated }: LoginProps) {
       return;
     }
 
+    publicAnalytics.track('public_sign_in_intent', { source: 'sign_in_form' });
     setLoading(true);
     setError('');
 

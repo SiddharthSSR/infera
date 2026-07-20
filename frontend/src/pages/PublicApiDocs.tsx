@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { CodeExample } from '../components/CodeExample';
 import { LabelText, Badge, AppShell, PublicNav } from '../components/shared';
+import { publicAnalytics } from '../lib/publicAnalytics';
 
 const BASE_URL = typeof window !== 'undefined' ? window.location.origin : 'https://inferai.co.in';
 
@@ -143,7 +144,12 @@ export function PublicApiDocs() {
                 <span className="docs-pill">Workspace keys</span>
               </div>
               <div className="docs-actions">
-                <Link className="btn-primary" to="/getting-started" style={{ textDecoration: 'none' }}>
+                <Link
+                  className="btn-primary"
+                  to="/getting-started"
+                  style={{ textDecoration: 'none' }}
+                  onClick={() => publicAnalytics.track('public_resource_opened', { resource: 'quickstart', source: 'onboarding' })}
+                >
                   START QUICKSTART
                 </Link>
                 <a className="btn-quiet" href="#examples">SEE EXAMPLES</a>

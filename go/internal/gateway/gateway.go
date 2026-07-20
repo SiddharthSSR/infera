@@ -252,6 +252,7 @@ func (g *Gateway) Start() error {
 	mux.HandleFunc("/api/workers/register", g.handleCORS(g.requireWorkerToken(g.handleRegisterWorker)))
 	mux.HandleFunc("/api/workers/heartbeat", g.handleCORS(g.requireWorkerToken(g.handleWorkerHeartbeat)))
 	mux.HandleFunc("/api/health", g.handleCORS(g.handleHealth))
+	mux.HandleFunc("/api/public-analytics/events", g.handlePublicAnalytics)
 	mux.HandleFunc("/health", g.handleHealth)
 	mux.HandleFunc("/internal/prometheus/worker-targets", g.internalOnlyHandler(g.handlePrometheusWorkerTargets))
 

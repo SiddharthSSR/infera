@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell, PublicFooter, PublicNav } from '../components/shared';
+import { publicAnalytics } from '../lib/publicAnalytics';
 
 const migrationSteps = [
   {
@@ -85,6 +86,14 @@ export function PublicLanding() {
   const copyResetTimer = useRef<number>();
 
   useEffect(() => () => window.clearTimeout(copyResetTimer.current), []);
+  useEffect(() => {
+    publicAnalytics.track('public_landing_view', { surface: 'migration_landing' });
+  }, []);
+
+  const trackQuickstart = (placement: 'hero' | 'closing') => {
+    publicAnalytics.track('public_primary_cta_clicked', { action: 'start_building', placement });
+    publicAnalytics.track('public_resource_opened', { resource: 'quickstart', source: 'landing' });
+  };
 
   const copyExample = async () => {
     window.clearTimeout(copyResetTimer.current);
@@ -113,8 +122,12 @@ export function PublicLanding() {
               One compatible endpoint for model discovery, chat, and streaming—plus the operator controls to keep it serving.
             </p>
             <div className="landing-actions">
-              <Link className="landing-button landing-button-primary" to="/getting-started">Run the quickstart</Link>
-              <a className="landing-button landing-button-secondary" href="#models">Explore registry models</a>
+              <Link className="landing-button landing-button-primary" to="/getting-started" onClick={() => trackQuickstart('hero')}>Run the quickstart</Link>
+              <a
+                className="landing-button landing-button-secondary"
+                href="#models"
+                onClick={() => publicAnalytics.track('public_product_explored', { product: 'model_catalog', source: 'landing' })}
+              >Explore registry models</a>
             </div>
           </div>
 
@@ -233,14 +246,14 @@ export function PublicLanding() {
             </div>
           </div>
           <div className="landing-proof-links">
-            <Link to="/docs">Read the API contract →</Link>
+            <Link to="/docs" onClick={() => publicAnalytics.track('public_resource_opened', { resource: 'api_docs', source: 'landing' })}>Read the API contract →</Link>
             <Link to="/trust">Inspect the trust record →</Link>
           </div>
         </section>
 
         <section className="landing-final-cta" aria-labelledby="final-cta-heading">
           <h2 id="final-cta-heading">Start with one compatible request.</h2>
-          <Link className="landing-button" to="/getting-started">Run the quickstart</Link>
+          <Link className="landing-button" to="/getting-started" onClick={() => trackQuickstart('closing')}>Run the quickstart</Link>
         </section>
       </main>
 

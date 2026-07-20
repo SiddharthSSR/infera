@@ -11,6 +11,15 @@ vi.mock('../lib/chatClient', () => ({
   sendChatCompletion: vi.fn(),
 }));
 
+const analyticsMocks = vi.hoisted(() => ({
+  track: vi.fn(),
+  trackFirst: vi.fn(),
+}));
+
+vi.mock('../lib/publicAnalytics', () => ({
+  publicAnalytics: analyticsMocks,
+}));
+
 vi.mock('../lib/deploymentHistory', () => ({
   summarizeDeploymentAttempt: vi.fn(),
 }));
@@ -213,6 +222,10 @@ describe('useInstanceDeploymentFlow', () => {
         latency_ms: expect.any(Number),
       }),
     });
+    expect(analyticsMocks.trackFirst).toHaveBeenCalledWith(
+      'activation_first_unary_inference_succeeded',
+      { surface: 'onboarding' },
+    );
     expect(mockToastSuccess).toHaveBeenCalled();
   });
 
@@ -277,6 +290,7 @@ describe('useInstanceDeploymentFlow', () => {
       }),
     });
     expect(mockToastError).toHaveBeenCalledWith('Gateway unavailable');
+    expect(analyticsMocks.trackFirst).not.toHaveBeenCalled();
     expect(result.current.verifyingAttemptID).toBeNull();
   });
 });

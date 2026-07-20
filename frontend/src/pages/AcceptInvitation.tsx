@@ -7,6 +7,7 @@ import {
   fetchInvitationPreview,
 } from '../lib/authAccessClient';
 import { getInvitationRecoveryGuidance } from '../lib/authAccess';
+import { publicAnalytics } from '../lib/publicAnalytics';
 import { DisplayHeader, GridRow, Cell, LabelText, ActionButton, ControlInput, AppShell, PublicNav } from '../components/shared';
 import type { SessionInfo, WorkspaceInvitationPreview } from '../types';
 
@@ -130,6 +131,7 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
     setError(null);
     setRecoveryGuidance(null);
     setErrorContext(null);
+    publicAnalytics.track('public_sign_in_intent', { source: 'invitation' });
     try {
       const session = await createSession(acceptedKey);
       onAccepted(session);

@@ -44,6 +44,7 @@ type GatewayMetrics struct {
 	healthyWorkersTotal     prometheus.Gauge
 	unhealthyWorkersTotal   prometheus.Gauge
 	workerHealthTransitions *prometheus.CounterVec
+	publicFunnelEvents      *prometheus.CounterVec
 }
 
 var inferenceDurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60}
@@ -170,6 +171,10 @@ func NewGatewayMetrics() *GatewayMetrics {
 			Name: "infera_gateway_worker_health_transitions_total",
 			Help: "Total number of registry-driven worker health transitions.",
 		}, []string{"event", "from_status", "to_status"}),
+		publicFunnelEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "infera_gateway_public_funnel_events_total",
+			Help: "Privacy-safe public conversion and activation events using bounded dimensions only.",
+		}, []string{"event", "source", "target"}),
 	}
 
 	registry.MustRegister(
@@ -199,10 +204,15 @@ func NewGatewayMetrics() *GatewayMetrics {
 		m.healthyWorkersTotal,
 		m.unhealthyWorkersTotal,
 		m.workerHealthTransitions,
+		m.publicFunnelEvents,
 	)
 	m.gatewayInfo.WithLabelValues("gateway", inferaEnv(), inferaVersion()).Set(1)
 
 	return m
+}
+
+func (m *GatewayMetrics) RecordPublicFunnelEvent(event, source, target string) {
+	m.publicFunnelEvents.WithLabelValues(event, source, target).Inc()
 }
 
 func (m *GatewayMetrics) Handler() http.Handler {

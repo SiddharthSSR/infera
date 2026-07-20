@@ -9,12 +9,21 @@ const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
   fetchInvitationPreview: vi.fn(),
   navigate: vi.fn(),
+  track: vi.fn(),
+  trackFirst: vi.fn(),
 }));
 
 vi.mock('../lib/authAccessClient', () => ({
   acceptWorkspaceInvitation: mocks.acceptWorkspaceInvitation,
   createSession: mocks.createSession,
   fetchInvitationPreview: mocks.fetchInvitationPreview,
+}));
+
+vi.mock('../lib/publicAnalytics', () => ({
+  publicAnalytics: {
+    track: mocks.track,
+    trackFirst: mocks.trackFirst,
+  },
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -139,6 +148,7 @@ describe('AcceptInvitation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'CONTINUE TO WORKSPACE SETUP' }));
 
     await waitFor(() => expect(onAccepted).toHaveBeenCalledWith(session));
+    expect(mocks.track).toHaveBeenCalledWith('public_sign_in_intent', { source: 'invitation' });
     expect(mocks.navigate).toHaveBeenCalledWith('/workspace', { replace: true });
     expect(mocks.fetchInvitationPreview).toHaveBeenCalledTimes(1);
   });
@@ -155,6 +165,7 @@ describe('AcceptInvitation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'CONTINUE TO WORKSPACE SETUP' }));
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Session unavailable'));
+    expect(mocks.track).toHaveBeenCalledWith('public_sign_in_intent', { source: 'invitation' });
     expect(screen.getByRole('alert')).toHaveTextContent('Your human key is still shown below');
     expect(screen.getByText('inf_human_once')).toBeInTheDocument();
   });

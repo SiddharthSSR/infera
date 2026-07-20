@@ -8,6 +8,7 @@ import {
   uploadAgentAttachment,
 } from '../lib/agentsClient';
 import { streamChatCompletion } from '../lib/chatClient';
+import { publicAnalytics } from '../lib/publicAnalytics';
 import type { PlaygroundHistoryEntry } from '../lib/chat-context';
 import { formatAgentStatus } from '../lib/labels';
 import type {
@@ -173,6 +174,8 @@ export function usePlaygroundExecutionState({
         fullResponse += chunk;
         setResponse(fullResponse);
       }
+
+      publicAnalytics.trackFirst('activation_first_streaming_inference_succeeded', { surface: 'playground' });
 
       const latency = Date.now() - startTime;
       const completionTokens = streamingCompletionTokens ?? Math.round(fullResponse.split(/\s+/).length * 1.3);

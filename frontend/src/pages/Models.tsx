@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { Model, Worker } from '../types';
 import { sendChatCompletion } from '../lib/chatClient';
+import { publicAnalytics } from '../lib/publicAnalytics';
 import { LabelText, Badge, ActionButton } from '../components/shared';
 import { ModelsSkeleton } from '../components/skeletons';
 import { ModelCatalogSection } from '../components/models/ModelCatalogSection';
@@ -548,6 +549,8 @@ export function Models() {
         temperature: 0,
         max_tokens: 16,
       });
+
+      publicAnalytics.trackFirst('activation_first_unary_inference_succeeded', { surface: 'model_catalog' });
 
       const latencyMs = Date.now() - startedAt;
       const content = response.choices?.[0]?.message?.content?.trim() || '';

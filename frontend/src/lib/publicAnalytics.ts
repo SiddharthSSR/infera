@@ -10,6 +10,7 @@ import {
 
 const ENABLED_VALUE = 'true';
 const STORAGE_PREFIX = 'infera.public-analytics.first.';
+const DEFAULT_ENDPOINT = '/api/public-analytics/events';
 
 const noopTransport: PublicAnalyticsTransport = {
   send: () => undefined,
@@ -28,6 +29,28 @@ interface CreatePublicAnalyticsOptions {
 
 interface PublicAnalyticsEnvironment {
   readonly VITE_PUBLIC_ANALYTICS_ENABLED?: string | boolean;
+}
+
+type AnalyticsFetch = typeof fetch;
+
+export function createSameOriginPublicAnalyticsTransport(
+  fetcher: AnalyticsFetch = fetch,
+  endpoint = DEFAULT_ENDPOINT,
+): PublicAnalyticsTransport {
+  return Object.freeze({
+    send: async (event: PublicAnalyticsEvent) => {
+      const response = await fetcher(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(event),
+        credentials: 'omit',
+        keepalive: true,
+      });
+      if (!response.ok) {
+        throw new Error(`Analytics endpoint returned ${response.status}`);
+      }
+    },
+  });
 }
 
 function sanitizeProperties<Name extends PublicAnalyticsEventName>(
@@ -181,12 +204,8 @@ const viteEnvironment = (
   import.meta as ImportMeta & { readonly env?: PublicAnalyticsEnvironment }
 ).env ?? {};
 
-/**
- * Safe default for call sites. It remains a no-op until an approved transport is
- * supplied at composition time; this module performs no network requests.
- */
 export const publicAnalytics = createPublicAnalyticsFromEnv(
   viteEnvironment,
-  undefined,
+  typeof window === 'undefined' ? noopTransport : createSameOriginPublicAnalyticsTransport(),
   browserSessionStorage(),
 );
