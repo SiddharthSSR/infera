@@ -1,6 +1,6 @@
 # Privacy-safe public funnel analytics
 
-INF-57 defines eight stable, vendor-neutral events. The implementation lives in
+INF-57 and INF-63 define stable, vendor-neutral events. The implementation lives in
 `src/lib/publicAnalytics.ts`; its only accepted properties are derived from
 `src/types/publicAnalytics.ts`.
 
@@ -18,12 +18,10 @@ and returns `void`, so analytics cannot block navigation or inference actions.
 First-success events use only the event name in `sessionStorage`; when storage is
 unavailable, an in-memory set preserves best-effort deduplication.
 
-No analytics vendor is installed and the repository has no approved analytics
-integration. The shipped `publicAnalytics` singleton therefore uses a no-op
-transport and performs no network requests. `VITE_PUBLIC_ANALYTICS_ENABLED` is
-fail-closed: only the exact value `true` enables dispatch. An approved future
-composition root can pass a `PublicAnalyticsTransport` to
-`createPublicAnalyticsFromEnv`; the adapter remains responsible for validation.
+No analytics vendor is installed. The shipped singleton uses a same-origin
+`/api/public-analytics/events` transport, while `VITE_PUBLIC_ANALYTICS_ENABLED`
+is fail-closed: only the exact value `true` enables dispatch. The adapter remains
+responsible for schema validation and failure isolation.
 
 ## Event taxonomy and metrics
 
@@ -34,6 +32,8 @@ composition root can pass a `PublicAnalyticsTransport` to
 | `public_product_explored` | `product`, `source` | Product-interest mix |
 | `public_resource_opened` | `resource`, `source` | Quickstart/docs engagement |
 | `public_sign_in_intent` | `source` | Landing-to-sign-in intent |
+| `design_partner_request_started` | `source` | Request-form start |
+| `design_partner_request_submitted` | `outcome` | Request submission and guardrail outcomes |
 | `activation_first_model_list_succeeded` | `surface` | First model-list activation |
 | `activation_first_unary_inference_succeeded` | `surface` | First unary activation |
 | `activation_first_streaming_inference_succeeded` | `surface` | First streaming activation |

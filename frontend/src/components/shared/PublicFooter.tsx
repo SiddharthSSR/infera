@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { publicEvidenceLinks } from '../../lib/publicEvidence';
+import { publicAnalytics } from '../../lib/publicAnalytics';
 
 export function PublicFooter() {
   return (
@@ -10,6 +11,7 @@ export function PublicFooter() {
       </div>
       <nav className="public-footer-links" aria-label="Public information">
         <Link to="/evaluation">Evaluation guide</Link>
+        <Link to="/request-access" onClick={() => publicAnalytics.track('public_primary_cta_clicked', { action: 'request_design_partner_access', placement: 'footer' })}>Request design-partner access</Link>
         <Link to="/getting-started">Migration quickstart</Link>
         <Link to="/trust">Trust</Link>
         <Link to="/company">Company</Link>

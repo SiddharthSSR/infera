@@ -66,9 +66,13 @@ export function PublicLanding() {
     publicAnalytics.track('public_landing_view', { surface: 'migration_landing' });
   }, []);
 
-  const trackQuickstart = (placement: 'hero' | 'closing') => {
-    publicAnalytics.track('public_primary_cta_clicked', { action: 'start_building', placement });
+  const trackQuickstart = () => {
+    publicAnalytics.track('public_primary_cta_clicked', { action: 'start_building', placement: 'hero' });
     publicAnalytics.track('public_resource_opened', { resource: 'quickstart', source: 'landing' });
+  };
+
+  const trackDesignPartnerRequest = (placement: 'hero' | 'closing') => {
+    publicAnalytics.track('public_primary_cta_clicked', { action: 'request_design_partner_access', placement });
   };
 
   const copyExample = async () => {
@@ -98,7 +102,8 @@ export function PublicLanding() {
               One compatible endpoint for model discovery, chat, and streaming—plus the operator controls to keep it serving.
             </p>
             <div className="landing-actions">
-              <Link className="landing-button landing-button-primary" to="/getting-started" onClick={() => trackQuickstart('hero')}>Run the quickstart</Link>
+              <Link className="landing-button landing-button-primary" to="/request-access" onClick={() => trackDesignPartnerRequest('hero')}>Request design-partner access</Link>
+              <Link className="landing-button landing-button-secondary" to="/getting-started" onClick={trackQuickstart}>Run the quickstart</Link>
               <a
                 className="landing-button landing-button-secondary"
                 href="#models"
@@ -198,8 +203,8 @@ export function PublicLanding() {
         </section>
 
         <section className="landing-final-cta" aria-labelledby="final-cta-heading">
-          <h2 id="final-cta-heading">Start with one compatible request.</h2>
-          <Link className="landing-button" to="/getting-started" onClick={() => trackQuickstart('closing')}>Run the quickstart</Link>
+          <div><span className="landing-meta">No paid subscription required</span><h2 id="final-cta-heading">Bring us the inference problem you need to evaluate.</h2></div>
+          <Link className="landing-button" to="/request-access" onClick={() => trackDesignPartnerRequest('closing')}>Request design-partner access</Link>
         </section>
       </main>
 

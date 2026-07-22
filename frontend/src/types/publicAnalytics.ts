@@ -7,8 +7,8 @@ export const PUBLIC_ANALYTICS_SCHEMA = {
     surface: ['migration_landing'],
   },
   public_primary_cta_clicked: {
-    action: ['start_building'],
-    placement: ['hero', 'closing'],
+    action: ['start_building', 'request_design_partner_access'],
+    placement: ['hero', 'closing', 'public_navigation', 'quickstart', 'footer'],
   },
   public_product_explored: {
     product: ['model_catalog', 'playground', 'openai_compatibility'],
@@ -20,6 +20,12 @@ export const PUBLIC_ANALYTICS_SCHEMA = {
   },
   public_sign_in_intent: {
     source: ['landing', 'public_navigation', 'onboarding', 'invitation', 'sign_in_form'],
+  },
+  design_partner_request_started: {
+    source: ['request_access'],
+  },
+  design_partner_request_submitted: {
+    outcome: ['succeeded', 'validation_failed', 'delivery_failed', 'configuration_missing'],
   },
   activation_first_model_list_succeeded: {
     surface: ['onboarding', 'model_catalog'],

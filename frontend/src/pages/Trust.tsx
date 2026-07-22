@@ -48,10 +48,10 @@ const evidenceRecords = [
     detail: 'No SECURITY file or dedicated private vulnerability-reporting channel is published.',
   },
   {
-    label: 'Company and design-partner contact',
-    status: 'Not published',
+    label: 'Company identity and design-partner intake',
+    status: 'Configuration required',
     tone: 'unavailable' as const,
-    detail: 'No approved legal company profile, team profile, or dedicated design-partner contact channel is available in the repository.',
+    detail: 'The request route is published, but no approved delivery endpoint, legal company profile, or team profile is available in the repository.',
   },
 ];
 

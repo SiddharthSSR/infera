@@ -35,22 +35,23 @@ describe('PublicLanding', () => {
     });
   });
 
-  it('records the landing view and both quickstart placements with bounded properties', () => {
+  it('records the landing view, acquisition CTAs, and quickstart with bounded properties', () => {
     renderLanding();
 
     expect(analyticsMocks.track).toHaveBeenCalledWith('public_landing_view', {
       surface: 'migration_landing',
     });
 
-    fireEvent.click(screen.getAllByRole('link', { name: 'Run the quickstart' })[0]);
-    fireEvent.click(screen.getAllByRole('link', { name: 'Run the quickstart' })[1]);
+    fireEvent.click(screen.getByRole('link', { name: 'Run the quickstart' }));
+    fireEvent.click(screen.getAllByRole('link', { name: 'Request design-partner access' })[0]);
+    fireEvent.click(screen.getAllByRole('link', { name: 'Request design-partner access' })[1]);
 
     expect(analyticsMocks.track).toHaveBeenCalledWith('public_primary_cta_clicked', {
       action: 'start_building',
       placement: 'hero',
     });
     expect(analyticsMocks.track).toHaveBeenCalledWith('public_primary_cta_clicked', {
-      action: 'start_building',
+      action: 'request_design_partner_access',
       placement: 'closing',
     });
     expect(analyticsMocks.track).toHaveBeenCalledWith('public_resource_opened', {
@@ -59,12 +60,13 @@ describe('PublicLanding', () => {
     });
   });
 
-  it('leads with a concise compatible-client promise and one dominant quickstart path', () => {
+  it('leads with a concise compatible-client promise and one dominant access path', () => {
     renderLanding();
 
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.getByRole('heading', { name: 'Run open models. Keep your OpenAI client.' })).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: 'Run the quickstart' })[0]).toHaveAttribute('href', '/getting-started');
+    expect(screen.getAllByRole('link', { name: 'Request design-partner access' })[0]).toHaveAttribute('href', '/request-access');
+    expect(screen.getByRole('link', { name: 'Run the quickstart' })).toHaveAttribute('href', '/getting-started');
     expect(screen.getByRole('link', { name: 'Explore registry models' })).toHaveAttribute('href', '#models');
     expect(screen.getByRole('link', { name: 'OPENAI MIGRATION' })).toHaveAttribute('href', '/#migration');
     expect(screen.getByRole('link', { name: 'SIGN IN' })).toHaveAttribute('href', '/sign-in');
@@ -121,7 +123,7 @@ describe('PublicLanding', () => {
     expect(screen.getByRole('link', { name: 'Open the failure runbook →' })).toHaveAttribute('href', '/getting-started#failures');
   });
 
-  it('keeps the quickstart primary while linking to the API and trust records', () => {
+  it('keeps the quickstart available while linking to the API and trust records', () => {
     renderLanding();
 
     expect(screen.getByRole('heading', { name: 'Small surface. Clear limits.' })).toBeInTheDocument();

@@ -28,6 +28,7 @@ const defaultPublicLinks: PublicNavLink[] = [
   { path: '/trust', label: 'TRUST' },
   { href: 'https://github.com/SiddharthSSR/infera', label: 'GITHUB', external: true },
   { path: '/sign-in', label: 'SIGN IN' },
+  { path: '/request-access', label: 'REQUEST ACCESS' },
 ];
 
 function trackPublicNavigation(link: PublicNavLink) {
@@ -35,6 +36,8 @@ function trackPublicNavigation(link: PublicNavLink) {
     publicAnalytics.track('public_resource_opened', { resource: 'api_docs', source: 'public_navigation' });
   } else if (link.path === '/sign-in') {
     publicAnalytics.track('public_sign_in_intent', { source: 'public_navigation' });
+  } else if (link.path === '/request-access') {
+    publicAnalytics.track('public_primary_cta_clicked', { action: 'request_design_partner_access', placement: 'public_navigation' });
   } else if (link.path === '/getting-started') {
     publicAnalytics.track('public_resource_opened', { resource: 'quickstart', source: 'public_navigation' });
   } else if (link.path === '/evaluation') {

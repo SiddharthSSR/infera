@@ -29,13 +29,15 @@ function recordingTransport(): {
 }
 
 describe('public analytics taxonomy', () => {
-  it('defines the eight INF-57 funnel events', () => {
+  it('defines the public funnel and design-partner events', () => {
     expect(Object.keys(PUBLIC_ANALYTICS_SCHEMA)).toEqual([
       'public_landing_view',
       'public_primary_cta_clicked',
       'public_product_explored',
       'public_resource_opened',
       'public_sign_in_intent',
+      'design_partner_request_started',
+      'design_partner_request_submitted',
       'activation_first_model_list_succeeded',
       'activation_first_unary_inference_succeeded',
       'activation_first_streaming_inference_succeeded',

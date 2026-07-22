@@ -65,6 +65,8 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/Dockerfile.frontend
+      args:
+        VITE_DESIGN_PARTNER_REQUEST_ENDPOINT: ${VITE_DESIGN_PARTNER_REQUEST_ENDPOINT:-}
     depends_on:
       gateway:
         condition: service_healthy

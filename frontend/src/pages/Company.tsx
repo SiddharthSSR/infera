@@ -7,7 +7,7 @@ const companyRecords = [
   ['Jurisdiction and address', 'Owner decision required'],
   ['Founders and team profile', 'Owner decision required'],
   ['Monitored company contact', 'Owner decision required'],
-  ['Design-partner intake', 'Owner decision required'],
+  ['Design-partner intake', 'Delivery configuration required'],
 ] as const;
 
 export function Company() {
@@ -62,7 +62,7 @@ export function Company() {
               <span className="landing-meta">Publication status</span>
               <h2 id="company-record-heading">Five approvals complete the company record.</h2>
             </div>
-            <p>The publication record names each decision and the evidence required. Commit authorship and repository metadata are not treated as company approval.</p>
+            <p>The publication record names each decision and the evidence required. The request route is published, but delivery remains unavailable until an administrator configures an approved secure intake destination; commit authorship and repository metadata are not treated as company approval.</p>
           </div>
           <dl className="company-record-grid">
             {companyRecords.map(([label, status]) => (
