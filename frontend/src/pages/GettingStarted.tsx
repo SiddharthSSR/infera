@@ -136,6 +136,7 @@ export function GettingStarted() {
                 <span className="docs-pill">Production-safe flow</span>
               </div>
               <div className="docs-actions">
+                <Link className="btn-primary" to="/request-access" onClick={() => publicAnalytics.track('public_primary_cta_clicked', { action: 'request_design_partner_access', placement: 'quickstart' })}>REQUEST DESIGN-PARTNER ACCESS</Link>
                 <a className="btn-primary" href="#runbook" style={{ textDecoration: 'none' }}>RUN THE FLOW</a>
                 <Link className="btn-quiet" to="/evaluation">REVIEW DEPLOYMENT FIT</Link>
                 <Link className="btn-quiet" to="/docs" onClick={() => publicAnalytics.track('public_resource_opened', { resource: 'api_docs', source: 'onboarding' })}>OPEN FULL API DOCS</Link>

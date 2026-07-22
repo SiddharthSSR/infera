@@ -23,6 +23,7 @@ const GettingStarted = lazyWithRetry(() => import('./pages/GettingStarted').then
 const Trust = lazyWithRetry(() => import('./pages/Trust').then((module) => ({ default: module.Trust })), 'trust');
 const Company = lazyWithRetry(() => import('./pages/Company').then((module) => ({ default: module.Company })), 'company');
 const Security = lazyWithRetry(() => import('./pages/Security').then((module) => ({ default: module.Security })), 'security');
+const DesignPartnerAccess = lazyWithRetry(() => import('./pages/DesignPartnerAccess').then((module) => ({ default: module.DesignPartnerAccess })), 'request-access');
 const AcceptInvitation = lazyWithRetry(() => import('./pages/AcceptInvitation').then((module) => ({ default: module.AcceptInvitation })), 'accept-invite');
 const Dashboard = lazyWithRetry(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })), 'dashboard');
 const Playground = lazyWithRetry(() => import('./pages/Playground').then((module) => ({ default: module.Playground })), 'playground');
@@ -497,6 +498,7 @@ function AppContent() {
           <Route path="/trust" element={<Trust />} />
           <Route path="/company" element={<Company />} />
           <Route path="/security" element={<Security />} />
+          <Route path="/request-access" element={<DesignPartnerAccess />} />
           <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -574,6 +576,7 @@ function AppContent() {
               <Route path="/trust" element={<Trust />} />
               <Route path="/company" element={<Company />} />
               <Route path="/security" element={<Security />} />
+              <Route path="/request-access" element={<DesignPartnerAccess />} />
               <Route path="/accept-invite" element={<AcceptInvitation onAccepted={(nextSession: SessionInfo) => setSession(nextSession)} />} />
               <Route path="/sign-in" element={<Navigate to="/" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />

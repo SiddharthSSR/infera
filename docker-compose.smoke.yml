@@ -28,6 +28,8 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/Dockerfile.frontend
+      args:
+        VITE_DESIGN_PARTNER_REQUEST_ENDPOINT: ${VITE_DESIGN_PARTNER_REQUEST_ENDPOINT:-}
     ports:
       - "13000:3000"
     depends_on:

@@ -18,6 +18,7 @@ vi.mock('./pages/GettingStarted', () => ({ GettingStarted: () => <div className=
 vi.mock('./pages/Trust', () => ({ Trust: () => <div className="top-nav">TRUST PAGE</div> }));
 vi.mock('./pages/Company', () => ({ Company: () => <div className="top-nav">COMPANY PAGE</div> }));
 vi.mock('./pages/Security', () => ({ Security: () => <div className="top-nav">SECURITY PAGE</div> }));
+vi.mock('./pages/DesignPartnerAccess', () => ({ DesignPartnerAccess: () => <div className="top-nav">REQUEST ACCESS PAGE</div> }));
 vi.mock('./pages/PublicLanding', () => ({ PublicLanding: () => <div>PUBLIC LANDING PAGE</div> }));
 vi.mock('./pages/Login', () => ({ Login: () => <div>SIGN IN PAGE</div> }));
 vi.mock('./pages/AcceptInvitation', () => ({ AcceptInvitation: () => <div>ACCEPT INVITATION PAGE</div> }));
@@ -88,6 +89,7 @@ describe('App public routing', () => {
       ['/trust', 'TRUST PAGE'],
       ['/company', 'COMPANY PAGE'],
       ['/security', 'SECURITY PAGE'],
+      ['/request-access', 'REQUEST ACCESS PAGE'],
       ['/accept-invite', 'ACCEPT INVITATION PAGE'],
     ] as const;
 
@@ -127,6 +129,7 @@ describe('App authenticated public routing', () => {
     ['/trust', 'TRUST PAGE'],
     ['/company', 'COMPANY PAGE'],
     ['/security', 'SECURITY PAGE'],
+    ['/request-access', 'REQUEST ACCESS PAGE'],
   ] as const)('renders %s for an authenticated session', async (path, expected) => {
     render(
       <MemoryRouter initialEntries={[path]}>

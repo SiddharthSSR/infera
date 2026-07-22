@@ -6357,6 +6357,284 @@ html {
   text-transform: uppercase;
 }
 
+/* Self-serve design-partner request */
+.request-access-shell {
+  color: var(--text-primary);
+  background: var(--bg-paper);
+}
+
+.request-access-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(20rem, 0.92fr);
+  gap: clamp(2rem, 7vw, 7rem);
+  padding: clamp(3.5rem, 8vw, 8rem) clamp(1.5rem, 6vw, 6rem);
+  border-bottom: var(--grid-line);
+}
+
+.request-access-header h1 {
+  max-width: 12ch;
+  margin-top: 1.5rem;
+  font-size: clamp(3.2rem, 6.7vw, 6.7rem);
+  font-weight: 700;
+  line-height: 0.92;
+  letter-spacing: -0.065em;
+}
+
+.request-access-intro {
+  align-self: end;
+  display: grid;
+  gap: 1.5rem;
+  max-width: 38rem;
+  color: var(--text-secondary);
+  font-size: clamp(1rem, 1.5vw, 1.2rem);
+  line-height: 1.65;
+}
+
+.request-access-boundary {
+  padding: 1rem 1.15rem;
+  border-left: 3px solid var(--text-primary);
+  background: var(--bg-accent);
+  font-size: 0.92rem;
+}
+
+.request-access-layout {
+  display: grid;
+  grid-template-columns: minmax(17rem, 0.68fr) minmax(0, 1.32fr);
+}
+
+.request-access-steps {
+  padding: clamp(2rem, 4vw, 4rem);
+  border-right: var(--grid-line);
+  background: var(--bg-accent);
+}
+
+.request-access-steps ol {
+  list-style: none;
+  margin-top: 2rem;
+  border-top: var(--grid-line);
+}
+
+.request-access-steps li {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  gap: 1rem;
+  padding-block: 1.5rem;
+  border-bottom: var(--grid-line);
+}
+
+.request-access-steps li > span,
+.request-required-note,
+.request-field > span:first-child {
+  font: 700 0.68rem/1.4 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.request-access-steps strong {
+  font-size: 0.95rem;
+}
+
+.request-access-steps p {
+  margin-top: 0.45rem;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+  line-height: 1.6;
+}
+
+.request-access-note {
+  margin-top: 2rem !important;
+}
+
+.request-access-note a {
+  color: inherit;
+  text-underline-offset: 0.2rem;
+}
+
+.request-access-form-panel {
+  min-width: 0;
+  padding: clamp(2rem, 5vw, 5rem);
+}
+
+.request-access-form-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 2rem;
+  align-items: end;
+  padding-bottom: 1.5rem;
+  border-bottom: 2px solid var(--text-primary);
+}
+
+.request-access-form-heading h2,
+.request-access-success h2 {
+  margin-top: 0.75rem;
+  font-size: clamp(2rem, 4vw, 3.5rem);
+  font-weight: 650;
+  line-height: 1;
+}
+
+.request-required-note {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.request-access-config,
+.request-error-summary,
+.request-submit-status {
+  margin-top: 1.25rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--status-warning-border);
+  background: var(--status-warning-bg);
+  color: var(--status-warning-text);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.request-error-summary,
+.request-submit-status {
+  border-color: var(--color-error);
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+}
+
+.request-error-summary {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.request-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: var(--grid-line);
+  border-left: var(--grid-line);
+  margin-top: 1.5rem;
+}
+
+.request-field {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 0.7rem;
+  padding: 1.25rem;
+  border-right: var(--grid-line);
+  border-bottom: var(--grid-line);
+}
+
+.request-field-wide {
+  grid-column: 1 / -1;
+}
+
+.request-field input,
+.request-field textarea {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  background: #fff;
+  color: var(--text-primary);
+  font: 500 1rem/1.5 var(--font-main);
+  resize: vertical;
+}
+
+.request-field textarea {
+  min-height: 6.5rem;
+}
+
+.request-field input:hover,
+.request-field textarea:hover {
+  border-color: var(--text-secondary);
+}
+
+.request-field input[aria-invalid="true"],
+.request-field textarea[aria-invalid="true"] {
+  border-color: var(--color-error);
+  border-width: 2px;
+}
+
+.request-field-hint,
+.request-field small,
+.request-consent-error {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.request-field small,
+.request-consent-error {
+  color: var(--status-error-text);
+  font-weight: 650;
+}
+
+.request-consent {
+  display: grid;
+  grid-template-columns: 1.35rem minmax(0, 1fr);
+  gap: 0.8rem;
+  align-items: start;
+  margin-top: 1.5rem;
+  color: var(--text-secondary);
+  font-size: 0.87rem;
+  line-height: 1.55;
+}
+
+.request-consent input {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: 0.05rem;
+  accent-color: var(--text-primary);
+}
+
+.request-consent-error {
+  display: block;
+  margin: 0.45rem 0 0 2.15rem;
+}
+
+.request-submit-row {
+  display: grid;
+  grid-template-columns: auto minmax(12rem, 1fr);
+  gap: 1.25rem;
+  align-items: center;
+  margin-top: 1.5rem;
+}
+
+.request-submit-row .landing-button {
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.request-submit-row .landing-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.request-submit-row p,
+.request-access-success p {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.request-access-success {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 42rem;
+  padding: clamp(1.5rem, 4vw, 3rem);
+  border: 2px solid var(--text-primary);
+  background: var(--bg-accent);
+}
+
+.request-access-success .landing-button {
+  justify-self: start;
+}
+
+.request-field input:focus-visible,
+.request-field textarea:focus-visible,
+.request-consent input:focus-visible,
+.request-error-summary:focus-visible,
+.request-access-note a:focus-visible {
+  outline: 3px solid var(--color-info);
+  outline-offset: 3px;
+}
+
 .landing-trust-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -8018,6 +8296,31 @@ html {
     justify-content: flex-start;
   }
 
+  .request-access-header,
+  .request-access-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .request-access-steps {
+    border-right: 0;
+    border-bottom: var(--grid-line);
+  }
+
+  .request-access-steps ol {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .request-access-steps li {
+    grid-template-columns: 1fr;
+    padding-inline: 1rem;
+    border-right: var(--grid-line);
+  }
+
+  .request-access-steps li:last-child {
+    border-right: 0;
+  }
+
   .trust-review-note {
     min-height: 19rem;
     border-top: 1px solid #383838;
@@ -8372,6 +8675,45 @@ html {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .request-access-header {
+    padding: 3.5rem 1.25rem;
+  }
+
+  .request-access-header h1 {
+    font-size: clamp(3rem, 15vw, 4.5rem);
+    overflow-wrap: anywhere;
+  }
+
+  .request-access-steps,
+  .request-access-form-panel {
+    padding: 2rem 1.25rem;
+  }
+
+  .request-access-steps ol,
+  .request-field-grid,
+  .request-submit-row {
+    grid-template-columns: 1fr;
+  }
+
+  .request-access-steps li {
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+    padding-inline: 0;
+    border-right: 0;
+  }
+
+  .request-access-form-heading {
+    display: grid;
+    align-items: start;
+  }
+
+  .request-field-wide {
+    grid-column: auto;
+  }
+
+  .request-submit-row .landing-button {
+    width: 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -8385,6 +8727,16 @@ html {
   .docs-page *,
   .docs-page *::before,
   .docs-page *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .request-access-shell *,
+  .request-access-shell *::before,
+  .request-access-shell *::after {
     animation-duration: 0.01ms !important;
     animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;

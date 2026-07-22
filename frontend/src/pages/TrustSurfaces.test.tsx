@@ -31,7 +31,7 @@ describe('public trust surfaces', () => {
     }
     expect(screen.getByText(/No authoritative public status page/i)).toBeInTheDocument();
     expect(screen.getByText(/No SECURITY file or dedicated private vulnerability-reporting channel/i)).toBeInTheDocument();
-    expect(screen.getByText(/No approved legal company profile/i)).toBeInTheDocument();
+    expect(screen.getByText(/no approved delivery endpoint, legal company profile/i)).toBeInTheDocument();
     expect(screen.queryByText(/SOC 2 certified/i)).not.toBeInTheDocument();
   });
 
@@ -40,7 +40,8 @@ describe('public trust surfaces', () => {
 
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.getByText('Legal or trading identity')).toBeInTheDocument();
-    expect(screen.getAllByText('Owner decision required')).toHaveLength(5);
+    expect(screen.getAllByText('Owner decision required')).toHaveLength(4);
+    expect(screen.getByText('Delivery configuration required')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Read the exact decision record/ })).toHaveAttribute(
       'href',
       'https://github.com/SiddharthSSR/infera/blob/main/docs/trust/publication-readiness.md',
