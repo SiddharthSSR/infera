@@ -9,6 +9,7 @@ export function PublicFooter() {
         <p>Public evidence is labeled by availability. No implied certifications, customers, or uptime promises.</p>
       </div>
       <nav className="public-footer-links" aria-label="Public information">
+        <Link to="/evaluation">Evaluation guide</Link>
         <Link to="/getting-started">Migration quickstart</Link>
         <Link to="/trust">Trust</Link>
         <Link to="/company">Company</Link>

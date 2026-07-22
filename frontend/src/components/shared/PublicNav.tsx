@@ -23,6 +23,7 @@ export interface PublicNavProps {
 const defaultPublicLinks: PublicNavLink[] = [
   { href: '/#product', label: 'PRODUCT' },
   { href: '/#migration', label: 'OPENAI MIGRATION' },
+  { path: '/evaluation', label: 'EVALUATE' },
   { path: '/docs', label: 'DOCS' },
   { path: '/trust', label: 'TRUST' },
   { href: 'https://github.com/SiddharthSSR/infera', label: 'GITHUB', external: true },
@@ -36,6 +37,8 @@ function trackPublicNavigation(link: PublicNavLink) {
     publicAnalytics.track('public_sign_in_intent', { source: 'public_navigation' });
   } else if (link.path === '/getting-started') {
     publicAnalytics.track('public_resource_opened', { resource: 'quickstart', source: 'public_navigation' });
+  } else if (link.path === '/evaluation') {
+    publicAnalytics.track('public_resource_opened', { resource: 'evaluation', source: 'public_navigation' });
   } else if (link.href === '/#product') {
     publicAnalytics.track('public_product_explored', { product: 'model_catalog', source: 'public_navigation' });
   } else if (link.href === '/#migration') {

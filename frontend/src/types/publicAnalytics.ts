@@ -15,7 +15,7 @@ export const PUBLIC_ANALYTICS_SCHEMA = {
     source: ['landing', 'public_navigation'],
   },
   public_resource_opened: {
-    resource: ['quickstart', 'api_docs'],
+    resource: ['quickstart', 'api_docs', 'evaluation'],
     source: ['landing', 'public_navigation', 'onboarding'],
   },
   public_sign_in_intent: {

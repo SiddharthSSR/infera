@@ -4,6 +4,10 @@ export const publicEvidenceLinks = {
   issues: 'https://github.com/SiddharthSSR/infera/issues',
   changelog: 'https://github.com/SiddharthSSR/infera/blob/main/frontend/CHANGELOG.md',
   compatibility: 'https://github.com/SiddharthSSR/infera/blob/main/docs/openai/COMPATIBILITY.md',
+  providerConformance: 'https://github.com/SiddharthSSR/infera/blob/main/docs/providers/CONFORMANCE.md',
+  modularBackend: 'https://github.com/SiddharthSSR/infera/blob/main/docs/MODULAR_INFERENCE_BACKEND.md',
+  localCompose: 'https://github.com/SiddharthSSR/infera/blob/main/docker-compose.yml',
+  productionCompose: 'https://github.com/SiddharthSSR/infera/blob/main/docker-compose.prod.yml',
   deploymentRecovery: 'https://github.com/SiddharthSSR/infera/blob/main/docs/operations/deployment-recovery.md',
   sharedAuditLedger: 'https://github.com/SiddharthSSR/infera/blob/main/docs/operations/shared-audit-ledger.md',
   ingressConfiguration: 'https://github.com/SiddharthSSR/infera/blob/main/deploy/docker/nginx.conf',
@@ -25,8 +29,8 @@ export function fingerprintPublicEvidence(links: typeof publicEvidenceLinks): st
 }
 
 export const publicEvidenceReview = {
-  reviewedOn: '19 July 2026',
-  evidenceFingerprint: '1e79faca',
+  reviewedOn: '22 July 2026',
+  evidenceFingerprint: '3a7e04dc',
 } as const;
 
 export const PUBLIC_EVIDENCE_REVIEWED_ON = publicEvidenceReview.reviewedOn;

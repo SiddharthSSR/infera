@@ -152,6 +152,7 @@ export function PublicApiDocs() {
                 >
                   START QUICKSTART
                 </Link>
+                <Link className="btn-quiet" to="/evaluation">EVALUATE DEPLOYMENT FIT</Link>
                 <a className="btn-quiet" href="#examples">SEE EXAMPLES</a>
               </div>
             </div>
