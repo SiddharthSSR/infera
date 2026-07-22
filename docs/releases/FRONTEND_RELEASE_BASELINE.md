@@ -73,13 +73,29 @@ For a production-shaped, local static preview, build and run the same Dockerfile
 ```bash
 PREVIEW_SHA="$(git rev-parse --short=12 HEAD)"
 docker build -f deploy/docker/Dockerfile.frontend -t "infera-frontend-preview:${PREVIEW_SHA}" .
-docker run --rm -p 127.0.0.1:3001:3000 "infera-frontend-preview:${PREVIEW_SHA}"
+docker run --rm \
+  --add-host gateway:127.0.0.1 \
+  -p 127.0.0.1:3001:3000 \
+  "infera-frontend-preview:${PREVIEW_SHA}"
 ```
 
-Open `http://127.0.0.1:3001` and record the commit SHA plus the JS/CSS asset names from the returned
-HTML. Static login and public routes can be reviewed this way. API-backed authenticated flows need
-an isolated preview stack with non-production credentials; do not point an unreviewed preview at
-the production gateway.
+The frontend nginx configuration declares `gateway:8080` proxy upstreams and resolves that hostname
+when nginx starts. The loopback host mapping lets this static-only container start without joining a
+Compose network or reaching a real gateway. It does not provide an API: `/api/`, `/v1/`, and
+`/health` requests will fail because nothing listens on port 8080 inside the preview container.
+
+In another terminal, confirm the root document is served and record the JS/CSS asset names:
+
+```bash
+curl --fail --silent --show-error http://127.0.0.1:3001/ |
+  grep -oE '/assets/index-[A-Za-z0-9_-]+\.(js|css)' |
+  sort -u
+```
+
+Open `http://127.0.0.1:3001` and record the commit SHA plus those asset names. Static login and
+public routes can be reviewed this way. API-backed authenticated flows need an isolated preview
+stack with non-production credentials; do not point an unreviewed preview at the production
+gateway.
 
 ## Safe release procedure under the current contract
 
