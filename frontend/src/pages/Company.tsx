@@ -3,11 +3,11 @@ import { AppShell, PublicFooter, PublicNav, TrustStatus } from '../components/sh
 import { publicEvidenceLinks } from '../lib/publicEvidence';
 
 const companyRecords = [
-  ['Legal company identity', 'Not published'],
-  ['Founders and team', 'Not published'],
-  ['Office or registered address', 'Not published'],
-  ['Dedicated company contact', 'Not published'],
-  ['Design-partner intake', 'Not published'],
+  ['Legal or trading identity', 'Owner decision required'],
+  ['Jurisdiction and address', 'Owner decision required'],
+  ['Founders and team profile', 'Owner decision required'],
+  ['Monitored company contact', 'Owner decision required'],
+  ['Design-partner intake', 'Owner decision required'],
 ] as const;
 
 export function Company() {
@@ -19,10 +19,10 @@ export function Company() {
       <main id="main-content">
         <header className="trust-page-header">
           <span className="landing-meta">Company / public record</span>
-          <h1>A product thesis, without an invented company story.</h1>
+          <h1>A public product record, bounded by evidence.</h1>
           <p>
             Infera is building an inference gateway and control plane for infrastructure teams that want to run open
-            models behind an OpenAI-compatible client flow. Public legal, team, and contact details have not been approved for publication.
+            models behind an OpenAI-compatible client flow. The product record is public; legal identity, team, and contact details await explicit owner approval.
           </p>
         </header>
 
@@ -60,9 +60,9 @@ export function Company() {
           <div className="trust-section-heading">
             <div>
               <span className="landing-meta">Publication status</span>
-              <h2 id="company-record-heading">Company details remain a named blocker.</h2>
+              <h2 id="company-record-heading">Five approvals complete the company record.</h2>
             </div>
-            <p>These omissions prevent a complete company and design-partner contact surface. They are shown explicitly instead of being filled with assumptions.</p>
+            <p>The publication record names each decision and the evidence required. Commit authorship and repository metadata are not treated as company approval.</p>
           </div>
           <dl className="company-record-grid">
             {companyRecords.map(([label, status]) => (
@@ -72,6 +72,11 @@ export function Company() {
               </div>
             ))}
           </dl>
+          <a className="trust-decision-card" href={publicEvidenceLinks.publicationReadiness} target="_blank" rel="noreferrer">
+            <span className="landing-meta">Administrator checklist</span>
+            <strong>Approve identity, jurisdiction, publishable address, team details, and monitored contact paths.</strong>
+            <span>Read the exact decision record<span className="sr-only"> (opens in a new tab)</span> ↗</span>
+          </a>
           <aside className="trust-caution">
             <strong>Repository-scoped questions only</strong>
             <p>

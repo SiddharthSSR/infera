@@ -6588,6 +6588,11 @@ html {
   background: var(--bg-paper);
 }
 
+.trust-link-grid-secondary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 1.5rem;
+}
+
 .trust-link-grid > a,
 .trust-principles article,
 .security-evidence-grid article {
@@ -6703,6 +6708,33 @@ html {
   padding: 1.5rem;
   border: 1px solid var(--status-warning-border);
   background: var(--status-warning-bg);
+}
+
+.trust-decision-card {
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.45fr) minmax(0, 1.2fr) minmax(12rem, auto);
+  gap: 1.25rem;
+  align-items: center;
+  margin-top: 1.5rem;
+  min-height: 7rem;
+  padding: 1.25rem;
+  border: var(--grid-line);
+  background: var(--text-primary);
+  color: var(--bg-paper);
+  text-decoration: none;
+}
+
+.trust-decision-card strong {
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.trust-decision-card > span:last-child {
+  font: 700 0.67rem/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-decoration: underline;
+  text-underline-offset: 0.3rem;
+  text-transform: uppercase;
 }
 
 .trust-caution strong {
@@ -7829,7 +7861,8 @@ html {
 .trust-link-grid > a:focus-visible,
 .evaluation-evidence-link:focus-visible,
 .evaluation-table-region:focus-visible,
-.evaluation-faq-list summary:focus-visible {
+.evaluation-faq-list summary:focus-visible,
+.trust-decision-card:focus-visible {
   outline: 3px solid var(--color-info);
   outline-offset: 3px;
 }
@@ -7996,6 +8029,14 @@ html {
   }
 
   .trust-ledger-row .trust-evidence-link {
+    grid-column: 2;
+  }
+
+  .trust-decision-card {
+    grid-template-columns: minmax(10rem, 0.45fr) minmax(0, 1fr);
+  }
+
+  .trust-decision-card > span:last-child {
     grid-column: 2;
   }
 
@@ -8266,6 +8307,14 @@ html {
   .company-record-grid,
   .security-gap-list {
     grid-template-columns: 1fr;
+  }
+
+  .trust-decision-card {
+    grid-template-columns: 1fr;
+  }
+
+  .trust-decision-card > span:last-child {
+    grid-column: 1;
   }
 
   .landing-trust-grid article,

@@ -646,4 +646,8 @@ Check that:
 
 ## License
 
-MIT
+License terms are not yet reconciled repository-wide. This README previously stated MIT, while
+[`python/pyproject.toml`](python/pyproject.toml) declares the Python worker package as Apache-2.0.
+No root `LICENSE` file is published until the repository owner approves the intended scope and
+terms. See the [public trust publication decision record](docs/trust/publication-readiness.md#1-repository-license)
+for the exact decision required.

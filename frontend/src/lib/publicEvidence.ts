@@ -1,6 +1,8 @@
 export const publicEvidenceLinks = {
   repository: 'https://github.com/SiddharthSSR/infera',
   readme: 'https://github.com/SiddharthSSR/infera/blob/main/README.md',
+  pythonPackaging: 'https://github.com/SiddharthSSR/infera/blob/main/python/pyproject.toml',
+  publicationReadiness: 'https://github.com/SiddharthSSR/infera/blob/main/docs/trust/publication-readiness.md',
   issues: 'https://github.com/SiddharthSSR/infera/issues',
   changelog: 'https://github.com/SiddharthSSR/infera/blob/main/frontend/CHANGELOG.md',
   compatibility: 'https://github.com/SiddharthSSR/infera/blob/main/docs/openai/COMPATIBILITY.md',
@@ -30,7 +32,7 @@ export function fingerprintPublicEvidence(links: typeof publicEvidenceLinks): st
 
 export const publicEvidenceReview = {
   reviewedOn: '22 July 2026',
-  evidenceFingerprint: '3a7e04dc',
+  evidenceFingerprint: '30366383',
 } as const;
 
 export const PUBLIC_EVIDENCE_REVIEWED_ON = publicEvidenceReview.reviewedOn;
