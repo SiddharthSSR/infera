@@ -1,32 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell, PublicFooter, PublicNav } from '../components/shared';
+import { ProductWalkthrough } from '../components/public/ProductWalkthrough';
 import { publicAnalytics } from '../lib/publicAnalytics';
-
-const migrationSteps = [
-  {
-    number: '01',
-    title: 'Discover',
-    description: 'Read the model IDs currently exposed by your workspace.',
-  },
-  {
-    number: '02',
-    title: 'Request',
-    description: 'Point an OpenAI-compatible client at the Infera gateway.',
-  },
-  {
-    number: '03',
-    title: 'Operate',
-    description: 'Verify the worker, test the route, and inspect the outcome.',
-  },
-];
-
-const productSurfaces = [
-  { label: 'Models', title: 'Know what can serve', description: 'Separate registry availability from verified serving.' },
-  { label: 'Nodes', title: 'See runtime capacity', description: 'Keep workers, GPUs, and model readiness in view.' },
-  { label: 'Playground', title: 'Test the real route', description: 'Send a workspace request before moving traffic.' },
-  { label: 'Logs', title: 'Trace the outcome', description: 'Isolate auth, routing, runtime, and model failures.' },
-];
 
 const registryModels = [
   {
@@ -190,37 +166,7 @@ export function PublicLanding() {
           <p className="landing-model-note"><strong>A registry entry does not mean serving.</strong> Use <code>GET /v1/models</code> and worker health as the source of truth before sending traffic.</p>
         </section>
 
-        <section className="landing-section landing-section-tone" id="migration" aria-labelledby="migration-heading">
-          <div className="landing-section-heading landing-section-heading-compact">
-            <div><span className="landing-meta">Shortest path</span><h2 id="migration-heading">Discover. Request. Operate.</h2></div>
-            <p>Move from a live model ID to an inspectable response without rebuilding your client integration.</p>
-          </div>
-          <ol className="landing-step-grid landing-step-grid-compact">
-            {migrationSteps.map((step) => (
-              <li key={step.number}>
-                <span className="landing-meta">{step.number}</span>
-                <h3>{step.title}</h3>
-                <p>{step.description}</p>
-              </li>
-            ))}
-          </ol>
-        </section>
-
-        <section className="landing-section" id="product" aria-labelledby="product-heading">
-          <div className="landing-section-heading">
-            <div><span className="landing-meta">Control plane</span><h2 id="product-heading">Operate the route, not just the endpoint.</h2></div>
-            <p>One workspace connects the model registry, runtime capacity, real requests, and their outcomes.</p>
-          </div>
-          <div className="landing-surface-grid">
-            {productSurfaces.map((surface) => (
-              <article key={surface.label}>
-                <span className="landing-meta">{surface.label}</span>
-                <h3>{surface.title}</h3>
-                <p>{surface.description}</p>
-              </article>
-            ))}
-          </div>
-        </section>
+        <ProductWalkthrough />
 
         <section className="landing-section landing-section-tone landing-boundary-section" id="proof" aria-labelledby="proof-heading">
           <div className="landing-section-heading">

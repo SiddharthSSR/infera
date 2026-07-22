@@ -66,6 +66,7 @@ describe('PublicLanding', () => {
     expect(screen.getByRole('heading', { name: 'Run open models. Keep your OpenAI client.' })).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: 'Run the quickstart' })[0]).toHaveAttribute('href', '/getting-started');
     expect(screen.getByRole('link', { name: 'Explore registry models' })).toHaveAttribute('href', '#models');
+    expect(screen.getByRole('link', { name: 'OPENAI MIGRATION' })).toHaveAttribute('href', '/#migration');
     expect(screen.getByRole('link', { name: 'SIGN IN' })).toHaveAttribute('href', '/sign-in');
     expect(screen.getByRole('link', { name: /GITHUB/ })).toHaveAttribute('href', 'https://github.com/SiddharthSSR/infera');
   });
@@ -83,29 +84,41 @@ describe('PublicLanding', () => {
     expect(screen.getByText(/live serving still requires a healthy worker/i)).toBeInTheDocument();
   });
 
-  it('keeps the shortest migration sequence and factual API boundary', () => {
+  it('shows the source-backed operator walkthrough and factual API boundary', () => {
     renderLanding();
 
-    const migrationSection = screen.getByRole('heading', { name: 'Discover. Request. Operate.' }).closest('section');
-    expect(migrationSection).not.toBeNull();
-    expect(within(migrationSection as HTMLElement).getAllByRole('listitem')).toHaveLength(3);
-    expect(within(migrationSection as HTMLElement).getByRole('heading', { name: 'Discover' })).toBeInTheDocument();
-    expect(within(migrationSection as HTMLElement).getByRole('heading', { name: 'Request' })).toBeInTheDocument();
-    expect(within(migrationSection as HTMLElement).getByRole('heading', { name: 'Operate' })).toBeInTheDocument();
+    const walkthrough = screen.getByRole('heading', { name: 'Follow one request from model to evidence.' }).closest('section');
+    expect(walkthrough).not.toBeNull();
+    expect(within(walkthrough as HTMLElement).getAllByRole('listitem')).toHaveLength(4);
+    expect(within(walkthrough as HTMLElement).getByText('Models / discovery')).toBeInTheDocument();
+    expect(within(walkthrough as HTMLElement).getByText('Nodes / readiness')).toBeInTheDocument();
+    expect(within(walkthrough as HTMLElement).getByText('Playground / request')).toBeInTheDocument();
+    expect(within(walkthrough as HTMLElement).getByText('Logs / inspection')).toBeInTheDocument();
+    expect(within(walkthrough as HTMLElement).getByRole('heading', { name: 'OpenAI migration' })).toBeInTheDocument();
+    expect(within(walkthrough as HTMLElement).getByRole('heading', { name: 'Self-hosted operations' })).toBeInTheDocument();
+    expect(within(walkthrough as HTMLElement).getByRole('heading', { name: 'Failure diagnosis' })).toBeInTheDocument();
     expect(screen.getByText('Error types are Infera-specific.')).toBeInTheDocument();
     expect(screen.getByText('No legacy completions or embeddings endpoint.')).toBeInTheDocument();
   });
 
-  it('keeps the model proof before the short migration and control-plane story', () => {
+  it('keeps model proof before the product walkthrough', () => {
     const { container } = renderLanding();
     const sectionIDs = Array.from(container.querySelectorAll('main > section[id]')).map((section) => section.id);
 
     expect(sectionIDs).toEqual([
       'models',
-      'migration',
       'product',
       'proof',
     ]);
+  });
+
+  it('links every walkthrough step to a focused quickstart or docs surface', () => {
+    renderLanding();
+
+    expect(screen.getByRole('link', { name: 'Run model discovery →' })).toHaveAttribute('href', '/getting-started#copy-run');
+    expect(screen.getByRole('link', { name: 'Review readiness checks →' })).toHaveAttribute('href', '/getting-started#failures');
+    expect(screen.getByRole('link', { name: 'Read the request contract →' })).toHaveAttribute('href', '/docs#quickstart');
+    expect(screen.getByRole('link', { name: 'Open the failure runbook →' })).toHaveAttribute('href', '/getting-started#failures');
   });
 
   it('keeps the quickstart primary while linking to the API and trust records', () => {
