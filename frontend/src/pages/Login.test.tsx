@@ -1,9 +1,9 @@
 /// <reference types="vitest/globals" />
 /// <reference types="@testing-library/jest-dom" />
 import React from 'react'
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Login } from './Login'
 
 const analyticsMocks = vi.hoisted(() => ({
@@ -11,7 +11,6 @@ const analyticsMocks = vi.hoisted(() => ({
   trackFirst: vi.fn(),
 }))
 
-// Mock the api module
 vi.mock('../lib/authAccessClient', () => ({
   createSession: vi.fn(),
 }))
@@ -22,7 +21,6 @@ vi.mock('../lib/publicAnalytics', () => ({
 
 import { createSession } from '../lib/authAccessClient'
 
-const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>
 const mockCreateSession = createSession as ReturnType<typeof vi.fn>
 
 function renderLogin(onAuthenticated = vi.fn()) {
@@ -38,186 +36,139 @@ describe('Login', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    mockFetch.mockReset()
-    // Default: health check succeeds (prevents noisy rejections)
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'healthy', workers: 1 }),
-    })
   })
 
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('renders branding and form elements', async () => {
+  it('renders the public-shell sign-in experience without runtime dashboard content', () => {
     renderLogin(mockOnAuthenticated)
 
-    // Wait for health check to settle
-    await waitFor(() => {
-      expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
-    })
-
-    expect(screen.getByText('INFERA')).toBeInTheDocument()
-    expect(screen.getByText('PUBLIC SOURCE')).toBeInTheDocument()
-    expect(screen.queryByText(/open source/i)).not.toBeInTheDocument()
-    expect(screen.getByText('API key')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('inf_...')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /connect/i })).toBeInTheDocument()
+    expect(screen.getByText('INFERA.AI')).toBeInTheDocument()
+    expect(screen.getByText('OPEN INFERENCE CONTROL PLANE')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Sign in with an admin key' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Admin key')).toHaveAttribute('type', 'password')
+    expect(screen.getByText('Admin access only')).toBeInTheDocument()
+    expect(screen.getByText('Stored server-side')).toBeInTheDocument()
+    expect(screen.getByText('Bound to the key workspace')).toBeInTheDocument()
+    expect(screen.queryByText(/workers connected/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
   })
 
-  it('shows gateway online with worker count', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'healthy', workers: 2 }),
-    })
-
+  it('shows an accessible error and focuses the field on empty submit', async () => {
     renderLogin(mockOnAuthenticated)
+    const input = screen.getByLabelText('Admin key')
 
-    await waitFor(() => {
-      expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
-    })
-    expect(screen.getByText(/2 workers connected/)).toBeInTheDocument()
-  })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
-  it('shows gateway unreachable on health check failure', async () => {
-    mockFetch.mockRejectedValue(new Error('network error'))
-
-    renderLogin(mockOnAuthenticated)
-
-    await waitFor(() => {
-      expect(screen.getByText('Gateway unreachable')).toBeInTheDocument()
-    })
-  })
-
-  it('shows error on empty submit', async () => {
-    renderLogin(mockOnAuthenticated)
-
-    // Wait for health check to settle
-    await waitFor(() => {
-      expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
-    })
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /connect/i }))
-    })
-
-    expect(screen.getByText('Please enter your API key')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter an admin key to continue.')
+    expect(input).toHaveFocus()
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(input).toHaveAttribute('aria-describedby', 'login-key-help login-key-error')
     expect(mockCreateSession).not.toHaveBeenCalled()
+    expect(analyticsMocks.track).not.toHaveBeenCalled()
   })
 
-  it('shows error for invalid key', async () => {
-    mockCreateSession.mockRejectedValueOnce(new Error('Invalid API key'))
-
+  it('reveals and hides the key while preserving input focus', () => {
     renderLogin(mockOnAuthenticated)
+    const input = screen.getByLabelText('Admin key')
 
-    await waitFor(() => {
-      expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
-    })
+    fireEvent.click(screen.getByRole('button', { name: 'Show admin key' }))
+    expect(input).toHaveAttribute('type', 'text')
+    expect(input).toHaveFocus()
 
-    const input = screen.getByPlaceholderText('inf_...')
+    fireEvent.click(screen.getByRole('button', { name: 'Hide admin key' }))
+    expect(input).toHaveAttribute('type', 'password')
+    expect(input).toHaveFocus()
+  })
+
+  it('shows the admin-specific invalid-key message and returns focus to the field', async () => {
+    mockCreateSession.mockRejectedValueOnce(new Error('Invalid API key'))
+    renderLogin(mockOnAuthenticated)
+    const input = screen.getByLabelText('Admin key')
     fireEvent.change(input, { target: { value: 'inf_badkey123' } })
 
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /connect/i }))
-    })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
     await waitFor(() => {
-      expect(screen.getByText('Invalid API key. Check your key and try again.')).toBeInTheDocument()
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Invalid admin key. Check your key and try again.',
+      )
     })
+    expect(input).toHaveFocus()
   })
 
-  it('shows admin access required when createSession returns 403', async () => {
+  it('explains when a non-admin key is rejected', async () => {
     mockCreateSession.mockRejectedValueOnce(new Error('Admin access required'))
-
     renderLogin(mockOnAuthenticated)
-
-    await waitFor(() => {
-      expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Admin key'), {
+      target: { value: 'inf_userkey123' },
     })
 
-    const input = screen.getByPlaceholderText('inf_...')
-    fireEvent.change(input, { target: { value: 'inf_userkey123' } })
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /connect/i }))
-    })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
     await waitFor(() => {
-      expect(screen.getByText('Admin access required. Only admin keys can access the dashboard.')).toBeInTheDocument()
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Admin access required. Only admin keys can access the dashboard.',
+      )
     })
   })
 
-  it('authenticates with valid key', async () => {
+  it('authenticates with a trimmed valid key and reports the public intent', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
-    mockCreateSession.mockResolvedValueOnce({
+    const session = {
       session: { id: 'sess-1', expires_at: '2099-01-01T00:00:00Z' },
-      key: { id: 'k1', key_prefix: 'inf_abcd', name: 'admin', role: 'admin' },
-    })
-
+      key: { id: 'k1', key_prefix: 'inf_abcd', name: 'admin', role: 'admin' as const },
+    }
+    mockCreateSession.mockResolvedValueOnce(session)
     renderLogin(mockOnAuthenticated)
-
-    const input = screen.getByPlaceholderText('inf_...')
-    fireEvent.change(input, { target: { value: 'inf_validkey123' } })
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /connect/i }))
+    fireEvent.change(screen.getByLabelText('Admin key'), {
+      target: { value: '  inf_validkey123  ' },
     })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
     await waitFor(() => {
       expect(mockCreateSession).toHaveBeenCalledWith('inf_validkey123')
+      expect(screen.getByText('Connected')).toBeInTheDocument()
     })
     expect(analyticsMocks.track).toHaveBeenCalledWith('public_sign_in_intent', {
       source: 'sign_in_form',
     })
 
-    // onAuthenticated fires after 500ms timeout
     await act(async () => {
       vi.advanceTimersByTime(500)
     })
-
-    expect(mockOnAuthenticated).toHaveBeenCalled()
+    expect(mockOnAuthenticated).toHaveBeenCalledWith(session)
   })
 
-  it('shows connection error when createSession throws unknown error', async () => {
+  it('shows a useful gateway error for an unknown failure', async () => {
     mockCreateSession.mockRejectedValueOnce(new Error('Network error'))
-
     renderLogin(mockOnAuthenticated)
-
-    await waitFor(() => {
-      expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Admin key'), {
+      target: { value: 'inf_somekey123' },
     })
 
-    const input = screen.getByPlaceholderText('inf_...')
-    fireEvent.change(input, { target: { value: 'inf_somekey123' } })
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /connect/i }))
-    })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
     await waitFor(() => {
-      expect(screen.getByText('Could not connect to gateway. Is it running?')).toBeInTheDocument()
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Could not connect to the gateway. Check its availability and try again.',
+      )
     })
   })
 
-  it('clears error when typing', async () => {
+  it('clears validation state as the user edits the key', () => {
     renderLogin(mockOnAuthenticated)
+    const input = screen.getByLabelText('Admin key')
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    expect(screen.getByRole('alert')).toBeInTheDocument()
 
-    await waitFor(() => {
-      expect(screen.getByText(/Gateway online/)).toBeInTheDocument()
-    })
-
-    // Trigger empty submit error
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /connect/i }))
-    })
-
-    expect(screen.getByText('Please enter your API key')).toBeInTheDocument()
-
-    // Type in input — error should clear
-    const input = screen.getByPlaceholderText('inf_...')
     fireEvent.change(input, { target: { value: 'a' } })
 
-    expect(screen.queryByText('Please enter your API key')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(input).toHaveAttribute('aria-invalid', 'false')
+    expect(input).toHaveAttribute('aria-describedby', 'login-key-help')
   })
 })
