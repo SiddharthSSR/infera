@@ -14,6 +14,9 @@ export function PublicFooter() {
         <Link to="/trust">Trust</Link>
         <Link to="/company">Company</Link>
         <Link to="/security">Security</Link>
+        <a href={publicEvidenceLinks.publicationReadiness} target="_blank" rel="noreferrer">
+          Publication decisions<span className="sr-only"> (opens in a new tab)</span>
+        </a>
         <a href={publicEvidenceLinks.repository} target="_blank" rel="noreferrer">
           Source repository<span className="sr-only"> (opens in a new tab)</span>
         </a>

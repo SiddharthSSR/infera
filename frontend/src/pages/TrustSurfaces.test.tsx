@@ -22,7 +22,13 @@ describe('public trust surfaces', () => {
       'href',
       'https://github.com/SiddharthSSR/infera',
     );
-    expect(screen.getByText(/no license file is present/i)).toBeInTheDocument();
+    expect(screen.getByText(/Python worker package declares Apache-2.0/i)).toBeInTheDocument();
+    for (const link of screen.getAllByRole('link', { name: /Read decision record/ })) {
+      expect(link).toHaveAttribute(
+        'href',
+        'https://github.com/SiddharthSSR/infera/blob/main/docs/trust/publication-readiness.md',
+      );
+    }
     expect(screen.getByText(/No authoritative public status page/i)).toBeInTheDocument();
     expect(screen.getByText(/No SECURITY file or dedicated private vulnerability-reporting channel/i)).toBeInTheDocument();
     expect(screen.getByText(/No approved legal company profile/i)).toBeInTheDocument();
@@ -33,8 +39,12 @@ describe('public trust surfaces', () => {
     renderPage(<Company />);
 
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
-    expect(screen.getByText('Legal company identity')).toBeInTheDocument();
-    expect(screen.getAllByText('Not published')).toHaveLength(5);
+    expect(screen.getByText('Legal or trading identity')).toBeInTheDocument();
+    expect(screen.getAllByText('Owner decision required')).toHaveLength(5);
+    expect(screen.getByRole('link', { name: /Read the exact decision record/ })).toHaveAttribute(
+      'href',
+      'https://github.com/SiddharthSSR/infera/blob/main/docs/trust/publication-readiness.md',
+    );
     expect(screen.getByText(/They are not a private contact channel/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Open GitHub issues/ })).toHaveAttribute(
       'href',
@@ -46,12 +56,13 @@ describe('public trust surfaces', () => {
     renderPage(<Security />);
 
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
-    expect(screen.getByRole('heading', { name: 'Implementation evidence is not a certification.' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Inspect the controls. Keep the claims bounded.' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Review compatibility documentation/ })).toHaveAttribute(
       'href',
       'https://github.com/SiddharthSSR/infera/blob/main/docs/openai/COMPATIBILITY.md',
     );
-    expect(screen.getByText('Compliance certification or attestation')).toBeInTheDocument();
+    expect(screen.getByText(/authoritative evidence before publishing audit or certification claims/i)).toBeInTheDocument();
+    expect(screen.getAllByText('Decision required')).toHaveLength(6);
     expect(screen.getByText(/Do not place vulnerability details/i)).toBeInTheDocument();
     expect(screen.queryByText(/guaranteed/i)).not.toBeInTheDocument();
   });

@@ -20,10 +20,20 @@ const evidenceRecords = [
     linkLabel: 'Read changelog',
   },
   {
-    label: 'Software license',
-    status: 'Not published',
+    label: 'Publication decision record',
+    status: 'Available',
+    tone: 'available' as const,
+    detail: 'A repository record names the exact owner decisions required before company, legal, privacy, security, and service claims can be published.',
+    href: publicEvidenceLinks.publicationReadiness,
+    linkLabel: 'Read decision record',
+  },
+  {
+    label: 'Repository-wide software license',
+    status: 'Owner decision required',
     tone: 'unavailable' as const,
-    detail: 'The README says MIT, but no license file is present and GitHub does not detect a license. Infera is not represented here as licensed open source.',
+    detail: 'The root README previously named MIT while the Python worker package declares Apache-2.0. No root license is published until scope, terms, and copyright text are approved.',
+    href: publicEvidenceLinks.publicationReadiness,
+    linkLabel: 'Review license decision',
   },
   {
     label: 'Public service status',
@@ -78,7 +88,7 @@ export function Trust() {
           <div className="trust-section-heading">
             <div>
               <span className="landing-meta">Availability record</span>
-              <h2 id="evidence-heading">Evidence, gaps, and no blurred lines.</h2>
+              <h2 id="evidence-heading">A usable record of what exists today.</h2>
             </div>
             <p>“Not published” is a status, not a promise. These items remain blockers until an authoritative source exists.</p>
           </div>
@@ -104,19 +114,31 @@ export function Trust() {
           <div className="trust-section-heading">
             <div>
               <span className="landing-meta">Source and license</span>
-              <h2 id="open-source-heading">Public source. License unresolved.</h2>
+              <h2 id="open-source-heading">Public source. License terms need one owner decision.</h2>
             </div>
             <p>
-              The repository can be inspected and its README includes contribution steps. Without a license file,
-              reuse rights are not stated clearly enough for this site to claim open-source status.
+              The repository can be inspected and its README includes contribution steps. The README's former MIT
+              statement conflicts with Apache-2.0 metadata in the Python package, so this site does not infer reuse rights.
             </p>
           </div>
           <div className="trust-link-grid">
             <a href={publicEvidenceLinks.readme} target="_blank" rel="noreferrer">
-              <span className="landing-meta">Project record</span>
-              <strong>README and contribution steps</strong>
-              <span>Open on GitHub ↗</span>
+              <span className="landing-meta">Root declaration</span>
+              <strong>README license reconciliation note</strong>
+              <span>Inspect README ↗</span>
             </a>
+            <a href={publicEvidenceLinks.pythonPackaging} target="_blank" rel="noreferrer">
+              <span className="landing-meta">Package declaration</span>
+              <strong>Python worker Apache-2.0 metadata</strong>
+              <span>Inspect package metadata ↗</span>
+            </a>
+            <a href={publicEvidenceLinks.publicationReadiness} target="_blank" rel="noreferrer">
+              <span className="landing-meta">Decision boundary</span>
+              <strong>Exact administrator approvals still required</strong>
+              <span>Read decision record ↗</span>
+            </a>
+          </div>
+          <div className="trust-link-grid trust-link-grid-secondary">
             <Link to="/security">
               <span className="landing-meta">Security</span>
               <strong>Implementation evidence and known gaps</strong>

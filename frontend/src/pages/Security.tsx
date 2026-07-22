@@ -29,13 +29,13 @@ const implementationEvidence = [
   },
 ];
 
-const missingSecurityMaterials = [
-  'Private vulnerability-reporting channel',
-  'Published security policy or response timeline',
-  'Independent penetration-test report',
-  'Compliance certification or attestation',
-  'Public privacy policy, DPA, retention schedule, or subprocessor list',
-  'Customer-facing SLA or public service-status history',
+const openPublicationDecisions = [
+  'Approve a monitored, non-public vulnerability intake path',
+  'Name supported versions, acknowledgement target, and disclosure expectations',
+  'Approve privacy roles, data categories, retention, deletion, and request handling',
+  'Approve subprocessors and transfer disclosures for the intended service scope',
+  'Provide authoritative evidence before publishing audit or certification claims',
+  'Assign ownership before linking a public status page or service commitment',
 ];
 
 export function Security() {
@@ -47,7 +47,7 @@ export function Security() {
       <main id="main-content">
         <header className="trust-page-header trust-page-header-security">
           <span className="landing-meta">Security / data handling</span>
-          <h1>Implementation evidence is not a certification.</h1>
+          <h1>Inspect the controls. Keep the claims bounded.</h1>
           <p>
             This page points to security-relevant source and operational documentation that exists today. It does not
             claim that a particular deployment is certified, independently audited, breach-proof, or covered by an SLA.
@@ -79,19 +79,24 @@ export function Security() {
         <section className="trust-section trust-section-tone" aria-labelledby="security-gaps-heading">
           <div className="trust-section-heading">
             <div>
-              <span className="landing-meta">Not published</span>
-              <h2 id="security-gaps-heading">Security materials still blocking enterprise review.</h2>
+              <span className="landing-meta">Owner decisions</span>
+              <h2 id="security-gaps-heading">A precise path to publishable policy.</h2>
             </div>
             <p>None of the items below should be inferred from source code, deployment assets, or internal operational documents.</p>
           </div>
           <ul className="security-gap-list">
-            {missingSecurityMaterials.map((material) => (
+            {openPublicationDecisions.map((material) => (
               <li key={material}>
-                <TrustStatus tone="unavailable">Unavailable</TrustStatus>
+                <TrustStatus tone="unavailable">Decision required</TrustStatus>
                 <span>{material}</span>
               </li>
             ))}
           </ul>
+          <a className="trust-decision-card" href={publicEvidenceLinks.publicationReadiness} target="_blank" rel="noreferrer">
+            <span className="landing-meta">Publication boundary</span>
+            <strong>Review the evidence table and the exact security, privacy, retention, status, and terms decisions.</strong>
+            <span>Read the decision record<span className="sr-only"> (opens in a new tab)</span> ↗</span>
+          </a>
           <aside className="trust-caution">
             <strong>No private security intake is published</strong>
             <p>
