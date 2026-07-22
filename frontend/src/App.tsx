@@ -18,6 +18,7 @@ import { PageTransition } from './components/PageTransition';
 const Login = lazyWithRetry(() => import('./pages/Login').then((module) => ({ default: module.Login })), 'login');
 const PublicLanding = lazyWithRetry(() => import('./pages/PublicLanding').then((module) => ({ default: module.PublicLanding })), 'public-landing');
 const PublicApiDocs = lazyWithRetry(() => import('./pages/PublicApiDocs').then((module) => ({ default: module.PublicApiDocs })), 'docs');
+const Evaluation = lazyWithRetry(() => import('./pages/Evaluation').then((module) => ({ default: module.Evaluation })), 'evaluation');
 const GettingStarted = lazyWithRetry(() => import('./pages/GettingStarted').then((module) => ({ default: module.GettingStarted })), 'getting-started');
 const Trust = lazyWithRetry(() => import('./pages/Trust').then((module) => ({ default: module.Trust })), 'trust');
 const Company = lazyWithRetry(() => import('./pages/Company').then((module) => ({ default: module.Company })), 'company');
@@ -491,6 +492,7 @@ function AppContent() {
           <Route path="/" element={<PublicLanding />} />
           <Route path="/sign-in" element={<Login onAuthenticated={(nextSession: SessionInfo) => setSession(nextSession)} />} />
           <Route path="/docs" element={<PublicApiDocs />} />
+          <Route path="/evaluation" element={<Evaluation />} />
           <Route path="/getting-started" element={<GettingStarted />} />
           <Route path="/trust" element={<Trust />} />
           <Route path="/company" element={<Company />} />
@@ -508,7 +510,7 @@ function AppContent() {
     eyebrow: 'Workspace console',
     description: 'Monitor the platform, operating state, and user-facing surfaces from one place.',
   };
-  const docsRoutes = ['/docs', '/getting-started', '/trust', '/company', '/security'];
+  const docsRoutes = ['/docs', '/evaluation', '/getting-started', '/trust', '/company', '/security'];
   const hideAppChrome = docsRoutes.includes(location.pathname);
   const hideDisplayHeader = hideAppChrome || location.pathname === '/playground';
 
@@ -567,6 +569,7 @@ function AppContent() {
               <Route path="/api-keys" element={<ApiKeys />} />
               <Route path="/workspace" element={<WorkspaceAdmin />} />
               <Route path="/docs" element={<PublicApiDocs />} />
+              <Route path="/evaluation" element={<Evaluation />} />
               <Route path="/getting-started" element={<GettingStarted />} />
               <Route path="/trust" element={<Trust />} />
               <Route path="/company" element={<Company />} />

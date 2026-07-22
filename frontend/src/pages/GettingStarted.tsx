@@ -137,6 +137,7 @@ export function GettingStarted() {
               </div>
               <div className="docs-actions">
                 <a className="btn-primary" href="#runbook" style={{ textDecoration: 'none' }}>RUN THE FLOW</a>
+                <Link className="btn-quiet" to="/evaluation">REVIEW DEPLOYMENT FIT</Link>
                 <Link className="btn-quiet" to="/docs" onClick={() => publicAnalytics.track('public_resource_opened', { resource: 'api_docs', source: 'onboarding' })}>OPEN FULL API DOCS</Link>
                 <Link className="btn-quiet" to="/sign-in" onClick={() => publicAnalytics.track('public_sign_in_intent', { source: 'onboarding' })}>SIGN IN TO DASHBOARD</Link>
               </div>
