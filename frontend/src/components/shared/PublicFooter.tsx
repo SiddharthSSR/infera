@@ -1,8 +1,18 @@
 import { Link } from 'react-router-dom';
+import {
+  designPartnerRequestEndpoint,
+  getPublicAcquisitionTarget,
+} from '../../lib/designPartnerRequest';
 import { publicEvidenceLinks } from '../../lib/publicEvidence';
 import { publicAnalytics } from '../../lib/publicAnalytics';
 
-export function PublicFooter() {
+export interface PublicFooterProps {
+  intakeEndpoint?: string;
+}
+
+export function PublicFooter({ intakeEndpoint = designPartnerRequestEndpoint }: PublicFooterProps) {
+  const acquisition = getPublicAcquisitionTarget(intakeEndpoint);
+
   return (
     <footer className="public-footer">
       <div className="public-footer-brand">
@@ -11,7 +21,15 @@ export function PublicFooter() {
       </div>
       <nav className="public-footer-links" aria-label="Public information">
         <Link to="/evaluation">Evaluation guide</Link>
-        <Link to="/request-access" onClick={() => publicAnalytics.track('public_primary_cta_clicked', { action: 'request_design_partner_access', placement: 'footer' })}>Request design-partner access</Link>
+        <Link
+          to={acquisition.path}
+          onClick={() => publicAnalytics.track('public_primary_cta_clicked', {
+            action: acquisition.action,
+            placement: 'footer',
+          })}
+        >
+          {acquisition.path === '/request-access' ? 'Request design-partner access' : 'Evaluate deployment fit'}
+        </Link>
         <Link to="/getting-started">Migration quickstart</Link>
         <Link to="/trust">Trust</Link>
         <Link to="/company">Company</Link>

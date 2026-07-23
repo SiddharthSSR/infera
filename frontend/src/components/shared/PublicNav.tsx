@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
+import {
+  designPartnerRequestEndpoint,
+  getPublicAcquisitionTarget,
+} from '../../lib/designPartnerRequest';
 import { cn } from '../../lib/utils';
 import { publicAnalytics } from '../../lib/publicAnalytics';
 import { LabelText } from './LabelText';
@@ -16,20 +20,28 @@ export interface PublicNavProps {
   title: string;
   /** Navigation links — defaults to the standard public page set */
   links?: PublicNavLink[];
+  /** Optional build-time intake endpoint override, primarily for deterministic rendering and tests. */
+  intakeEndpoint?: string;
   className?: string;
   style?: React.CSSProperties;
 }
 
-const defaultPublicLinks: PublicNavLink[] = [
-  { href: '/#product', label: 'PRODUCT' },
-  { href: '/#migration', label: 'OPENAI MIGRATION' },
-  { path: '/evaluation', label: 'EVALUATE' },
-  { path: '/docs', label: 'DOCS' },
-  { path: '/trust', label: 'TRUST' },
-  { href: 'https://github.com/SiddharthSSR/infera', label: 'GITHUB', external: true },
-  { path: '/sign-in', label: 'SIGN IN' },
-  { path: '/request-access', label: 'REQUEST ACCESS' },
-];
+function getDefaultPublicLinks(intakeEndpoint?: string): PublicNavLink[] {
+  const acquisition = getPublicAcquisitionTarget(intakeEndpoint);
+
+  return [
+    { href: '/#product', label: 'PRODUCT' },
+    { href: '/#migration', label: 'OPENAI MIGRATION' },
+    { path: '/evaluation', label: 'EVALUATE' },
+    { path: '/docs', label: 'DOCS' },
+    { path: '/trust', label: 'TRUST' },
+    { href: 'https://github.com/SiddharthSSR/infera', label: 'GITHUB', external: true },
+    { path: '/sign-in', label: 'SIGN IN' },
+    acquisition.path === '/request-access'
+      ? { path: acquisition.path, label: 'REQUEST ACCESS' }
+      : { path: '/getting-started', label: 'RUN QUICKSTART' },
+  ];
+}
 
 function trackPublicNavigation(link: PublicNavLink) {
   if (link.path === '/docs') {
@@ -55,12 +67,14 @@ function trackPublicNavigation(link: PublicNavLink) {
  */
 export function PublicNav({
   title,
-  links = defaultPublicLinks,
+  links,
+  intakeEndpoint = designPartnerRequestEndpoint,
   className,
   style,
 }: PublicNavProps) {
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const publicLinks = links ?? getDefaultPublicLinks(intakeEndpoint);
 
   useEffect(() => {
     setMenuOpen(false);
@@ -86,7 +100,7 @@ export function PublicNav({
         className={cn('nav-group public-nav-links', menuOpen && 'is-open')}
         aria-label="Primary navigation"
       >
-        {links.map((link) => link.path ? (
+        {publicLinks.map((link) => link.path ? (
           <NavLink
             key={link.path}
             to={link.path}

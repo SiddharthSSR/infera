@@ -45,4 +45,28 @@ describe('GettingStarted', () => {
     expect(within(recoveryCard!).getByRole('link', { name: 'ACCEPT AN INVITATION' })).toHaveAttribute('href', '/accept-invite');
     expect(screen.getByText(/first setup action is to connect provider access in Workspace/i)).toBeInTheDocument();
   });
+
+  it('uses evaluation as the primary acquisition action while intake is unconfigured', () => {
+    render(
+      <MemoryRouter>
+        <GettingStarted intakeEndpoint="" />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('link', { name: 'EVALUATE DEPLOYMENT FIT' })).toHaveAttribute('href', '/evaluation');
+    expect(screen.queryByRole('link', { name: 'REQUEST DESIGN-PARTNER ACCESS' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'RUN QUICKSTART' })).toHaveAttribute('href', '/getting-started');
+  });
+
+  it('activates design-partner acquisition when intake is configured', () => {
+    render(
+      <MemoryRouter>
+        <GettingStarted intakeEndpoint="/api/design-partner-requests" />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('link', { name: 'REQUEST DESIGN-PARTNER ACCESS' })).toHaveAttribute('href', '/request-access');
+    expect(screen.getByRole('link', { name: 'REVIEW DEPLOYMENT FIT' })).toHaveAttribute('href', '/evaluation');
+    expect(screen.getByRole('link', { name: 'REQUEST ACCESS' })).toHaveAttribute('href', '/request-access');
+  });
 });

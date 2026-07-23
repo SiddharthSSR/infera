@@ -10,6 +10,13 @@ interface DesignPartnerRequestEnvironment {
   readonly VITE_DESIGN_PARTNER_REQUEST_ENDPOINT?: string;
 }
 
+export type PublicAcquisitionAction = 'evaluate_deployment_fit' | 'request_design_partner_access';
+
+export interface PublicAcquisitionTarget {
+  action: PublicAcquisitionAction;
+  path: '/evaluation' | '/request-access';
+}
+
 interface SubmitDesignPartnerRequestOptions {
   endpoint: string;
   fetcher?: typeof fetch;
@@ -33,6 +40,16 @@ export function getDesignPartnerRequestEndpoint(
   } catch {
     return undefined;
   }
+}
+
+export function getPublicAcquisitionTarget(endpoint?: string): PublicAcquisitionTarget {
+  const configuredEndpoint = getDesignPartnerRequestEndpoint({
+    VITE_DESIGN_PARTNER_REQUEST_ENDPOINT: endpoint,
+  });
+
+  return configuredEndpoint
+    ? { action: 'request_design_partner_access', path: '/request-access' }
+    : { action: 'evaluate_deployment_fit', path: '/evaluation' };
 }
 
 export async function submitDesignPartnerRequest(

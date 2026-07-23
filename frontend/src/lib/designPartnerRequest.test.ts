@@ -1,6 +1,10 @@
 /// <reference types="vitest/globals" />
 import { describe, expect, it, vi } from 'vitest';
-import { getDesignPartnerRequestEndpoint, submitDesignPartnerRequest } from './designPartnerRequest';
+import {
+  getDesignPartnerRequestEndpoint,
+  getPublicAcquisitionTarget,
+  submitDesignPartnerRequest,
+} from './designPartnerRequest';
 
 const request = {
   workEmail: 'operator@example.com',
@@ -17,6 +21,21 @@ describe('design-partner request configuration', () => {
     expect(getDesignPartnerRequestEndpoint({ VITE_DESIGN_PARTNER_REQUEST_ENDPOINT: 'http://intake.example.com/requests' })).toBeUndefined();
     expect(getDesignPartnerRequestEndpoint({ VITE_DESIGN_PARTNER_REQUEST_ENDPOINT: '//intake.example.com/requests' })).toBeUndefined();
     expect(getDesignPartnerRequestEndpoint({})).toBeUndefined();
+  });
+
+  it('keeps acquisition on evaluation until a valid endpoint is configured', () => {
+    expect(getPublicAcquisitionTarget()).toEqual({
+      action: 'evaluate_deployment_fit',
+      path: '/evaluation',
+    });
+    expect(getPublicAcquisitionTarget('http://intake.example.com/requests')).toEqual({
+      action: 'evaluate_deployment_fit',
+      path: '/evaluation',
+    });
+    expect(getPublicAcquisitionTarget('/api/design-partner-requests')).toEqual({
+      action: 'request_design_partner_access',
+      path: '/request-access',
+    });
   });
 
   it('posts only the approved fields without cookies or referrer data', async () => {

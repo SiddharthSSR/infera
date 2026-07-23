@@ -7,7 +7,7 @@ export const PUBLIC_ANALYTICS_SCHEMA = {
     surface: ['migration_landing'],
   },
   public_primary_cta_clicked: {
-    action: ['start_building', 'request_design_partner_access'],
+    action: ['start_building', 'evaluate_deployment_fit', 'request_design_partner_access'],
     placement: ['hero', 'closing', 'public_navigation', 'quickstart', 'footer'],
   },
   public_product_explored: {
