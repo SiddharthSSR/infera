@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell, PublicFooter, PublicNav } from '../components/shared';
 import { ProductWalkthrough } from '../components/public/ProductWalkthrough';
+import {
+  designPartnerRequestEndpoint,
+  getPublicAcquisitionTarget,
+} from '../lib/designPartnerRequest';
 import { publicAnalytics } from '../lib/publicAnalytics';
 
 const registryModels = [
@@ -57,9 +61,17 @@ client = OpenAI(
   base_url="${baseUrl}/v1",
 )`;
 
-export function PublicLanding() {
+export interface PublicLandingProps {
+  intakeEndpoint?: string;
+}
+
+export function PublicLanding({ intakeEndpoint = designPartnerRequestEndpoint }: PublicLandingProps) {
   const [copyStatus, setCopyStatus] = useState('');
   const copyResetTimer = useRef<number>();
+  const acquisition = getPublicAcquisitionTarget(intakeEndpoint);
+  const acquisitionLabel = acquisition.path === '/request-access'
+    ? 'Request design-partner access'
+    : 'Evaluate deployment fit';
 
   useEffect(() => () => window.clearTimeout(copyResetTimer.current), []);
   useEffect(() => {
@@ -71,8 +83,8 @@ export function PublicLanding() {
     publicAnalytics.track('public_resource_opened', { resource: 'quickstart', source: 'landing' });
   };
 
-  const trackDesignPartnerRequest = (placement: 'hero' | 'closing') => {
-    publicAnalytics.track('public_primary_cta_clicked', { action: 'request_design_partner_access', placement });
+  const trackAcquisition = (placement: 'hero' | 'closing') => {
+    publicAnalytics.track('public_primary_cta_clicked', { action: acquisition.action, placement });
   };
 
   const copyExample = async () => {
@@ -91,7 +103,7 @@ export function PublicLanding() {
   return (
     <AppShell variant="public" className="public-landing-shell">
       <a className="public-skip-link" href="#main-content">Skip to main content</a>
-      <PublicNav title="OPEN INFERENCE CONTROL PLANE" />
+      <PublicNav title="OPEN INFERENCE CONTROL PLANE" intakeEndpoint={intakeEndpoint} />
 
       <main id="main-content">
         <section className="landing-hero" aria-labelledby="landing-title">
@@ -102,7 +114,7 @@ export function PublicLanding() {
               One compatible endpoint for model discovery, chat, and streaming—plus the operator controls to keep it serving.
             </p>
             <div className="landing-actions">
-              <Link className="landing-button landing-button-primary" to="/request-access" onClick={() => trackDesignPartnerRequest('hero')}>Request design-partner access</Link>
+              <Link className="landing-button landing-button-primary" to={acquisition.path} onClick={() => trackAcquisition('hero')}>{acquisitionLabel}</Link>
               <Link className="landing-button landing-button-secondary" to="/getting-started" onClick={trackQuickstart}>Run the quickstart</Link>
               <a
                 className="landing-button landing-button-secondary"
@@ -204,11 +216,11 @@ export function PublicLanding() {
 
         <section className="landing-final-cta" aria-labelledby="final-cta-heading">
           <div><span className="landing-meta">No paid subscription required</span><h2 id="final-cta-heading">Bring us the inference problem you need to evaluate.</h2></div>
-          <Link className="landing-button" to="/request-access" onClick={() => trackDesignPartnerRequest('closing')}>Request design-partner access</Link>
+          <Link className="landing-button" to={acquisition.path} onClick={() => trackAcquisition('closing')}>{acquisitionLabel}</Link>
         </section>
       </main>
 
-      <PublicFooter />
+      <PublicFooter intakeEndpoint={intakeEndpoint} />
     </AppShell>
   );
 }

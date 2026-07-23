@@ -14,10 +14,10 @@ vi.mock('../lib/publicAnalytics', () => ({
   publicAnalytics: analyticsMocks,
 }));
 
-function renderLanding() {
+function renderLanding(intakeEndpoint = '') {
   return render(
     <MemoryRouter>
-      <PublicLanding />
+      <PublicLanding intakeEndpoint={intakeEndpoint} />
     </MemoryRouter>,
   );
 }
@@ -35,7 +35,7 @@ describe('PublicLanding', () => {
     });
   });
 
-  it('records the landing view, acquisition CTAs, and quickstart with bounded properties', () => {
+  it('records the unconfigured evaluation path and quickstart with bounded properties', () => {
     renderLanding();
 
     expect(analyticsMocks.track).toHaveBeenCalledWith('public_landing_view', {
@@ -43,15 +43,16 @@ describe('PublicLanding', () => {
     });
 
     fireEvent.click(screen.getByRole('link', { name: 'Run the quickstart' }));
-    fireEvent.click(screen.getAllByRole('link', { name: 'Request design-partner access' })[0]);
-    fireEvent.click(screen.getAllByRole('link', { name: 'Request design-partner access' })[1]);
+    const evaluationLinks = screen.getAllByRole('link', { name: 'Evaluate deployment fit' });
+    fireEvent.click(evaluationLinks[0]);
+    fireEvent.click(evaluationLinks[1]);
 
     expect(analyticsMocks.track).toHaveBeenCalledWith('public_primary_cta_clicked', {
       action: 'start_building',
       placement: 'hero',
     });
     expect(analyticsMocks.track).toHaveBeenCalledWith('public_primary_cta_clicked', {
-      action: 'request_design_partner_access',
+      action: 'evaluate_deployment_fit',
       placement: 'closing',
     });
     expect(analyticsMocks.track).toHaveBeenCalledWith('public_resource_opened', {
@@ -60,17 +61,35 @@ describe('PublicLanding', () => {
     });
   });
 
-  it('leads with a concise compatible-client promise and one dominant access path', () => {
+  it('leads with a concise compatible-client promise and a functional evaluation path while intake is unconfigured', () => {
     renderLanding();
 
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.getByRole('heading', { name: 'Run open models. Keep your OpenAI client.' })).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: 'Request design-partner access' })[0]).toHaveAttribute('href', '/request-access');
+    expect(screen.getAllByRole('link', { name: 'Evaluate deployment fit' })[0]).toHaveAttribute('href', '/evaluation');
+    expect(screen.queryByRole('link', { name: 'Request design-partner access' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'REQUEST ACCESS' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'RUN QUICKSTART' })).toHaveAttribute('href', '/getting-started');
     expect(screen.getByRole('link', { name: 'Run the quickstart' })).toHaveAttribute('href', '/getting-started');
     expect(screen.getByRole('link', { name: 'Explore registry models' })).toHaveAttribute('href', '#models');
     expect(screen.getByRole('link', { name: 'OPENAI MIGRATION' })).toHaveAttribute('href', '/#migration');
     expect(screen.getByRole('link', { name: 'SIGN IN' })).toHaveAttribute('href', '/sign-in');
     expect(screen.getByRole('link', { name: /GITHUB/ })).toHaveAttribute('href', 'https://github.com/SiddharthSSR/infera');
+  });
+
+  it('activates the design-partner path automatically when intake is configured', () => {
+    renderLanding('/api/design-partner-requests');
+
+    expect(screen.getAllByRole('link', { name: 'Request design-partner access' })).toHaveLength(3);
+    expect(screen.getAllByRole('link', { name: 'Request design-partner access' })[0]).toHaveAttribute('href', '/request-access');
+    expect(screen.getByRole('link', { name: 'REQUEST ACCESS' })).toHaveAttribute('href', '/request-access');
+    expect(screen.queryByRole('link', { name: 'RUN QUICKSTART' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('link', { name: 'Request design-partner access' })[1]);
+    expect(analyticsMocks.track).toHaveBeenCalledWith('public_primary_cta_clicked', {
+      action: 'request_design_partner_access',
+      placement: 'closing',
+    });
   });
 
   it('presents source-backed registry examples without implying live serving', () => {

@@ -1,8 +1,11 @@
 # Design-partner request intake
 
 INF-63 adds `/request-access` and intentionally does not hardcode an email
-address, form provider, or storage destination. The form fails closed until an
-administrator configures an approved endpoint at frontend build time.
+address, form provider, or storage destination. INF-69 keeps the public
+acquisition path on the evaluation and quickstart surfaces until an
+administrator configures an approved endpoint at frontend build time. When the
+endpoint is absent or invalid, `/request-access` shows an informational state
+and renders no form or submit control.
 
 ## Required administrator input
 
@@ -23,6 +26,8 @@ production submission, the administrator must supply the endpoint above and
 verify its authentication posture, CORS policy when cross-origin, encryption,
 access controls, retention/deletion policy, abuse controls, and incident owner.
 No personal address discovered in Git or local configuration should be used.
+Once the build receives a valid endpoint, the public acquisition links and
+request form activate automatically.
 
 ## Request contract
 
@@ -46,7 +51,7 @@ cookies, analytics identifiers, or payment information.
 
 ## Privacy-safe measurement
 
-The form emits only two fixed-schema analytics events:
+The configured form emits only two fixed-schema analytics events:
 
 - `design_partner_request_started` with `source: request_access`
 - `design_partner_request_submitted` with one of `succeeded`,
@@ -54,4 +59,5 @@ The form emits only two fixed-schema analytics events:
 
 No form value is passed to analytics. Use aggregate start-to-success counts as
 the funnel measure. Treat validation/delivery/configuration outcomes as
-guardrails; do not add identity to join events.
+guardrails; do not add identity to join events. The unconfigured informational
+state renders no form and emits no design-partner form event.

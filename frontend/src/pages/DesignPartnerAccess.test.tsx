@@ -44,7 +44,9 @@ describe('DesignPartnerAccess', () => {
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'Request design-partner access' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Check the highlighted fields.');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Check the highlighted fields.');
+    await waitFor(() => expect(alert).toHaveFocus());
     expect(screen.getByLabelText('Work email')).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByText('Enter a valid work email address.')).toBeInTheDocument();
     expect(analyticsMocks.track).toHaveBeenCalledWith('design_partner_request_submitted', { outcome: 'validation_failed' });
@@ -57,6 +59,7 @@ describe('DesignPartnerAccess', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Request design-partner access' }));
 
     expect(await screen.findByRole('status')).toHaveTextContent('Your evaluation context was delivered.');
+    await waitFor(() => expect(screen.getByRole('status')).toHaveFocus());
     const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
     expect(payload).toEqual({
       workEmail: 'operator@example.com',
@@ -79,12 +82,29 @@ describe('DesignPartnerAccess', () => {
     expect(analyticsMocks.track).toHaveBeenCalledWith('design_partner_request_submitted', { outcome: 'delivery_failed' });
   });
 
-  it('fails closed and names the administrator action when delivery is unconfigured', async () => {
+  it('fails closed with no form or submit control when delivery is unconfigured', () => {
     renderPage('');
-    expect(screen.getByRole('status')).toHaveTextContent('administrator must connect an approved secure intake endpoint');
-    completeForm();
-    fireEvent.click(screen.getByRole('button', { name: 'Request design-partner access' }));
-    await waitFor(() => expect(analyticsMocks.track).toHaveBeenCalledWith('design_partner_request_submitted', { outcome: 'configuration_missing' }));
+
+    expect(screen.getByRole('heading', { name: 'Design-partner requests are not open yet.' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Evaluate the fit. Keep your details with you.' })).toBeInTheDocument();
+    expect(screen.getByText(/does not collect or submit contact details/i)).toBeInTheDocument();
+    expect(screen.getByText(/No request has been sent or saved/i)).toBeInTheDocument();
+    expect(document.querySelector('form')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Request design-partner access' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Work email')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Evaluate deployment fit' })[0]).toHaveAttribute('href', '/evaluation');
+    expect(screen.getAllByRole('link', { name: 'Run the quickstart' })[0]).toHaveAttribute('href', '/getting-started');
     expect(fetch).not.toHaveBeenCalled();
+    expect(analyticsMocks.track).not.toHaveBeenCalledWith(
+      'design_partner_request_submitted',
+      expect.anything(),
+    );
+  });
+
+  it('treats an unsafe endpoint override as unconfigured', () => {
+    renderPage('http://intake.example.com/requests');
+
+    expect(screen.getByRole('heading', { name: 'Design-partner requests are not open yet.' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Request design-partner access' })).not.toBeInTheDocument();
   });
 });

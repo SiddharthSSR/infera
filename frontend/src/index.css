@@ -6465,7 +6465,8 @@ html {
 }
 
 .request-access-form-heading h2,
-.request-access-success h2 {
+.request-access-success h2,
+.request-access-unavailable h2 {
   margin-top: 0.75rem;
   font-size: clamp(2rem, 4vw, 3.5rem);
   font-weight: 650;
@@ -6620,6 +6621,27 @@ html {
   padding: clamp(1.5rem, 4vw, 3rem);
   border: 2px solid var(--text-primary);
   background: var(--bg-accent);
+}
+
+.request-access-unavailable {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 48rem;
+  padding: clamp(1.5rem, 4vw, 3rem);
+  border: 2px solid var(--text-primary);
+  background: var(--bg-accent);
+}
+
+.request-access-unavailable p {
+  max-width: 60ch;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+.request-access-unavailable-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
 .request-access-success .landing-button {
@@ -8712,6 +8734,14 @@ html {
   }
 
   .request-submit-row .landing-button {
+    width: 100%;
+  }
+
+  .request-access-unavailable-actions {
+    display: grid;
+  }
+
+  .request-access-unavailable-actions .landing-button {
     width: 100%;
   }
 }

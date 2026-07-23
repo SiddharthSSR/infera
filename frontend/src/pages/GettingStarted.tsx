@@ -1,6 +1,10 @@
 import { Link } from 'react-router-dom';
 import { CodeExample } from '../components/CodeExample';
 import { LabelText, Badge, AppShell, PublicNav } from '../components/shared';
+import {
+  designPartnerRequestEndpoint,
+  getPublicAcquisitionTarget,
+} from '../lib/designPartnerRequest';
 import { publicAnalytics } from '../lib/publicAnalytics';
 
 const BASE_URL = typeof window !== 'undefined' ? window.location.origin : 'https://inferai.co.in';
@@ -115,11 +119,17 @@ const failureChecks = [
   'Your client keeps reading the stream until data: [DONE]',
 ];
 
-export function GettingStarted() {
+export interface GettingStartedProps {
+  intakeEndpoint?: string;
+}
+
+export function GettingStarted({ intakeEndpoint = designPartnerRequestEndpoint }: GettingStartedProps) {
+  const acquisition = getPublicAcquisitionTarget(intakeEndpoint);
+
   return (
     <AppShell variant="public">
         <a className="public-skip-link" href="#main-content">Skip to main content</a>
-        <PublicNav title="GETTING STARTED" />
+        <PublicNav title="GETTING STARTED" intakeEndpoint={intakeEndpoint} />
 
         <main id="main-content">
         <section className="docs-hero">
@@ -136,9 +146,18 @@ export function GettingStarted() {
                 <span className="docs-pill">Production-safe flow</span>
               </div>
               <div className="docs-actions">
-                <Link className="btn-primary" to="/request-access" onClick={() => publicAnalytics.track('public_primary_cta_clicked', { action: 'request_design_partner_access', placement: 'quickstart' })}>REQUEST DESIGN-PARTNER ACCESS</Link>
+                <Link
+                  className="btn-primary"
+                  to={acquisition.path}
+                  onClick={() => publicAnalytics.track('public_primary_cta_clicked', {
+                    action: acquisition.action,
+                    placement: 'quickstart',
+                  })}
+                >
+                  {acquisition.path === '/request-access' ? 'REQUEST DESIGN-PARTNER ACCESS' : 'EVALUATE DEPLOYMENT FIT'}
+                </Link>
                 <a className="btn-primary" href="#runbook" style={{ textDecoration: 'none' }}>RUN THE FLOW</a>
-                <Link className="btn-quiet" to="/evaluation">REVIEW DEPLOYMENT FIT</Link>
+                {acquisition.path === '/request-access' ? <Link className="btn-quiet" to="/evaluation">REVIEW DEPLOYMENT FIT</Link> : null}
                 <Link className="btn-quiet" to="/docs" onClick={() => publicAnalytics.track('public_resource_opened', { resource: 'api_docs', source: 'onboarding' })}>OPEN FULL API DOCS</Link>
                 <Link className="btn-quiet" to="/sign-in" onClick={() => publicAnalytics.track('public_sign_in_intent', { source: 'onboarding' })}>SIGN IN TO DASHBOARD</Link>
               </div>
