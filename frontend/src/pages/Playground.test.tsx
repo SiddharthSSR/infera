@@ -176,10 +176,8 @@ function failedDetail(): AgentRunDetail {
 describe('Playground agent mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal('URL', {
-      createObjectURL: vi.fn(() => 'blob:preview'),
-      revokeObjectURL: vi.fn(),
-    });
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
 
     hookMocks.useModels.mockReturnValue({
       data: [

@@ -11,12 +11,12 @@ afterEach(() => {
 // Mock fetch globally
 ;(globalThis as any).fetch = vi.fn()
 
-// Mock ResizeObserver
-;(globalThis as any).ResizeObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}))
+// Mock ResizeObserver with a constructible class, matching the browser API.
+;(globalThis as any).ResizeObserver = class ResizeObserverMock {
+  observe = vi.fn()
+  unobserve = vi.fn()
+  disconnect = vi.fn()
+}
 
 // Mock matchMedia
 Object.defineProperty(window, 'matchMedia', {
