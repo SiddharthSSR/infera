@@ -84,10 +84,8 @@ function renderExecutionState(overrides: Partial<HookProps> = {}) {
 describe('usePlaygroundExecutionState', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal('URL', {
-      createObjectURL: vi.fn(() => 'blob:preview'),
-      revokeObjectURL: vi.fn(),
-    });
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
   });
 
   it('streams chat output and records token usage/history', async () => {
