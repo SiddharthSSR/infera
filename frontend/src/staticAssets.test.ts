@@ -25,18 +25,24 @@ describe('static font and favicon assets', () => {
       ['DM Sans', '700', 'dm-sans-latin-700-normal.woff2'],
       ['Space Mono', '400', 'space-mono-latin-400-normal.woff2'],
     ]
+    const fontFaceBlocks = css.match(/@font-face\s*{[^}]+}/g) ?? []
 
     for (const [family, weight, filename] of expectedFaces) {
       const fontPath = resolve(frontendRoot, 'public/fonts', filename)
+      const fontFace = fontFaceBlocks.find(
+        (block) =>
+          block.includes(`font-family: "${family}"`) &&
+          block.includes(`font-weight: ${weight}`),
+      )
 
-      expect(css).toContain(`font-family: "${family}"`)
-      expect(css).toContain(`font-weight: ${weight}`)
-      expect(css).toContain(`url("/fonts/${filename}") format("woff2")`)
+      expect(fontFace).toContain(
+        `url("/fonts/${filename}") format("woff2")`,
+      )
       expect(existsSync(fontPath)).toBe(true)
       expect(readFileSync(fontPath).subarray(0, 4).toString('ascii')).toBe('wOF2')
     }
 
-    expect(css.match(/@font-face/g)).toHaveLength(expectedFaces.length)
+    expect(fontFaceBlocks).toHaveLength(expectedFaces.length)
     expect(css.match(/font-display: swap/g)).toHaveLength(expectedFaces.length)
     expect(css).toContain(
       '--font-main: "DM Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -72,6 +78,19 @@ describe('static font and favicon assets', () => {
 
     expect(nginx).toContain("font-src 'self' data:")
     expect(nginx).not.toMatch(/font-src[^;]*https?:/i)
-    expect(nginx).toMatch(/ico\|svg\|woff\|woff2/)
+
+    const staticLocationStart = nginx.indexOf(
+      'location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {',
+    )
+    const staticLocationEnd = nginx.indexOf('\n    }', staticLocationStart)
+
+    expect(staticLocationStart).toBeGreaterThanOrEqual(0)
+    expect(staticLocationEnd).toBeGreaterThan(staticLocationStart)
+
+    const staticLocation = nginx.slice(staticLocationStart, staticLocationEnd)
+    expect(staticLocation).toContain('expires 1y;')
+    expect(staticLocation).toContain(
+      'add_header Cache-Control "public, immutable";',
+    )
   })
 })
