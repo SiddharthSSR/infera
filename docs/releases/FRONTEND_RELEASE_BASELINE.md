@@ -73,13 +73,18 @@ For a production-shaped, local static preview, build and run the same Dockerfile
 ```bash
 PREVIEW_SHA="$(git rev-parse --short=12 HEAD)"
 docker build -f deploy/docker/Dockerfile.frontend -t "infera-frontend-preview:${PREVIEW_SHA}" .
-docker run --rm -p 127.0.0.1:3001:3000 "infera-frontend-preview:${PREVIEW_SHA}"
+docker run --rm \
+  --add-host gateway:127.0.0.1 \
+  -p 127.0.0.1:3001:3000 \
+  "infera-frontend-preview:${PREVIEW_SHA}"
 ```
 
 Open `http://127.0.0.1:3001` and record the commit SHA plus the JS/CSS asset names from the returned
-HTML. Static login and public routes can be reviewed this way. API-backed authenticated flows need
-an isolated preview stack with non-production credentials; do not point an unreviewed preview at
-the production gateway.
+HTML. The loopback `gateway` mapping lets nginx validate its checked-in upstream configuration
+without connecting the preview to a real gateway. Static login and public routes can be reviewed
+this way; proxied `/api`, `/v1`, and `/health` requests are intentionally unavailable. API-backed
+authenticated flows need an isolated preview stack with non-production credentials; do not point
+an unreviewed preview at the production gateway.
 
 ## Safe release procedure under the current contract
 
