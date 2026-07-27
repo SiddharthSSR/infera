@@ -123,6 +123,7 @@ export INFERA_RECOVERY_WORKER_MODEL=Qwen/Qwen2.5-7B-Instruct
 export INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB,H100
 export INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=180
 export INFERA_RECOVERY_POST_201_CLEANUP_SECONDS=60
+export INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS=60
 export INFERA_RECOVERY_STATE_DIR=/opt/infera/.infera-recovery
 export INFERA_RECOVERY_CONTROLLER_SCOPE=designated-single-controller
 ./scripts/release-recovery.sh deploy \
@@ -150,6 +151,12 @@ gateway when `/health` reports `healthy_workers=0`. A deliberately scaled-to-zer
 worker discovery and chat inference, but still verifies rollout identity, dashboard health,
 authentication, and the model-list response contract. Any other mode or malformed worker count
 fails closed. Never use cost-saving mode to bypass a failed worker rollout.
+
+Recovery verification gives each authenticated smoke request 60 seconds by default so a newly
+registered worker can complete its first cold inference. Override this only with
+`INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS`; values must be between 1 and 120 seconds. The coordinator's
+absolute deadline still bounds the complete verifier process, so a slow or hung inference continues
+to fail into rollback rather than extending the recovery window.
 
 The RunPod deployment adapter requires an explicit reviewed `INFERA_RECOVERY_WORKER_MODEL`; it does
 not select a model implicitly. It defaults to one `RTX_4090` vLLM worker. Set the ordered,

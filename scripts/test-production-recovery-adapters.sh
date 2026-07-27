@@ -556,6 +556,30 @@ INFERA_SMOKE_MODEL=test-model \
 "${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"
 grep -q 'http://172.20.0.9:8080/v1/models' "${TEST_CALLS}"
 grep -q 'http://172.20.0.10:8080/v1/models' "${TEST_CALLS}"
+[[ "$(grep -c -- '--max-time 60 .*v1/chat/completions' "${TEST_CALLS}")" == "4" ]]
+
+: >"${TEST_CALLS}"
+TEST_GATEWAY_REPLICAS=2 \
+INFERA_GATEWAY_REPLICAS=2 \
+INFERA_EXPECT_TRAFFIC_DRAINED=1 \
+INFERA_SMOKE_API_KEY=test-smoke-key \
+INFERA_SMOKE_MODEL=test-model \
+INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS=75 \
+"${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"
+[[ "$(grep -c -- '--max-time 75 .*v1/chat/completions' "${TEST_CALLS}")" == "4" ]]
+
+for invalid_recovery_smoke_timeout in 0 121 invalid; do
+  : >"${TEST_CALLS}"
+  if INFERA_EXPECT_TRAFFIC_DRAINED=1 \
+    INFERA_SMOKE_API_KEY=test-smoke-key \
+    INFERA_SMOKE_MODEL=test-model \
+    INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS="${invalid_recovery_smoke_timeout}" \
+    "${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"; then
+    echo "invalid recovery smoke timeout must fail closed" >&2
+    exit 1
+  fi
+  [[ ! -s "${TEST_CALLS}" ]]
+done
 
 : >"${TEST_CALLS}"
 if TEST_ZERO_HEALTH=1 \
