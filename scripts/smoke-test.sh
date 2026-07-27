@@ -14,6 +14,7 @@
 #   INFERA_BASE_URL       Base URL (default: https://inferai.co.in)
 #   INFERA_SMOKE_API_KEY  API key for authenticated endpoints
 #   SMOKE_TIMEOUT         curl timeout seconds (default: 10)
+#   SMOKE_CHAT_TIMEOUT    Chat curl timeout seconds (default: SMOKE_TIMEOUT)
 #   INFERA_SMOKE_MODEL    Optional model ID for inference contract checks
 #   INFERA_SMOKE_PROMPT   Optional prompt for inference checks
 #   INFERA_SMOKE_STREAM   Set to 1 to also validate streaming SSE output
@@ -25,6 +26,7 @@ BASE_URL="${1:-${INFERA_BASE_URL:-https://inferai.co.in}}"
 BASE_URL="${BASE_URL%/}"
 API_KEY="${INFERA_SMOKE_API_KEY:-${INFERA_ADMIN_KEY:-}}"
 SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-10}"
+SMOKE_CHAT_TIMEOUT="${SMOKE_CHAT_TIMEOUT:-${SMOKE_TIMEOUT}}"
 SMOKE_MODEL="${INFERA_SMOKE_MODEL:-}"
 SMOKE_PROMPT="${INFERA_SMOKE_PROMPT:-hello from smoke test}"
 SMOKE_STREAM="${INFERA_SMOKE_STREAM:-0}"
@@ -97,7 +99,7 @@ if [[ -n "${SMOKE_MODEL}" && "${SKIP_CHAT_CHECKS}" != "1" ]]; then
   echo "4) Checking authenticated ${BASE_URL}/v1/chat/completions"
   CHAT_PAYLOAD="$(build_chat_payload 0)"
   CHAT_FILE="${TMP_DIR}/chat.json"
-  curl -fsS --max-time "${SMOKE_TIMEOUT}" \
+  curl -fsS --max-time "${SMOKE_CHAT_TIMEOUT}" \
     -H "Authorization: Bearer ${API_KEY}" \
     -H "Content-Type: application/json" \
     -d "${CHAT_PAYLOAD}" \
@@ -128,7 +130,7 @@ PY
     echo "5) Checking streaming ${BASE_URL}/v1/chat/completions"
     STREAM_PAYLOAD="$(build_chat_payload 1)"
     STREAM_FILE="${TMP_DIR}/stream.txt"
-    curl -fsS --max-time "${SMOKE_TIMEOUT}" \
+    curl -fsS --max-time "${SMOKE_CHAT_TIMEOUT}" \
       -H "Authorization: Bearer ${API_KEY}" \
       -H "Content-Type: application/json" \
       -d "${STREAM_PAYLOAD}" \
