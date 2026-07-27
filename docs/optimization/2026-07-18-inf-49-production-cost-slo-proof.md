@@ -6,9 +6,12 @@ Date: 2026-07-18 UTC
 
 `min_cost_under_latency_slo` passed a bounded production proof on release
 `main-2d2a021-inf49`. With two healthy workers serving the same model and fresh
-p99 telemetry, the router selected the lowest trusted hourly cost under a
-60 ms SLO. With a 56.637 ms SLO, it excluded the cheaper worker whose known p99
-was above the SLO and selected the remaining eligible worker.
+p99 telemetry, the router selected the lowest stored snapshot cost under a
+60 ms router eligibility threshold. With a 56.637 ms router eligibility
+threshold, it excluded the cheaper worker whose known p99 was above the
+threshold and selected the remaining eligible worker. These bounded proof
+thresholds are not customer-facing gateway SLO commitments; INF-51 tracks the
+limitation that stored snapshots can diverge from live provider pricing.
 
 Routing was restored to `least_loaded` after the proof. All proof workers were
 terminated, the gateway worker registry returned to zero, and RunPod reported
@@ -45,49 +48,52 @@ errors, and $0.002733695 attributed cost.
 
 ## Routing evidence
 
-### Known over-SLO candidate excluded from fallback
+### Known over-threshold candidate excluded from fallback
 
-At a 50 ms SLO, the 1x worker had known p99 of 56.648 ms and the new 2x worker
-did not yet have latency evidence. The request succeeded on the 2x worker with:
+At a 50 ms router eligibility threshold, the 1x worker had known p99 of
+56.648 ms and the new 2x worker did not yet have latency evidence. The request
+succeeded on the 2x worker with:
 
 - strategy: `min_cost_under_latency_slo`
 - candidates evaluated: `2`
-- cost/SLO eligible candidates: `0`
+- cost/threshold-eligible candidates: `0`
 - selected worker shape: 2x A100 PCIe
 - fallback reason: `no_candidate_with_trusted_cost_and_fresh_latency_under_slo`
 
-The known over-SLO 1x worker did not enter the least-loaded fallback.
+The known over-threshold 1x worker did not enter the least-loaded fallback.
 
 ### Cheapest eligible worker selected
 
-At a 60 ms SLO, both workers had fresh p99 telemetry and trusted positive USD/hour
-snapshots. The request succeeded with:
+At a 60 ms router eligibility threshold, both workers had fresh p99 telemetry
+and stored positive USD/hour snapshots. The request succeeded with:
 
 - strategy: `min_cost_under_latency_slo`
 - candidates evaluated: `2`
-- cost/SLO eligible candidates: `2`
+- cost/threshold-eligible candidates: `2`
 - selected p99: `56.648 ms`
 - selected cost: `1,190,000,000` nano-USD/hour
 - result: the 1x worker at $1.19/hour was selected over the 2x worker at
   $2.38/hour
 
-### Known over-SLO candidate excluded from normal cost selection
+### Known over-threshold candidate excluded from normal cost selection
 
-At a 56.637 ms midpoint SLO, the cheaper 1x worker's 56.648 ms p99 was over the
-SLO while the 2x worker's 56.626 ms p99 remained within it. The request
-succeeded with one cost/SLO-eligible candidate and selected the 2x worker at
-`2,380,000,000` nano-USD/hour. No fallback was used.
+At a 56.637 ms midpoint router eligibility threshold, the cheaper 1x worker's
+56.648 ms p99 was over the threshold while the 2x worker's 56.626 ms p99
+remained within it. The request succeeded with one
+cost/threshold-eligible candidate and selected the 2x worker at `2,380,000,000`
+nano-USD/hour. No fallback was used.
 
 The opt-in `X-Infera-Route-Decision` metadata contained only bounded routing
 fields: request/model identifiers, strategy, selected worker/provider, queue
-and latency measurements, SLO, selected hourly cost, eligible count, reason,
-and timestamp. It contained no credentials, instance IDs, prompts, model
-outputs, or internal price-snapshot version.
+and latency measurements, the `SLO` route field used as the router eligibility
+threshold, selected hourly cost, eligible count, reason, and timestamp. It
+contained no credentials, instance IDs, prompts, model outputs, or internal
+price-snapshot version.
 
 ## Audit and cost reconciliation
 
-For the 60 ms cheapest-worker request, the PostgreSQL audit window changed as
-follows:
+For the request using the 60 ms router eligibility threshold, the PostgreSQL
+audit window changed as follows:
 
 | Metric | Before | After | Delta |
 | --- | ---: | ---: | ---: |
@@ -124,10 +130,10 @@ can be considered economically authoritative.
 ## Cleanup evidence
 
 - Routing on both gateway replicas: `least_loaded`
-- Restored defaults: 2000 ms SLO, 2 minute evidence age
+- Restored router defaults: 2000 ms eligibility threshold, 2 minute evidence age
 - Gateway replicas: 2 healthy
 - Registered workers: 0
-- Active gateway instances: 0
+- Active worker instances: 0
 - Active RunPod pods: 0
 - Active RunPod hourly spend: $0
 - Proof pod names remaining at provider: none
