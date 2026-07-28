@@ -183,9 +183,6 @@ jobs:
           if frontend.get("image") != "infera-frontend:ci-test":
               raise SystemExit(f"unexpected production frontend image: {frontend.get('image')}")
           PY
-          INFERA_FRONTEND_IMAGE=infera-frontend:ci-test \
-            docker compose --env-file /dev/null -f docker-compose.prod.yml \
-            build frontend
 
       - name: Test deployment recovery behavior
         run: |
