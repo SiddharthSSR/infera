@@ -1,27 +1,33 @@
 .git
 .gitignore
 
-# Never send local credentials or operational evidence to the Docker daemon.
+# This denylist reduces generic repository build contexts; it does not prove
+# that inputs are tracked or reviewed. Frontend releases must use
+# scripts/build-reviewed-frontend.sh, which materializes an explicit Git commit.
 .env
 .env.*
 **/.env
 **/.env.*
 recovery-evidence
+**/recovery-evidence
+**/recovery-evidence/**
 output
-
-# Exclude host-generated dependency and build artifacts. Dockerfiles install
-# their own dependencies and must build only from tracked source inputs.
+**/output
+**/output/**
 **/node_modules
+**/node_modules/**
 **/dist
+**/dist/**
 **/coverage
+**/coverage/**
 **/.vite
+**/.vite/**
 **/.cache
+**/.cache/**
 **/__pycache__
 **/.pytest_cache
 **/.ruff_cache
 **/.mypy_cache
 **/.venv
 **/venv
-
-# Host metadata is not a build input.
 **/.DS_Store

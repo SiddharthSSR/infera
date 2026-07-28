@@ -6,6 +6,7 @@ set -e
 REGISTRY="${DOCKER_REGISTRY:-docker.io}"
 NAMESPACE="${DOCKER_NAMESPACE:-infera}"
 VERSION="${VERSION:-latest}"
+FRONTEND_REVISION="${FRONTEND_REVISION:-}"
 
 # Colors
 RED='\033[0;31m'
@@ -127,6 +128,7 @@ while [[ $# -gt 0 ]]; do
             echo "  VERSION           Image version tag (default: latest)"
             echo "  WORKER_SGLANG_PACKAGE  SGLang package spec (default: sglang)"
             echo "  WORKER_TENSORRT_LLM_BASE_IMAGE  Official NVIDIA TensorRT-LLM base image"
+            echo "  FRONTEND_REVISION  Explicit reviewed Git revision (required for frontend)"
             exit 0
             ;;
         *)
@@ -177,7 +179,13 @@ if $BUILD_WORKER_TENSORRT_LLM; then
 fi
 
 if $BUILD_FRONTEND; then
-    build_image "frontend" "deploy/docker/Dockerfile.frontend" "."
+    if [[ -z "$FRONTEND_REVISION" ]]; then
+        echo -e "${RED}Error: FRONTEND_REVISION is required for frontend builds${NC}"
+        exit 1
+    fi
+    ./scripts/build-reviewed-frontend.sh \
+        --revision "$FRONTEND_REVISION" \
+        --tag "$REGISTRY/$NAMESPACE/frontend:$VERSION"
 fi
 
 # Push images if requested
