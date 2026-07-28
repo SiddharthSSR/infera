@@ -222,6 +222,9 @@ if grep -Eq 'apt-get|pip install --upgrade|vllm>=|pip install .* -e([[:space:]]|
 fi
 grep -q 'sha256sum -c worker-vllm.lock.sha256' deploy/docker/Dockerfile.worker.vllm ||
     fail "worker Dockerfile does not verify lock integrity"
+grep -Eq '^# syntax=docker/dockerfile:1@sha256:[0-9a-f]{64}$' \
+    deploy/docker/Dockerfile.worker.vllm ||
+    fail "worker Dockerfile frontend is not pinned by digest"
 grep -q 'build_reviewed_image "gateway" "gateway"' scripts/build-docker.sh ||
     fail "build-docker gateway path bypasses the reviewed builder"
 grep -q 'build_reviewed_image "worker-vllm" "worker-vllm"' scripts/build-docker.sh ||

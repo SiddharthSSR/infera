@@ -21,6 +21,7 @@ All recorded digests are linux/amd64 manifests, not mutable tags:
 | Gateway builder | `golang:1.22-alpine3.19` (resolved version `1.22.10-alpine3.19`) | `sha256:364133ae013cea7fbeb56f93ab38e01085d1bf87cf1b85d56c8598976c043530` | Docker Official Image; index at review was `sha256:6f73a1b8b608dad4866b9f746ac6888ffdb112f75ef59ed97c43b5f734368718` |
 | Gateway runtime | `alpine:3.19` (resolved version `3.19.9`) | `sha256:b58899f069c47216f6002a6850143dc6fae0d35eb8b0df9300bbe6327b9c2171` | Docker Official Image; index at review was `sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1` |
 | vLLM runtime | `docker.io/codingtensor/worker-vllm:engine-phase2` | `sha256:e3f6253d4c767d815fd6809b99d1f22fe24469472c53d3945ba8ec7f71d52331` | Published last-known-good RunPod worker, linux/amd64, created `2026-03-27T08:55:52Z` |
+| Worker Dockerfile frontend | `docker/dockerfile:1` | `sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89` | BuildKit frontend required for deterministic heredoc parsing |
 
 The vLLM runtime base was built on RunPod
 `pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`. The current RunPod tag
