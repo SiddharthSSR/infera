@@ -841,7 +841,7 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 			continue
 		}
 
-		updated, updateErr := m.instances.updateIfLifecycleVersion(inst.ID, inst.LifecycleVersion, func(existing *Instance) {
+		_, updateErr := m.instances.updateIfLifecycleVersion(inst.ID, inst.LifecycleVersion, func(existing *Instance) {
 			existing.Status = refreshed.Status
 			existing.PublicIP = refreshed.PublicIP
 			existing.HTTPPort = refreshed.HTTPPort
@@ -857,9 +857,6 @@ func (m *Manager) RefreshInstances(ctx context.Context) error {
 		})
 		if updateErr != nil {
 			return updateErr
-		}
-		if !updated {
-			continue
 		}
 	}
 

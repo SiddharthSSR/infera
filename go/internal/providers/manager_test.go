@@ -334,7 +334,13 @@ func TestManagerPriceSnapshotRejectsInvalidOrOverflowingPrices(t *testing.T) {
 
 	invalid := []float64{0, -1, math.NaN(), math.Inf(1), math.Inf(-1), float64(math.MaxInt64) / 1_000_000_000}
 	for _, price := range invalid {
-		mgr.instances.update(instance.ID, func(stored *Instance) { stored.CostPerHour = price })
+		updated, err := mgr.instances.update(instance.ID, func(stored *Instance) { stored.CostPerHour = price })
+		if err != nil {
+			t.Fatalf("update price %v: %v", price, err)
+		}
+		if !updated {
+			t.Fatalf("instance %s not found while updating price %v", instance.ID, price)
+		}
 		if snapshot, ok := mgr.GetPriceSnapshotForWorker("priced-worker"); ok {
 			t.Fatalf("price %v must be unavailable, got %+v", price, snapshot)
 		}
@@ -352,7 +358,13 @@ func TestManagerPriceSnapshotRoundsToNearestNanoUSD(t *testing.T) {
 	if err := mgr.LinkWorker(instance.ID, "priced-worker"); err != nil {
 		t.Fatalf("LinkWorker: %v", err)
 	}
-	mgr.instances.update(instance.ID, func(stored *Instance) { stored.CostPerHour = 0.4000000006 })
+	updated, err := mgr.instances.update(instance.ID, func(stored *Instance) { stored.CostPerHour = 0.4000000006 })
+	if err != nil {
+		t.Fatalf("update price: %v", err)
+	}
+	if !updated {
+		t.Fatalf("instance %s not found while updating price", instance.ID)
+	}
 	snapshot, ok := mgr.GetPriceSnapshotForWorker("priced-worker")
 	if !ok || snapshot.AmountNano != 400_000_001 {
 		t.Fatalf("expected nearest-nano rounding, got %+v, ok=%v", snapshot, ok)
@@ -406,7 +418,7 @@ func TestManagerUsesRunPodProxyForNetworkReadinessAndRegistrationTimeout(t *test
 		t.Fatalf("Provision failed: %v", err)
 	}
 	old := time.Now().Add(-10 * time.Minute)
-	mgr.instances.update(inst.ID, func(stored *Instance) {
+	updated, err := mgr.instances.update(inst.ID, func(stored *Instance) {
 		stored.Provider = ProviderRunPod
 		stored.ProviderID = "pod-123"
 		stored.PublicIP = ""
@@ -416,6 +428,12 @@ func TestManagerUsesRunPodProxyForNetworkReadinessAndRegistrationTimeout(t *test
 		stored.WorkerRegistrationDeadline = nil
 		mgr.evaluateWorkerRegistration(stored, time.Now())
 	})
+	if err != nil {
+		t.Fatalf("update instance: %v", err)
+	}
+	if !updated {
+		t.Fatalf("instance %s not found while updating registration state", inst.ID)
+	}
 
 	got, ok := mgr.GetInstance(inst.ID)
 	if !ok {
@@ -463,7 +481,7 @@ func TestManagerSurfacesRunningInstanceRegistrationTimeout(t *testing.T) {
 		t.Fatalf("Provision failed: %v", err)
 	}
 	old := time.Now().Add(-10 * time.Minute)
-	mgr.instances.update(inst.ID, func(stored *Instance) {
+	updated, err := mgr.instances.update(inst.ID, func(stored *Instance) {
 		stored.StartedAt = &old
 		stored.CreatedAt = old
 		stored.PublicIP = "203.0.113.10"
@@ -471,6 +489,12 @@ func TestManagerSurfacesRunningInstanceRegistrationTimeout(t *testing.T) {
 		stored.WorkerRegistrationDeadline = nil
 		mgr.evaluateWorkerRegistration(stored, time.Now())
 	})
+	if err != nil {
+		t.Fatalf("update instance: %v", err)
+	}
+	if !updated {
+		t.Fatalf("instance %s not found while updating registration state", inst.ID)
+	}
 
 	got, ok := mgr.GetInstance(inst.ID)
 	if !ok {
@@ -1057,7 +1081,9 @@ func TestManagerStartUsesInstanceStarterWhenAvailable(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 	provider.instances[instance.ID] = instance
-	mgr.instances.put(instance)
+	if err := mgr.instances.put(instance); err != nil {
+		t.Fatalf("put instance: %v", err)
+	}
 
 	if err := mgr.Start(context.Background(), instance.ID); err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -1080,7 +1106,9 @@ func TestNewManagerWithStoreUsesInjectedInstanceStore(t *testing.T) {
 		Models:      []string{"Qwen/Qwen2.5-7B-Instruct"},
 		CreatedAt:   time.Now(),
 	}
-	store.put(instance)
+	if err := store.put(instance); err != nil {
+		t.Fatalf("put instance: %v", err)
+	}
 
 	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
 	mgrWithStore, err := NewManagerWithStore(ManagerConfig{DefaultProvider: ProviderMock}, store)
@@ -1174,11 +1202,17 @@ func TestManagerStartRejectedForTerminatedInstance(t *testing.T) {
 	ctx := context.Background()
 	req := &ProvisionRequest{Name: "terminated-start", GPUType: GPURTX4090}
 	instance, _ := mgr.Provision(ctx, req)
-	mgr.instances.update(instance.ID, func(stored *Instance) {
+	updated, err := mgr.instances.update(instance.ID, func(stored *Instance) {
 		stored.Status = InstanceStatusTerminated
 	})
+	if err != nil {
+		t.Fatalf("update instance: %v", err)
+	}
+	if !updated {
+		t.Fatalf("instance %s not found while updating status", instance.ID)
+	}
 
-	err := mgr.Start(ctx, instance.ID)
+	err = mgr.Start(ctx, instance.ID)
 	if err == nil {
 		t.Fatal("expected terminated instance start to fail")
 	}
@@ -1948,10 +1982,16 @@ func TestManagerGetInstanceByProviderRef(t *testing.T) {
 		t.Fatalf("Provision failed: %v", err)
 	}
 
-	mgr.instances.update(instance.ID, func(stored *Instance) {
+	updated, err := mgr.instances.update(instance.ID, func(stored *Instance) {
 		stored.Provider = ProviderRunPod
 		stored.ProviderID = "pod-123"
 	})
+	if err != nil {
+		t.Fatalf("update instance: %v", err)
+	}
+	if !updated {
+		t.Fatalf("instance %s not found while updating provider ref", instance.ID)
+	}
 
 	found, ok := mgr.GetInstanceByProviderRef(ProviderRunPod, "pod-123")
 	if !ok {
