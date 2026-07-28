@@ -198,7 +198,8 @@ grep -q 'built image revision label mismatch' "$test_root/label-mismatch.err" ||
 
 if find "$contexts" -maxdepth 1 \
     \( -name 'infera-gateway-context.*' -o -name 'infera-worker-vllm-context.*' \
-       -o -name 'infera-*-iid.*' \) -print -quit | grep -q .; then
+       -o -name 'infera-gateway-iid.*' -o -name 'infera-worker-vllm-iid.*' \) \
+    -print -quit | grep -q .; then
     fail "temporary release build inputs were not cleaned"
 fi
 

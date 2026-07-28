@@ -134,11 +134,11 @@ trap cleanup EXIT HUP INT TERM
 git -C "$repository_root" archive --format=tar "$revision" -- "${required_paths[@]}" |
     tar -xf - -C "$build_context"
 
-iid_file=$(mktemp "${context_parent%/}/infera-${component}-iid.XXXXXX")
-rm -f "$iid_file"
+iid_directory=$(mktemp -d "${context_parent%/}/infera-${component}-iid.XXXXXX")
+iid_file="$iid_directory/image-id"
 cleanup_with_iid() {
     rm -rf -- "$build_context"
-    rm -f -- "$iid_file"
+    rm -rf -- "$iid_directory"
 }
 trap cleanup_with_iid EXIT HUP INT TERM
 
