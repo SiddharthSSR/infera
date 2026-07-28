@@ -245,7 +245,8 @@ type GPUOffering struct {
 	CostPerHour       float64      `json:"cost_per_hour"`
 	SpotPrice         float64      `json:"spot_price,omitempty"`
 	Region            string       `json:"region"`
-	Available         int          `json:"available"`
+	// Available is provider-advertised availability, not confirmed placement capacity.
+	Available int `json:"available"`
 }
 
 // ProviderStatus contains provider health and quota info.

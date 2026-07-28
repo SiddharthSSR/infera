@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,8 +25,25 @@ const (
 	defaultEndpoint              = "https://api.runpod.io/graphql"
 	pollInterval                 = 5 * time.Second
 	readyTimeout                 = 10 * time.Minute
+	priceReconciliationInterval  = 500 * time.Millisecond
+	priceReconciliationTimeout   = 20 * time.Second
+	provisionCleanupTimeout      = 15 * time.Second
 	workspaceMountPath           = "/workspace"
 	metadataAllowedCudaVersions  = "allowed_cuda_versions"
+	metadataCostCurrency         = "cost_evidence_currency"
+	metadataCostUnit             = "cost_evidence_unit"
+	metadataCostSource           = "cost_evidence_source"
+	metadataCostCapturedAt       = "cost_evidence_captured_at"
+	metadataCostAdvertised       = "cost_evidence_advertised_usd_per_hour"
+	metadataCostState            = "cost_evidence_state"
+	metadataCapacityState        = "capacity_evidence_state"
+	costCurrencyUSD              = "USD"
+	costUnitInstanceHour         = "instance-hour"
+	costSourceRunPodMachine      = "runpod.pod.machine.costPerHr"
+	capacityStateAdvertised      = "advertised_not_confirmed"
+	costStateConfirmed           = "confirmed"
+	costStateConfirmedDrift      = "confirmed_price_drift"
+	costStateConfirmedNoAdvert   = "confirmed_advertised_price_unavailable"
 	insufficientMachineResources = "This machine does not have the resources to deploy your pod. Please try a different machine"
 )
 
@@ -34,6 +53,10 @@ type Provider struct {
 	endpoint   string
 	httpClient *http.Client
 	hfToken    string
+
+	pricePollInterval time.Duration
+	pricePollTimeout  time.Duration
+	cleanupTimeout    time.Duration
 }
 
 // Config for RunPod provider.
@@ -63,10 +86,13 @@ func New(config Config) (*Provider, error) {
 	}
 
 	return &Provider{
-		apiKey:     config.APIKey,
-		endpoint:   endpoint,
-		httpClient: egress.NewPublicClient(egress.ClientOptions{Timeout: 30 * time.Second, AllowedSchemes: []string{"https"}}),
-		hfToken:    strings.TrimSpace(config.HFToken),
+		apiKey:            config.APIKey,
+		endpoint:          endpoint,
+		httpClient:        egress.NewPublicClient(egress.ClientOptions{Timeout: 30 * time.Second, AllowedSchemes: []string{"https"}}),
+		hfToken:           strings.TrimSpace(config.HFToken),
+		pricePollInterval: priceReconciliationInterval,
+		pricePollTimeout:  priceReconciliationTimeout,
+		cleanupTimeout:    provisionCleanupTimeout,
 	}, nil
 }
 
@@ -102,8 +128,69 @@ type graphQLResponse struct {
 	} `json:"errors,omitempty"`
 }
 
+const runPodGPUOfferingFields = `
+	id
+	displayName
+	memoryInGb
+	securePrice
+	communityPrice
+	secureSpotPrice
+	communitySpotPrice
+	maxGpuCountCommunityCloud
+	maxGpuCountSecureCloud
+	lowestPrice1: lowestPrice(input: { gpuCount: 1 }) {
+		minimumBidPrice
+		uninterruptablePrice
+	}
+	lowestPrice2: lowestPrice(input: { gpuCount: 2 }) {
+		minimumBidPrice
+		uninterruptablePrice
+	}
+	lowestPrice4: lowestPrice(input: { gpuCount: 4 }) {
+		minimumBidPrice
+		uninterruptablePrice
+	}
+	lowestPrice8: lowestPrice(input: { gpuCount: 8 }) {
+		minimumBidPrice
+		uninterruptablePrice
+	}
+	lowestPrice16: lowestPrice(input: { gpuCount: 16 }) {
+		minimumBidPrice
+		uninterruptablePrice
+	}
+`
+
 // Provision creates a new GPU pod.
 func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionRequest) (*providers.Instance, error) {
+	if req == nil {
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorInvalidRequest,
+			Message:  "provision request is required",
+		}
+	}
+	if math.IsNaN(req.MaxCostHour) || math.IsInf(req.MaxCostHour, 0) || req.MaxCostHour < 0 {
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorInvalidRequest,
+			Message:  "max_cost_hour must be finite and non-negative",
+		}
+	}
+	if req.MaxCostHour > 0 && !validHourlyPrice(req.MaxCostHour) {
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorInvalidRequest,
+			Message:  "max_cost_hour exceeds the supported price range",
+		}
+	}
+	if req.SpotInstance {
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorInvalidRequest,
+			Message:  "RunPod spot placement is not supported by this adapter",
+		}
+	}
+
 	// Map our GPU types to RunPod GPU IDs
 	gpuTypeID := resolveRunPodGPUTypeID(req)
 	if gpuTypeID == "" {
@@ -111,6 +198,13 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 			Provider: providers.ProviderRunPod,
 			Code:     "invalid_gpu_type",
 			Message:  fmt.Sprintf("unsupported RunPod GPU type: %s", req.GPUType),
+		}
+	}
+	if req.GPUCount <= 0 {
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorInvalidRequest,
+			Message:  "GPU count must be positive",
 		}
 	}
 
@@ -122,7 +216,8 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 			Message:  err.Error(),
 		}
 	}
-	if err := p.requireProvisionCapacity(ctx, gpuTypeID, req.GPUCount); err != nil {
+	offeringEvidence, err := p.requireProvisionOffering(ctx, req, gpuTypeID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -206,6 +301,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 				machineId
 				machine {
 					gpuDisplayName
+					costPerHr
 				}
 			}
 		}
@@ -269,7 +365,8 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 			ImageName     string `json:"imageName"`
 			MachineID     string `json:"machineId"`
 			Machine       struct {
-				GPUDisplayName string `json:"gpuDisplayName"`
+				GPUDisplayName string   `json:"gpuDisplayName"`
+				CostPerHr      *float64 `json:"costPerHr"`
 			} `json:"machine"`
 		} `json:"podFindAndDeployOnDemand"`
 	}
@@ -282,6 +379,31 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 
 	// Use full pod ID for consistency
 	podID := pod.ID
+	if strings.TrimSpace(podID) == "" {
+		return nil, &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorGraphQLError,
+			Message:  "RunPod create response omitted the pod ID",
+		}
+	}
+	createdAt := time.Now().UTC()
+
+	confirmedPrice, capturedAt, err := p.reconcileCreatedPrice(ctx, podID, pod.Machine.CostPerHr)
+	if err != nil {
+		return nil, p.cleanupCreatedPod(podID, err)
+	}
+	if exceedsHourlyCap(confirmedPrice, req.MaxCostHour) {
+		primary := &providers.ProviderError{
+			Provider: providers.ProviderRunPod,
+			Code:     providers.ProviderErrorInvalidRequest,
+			Message: fmt.Sprintf(
+				"RunPod confirmed hourly price %s USD exceeds max_cost_hour %s USD",
+				formatHourlyPrice(confirmedPrice),
+				formatHourlyPrice(req.MaxCostHour),
+			),
+		}
+		return nil, p.cleanupCreatedPod(podID, primary)
+	}
 
 	// Use provided models or default
 	models := req.Models
@@ -293,10 +415,17 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		models = []string{defaultModel}
 	}
 	metadata := map[string]string{
-		"machine_id":      pod.MachineID,
-		"image":           pod.ImageName,
-		"workspace_mount": workspaceMountPath,
-		"volume_gb":       fmt.Sprintf("%d", volumeSize),
+		"machine_id":           pod.MachineID,
+		"image":                pod.ImageName,
+		"workspace_mount":      workspaceMountPath,
+		"volume_gb":            fmt.Sprintf("%d", volumeSize),
+		metadataCostCurrency:   costCurrencyUSD,
+		metadataCostUnit:       costUnitInstanceHour,
+		metadataCostSource:     costSourceRunPodMachine,
+		metadataCostCapturedAt: capturedAt.UTC().Format(time.RFC3339Nano),
+		metadataCostAdvertised: formatHourlyPrice(offeringEvidence.AdvertisedPrice),
+		metadataCostState:      reconciledCostState(offeringEvidence.AdvertisedPrice, confirmedPrice),
+		metadataCapacityState:  capacityStateAdvertised,
 	}
 	if len(allowedCudaVersions) > 0 {
 		metadata[metadataAllowedCudaVersions] = strings.Join(allowedCudaVersions, ",")
@@ -310,41 +439,39 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		Status:       providers.InstanceStatusProvisioning,
 		GPUType:      req.GPUType,
 		GPUCount:     req.GPUCount,
-		CostPerHour:  getEstimatedPrice(req.GPUType) * float64(req.GPUCount),
+		CostPerHour:  confirmedPrice,
 		SpotInstance: req.SpotInstance,
 		Models:       models,
-		CreatedAt:    time.Now(),
+		CreatedAt:    createdAt,
 		Metadata:     metadata,
 	}, nil
 }
 
-func (p *Provider) requireProvisionCapacity(ctx context.Context, gpuTypeID string, requested int) error {
-	query := `
-		query GpuCapacity {
+type provisionOfferingEvidence struct {
+	AdvertisedPrice float64
+}
+
+func (p *Provider) requireProvisionOffering(ctx context.Context, req *providers.ProvisionRequest, gpuTypeID string) (provisionOfferingEvidence, error) {
+	query := fmt.Sprintf(`
+		query GpuPlacementEvidence {
 			gpuTypes {
-				id
-				maxGpuCountCommunityCloud
-				maxGpuCountSecureCloud
+				%s
 			}
 		}
-	`
+	`, runPodGPUOfferingFields)
 	resp, err := p.graphQL(ctx, query, nil)
 	if err != nil {
-		return err
+		return provisionOfferingEvidence{}, err
 	}
 
 	var result struct {
-		GpuTypes []struct {
-			ID                     string `json:"id"`
-			MaxGPUCountCommunity   *int   `json:"maxGpuCountCommunityCloud"`
-			MaxGPUCountSecureCloud *int   `json:"maxGpuCountSecureCloud"`
-		} `json:"gpuTypes"`
+		GpuTypes []runpodGPUOfferingEvidence `json:"gpuTypes"`
 	}
 	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		return &providers.ProviderError{
+		return provisionOfferingEvidence{}, &providers.ProviderError{
 			Provider: providers.ProviderRunPod,
 			Code:     providers.ProviderErrorGraphQLError,
-			Message:  "RunPod returned a malformed capacity response",
+			Message:  "RunPod returned malformed placement evidence",
 		}
 	}
 
@@ -352,29 +479,218 @@ func (p *Provider) requireProvisionCapacity(ctx context.Context, gpuTypeID strin
 		if gpu.ID != gpuTypeID {
 			continue
 		}
+		if !runPodGPUTypeMatches(req.GPUType, gpu.DisplayName) {
+			return provisionOfferingEvidence{}, &providers.ProviderError{
+				Provider: providers.ProviderRunPod,
+				Code:     providers.ProviderErrorInvalidRequest,
+				Message:  "RunPod offering GPU type does not match the requested GPU type",
+			}
+		}
 		if gpu.MaxGPUCountCommunity == nil || gpu.MaxGPUCountSecureCloud == nil ||
 			*gpu.MaxGPUCountCommunity < 0 || *gpu.MaxGPUCountSecureCloud < 0 {
-			return &providers.ProviderError{
+			return provisionOfferingEvidence{}, &providers.ProviderError{
 				Provider: providers.ProviderRunPod,
 				Code:     providers.ProviderErrorGraphQLError,
-				Message:  "RunPod returned a malformed capacity response",
+				Message:  "RunPod returned malformed placement availability",
 			}
 		}
-		if *gpu.MaxGPUCountCommunity < requested && *gpu.MaxGPUCountSecureCloud < requested {
-			return &providers.ProviderError{
+		if *gpu.MaxGPUCountCommunity < req.GPUCount && *gpu.MaxGPUCountSecureCloud < req.GPUCount {
+			return provisionOfferingEvidence{}, &providers.ProviderError{
 				Provider: providers.ProviderRunPod,
 				Code:     providers.ProviderErrorCapacityUnavailable,
-				Message:  "RunPod has insufficient capacity for the requested GPU type",
+				Message:  "RunPod advertises insufficient availability for the requested GPU type",
 			}
 		}
-		return nil
+
+		advertisedPrice := gpu.priceFor(req.GPUCount, req.SpotInstance)
+		if req.MaxCostHour > 0 && !validHourlyPrice(advertisedPrice) {
+			return provisionOfferingEvidence{}, &providers.ProviderError{
+				Provider: providers.ProviderRunPod,
+				Code:     providers.ProviderErrorServiceUnavailable,
+				Message:  "RunPod did not provide trustworthy advertised hourly price evidence for the requested placement",
+			}
+		}
+		if exceedsHourlyCap(advertisedPrice, req.MaxCostHour) {
+			return provisionOfferingEvidence{}, &providers.ProviderError{
+				Provider: providers.ProviderRunPod,
+				Code:     providers.ProviderErrorInvalidRequest,
+				Message: fmt.Sprintf(
+					"RunPod advertised hourly price %s USD exceeds max_cost_hour %s USD",
+					formatHourlyPrice(advertisedPrice),
+					formatHourlyPrice(req.MaxCostHour),
+				),
+			}
+		}
+		return provisionOfferingEvidence{AdvertisedPrice: advertisedPrice}, nil
 	}
 
-	return &providers.ProviderError{
+	return provisionOfferingEvidence{}, &providers.ProviderError{
 		Provider: providers.ProviderRunPod,
 		Code:     providers.ProviderErrorGraphQLError,
-		Message:  "RunPod capacity response omitted the requested GPU type",
+		Message:  "RunPod placement evidence omitted the requested provider GPU ID",
 	}
+}
+
+type runpodGPUOfferingEvidence struct {
+	ID                     string             `json:"id"`
+	DisplayName            string             `json:"displayName"`
+	SecurePrice            *float64           `json:"securePrice"`
+	CommunityPrice         *float64           `json:"communityPrice"`
+	SecureSpotPrice        *float64           `json:"secureSpotPrice"`
+	CommunitySpotPrice     *float64           `json:"communitySpotPrice"`
+	MaxGPUCountCommunity   *int               `json:"maxGpuCountCommunityCloud"`
+	MaxGPUCountSecureCloud *int               `json:"maxGpuCountSecureCloud"`
+	LowestPrice1           *runpodLowestPrice `json:"lowestPrice1"`
+	LowestPrice2           *runpodLowestPrice `json:"lowestPrice2"`
+	LowestPrice4           *runpodLowestPrice `json:"lowestPrice4"`
+	LowestPrice8           *runpodLowestPrice `json:"lowestPrice8"`
+	LowestPrice16          *runpodLowestPrice `json:"lowestPrice16"`
+}
+
+func (e runpodGPUOfferingEvidence) priceFor(count int, spot bool) float64 {
+	lowest := map[int]*runpodLowestPrice{
+		1: e.LowestPrice1, 2: e.LowestPrice2, 4: e.LowestPrice4,
+		8: e.LowestPrice8, 16: e.LowestPrice16,
+	}[count]
+	if spot {
+		if price := spotPriceFromRunPodPrice(lowest); validHourlyPrice(price) {
+			return price
+		}
+		return e.availableTierPrice(count, e.CommunitySpotPrice, e.SecureSpotPrice)
+	}
+	if price := priceFromRunPodPrice(lowest); validHourlyPrice(price) {
+		return price
+	}
+	return e.availableTierPrice(count, e.CommunityPrice, e.SecurePrice)
+}
+
+func (e runpodGPUOfferingEvidence) availableTierPrice(count int, communityPrice, securePrice *float64) float64 {
+	var price float64
+	if e.MaxGPUCountCommunity != nil && *e.MaxGPUCountCommunity >= count &&
+		communityPrice != nil && validHourlyPrice(*communityPrice) {
+		price = *communityPrice
+	}
+	if e.MaxGPUCountSecureCloud != nil && *e.MaxGPUCountSecureCloud >= count &&
+		securePrice != nil && validHourlyPrice(*securePrice) && *securePrice > price {
+		// cloudType "ALL" may choose either tier, so cap enforcement uses the higher eligible price.
+		price = *securePrice
+	}
+	if validHourlyPrice(price * float64(count)) {
+		return price * float64(count)
+	}
+	return 0
+}
+
+func maxSupportedHourlyPrice() float64 {
+	return float64(math.MaxInt64-1) / 1_000_000_000
+}
+
+func validHourlyPrice(price float64) bool {
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return false
+	}
+	return price < maxSupportedHourlyPrice()
+}
+
+func hourlyPriceNano(price float64) int64 {
+	if !validHourlyPrice(price) {
+		return 0
+	}
+	return int64(math.Round(price * 1_000_000_000))
+}
+
+func exceedsHourlyCap(price, cap float64) bool {
+	if cap <= 0 {
+		return false
+	}
+	if !validHourlyPrice(price) {
+		return true
+	}
+	if !validHourlyPrice(cap) {
+		return false
+	}
+	return hourlyPriceNano(price) > hourlyPriceNano(cap)
+}
+
+func formatHourlyPrice(price float64) string {
+	return strconv.FormatFloat(price, 'f', -1, 64)
+}
+
+func reconciledCostState(advertised, confirmed float64) string {
+	if !validHourlyPrice(advertised) {
+		return costStateConfirmedNoAdvert
+	}
+	if validHourlyPrice(advertised) && hourlyPriceNano(advertised) != hourlyPriceNano(confirmed) {
+		return costStateConfirmedDrift
+	}
+	return costStateConfirmed
+}
+
+func (p *Provider) reconcileCreatedPrice(ctx context.Context, podID string, createPrice *float64) (float64, time.Time, error) {
+	if createPrice != nil && validHourlyPrice(*createPrice) {
+		return *createPrice, time.Now().UTC(), nil
+	}
+
+	timeout := p.pricePollTimeout
+	if timeout <= 0 {
+		timeout = priceReconciliationTimeout
+	}
+	interval := p.pricePollInterval
+	if interval <= 0 {
+		interval = priceReconciliationInterval
+	}
+	reconcileCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var lastErr error
+	for {
+		instance, err := p.GetInstance(reconcileCtx, podID)
+		if err == nil && instance != nil && validHourlyPrice(instance.CostPerHour) {
+			return instance.CostPerHour, time.Now().UTC(), nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-reconcileCtx.Done():
+			timer.Stop()
+			message := "RunPod actual hourly price could not be confirmed within the bounded reconciliation window"
+			if lastErr != nil {
+				message += ": " + lastErr.Error()
+			}
+			return 0, time.Time{}, &providers.ProviderError{
+				Provider: providers.ProviderRunPod,
+				Code:     providers.ProviderErrorTimeout,
+				Message:  message,
+			}
+		case <-timer.C:
+		}
+	}
+}
+
+func runPodGPUTypeMatches(requested providers.GPUType, displayName string) bool {
+	advertised, known := mapDisplayNameToGPUType(displayName)
+	if known {
+		return advertised == requested
+	}
+	normalizedRequested := compactGPUDisplayName(string(requested))
+	normalizedAdvertised := compactGPUDisplayName(displayName)
+	return normalizedRequested != "" && strings.EqualFold(normalizedRequested, normalizedAdvertised)
+}
+
+func (p *Provider) cleanupCreatedPod(podID string, primary error) error {
+	timeout := p.cleanupTimeout
+	if timeout <= 0 {
+		timeout = provisionCleanupTimeout
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := p.Terminate(cleanupCtx, podID); err != nil {
+		return errors.Join(primary, fmt.Errorf("terminate RunPod pod %s after price validation failure: %w", podID, err))
+	}
+	return primary
 }
 
 func appendHuggingFaceEnv(env []map[string]string, token string) []map[string]string {
@@ -642,44 +958,15 @@ func (p *Provider) ListInstances(ctx context.Context) ([]*providers.Instance, er
 	return instances, nil
 }
 
-// ListOfferings returns available GPU configurations with real pricing from RunPod API.
+// ListOfferings returns advertised GPU configurations with live pricing from RunPod API.
 func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering, error) {
-	// Query gpuTypes with pricing fields from RunPod's GraphQL API
-	query := `
+	query := fmt.Sprintf(`
 		query GpuTypes {
 			gpuTypes {
-				id
-				displayName
-				memoryInGb
-				securePrice
-				communityPrice
-				secureSpotPrice
-				communitySpotPrice
-				maxGpuCountCommunityCloud
-				maxGpuCountSecureCloud
-				lowestPrice1: lowestPrice(input: { gpuCount: 1 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice2: lowestPrice(input: { gpuCount: 2 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice4: lowestPrice(input: { gpuCount: 4 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice8: lowestPrice(input: { gpuCount: 8 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice16: lowestPrice(input: { gpuCount: 16 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
+				%s
 			}
 		}
-	`
+	`, runPodGPUOfferingFields)
 
 	resp, err := p.graphQL(ctx, query, nil)
 	if err != nil {
@@ -728,7 +1015,8 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 			continue
 		}
 
-		// Determine the best on-demand price: prefer community, fall back to secure, then lowestPrice
+		// Surface only live provider pricing. A missing price remains zero so
+		// callers cannot mistake a static estimate for current provider evidence.
 		price := gpu.CommunityPrice
 		if price == 0 {
 			price = gpu.SecurePrice
@@ -736,20 +1024,13 @@ func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering,
 		if price == 0 && gpu.LowestPrice1 != nil {
 			price = gpu.LowestPrice1.UninterruptablePrice
 		}
-		if price == 0 {
-			price = getEstimatedPrice(gpuType)
-		}
 
-		// Determine spot price: prefer community spot, fall back to secure spot, then lowestPrice bid
 		spotPrice := gpu.CommunitySpotPrice
 		if spotPrice == 0 {
 			spotPrice = gpu.SecureSpotPrice
 		}
 		if spotPrice == 0 && gpu.LowestPrice1 != nil {
 			spotPrice = gpu.LowestPrice1.MinimumBidPrice
-		}
-		if spotPrice == 0 {
-			spotPrice = price * 0.5
 		}
 
 		priceByCount := map[int]float64{
@@ -840,28 +1121,6 @@ func spotPriceFromRunPodPrice(price *runpodLowestPrice) float64 {
 		return 0
 	}
 	return price.MinimumBidPrice
-}
-
-// getEstimatedPrice returns estimated hourly price for a GPU type.
-// Used as fallback when the API doesn't return pricing.
-// Prices reflect RunPod community cloud on-demand rates as of March 2026.
-func getEstimatedPrice(gpuType providers.GPUType) float64 {
-	switch gpuType {
-	case providers.GPURTX4090:
-		return 0.34
-	case providers.GPURTX4080:
-		return 0.29
-	case providers.GPUA100_40:
-		return 1.19
-	case providers.GPUA100_80:
-		return 1.19
-	case providers.GPUH100:
-		return 1.99
-	case providers.GPUL40S:
-		return 0.79
-	default:
-		return 0.50
-	}
 }
 
 // GetStatus returns RunPod account status.
