@@ -547,6 +547,22 @@ if TEST_GATEWAY_REPLICAS=2 INFERA_GATEWAY_REPLICAS=3 bash -c 'source "$1/scripts
   exit 1
 fi
 
+assert_recovery_smoke_timeouts() {
+  local expected_chat_timeout="$1"
+  local expected_chat_calls="$2"
+
+  [[ "$(grep -c '/v1/chat/completions' "${TEST_CALLS}")" == "${expected_chat_calls}" ]]
+  if grep -E '/health|/v1/models' "${TEST_CALLS}" | grep -vq -- '--max-time 10 '; then
+    echo "recovery health and models calls must retain the ordinary 10-second timeout" >&2
+    exit 1
+  fi
+  if grep '/v1/chat/completions' "${TEST_CALLS}" |
+    grep -vq -- "--max-time ${expected_chat_timeout} "; then
+    echo "recovery chat calls must use the bounded recovery smoke timeout" >&2
+    exit 1
+  fi
+}
+
 : >"${TEST_CALLS}"
 TEST_GATEWAY_REPLICAS=2 \
 INFERA_GATEWAY_REPLICAS=2 \
@@ -556,7 +572,7 @@ INFERA_SMOKE_MODEL=test-model \
 "${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"
 grep -q 'http://172.20.0.9:8080/v1/models' "${TEST_CALLS}"
 grep -q 'http://172.20.0.10:8080/v1/models' "${TEST_CALLS}"
-[[ "$(grep -c -- '--max-time 60 .*v1/chat/completions' "${TEST_CALLS}")" == "4" ]]
+assert_recovery_smoke_timeouts 60 4
 
 : >"${TEST_CALLS}"
 TEST_GATEWAY_REPLICAS=2 \
@@ -564,11 +580,38 @@ INFERA_GATEWAY_REPLICAS=2 \
 INFERA_EXPECT_TRAFFIC_DRAINED=1 \
 INFERA_SMOKE_API_KEY=test-smoke-key \
 INFERA_SMOKE_MODEL=test-model \
+SMOKE_TIMEOUT=99 \
 INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS=75 \
 "${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"
-[[ "$(grep -c -- '--max-time 75 .*v1/chat/completions' "${TEST_CALLS}")" == "4" ]]
+assert_recovery_smoke_timeouts 75 4
 
-for invalid_recovery_smoke_timeout in 0 121 invalid; do
+for valid_recovery_smoke_timeout in 1 120; do
+  : >"${TEST_CALLS}"
+  INFERA_EXPECT_TRAFFIC_DRAINED=1 \
+  INFERA_SMOKE_API_KEY=test-smoke-key \
+  INFERA_SMOKE_MODEL=test-model \
+  INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS="${valid_recovery_smoke_timeout}" \
+  "${REPO_ROOT}/scripts/verify-release-manifest.sh" "${TMP_DIR}/release.manifest"
+  assert_recovery_smoke_timeouts "${valid_recovery_smoke_timeout}" 2
+done
+
+invalid_recovery_smoke_timeouts=(
+  ""
+  "0"
+  "121"
+  "-1"
+  "+1"
+  " 1"
+  "1 "
+  "1.0"
+  "1a"
+  "invalid"
+  "01"
+  "18446744073709551617"
+  "18446744073709551736"
+  "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+)
+for invalid_recovery_smoke_timeout in "${invalid_recovery_smoke_timeouts[@]}"; do
   : >"${TEST_CALLS}"
   if INFERA_EXPECT_TRAFFIC_DRAINED=1 \
     INFERA_SMOKE_API_KEY=test-smoke-key \

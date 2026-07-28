@@ -9,14 +9,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=recovery-adapter-common.sh
 source "${SCRIPT_DIR}/recovery-adapter-common.sh"
 : "${INFERA_SMOKE_MODEL:?INFERA_SMOKE_MODEL is required for recovery verification}"
-RECOVERY_SMOKE_TIMEOUT_SECONDS="${INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS:-60}"
-[[ "${RECOVERY_SMOKE_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ &&
-   "${RECOVERY_SMOKE_TIMEOUT_SECONDS}" -le 120 ]] || {
-  echo "INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS must be between 1 and 120" >&2
+RECOVERY_SMOKE_TIMEOUT_SECONDS="${INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS-60}"
+[[ "${RECOVERY_SMOKE_TIMEOUT_SECONDS}" =~ ^([1-9]|[1-9][0-9]|1[01][0-9]|120)$ ]] || {
+  echo "INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS must be a canonical decimal between 1 and 120" >&2
   exit 2
 }
 export INFERA_SMOKE_STREAM=1
-export SMOKE_TIMEOUT="${RECOVERY_SMOKE_TIMEOUT_SECONDS}"
+export SMOKE_TIMEOUT=10
+export SMOKE_CHAT_TIMEOUT="${RECOVERY_SMOKE_TIMEOUT_SECONDS}"
 export SKIP_CHAT_CHECKS=0
 
 case "${INFERA_RELEASE_WORKER_MODE:-serving}" in

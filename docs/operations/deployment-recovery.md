@@ -152,11 +152,13 @@ worker discovery and chat inference, but still verifies rollout identity, dashbo
 authentication, and the model-list response contract. Any other mode or malformed worker count
 fails closed. Never use cost-saving mode to bypass a failed worker rollout.
 
-Recovery verification gives each authenticated smoke request 60 seconds by default so a newly
-registered worker can complete its first cold inference. Override this only with
-`INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS`; values must be between 1 and 120 seconds. The coordinator's
-absolute deadline still bounds the complete verifier process, so a slow or hung inference continues
-to fail into rollback rather than extending the recovery window.
+Recovery verification gives each authenticated chat smoke request 60 seconds by default so a newly
+registered worker can complete its first cold inference. Health and authenticated model-list
+requests retain the ordinary 10-second smoke timeout. Override the chat timeout only with
+`INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS`; values must be canonical decimal integers from 1 through
+120, without signs, whitespace, or leading zeros. The coordinator's absolute deadline still bounds
+the complete verifier process, so a slow or hung inference continues to fail into rollback rather
+than extending the recovery window.
 
 The RunPod deployment adapter requires an explicit reviewed `INFERA_RECOVERY_WORKER_MODEL`; it does
 not select a model implicitly. It defaults to one `RTX_4090` vLLM worker. Set the ordered,
