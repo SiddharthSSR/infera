@@ -165,6 +165,9 @@ image_revision=$(docker image inspect \
     "$image_tag")
 [[ "$image_revision" == "$revision" ]] || {
     echo "error: built image revision label mismatch: expected $revision, got $image_revision" >&2
+    if ! docker image rm --force "$image_tag" >/dev/null 2>&1; then
+        echo "warning: failed to remove rejected image tag: $image_tag" >&2
+    fi
     exit 1
 }
 

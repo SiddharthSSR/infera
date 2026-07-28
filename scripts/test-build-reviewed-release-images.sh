@@ -115,6 +115,10 @@ if [[ "$1" == image && "$2" == inspect ]]; then
     fi
     exit 0
 fi
+if [[ "$1" == image && "$2" == rm ]]; then
+    printf '%s\n' "$*" > "$CAPTURE_ROOT/rejected-image-removed"
+    exit 0
+fi
 echo "unexpected fake docker invocation: $*" >&2
 exit 1
 EOF
@@ -195,6 +199,8 @@ if LABEL_MISMATCH=1 PATH="$fake_bin:$PATH" CAPTURE_ROOT="$capture" TMPDIR="$cont
 fi
 grep -q 'built image revision label mismatch' "$test_root/label-mismatch.err" ||
     fail "revision-label mismatch was not reported"
+grep -q 'example.invalid/gateway:test' "$capture/rejected-image-removed" ||
+    fail "revision-label mismatch did not remove the rejected image tag"
 
 if find "$contexts" -maxdepth 1 \
     \( -name 'infera-gateway-context.*' -o -name 'infera-worker-vllm-context.*' \
@@ -222,6 +228,8 @@ grep -q 'build_reviewed_image "worker-vllm" "worker-vllm"' scripts/build-docker.
     fail "build-docker vLLM path bypasses the reviewed builder"
 grep -q 'RELEASE_REVISION: \${{ github.sha }}' .github/workflows/build-worker-image.yml ||
     fail "worker image workflow does not bind the reviewed commit"
+grep -q 'persist-credentials: false' .github/workflows/build-worker-image.yml ||
+    fail "worker image workflow persists checkout credentials"
 if awk '
     /^  gateway:/ { in_gateway=1; next }
     in_gateway && /^  [A-Za-z0-9_-]+:/ { in_gateway=0 }
@@ -234,6 +242,15 @@ fi
     cd python/requirements
     shasum -a 256 -c worker-vllm.lock.sha256
 ) >/dev/null || fail "worker dependency lock checksum mismatch"
+
+bash scripts/validate-worker-image-pin.sh \
+    example.invalid/gateway@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    INFERA_GATEWAY_IMAGE --require-digest
+if bash scripts/validate-worker-image-pin.sh \
+    example.invalid/gateway:release INFERA_GATEWAY_IMAGE --require-digest \
+    > /dev/null 2>&1; then
+    fail "strict release image validation accepted a mutable tag"
+fi
 
 python3 - python/requirements/worker-vllm.lock <<'PY'
 from pathlib import Path

@@ -64,6 +64,10 @@ docker compose -f docker-compose.prod.yml down --remove-orphans
 - [ ] Pull and start the reviewed image digests without a local build:
 
 ```bash
+./scripts/validate-worker-image-pin.sh \
+  "$INFERA_GATEWAY_IMAGE" INFERA_GATEWAY_IMAGE --require-digest
+./scripts/validate-worker-image-pin.sh \
+  "$INFERA_WORKER_IMAGE" INFERA_WORKER_IMAGE --require-digest
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d --no-build --force-recreate
 ```
@@ -179,11 +183,18 @@ docker compose -f docker-compose.prod.yml ps
 docker compose -f docker-compose.prod.yml logs <service> --tail=300
 ```
 
-3. [ ] Roll back to the last-known-good image digests:
+3. [ ] Roll back to the complete recorded last-known-good release set:
 
 ```bash
 docker compose -f docker-compose.prod.yml down --remove-orphans
-# Restore the recorded INFERA_GATEWAY_IMAGE and INFERA_WORKER_IMAGE repo digests.
+# Atomically restore all six validated fields from the recorded manifest:
+# INFERA_RELEASE_ID, INFERA_GATEWAY_IMAGE, INFERA_WORKER_IMAGE,
+# INFERA_WORKER_PROTOCOL_VERSION, INFERA_RECOVERY_API_PROTOCOL_VERSION, and
+# INFERA_AUDIT_LEDGER_WRITER_PROTOCOL. Do not mix candidate and rollback fields.
+./scripts/validate-worker-image-pin.sh \
+  "$INFERA_GATEWAY_IMAGE" INFERA_GATEWAY_IMAGE --require-digest
+./scripts/validate-worker-image-pin.sh \
+  "$INFERA_WORKER_IMAGE" INFERA_WORKER_IMAGE --require-digest
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d --no-build --force-recreate
 ```

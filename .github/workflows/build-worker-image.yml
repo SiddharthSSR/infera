@@ -65,6 +65,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Show initial disk usage
         shell: bash
