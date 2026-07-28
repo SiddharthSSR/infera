@@ -276,14 +276,7 @@ func TestProvisionReturnsCapacityUnavailableWithoutCreateMutation(t *testing.T) 
 	}
 	createCalls := 0
 	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("ReadAll: %v", err)
-		}
-		var request graphQLRequest
-		if err := json.Unmarshal(body, &request); err != nil {
-			t.Fatalf("json.Unmarshal request: %v", err)
-		}
+		request := decodeGraphQLRequest(t, req)
 		if strings.Contains(request.Query, "query GpuPlacementEvidence") {
 			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","displayName":"NVIDIA L40S","maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":0}]}}`), nil
 		}
@@ -317,14 +310,7 @@ func TestProvisionCreatesWhenStructuredCapacityIsPositive(t *testing.T) {
 	capacityCalls := 0
 	createCalls := 0
 	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("ReadAll: %v", err)
-		}
-		var request graphQLRequest
-		if err := json.Unmarshal(body, &request); err != nil {
-			t.Fatalf("json.Unmarshal request: %v", err)
-		}
+		request := decodeGraphQLRequest(t, req)
 		if strings.Contains(request.Query, "query GpuPlacementEvidence") {
 			capacityCalls++
 			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","displayName":"NVIDIA L40S","communityPrice":0.79,"maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":1}]}}`), nil
@@ -683,13 +669,7 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 
 	var captured graphQLRequest
 	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("ReadAll: %v", err)
-		}
-		if err := json.Unmarshal(body, &captured); err != nil {
-			t.Fatalf("json.Unmarshal request: %v", err)
-		}
+		captured = decodeGraphQLRequest(t, req)
 		if strings.Contains(captured.Query, "query GpuPlacementEvidence") {
 			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","displayName":"NVIDIA L40S","communityPrice":0.79,"maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
 		}
@@ -779,13 +759,7 @@ func TestProvisionIncludesAllowedCudaVersions(t *testing.T) {
 
 	var captured graphQLRequest
 	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("ReadAll: %v", err)
-		}
-		if err := json.Unmarshal(body, &captured); err != nil {
-			t.Fatalf("json.Unmarshal request: %v", err)
-		}
+		captured = decodeGraphQLRequest(t, req)
 		if strings.Contains(captured.Query, "query GpuPlacementEvidence") {
 			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA A100 80GB PCIe","displayName":"NVIDIA A100 80GB PCIe","communityPrice":1.19,"maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":1}]}}`), nil
 		}
@@ -829,13 +803,7 @@ func TestProvisionAddsRuntimeEnvOverridesForKnownModel(t *testing.T) {
 
 	var captured graphQLRequest
 	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("ReadAll: %v", err)
-		}
-		if err := json.Unmarshal(body, &captured); err != nil {
-			t.Fatalf("json.Unmarshal request: %v", err)
-		}
+		captured = decodeGraphQLRequest(t, req)
 		if strings.Contains(captured.Query, "query GpuPlacementEvidence") {
 			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","displayName":"NVIDIA L40S","communityPrice":0.79,"maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
 		}
@@ -1028,13 +996,7 @@ func TestProvisionPassesThroughUnknownLiveGPUDisplayName(t *testing.T) {
 
 	var captured graphQLRequest
 	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("ReadAll: %v", err)
-		}
-		if err := json.Unmarshal(body, &captured); err != nil {
-			t.Fatalf("json.Unmarshal request: %v", err)
-		}
+		captured = decodeGraphQLRequest(t, req)
 		if strings.Contains(captured.Query, "query GpuPlacementEvidence") {
 			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"H200 SXM","displayName":"NVIDIA H200 SXM","communityPrice":2.69,"maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
 		}

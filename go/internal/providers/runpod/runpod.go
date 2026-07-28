@@ -128,6 +128,38 @@ type graphQLResponse struct {
 	} `json:"errors,omitempty"`
 }
 
+const runPodGPUOfferingFields = `
+	id
+	displayName
+	memoryInGb
+	securePrice
+	communityPrice
+	secureSpotPrice
+	communitySpotPrice
+	maxGpuCountCommunityCloud
+	maxGpuCountSecureCloud
+	lowestPrice1: lowestPrice(input: { gpuCount: 1 }) {
+		minimumBidPrice
+		uninterruptablePrice
+	}
+	lowestPrice2: lowestPrice(input: { gpuCount: 2 }) {
+		minimumBidPrice
+		uninterruptablePrice
+	}
+	lowestPrice4: lowestPrice(input: { gpuCount: 4 }) {
+		minimumBidPrice
+		uninterruptablePrice
+	}
+	lowestPrice8: lowestPrice(input: { gpuCount: 8 }) {
+		minimumBidPrice
+		uninterruptablePrice
+	}
+	lowestPrice16: lowestPrice(input: { gpuCount: 16 }) {
+		minimumBidPrice
+		uninterruptablePrice
+	}
+`
+
 // Provision creates a new GPU pod.
 func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionRequest) (*providers.Instance, error) {
 	if req == nil {
@@ -354,6 +386,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 			Message:  "RunPod create response omitted the pod ID",
 		}
 	}
+	createdAt := time.Now().UTC()
 
 	confirmedPrice, capturedAt, err := p.reconcileCreatedPrice(ctx, podID, pod.Machine.CostPerHr)
 	if err != nil {
@@ -409,7 +442,7 @@ func (p *Provider) Provision(ctx context.Context, req *providers.ProvisionReques
 		CostPerHour:  confirmedPrice,
 		SpotInstance: req.SpotInstance,
 		Models:       models,
-		CreatedAt:    capturedAt,
+		CreatedAt:    createdAt,
 		Metadata:     metadata,
 	}, nil
 }
@@ -419,40 +452,13 @@ type provisionOfferingEvidence struct {
 }
 
 func (p *Provider) requireProvisionOffering(ctx context.Context, req *providers.ProvisionRequest, gpuTypeID string) (provisionOfferingEvidence, error) {
-	query := `
+	query := fmt.Sprintf(`
 		query GpuPlacementEvidence {
 			gpuTypes {
-				id
-				displayName
-				securePrice
-				communityPrice
-				secureSpotPrice
-				communitySpotPrice
-				maxGpuCountCommunityCloud
-				maxGpuCountSecureCloud
-				lowestPrice1: lowestPrice(input: { gpuCount: 1 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice2: lowestPrice(input: { gpuCount: 2 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice4: lowestPrice(input: { gpuCount: 4 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice8: lowestPrice(input: { gpuCount: 8 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice16: lowestPrice(input: { gpuCount: 16 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
+				%s
 			}
 		}
-	`
+	`, runPodGPUOfferingFields)
 	resp, err := p.graphQL(ctx, query, nil)
 	if err != nil {
 		return provisionOfferingEvidence{}, err
@@ -566,6 +572,7 @@ func (e runpodGPUOfferingEvidence) availableTierPrice(count int, communityPrice,
 	}
 	if e.MaxGPUCountSecureCloud != nil && *e.MaxGPUCountSecureCloud >= count &&
 		securePrice != nil && validHourlyPrice(*securePrice) && *securePrice > price {
+		// cloudType "ALL" may choose either tier, so cap enforcement uses the higher eligible price.
 		price = *securePrice
 	}
 	if validHourlyPrice(price * float64(count)) {
@@ -951,44 +958,15 @@ func (p *Provider) ListInstances(ctx context.Context) ([]*providers.Instance, er
 	return instances, nil
 }
 
-// ListOfferings returns available GPU configurations with real pricing from RunPod API.
+// ListOfferings returns advertised GPU configurations with live pricing from RunPod API.
 func (p *Provider) ListOfferings(ctx context.Context) ([]*providers.GPUOffering, error) {
-	// Query gpuTypes with pricing fields from RunPod's GraphQL API
-	query := `
+	query := fmt.Sprintf(`
 		query GpuTypes {
 			gpuTypes {
-				id
-				displayName
-				memoryInGb
-				securePrice
-				communityPrice
-				secureSpotPrice
-				communitySpotPrice
-				maxGpuCountCommunityCloud
-				maxGpuCountSecureCloud
-				lowestPrice1: lowestPrice(input: { gpuCount: 1 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice2: lowestPrice(input: { gpuCount: 2 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice4: lowestPrice(input: { gpuCount: 4 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice8: lowestPrice(input: { gpuCount: 8 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
-				lowestPrice16: lowestPrice(input: { gpuCount: 16 }) {
-					minimumBidPrice
-					uninterruptablePrice
-				}
+				%s
 			}
 		}
-	`
+	`, runPodGPUOfferingFields)
 
 	resp, err := p.graphQL(ctx, query, nil)
 	if err != nil {
