@@ -1,9 +1,6 @@
 services:
   gateway:
     image: ${INFERA_GATEWAY_IMAGE:?INFERA_GATEWAY_IMAGE is required}
-    build:
-      context: .
-      dockerfile: deploy/docker/Dockerfile.gateway
     environment:
       - RUNPOD_API_KEY=${RUNPOD_API_KEY}
       - VASTAI_API_KEY=${VASTAI_API_KEY}

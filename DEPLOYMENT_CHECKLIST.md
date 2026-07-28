@@ -61,10 +61,15 @@ mkdir -p data
 docker compose -f docker-compose.prod.yml down --remove-orphans
 ```
 
-- [ ] Build and start:
+- [ ] Pull and start the reviewed image digests without a local build:
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build --force-recreate
+./scripts/validate-worker-image-pin.sh \
+  "$INFERA_GATEWAY_IMAGE" INFERA_GATEWAY_IMAGE --require-digest
+./scripts/validate-worker-image-pin.sh \
+  "$INFERA_WORKER_IMAGE" INFERA_WORKER_IMAGE --require-digest
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d --no-build --force-recreate
 ```
 
 - [ ] Confirm services are up:
@@ -178,13 +183,20 @@ docker compose -f docker-compose.prod.yml ps
 docker compose -f docker-compose.prod.yml logs <service> --tail=300
 ```
 
-3. [ ] Roll back to last known good commit:
+3. [ ] Roll back to the complete recorded last-known-good release set:
 
 ```bash
-git log --oneline -n 10
-git checkout <known-good-commit>
 docker compose -f docker-compose.prod.yml down --remove-orphans
-docker compose -f docker-compose.prod.yml up -d --build --force-recreate
+# Atomically restore all six validated fields from the recorded manifest:
+# INFERA_RELEASE_ID, INFERA_GATEWAY_IMAGE, INFERA_WORKER_IMAGE,
+# INFERA_WORKER_PROTOCOL_VERSION, INFERA_RECOVERY_API_PROTOCOL_VERSION, and
+# INFERA_AUDIT_LEDGER_WRITER_PROTOCOL. Do not mix candidate and rollback fields.
+./scripts/validate-worker-image-pin.sh \
+  "$INFERA_GATEWAY_IMAGE" INFERA_GATEWAY_IMAGE --require-digest
+./scripts/validate-worker-image-pin.sh \
+  "$INFERA_WORKER_IMAGE" INFERA_WORKER_IMAGE --require-digest
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d --no-build --force-recreate
 ```
 
 ## 6. Known Failure Patterns

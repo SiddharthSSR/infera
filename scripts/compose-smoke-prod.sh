@@ -33,6 +33,7 @@ trap cleanup EXIT
 : "${INFERA_WORKER_PROTOCOL_VERSION:=1}"
 : "${INFERA_RECOVERY_API_PROTOCOL_VERSION:=1}"
 : "${INFERA_GATEWAY_IMAGE:=ghcr.io/example/infera-gateway:test}"
+: "${SMOKE_GATEWAY_REVISION:=$(git rev-parse --verify 'HEAD^{commit}')}"
 : "${INFERA_GATEWAY_REPLICAS:=1}"
 : "${INFERA_CONTROL_STATE_DSN:=postgres://infera:infera-smoke@control-state:5432/infera?sslmode=disable}"
 : "${INFERA_AUDIT_LEDGER_BACKEND:=sqlite}"
@@ -60,6 +61,7 @@ export INFERA_RELEASE_ID
 export INFERA_WORKER_PROTOCOL_VERSION
 export INFERA_RECOVERY_API_PROTOCOL_VERSION
 export INFERA_GATEWAY_IMAGE
+export SMOKE_GATEWAY_REVISION
 export INFERA_GATEWAY_REPLICAS
 export INFERA_CONTROL_STATE_DSN
 export INFERA_AUDIT_LEDGER_BACKEND
@@ -205,8 +207,14 @@ fetch_ingress() {
 prepare_smoke_compose_file
 prepare_ci_caddyfile
 
-echo "Building and starting gateway from ${COMPOSE_FILE}"
-compose up -d --build gateway
+echo "Building reviewed gateway revision ${SMOKE_GATEWAY_REVISION} as ${INFERA_GATEWAY_IMAGE}"
+bash "$(dirname "$0")/build-reviewed-release-image.sh" \
+  --component gateway \
+  --revision "${SMOKE_GATEWAY_REVISION}" \
+  --tag "${INFERA_GATEWAY_IMAGE}"
+
+echo "Starting gateway without a Compose build path"
+compose up -d --no-build gateway
 
 echo "Waiting for gateway"
 wait_for_service gateway "${SMOKE_TIMEOUT}"

@@ -63,6 +63,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Show initial disk usage
         shell: bash
@@ -144,6 +147,7 @@ jobs:
           DOCKER_REGISTRY: ${{ inputs.docker_registry }}
           DOCKER_NAMESPACE: ${{ inputs.docker_namespace }}
           VERSION: ${{ steps.meta.outputs.version }}
+          RELEASE_REVISION: ${{ github.sha }}
           WORKER_TENSORRT_LLM_BASE_IMAGE: ${{ inputs.tensorrt_base_image }}
         run: |
           cmd=(./scripts/build-docker.sh "${{ steps.meta.outputs.build_flag }}")

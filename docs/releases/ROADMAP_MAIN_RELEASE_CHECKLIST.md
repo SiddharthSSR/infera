@@ -44,9 +44,11 @@ These checks were run successfully on `roadmap`:
 These should be confirmed before merging `roadmap` into `main`:
 
 1. Pin the production worker image.
-   - Confirm [deploy/docker/Dockerfile.worker.vllm](/Users/siddharthsingh/codingtensor/infera/deploy/docker/Dockerfile.worker.vllm) has produced the intended image.
-	- Set `INFERA_WORKER_IMAGE` in production to a pinned tag or digest, not `latest`.
-	- Engine-specific `INFERA_WORKER_IMAGE_<ENGINE>` overrides must also use pinned tags or digests.
+   - Build gateway and vLLM worker from the exact candidate commit through
+     [REPRODUCIBLE_RELEASE_BUILDS.md](REPRODUCIBLE_RELEASE_BUILDS.md).
+   - Confirm both OCI revision labels match the candidate commit.
+   - Set `INFERA_GATEWAY_IMAGE` and `INFERA_WORKER_IMAGE` to registry repo digests.
+   - Engine-specific `INFERA_WORKER_IMAGE_<ENGINE>` overrides must also use repo digests.
 	- Validate it before deploy:
 
      ```bash
@@ -105,7 +107,8 @@ Run this on the production-like target before merging to `main`:
    - `docker compose -f docker-compose.prod.yml config >/tmp/infera-prod-config.yaml`
 
 3. Deploy the canary stack.
-   - `docker compose -f docker-compose.prod.yml up -d --build`
+   - `docker compose -f docker-compose.prod.yml pull`
+   - `docker compose -f docker-compose.prod.yml up -d --no-build`
    - `docker compose -f docker-compose.prod.yml ps`
 
 4. Verify service health.
