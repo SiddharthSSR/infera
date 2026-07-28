@@ -74,6 +74,8 @@ cat > "$fake_bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+printf '%s\n' invoked > "$CAPTURE_ROOT/docker-invoked"
+
 if [[ "$1" == build ]]; then
     shift
     context=${!#}
@@ -149,6 +151,37 @@ if find "$contexts" -maxdepth 1 -name 'infera-frontend-context.*' -print -quit |
     fail "temporary build context was not cleaned up"
 fi
 
+assert_rejected_platform() {
+    local rejected_platform=$1
+    local label=$2
+    local error_output="$test_root/platform-${label}.err"
+    local exit_code
+
+    rm -f "$capture/docker-invoked"
+    set +e
+    PATH="$fake_bin:$PATH" CAPTURE_ROOT="$capture" TMPDIR="$contexts" \
+        "$fixture/scripts/build-reviewed-frontend.sh" \
+        --revision "$reviewed_revision" \
+        --tag infera-frontend:test \
+        --platform "$rejected_platform" \
+        > /dev/null 2>"$error_output"
+    exit_code=$?
+    set -e
+
+    [[ $exit_code -eq 2 ]] ||
+        fail "platform ${label} exited ${exit_code}, expected 2"
+    grep -q "reviewed frontend builds require --platform linux/amd64" "$error_output" ||
+        fail "platform ${label} did not report the amd64 requirement"
+    assert_absent "$capture/docker-invoked"
+    if find "$contexts" -maxdepth 1 -name 'infera-frontend-context.*' -print -quit | grep -q .; then
+        fail "platform ${label} left a temporary context behind"
+    fi
+}
+
+assert_rejected_platform "linux/arm64" arm64
+assert_rejected_platform "" empty
+assert_rejected_platform "windows/amd64" other
+
 if PATH="$fake_bin:$PATH" CAPTURE_ROOT="$capture" TMPDIR="$contexts" \
     "$fixture/scripts/build-reviewed-frontend.sh" \
     --tag infera-frontend:test > /dev/null 2>&1; then
@@ -174,4 +207,5 @@ if find "$contexts" -maxdepth 1 -name 'infera-frontend-context.*' -print -quit |
 fi
 
 echo "PASS: reviewed frontend context ignores dirty, staged, and untracked workspace inputs"
+echo "PASS: reviewed frontend builds reject every non-linux/amd64 platform before Docker"
 echo "PASS: invalid/missing revisions fail and temporary contexts are cleaned"

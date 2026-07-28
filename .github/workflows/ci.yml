@@ -145,6 +145,7 @@ jobs:
           INFERA_WORKER_PROTOCOL_VERSION: "1"
           INFERA_GATEWAY_IMAGE: ghcr.io/example/infera-gateway:test
           INFERA_WORKER_IMAGE: ghcr.io/example/infera-worker:test
+          INFERA_FRONTEND_IMAGE: infera-frontend:ci-test
           GRAFANA_ADMIN_USER: admin
           GRAFANA_ADMIN_PASSWORD: test-grafana-password
           ALERT_EMAIL_TO: alerts@example.com
@@ -155,7 +156,17 @@ jobs:
           RUNPOD_API_KEY: ""
           VASTAI_API_KEY: ""
           HF_TOKEN: ""
-        run: docker compose -f docker-compose.prod.yml config
+        run: |
+          error_output="$(mktemp)"
+          trap 'rm -f "${error_output}"' EXIT
+          if env -u INFERA_FRONTEND_IMAGE \
+            docker compose --env-file /dev/null -f docker-compose.prod.yml config \
+              >/dev/null 2>"${error_output}"; then
+            echo "Production Compose unexpectedly accepted a missing INFERA_FRONTEND_IMAGE" >&2
+            exit 1
+          fi
+          grep -F "INFERA_FRONTEND_IMAGE is required" "${error_output}"
+          docker compose --env-file /dev/null -f docker-compose.prod.yml config
 
       - name: Test deployment recovery behavior
         run: |
@@ -191,6 +202,7 @@ jobs:
           INFERA_WORKER_PROTOCOL_VERSION: "1"
           INFERA_GATEWAY_IMAGE: ghcr.io/example/infera-gateway:test
           INFERA_WORKER_IMAGE: ghcr.io/example/infera-worker:test
+          INFERA_FRONTEND_IMAGE: infera-frontend:smoke
           GRAFANA_ADMIN_USER: admin
           GRAFANA_ADMIN_PASSWORD: test-grafana-password
           ALERT_EMAIL_TO: alerts@example.com

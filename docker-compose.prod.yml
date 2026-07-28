@@ -62,7 +62,7 @@ services:
         max-file: "3"
 
   frontend:
-    image: ${INFERA_FRONTEND_IMAGE:-infera-frontend:local}
+    image: ${INFERA_FRONTEND_IMAGE:?INFERA_FRONTEND_IMAGE is required}
     build:
       context: .
       dockerfile: deploy/docker/Dockerfile.frontend

@@ -12,7 +12,7 @@ working tree is never used as the Docker build context.
 Options:
   --revision <revision>  Required commit, tag, or other revision resolving to a commit
   --tag <image-tag>      Required local image tag
-  --platform <platform>  Docker target platform (default: linux/amd64)
+  --platform <platform>  Docker target platform; must be linux/amd64
   --build-arg <value>    Additional Docker build argument; may be repeated
   --help                 Show this help
 EOF
@@ -45,6 +45,10 @@ while [[ $# -gt 0 ]]; do
         --platform)
             [[ $# -ge 2 ]] || {
                 echo "error: --platform requires a value" >&2
+                exit 2
+            }
+            [[ "$2" == "linux/amd64" ]] || {
+                echo "error: reviewed frontend builds require --platform linux/amd64" >&2
                 exit 2
             }
             platform=$2
