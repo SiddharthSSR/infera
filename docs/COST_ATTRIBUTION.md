@@ -42,3 +42,35 @@ turn attributed request cost into a predictive cost-per-token estimate. The
 versioned provider instance price snapshot (USD/hour) resolved by authoritative
 worker ID. Its separate trust, freshness, and fallback contract is documented
 in `docs/optimization/cost-slo-routing.md`.
+
+## Provider price trust and billing reconciliation
+
+For RunPod, an instance price becomes trusted only after the adapter reads the
+created pod's provider-reported `machine.costPerHr`. Pre-placement `gpuTypes`
+prices and maximum GPU counts are advertised evidence: they can reject a
+placement under `max_cost_hour`, but they are not proof of the final placement
+price or capacity. Static catalog estimates are not eligible as confirmed
+evidence.
+
+The RunPod adapter records the confirmed value on `Instance.CostPerHour` plus
+metadata containing:
+
+- currency: `USD`;
+- unit: `instance-hour`;
+- source: `runpod.pod.machine.costPerHr`;
+- provider capture time;
+- advertised USD/hour price;
+- reconciliation state (`confirmed`, `confirmed_price_drift`, or
+  `confirmed_advertised_price_unavailable`);
+- capacity state (`advertised_not_confirmed`).
+
+The provider manager snapshots that confirmed `Instance.CostPerHour` into
+`provider-instance-hourly-v1` audit evidence. Later routing and audit rows must
+continue to use the immutable provider-instance snapshot for the execution,
+not a fresh catalog quote. Provider invoices remain the external source of
+truth: operational reconciliation should join by provider and instance/pod ID,
+compare billed instance-hour intervals and rates with the stored confirmed
+price and capture time, and attribute storage, network, taxes, discounts,
+minimum billing increments, and idle time separately. A drift marker explains
+why the final instance price differs from the pre-placement advertisement; it
+does not rewrite historical audit snapshots.

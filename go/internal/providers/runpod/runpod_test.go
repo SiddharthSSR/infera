@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/infera/infera/go/internal/providers"
 )
@@ -283,8 +284,8 @@ func TestProvisionReturnsCapacityUnavailableWithoutCreateMutation(t *testing.T) 
 		if err := json.Unmarshal(body, &request); err != nil {
 			t.Fatalf("json.Unmarshal request: %v", err)
 		}
-		if strings.Contains(request.Query, "query GpuCapacity") {
-			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":0}]}}`), nil
+		if strings.Contains(request.Query, "query GpuPlacementEvidence") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","displayName":"NVIDIA L40S","maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":0}]}}`), nil
 		}
 		createCalls++
 		return httpResponse(http.StatusOK, `{"data":{}}`), nil
@@ -324,12 +325,12 @@ func TestProvisionCreatesWhenStructuredCapacityIsPositive(t *testing.T) {
 		if err := json.Unmarshal(body, &request); err != nil {
 			t.Fatalf("json.Unmarshal request: %v", err)
 		}
-		if strings.Contains(request.Query, "query GpuCapacity") {
+		if strings.Contains(request.Query, "query GpuPlacementEvidence") {
 			capacityCalls++
-			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":1}]}}`), nil
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","displayName":"NVIDIA L40S","communityPrice":0.79,"maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":1}]}}`), nil
 		}
 		createCalls++
-		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S"}}}}`), nil
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S","costPerHr":0.79}}}}`), nil
 	})
 
 	if _, err := provider.Provision(context.Background(), &providers.ProvisionRequest{
@@ -374,6 +375,302 @@ func TestProvisionPreservesStructuredCapacityQueryError(t *testing.T) {
 	}
 }
 
+func TestProvisionRejectsAdvertisedPriceAboveCapBeforeCreate(t *testing.T) {
+	provider := newPriceTestProvider(t)
+	createCalls := 0
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		request := decodeGraphQLRequest(t, req)
+		if strings.Contains(request.Query, "query GpuPlacementEvidence") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{
+				"id":"NVIDIA L40S",
+				"displayName":"NVIDIA L40S",
+				"communityPrice":0.45,
+				"maxGpuCountCommunityCloud":2,
+				"maxGpuCountSecureCloud":0,
+				"lowestPrice2":{"uninterruptablePrice":0.81}
+			}]}}`), nil
+		}
+		createCalls++
+		return httpResponse(http.StatusOK, `{"data":{}}`), nil
+	})
+
+	_, err := provider.Provision(context.Background(), priceTestRequest(2, 0.80))
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Code != providers.ProviderErrorInvalidRequest {
+		t.Fatalf("expected typed cap rejection, got %v", err)
+	}
+	if !strings.Contains(providerErr.Message, "advertised hourly price 0.81") {
+		t.Fatalf("expected advertised price in error, got %q", providerErr.Message)
+	}
+	if createCalls != 0 {
+		t.Fatalf("expected no create mutation, got %d", createCalls)
+	}
+}
+
+func TestProvisionRejectsMissingAdvertisedPriceUnderCap(t *testing.T) {
+	provider := newPriceTestProvider(t)
+	createCalls := 0
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		request := decodeGraphQLRequest(t, req)
+		if strings.Contains(request.Query, "query GpuPlacementEvidence") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{
+				"id":"NVIDIA L40S",
+				"displayName":"NVIDIA L40S",
+				"communityPrice":0,
+				"securePrice":0,
+				"maxGpuCountCommunityCloud":1,
+				"maxGpuCountSecureCloud":0
+			}]}}`), nil
+		}
+		createCalls++
+		return httpResponse(http.StatusOK, `{"data":{}}`), nil
+	})
+
+	_, err := provider.Provision(context.Background(), priceTestRequest(1, 1.00))
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Code != providers.ProviderErrorServiceUnavailable {
+		t.Fatalf("expected unavailable price evidence error, got %v", err)
+	}
+	if createCalls != 0 {
+		t.Fatalf("expected no create mutation, got %d", createCalls)
+	}
+}
+
+func TestProvisionRejectsMismatchedLiveGPUTypeBeforeCreate(t *testing.T) {
+	provider := newPriceTestProvider(t)
+	createCalls := 0
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		request := decodeGraphQLRequest(t, req)
+		if strings.Contains(request.Query, "query GpuPlacementEvidence") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{
+				"id":"NVIDIA L40S",
+				"displayName":"NVIDIA H100 PCIe",
+				"communityPrice":0.79,
+				"maxGpuCountCommunityCloud":1,
+				"maxGpuCountSecureCloud":0
+			}]}}`), nil
+		}
+		createCalls++
+		return httpResponse(http.StatusOK, `{"data":{}}`), nil
+	})
+
+	_, err := provider.Provision(context.Background(), priceTestRequest(1, 1.00))
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Code != providers.ProviderErrorInvalidRequest {
+		t.Fatalf("expected GPU type reconciliation error, got %v", err)
+	}
+	if createCalls != 0 {
+		t.Fatalf("expected no create mutation, got %d", createCalls)
+	}
+}
+
+func TestProvisionRejectsUnsupportedSpotModeBeforeProviderCalls(t *testing.T) {
+	provider := newPriceTestProvider(t)
+	providerCalls := 0
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		providerCalls++
+		return httpResponse(http.StatusOK, `{"data":{}}`), nil
+	})
+	req := priceTestRequest(1, 1.00)
+	req.SpotInstance = true
+
+	_, err := provider.Provision(context.Background(), req)
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Code != providers.ProviderErrorInvalidRequest {
+		t.Fatalf("expected unsupported spot error, got %v", err)
+	}
+	if providerCalls != 0 {
+		t.Fatalf("expected no provider call for unsupported spot mode, got %d", providerCalls)
+	}
+}
+
+func TestProvisionPersistsConfirmedPriceEvidenceAndDrift(t *testing.T) {
+	provider := newPriceTestProvider(t)
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		request := decodeGraphQLRequest(t, req)
+		switch {
+		case strings.Contains(request.Query, "query GpuPlacementEvidence"):
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{
+				"id":"NVIDIA L40S",
+				"displayName":"NVIDIA L40S",
+				"communityPrice":0.79,
+				"maxGpuCountCommunityCloud":1,
+				"maxGpuCountSecureCloud":0
+			}]}}`), nil
+		case strings.Contains(request.Query, "mutation CreatePod"):
+			return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{
+				"id":"pod-drift",
+				"name":"worker",
+				"desiredStatus":"RUNNING",
+				"imageName":"custom/worker:v1",
+				"machineId":"machine-1",
+				"machine":{"gpuDisplayName":"NVIDIA L40S","costPerHr":0.83}
+			}}}`), nil
+		default:
+			t.Fatalf("unexpected GraphQL operation: %s", request.Query)
+			return nil, nil
+		}
+	})
+
+	instance, err := provider.Provision(context.Background(), priceTestRequest(1, 0.85))
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if instance.CostPerHour != 0.83 {
+		t.Fatalf("expected confirmed actual price 0.83, got %f", instance.CostPerHour)
+	}
+	if instance.Metadata[metadataCostCurrency] != costCurrencyUSD ||
+		instance.Metadata[metadataCostUnit] != costUnitInstanceHour ||
+		instance.Metadata[metadataCostSource] != costSourceRunPodMachine ||
+		instance.Metadata[metadataCostAdvertised] != "0.79" ||
+		instance.Metadata[metadataCostState] != costStateConfirmedDrift ||
+		instance.Metadata[metadataCapacityState] != capacityStateAdvertised {
+		t.Fatalf("unexpected cost evidence metadata: %#v", instance.Metadata)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, instance.Metadata[metadataCostCapturedAt]); err != nil {
+		t.Fatalf("invalid evidence capture time: %v", err)
+	}
+}
+
+func TestProvisionTerminatesWhenConfirmedPriceExceedsCap(t *testing.T) {
+	provider := newPriceTestProvider(t)
+	terminateCalls := 0
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		request := decodeGraphQLRequest(t, req)
+		switch {
+		case strings.Contains(request.Query, "query GpuPlacementEvidence"):
+			return placementEvidenceResponse(0.79), nil
+		case strings.Contains(request.Query, "mutation CreatePod"):
+			return createPodResponse("pod-over-cap", 0.82), nil
+		case strings.Contains(request.Query, "mutation TerminatePod"):
+			terminateCalls++
+			return httpResponse(http.StatusOK, `{"data":{"podTerminate":true}}`), nil
+		default:
+			t.Fatalf("unexpected GraphQL operation: %s", request.Query)
+			return nil, nil
+		}
+	})
+
+	_, err := provider.Provision(context.Background(), priceTestRequest(1, 0.80))
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Code != providers.ProviderErrorInvalidRequest {
+		t.Fatalf("expected typed confirmed cap violation, got %v", err)
+	}
+	if !strings.Contains(providerErr.Message, "confirmed hourly price 0.82") {
+		t.Fatalf("expected confirmed price in error, got %q", providerErr.Message)
+	}
+	if terminateCalls != 1 {
+		t.Fatalf("expected one termination, got %d", terminateCalls)
+	}
+}
+
+func TestProvisionTerminatesWhenActualPriceCannotBeReconciled(t *testing.T) {
+	provider := newPriceTestProvider(t)
+	provider.pricePollInterval = time.Millisecond
+	provider.pricePollTimeout = 5 * time.Millisecond
+	getCalls := 0
+	terminateCalls := 0
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		request := decodeGraphQLRequest(t, req)
+		switch {
+		case strings.Contains(request.Query, "query GpuPlacementEvidence"):
+			return placementEvidenceResponse(0.79), nil
+		case strings.Contains(request.Query, "mutation CreatePod"):
+			return createPodResponse("pod-missing-price", 0), nil
+		case strings.Contains(request.Query, "query GetPod"):
+			getCalls++
+			return httpResponse(http.StatusOK, `{"data":{"pod":{
+				"id":"pod-missing-price",
+				"name":"worker",
+				"desiredStatus":"RUNNING",
+				"machine":{"gpuDisplayName":"NVIDIA L40S","costPerHr":0}
+			}}}`), nil
+		case strings.Contains(request.Query, "mutation TerminatePod"):
+			terminateCalls++
+			return httpResponse(http.StatusOK, `{"data":{"podTerminate":true}}`), nil
+		default:
+			t.Fatalf("unexpected GraphQL operation: %s", request.Query)
+			return nil, nil
+		}
+	})
+
+	_, err := provider.Provision(context.Background(), priceTestRequest(1, 1.00))
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Code != providers.ProviderErrorTimeout {
+		t.Fatalf("expected typed reconciliation timeout, got %v", err)
+	}
+	if getCalls == 0 || terminateCalls != 1 {
+		t.Fatalf("expected bounded reconciliation and one termination, got get=%d terminate=%d", getCalls, terminateCalls)
+	}
+}
+
+func TestProvisionPreservesPriceViolationWhenCleanupFails(t *testing.T) {
+	provider := newPriceTestProvider(t)
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		request := decodeGraphQLRequest(t, req)
+		switch {
+		case strings.Contains(request.Query, "query GpuPlacementEvidence"):
+			return placementEvidenceResponse(0.79), nil
+		case strings.Contains(request.Query, "mutation CreatePod"):
+			return createPodResponse("pod-cleanup-failure", 0.82), nil
+		case strings.Contains(request.Query, "mutation TerminatePod"):
+			return httpResponse(http.StatusOK, `{"errors":[{"message":"termination failed"}]}`), nil
+		default:
+			t.Fatalf("unexpected GraphQL operation: %s", request.Query)
+			return nil, nil
+		}
+	})
+
+	_, err := provider.Provision(context.Background(), priceTestRequest(1, 0.80))
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Code != providers.ProviderErrorInvalidRequest {
+		t.Fatalf("expected primary cap violation to remain typed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "terminate RunPod pod pod-cleanup-failure") ||
+		!strings.Contains(err.Error(), "termination failed") {
+		t.Fatalf("expected cleanup failure alongside primary violation, got %v", err)
+	}
+}
+
+func TestRunPodOfferingPriceSelectsModeAndGPUCount(t *testing.T) {
+	onDemandOne := 0.45
+	spotOne := 0.21
+	communityAvailable := 3
+	secureAvailable := 0
+	evidence := runpodGPUOfferingEvidence{
+		CommunityPrice:         &onDemandOne,
+		CommunitySpotPrice:     &spotOne,
+		MaxGPUCountCommunity:   &communityAvailable,
+		MaxGPUCountSecureCloud: &secureAvailable,
+		LowestPrice2: &runpodLowestPrice{
+			UninterruptablePrice: 0.81,
+			MinimumBidPrice:      0.39,
+		},
+	}
+
+	if got := evidence.priceFor(2, false); got != 0.81 {
+		t.Fatalf("expected exact two-GPU on-demand price, got %f", got)
+	}
+	if got := evidence.priceFor(2, true); got != 0.39 {
+		t.Fatalf("expected exact two-GPU spot price, got %f", got)
+	}
+	if got := evidence.priceFor(3, false); got != 1.35 {
+		t.Fatalf("expected live per-GPU on-demand fallback for three GPUs, got %f", got)
+	}
+	if got := evidence.priceFor(3, true); got != 0.63 {
+		t.Fatalf("expected live per-GPU spot fallback for three GPUs, got %f", got)
+	}
+}
+
+func TestHourlyCapComparisonUsesNanoUSDDecimalBoundary(t *testing.T) {
+	if exceedsHourlyCap(0.1+0.2, 0.3) {
+		t.Fatal("equivalent decimal prices must not exceed the cap because of float representation")
+	}
+	if !exceedsHourlyCap(0.300000001, 0.3) {
+		t.Fatal("one nano-USD/hour above the cap must be rejected")
+	}
+}
+
 func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 	t.Setenv("INFERA_WORKER_SHARED_TOKEN", "worker-shared-token")
 	t.Setenv("INFERA_GATEWAY_ADDRESS", "https://inferai.co.in")
@@ -393,10 +690,10 @@ func TestProvisionUsesProvidedDockerImage(t *testing.T) {
 		if err := json.Unmarshal(body, &captured); err != nil {
 			t.Fatalf("json.Unmarshal request: %v", err)
 		}
-		if strings.Contains(captured.Query, "query GpuCapacity") {
-			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
+		if strings.Contains(captured.Query, "query GpuPlacementEvidence") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","displayName":"NVIDIA L40S","communityPrice":0.79,"maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
 		}
-		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S"}}}}`), nil
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S","costPerHr":0.79}}}}`), nil
 	})
 
 	instance, err := provider.Provision(context.Background(), &providers.ProvisionRequest{
@@ -489,10 +786,10 @@ func TestProvisionIncludesAllowedCudaVersions(t *testing.T) {
 		if err := json.Unmarshal(body, &captured); err != nil {
 			t.Fatalf("json.Unmarshal request: %v", err)
 		}
-		if strings.Contains(captured.Query, "query GpuCapacity") {
-			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA A100 80GB PCIe","maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":1}]}}`), nil
+		if strings.Contains(captured.Query, "query GpuPlacementEvidence") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA A100 80GB PCIe","displayName":"NVIDIA A100 80GB PCIe","communityPrice":1.19,"maxGpuCountCommunityCloud":0,"maxGpuCountSecureCloud":1}]}}`), nil
 		}
-		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA A100 80GB PCIe"}}}}`), nil
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA A100 80GB PCIe","costPerHr":1.19}}}}`), nil
 	})
 
 	instance, err := provider.Provision(context.Background(), &providers.ProvisionRequest{
@@ -539,10 +836,10 @@ func TestProvisionAddsRuntimeEnvOverridesForKnownModel(t *testing.T) {
 		if err := json.Unmarshal(body, &captured); err != nil {
 			t.Fatalf("json.Unmarshal request: %v", err)
 		}
-		if strings.Contains(captured.Query, "query GpuCapacity") {
-			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
+		if strings.Contains(captured.Query, "query GpuPlacementEvidence") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"NVIDIA L40S","displayName":"NVIDIA L40S","communityPrice":0.79,"maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
 		}
-		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S"}}}}`), nil
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-123","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA L40S","costPerHr":0.79}}}}`), nil
 	})
 
 	req := &providers.ProvisionRequest{
@@ -672,6 +969,34 @@ func TestListOfferingsReturnsErrorWhenLiveQueryFails(t *testing.T) {
 	}
 }
 
+func TestListOfferingsDoesNotSubstituteStaticPriceEvidence(t *testing.T) {
+	provider := newPriceTestProvider(t)
+	provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{
+			"id":"gpu-l40s",
+			"displayName":"NVIDIA L40S",
+			"memoryInGb":48,
+			"communityPrice":0,
+			"securePrice":0,
+			"communitySpotPrice":0,
+			"secureSpotPrice":0,
+			"maxGpuCountCommunityCloud":1,
+			"maxGpuCountSecureCloud":0
+		}]}}`), nil
+	})
+
+	offerings, err := provider.ListOfferings(context.Background())
+	if err != nil {
+		t.Fatalf("ListOfferings: %v", err)
+	}
+	if len(offerings) != 1 {
+		t.Fatalf("expected one advertised offering, got %d", len(offerings))
+	}
+	if offerings[0].CostPerHour != 0 || offerings[0].SpotPrice != 0 {
+		t.Fatalf("missing live prices must remain untrusted zero values, got %+v", offerings[0])
+	}
+}
+
 func TestProvisionRejectsUnsupportedGPUType(t *testing.T) {
 	provider, err := New(Config{APIKey: "test-key"})
 	if err != nil {
@@ -710,10 +1035,10 @@ func TestProvisionPassesThroughUnknownLiveGPUDisplayName(t *testing.T) {
 		if err := json.Unmarshal(body, &captured); err != nil {
 			t.Fatalf("json.Unmarshal request: %v", err)
 		}
-		if strings.Contains(captured.Query, "query GpuCapacity") {
-			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"H200 SXM","maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
+		if strings.Contains(captured.Query, "query GpuPlacementEvidence") {
+			return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{"id":"H200 SXM","displayName":"NVIDIA H200 SXM","communityPrice":2.69,"maxGpuCountCommunityCloud":1,"maxGpuCountSecureCloud":0}]}}`), nil
 		}
-		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-h200","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA H200 SXM"}}}}`), nil
+		return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{"id":"pod-h200","name":"worker","desiredStatus":"RUNNING","imageName":"custom/worker:v1","machineId":"machine-1","machine":{"gpuDisplayName":"NVIDIA H200 SXM","costPerHr":2.69}}}}`), nil
 	})
 
 	_, err = provider.Provision(context.Background(), &providers.ProvisionRequest{
@@ -786,6 +1111,59 @@ func httpResponse(status int, body string) *http.Response {
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
+}
+
+func newPriceTestProvider(t *testing.T) *Provider {
+	t.Helper()
+	provider, err := New(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return provider
+}
+
+func priceTestRequest(gpuCount int, maxCostHour float64) *providers.ProvisionRequest {
+	return &providers.ProvisionRequest{
+		Name:        "worker",
+		GPUType:     providers.GPUL40S,
+		GPUCount:    gpuCount,
+		MaxCostHour: maxCostHour,
+		DockerImage: "custom/worker:v1",
+	}
+}
+
+func decodeGraphQLRequest(t *testing.T, req *http.Request) graphQLRequest {
+	t.Helper()
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	var request graphQLRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatalf("json.Unmarshal request: %v", err)
+	}
+	return request
+}
+
+func placementEvidenceResponse(price float64) *http.Response {
+	return httpResponse(http.StatusOK, `{"data":{"gpuTypes":[{
+		"id":"NVIDIA L40S",
+		"displayName":"NVIDIA L40S",
+		"communityPrice":`+formatHourlyPrice(price)+`,
+		"maxGpuCountCommunityCloud":1,
+		"maxGpuCountSecureCloud":0
+	}]}}`)
+}
+
+func createPodResponse(podID string, price float64) *http.Response {
+	return httpResponse(http.StatusOK, `{"data":{"podFindAndDeployOnDemand":{
+		"id":"`+podID+`",
+		"name":"worker",
+		"desiredStatus":"RUNNING",
+		"imageName":"custom/worker:v1",
+		"machineId":"machine-1",
+		"machine":{"gpuDisplayName":"NVIDIA L40S","costPerHr":`+formatHourlyPrice(price)+`}
+	}}}`)
 }
 
 func assertEnvContains(t *testing.T, env []interface{}, key, want string) {
