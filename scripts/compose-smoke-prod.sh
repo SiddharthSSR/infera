@@ -39,6 +39,8 @@ trap cleanup EXIT
 : "${INFERA_AUDIT_LEDGER_DSN:=}"
 : "${INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY:=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
 : "${INFERA_WORKER_IMAGE:=ghcr.io/example/infera-worker:test}"
+: "${INFERA_FRONTEND_IMAGE:=infera-frontend:smoke}"
+: "${SMOKE_FRONTEND_REVISION:=$(git rev-parse --verify 'HEAD^{commit}')}"
 : "${GRAFANA_ADMIN_USER:=admin}"
 : "${GRAFANA_ADMIN_PASSWORD:=test-grafana-password}"
 : "${ALERT_EMAIL_TO:=alerts@example.com}"
@@ -64,6 +66,8 @@ export INFERA_AUDIT_LEDGER_BACKEND
 export INFERA_AUDIT_LEDGER_DSN
 export INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY
 export INFERA_WORKER_IMAGE
+export INFERA_FRONTEND_IMAGE
+export SMOKE_FRONTEND_REVISION
 export GRAFANA_ADMIN_USER
 export GRAFANA_ADMIN_PASSWORD
 export ALERT_EMAIL_TO
@@ -207,8 +211,14 @@ compose up -d --build gateway
 echo "Waiting for gateway"
 wait_for_service gateway "${SMOKE_TIMEOUT}"
 
-echo "Starting frontend"
-compose up -d frontend
+echo "Building reviewed frontend revision ${SMOKE_FRONTEND_REVISION} as ${INFERA_FRONTEND_IMAGE}"
+bash "$(dirname "$0")/build-reviewed-frontend.sh" \
+  --revision "${SMOKE_FRONTEND_REVISION}" \
+  --tag "${INFERA_FRONTEND_IMAGE}" \
+  --build-arg "VITE_DESIGN_PARTNER_REQUEST_ENDPOINT=${VITE_DESIGN_PARTNER_REQUEST_ENDPOINT:-}"
+
+echo "Starting frontend without a Compose build path"
+compose up -d --no-build frontend
 
 echo "Waiting for frontend"
 wait_for_service frontend "${SMOKE_TIMEOUT}"

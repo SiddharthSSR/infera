@@ -62,11 +62,7 @@ services:
         max-file: "3"
 
   frontend:
-    build:
-      context: .
-      dockerfile: deploy/docker/Dockerfile.frontend
-      args:
-        VITE_DESIGN_PARTNER_REQUEST_ENDPOINT: ${VITE_DESIGN_PARTNER_REQUEST_ENDPOINT:-}
+    image: ${INFERA_FRONTEND_IMAGE:?INFERA_FRONTEND_IMAGE is required}
     depends_on:
       gateway:
         condition: service_healthy
