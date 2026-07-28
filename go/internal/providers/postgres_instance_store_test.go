@@ -702,7 +702,11 @@ func TestPostgresInstanceStoreQueryTimeoutFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer blocker.Rollback()
+	defer func() {
+		if err := blocker.Rollback(); err != nil {
+			t.Errorf("rollback blocker transaction: %v", err)
+		}
+	}()
 	if _, err := blocker.Exec(`LOCK TABLE managed_instances IN ACCESS EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}
