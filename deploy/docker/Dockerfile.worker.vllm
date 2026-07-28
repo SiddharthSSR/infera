@@ -4,37 +4,54 @@
 # current branch. It deliberately verifies the installed vLLM API surface at
 # build time so image/code mismatches fail before deployment.
 
-FROM --platform=linux/amd64 runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+# The reviewed engine-phase2 runtime is itself derived from the RunPod
+# 2.4.0/Python 3.11/CUDA 12.4.1 image. Its content digest locks the complete
+# known-compatible vLLM/PyTorch/CUDA dependency environment.
+FROM --platform=linux/amd64 docker.io/codingtensor/worker-vllm:engine-phase2@sha256:e3f6253d4c767d815fd6809b99d1f22fe24469472c53d3945ba8ec7f71d52331
 
 WORKDIR /app
 
-# Install system dependencies needed by the worker runtime and health checks.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+ARG SOURCE_REVISION
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
 
-# Remove the preinstalled torch stack so vLLM can pull a matching dependency set.
-RUN pip uninstall -y torch torchvision torchaudio 2>/dev/null; true
+# Remove the dependency image's old editable application before introducing the
+# explicitly reviewed source archive.
+RUN pip uninstall -y infera-worker && \
+    find /app -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 
-RUN pip install --upgrade pip
+# Verify that the immutable runtime base still matches the reviewed active
+# transitive dependency inventory. No apt or remote pip resolution occurs.
+COPY python/requirements/worker-vllm.lock /tmp/worker-vllm.lock
+COPY python/requirements/worker-vllm.lock.sha256 /tmp/worker-vllm.lock.sha256
+RUN cd /tmp && sha256sum -c worker-vllm.lock.sha256
+RUN python - <<'PY'
+import importlib.metadata
+from pathlib import Path
 
-# Install a modern vLLM stack that supports the runtime kwargs used by this branch.
-RUN pip install --no-cache-dir \
-    "vllm>=0.16.0" \
-    "transformers>=4.43.0" \
-    "accelerate>=0.30.0" \
-    "tokenizers>=0.19.0" \
-    "aiohttp>=3.9.0"
+failures = []
+for raw_line in Path("/tmp/worker-vllm.lock").read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    name, expected = line.split("==", 1)
+    try:
+        actual = importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        failures.append(f"{name}: missing (expected {expected})")
+        continue
+    if actual != expected:
+        failures.append(f"{name}: {actual} (expected {expected})")
+if failures:
+    raise SystemExit("worker dependency lock mismatch:\n" + "\n".join(failures))
+PY
+RUN rm /tmp/worker-vllm.lock /tmp/worker-vllm.lock.sha256
 
-COPY python/pyproject.toml .
-COPY python/README.md .
-COPY python/src/ ./src/
+COPY python/pyproject.toml python/README.md ./
+COPY python/src/infera_worker/ ./src/infera_worker/
 
 # Install the worker package and fail the build if the image cannot satisfy the
 # current vLLM runtime contract.
-RUN pip install --no-cache-dir -e . && \
+RUN pip install --no-cache-dir --no-deps --no-build-isolation --force-reinstall . && \
     echo "=== Verifying installation ===" && \
     python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.version.cuda}')" && \
     python -c "import transformers; print(f'Transformers {transformers.__version__}')" && \
@@ -68,6 +85,6 @@ ENV INFERA_PRELOAD_MODELS=""
 EXPOSE 8081 50051
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
-    CMD curl -f http://localhost:8081/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8081/health', timeout=5)" || exit 1
 
 CMD ["python", "-m", "infera_worker.cli"]

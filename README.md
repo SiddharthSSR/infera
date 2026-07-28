@@ -119,10 +119,10 @@ INFERA_ALLOWED_ORIGINS=https://inferai.co.in
 INFERA_WORKER_SHARED_TOKEN=<long-random-token>
 INFERA_RELEASE_ID=v1.3.0
 INFERA_WORKER_PROTOCOL_VERSION=1
-INFERA_GATEWAY_IMAGE=<registry>/infera-gateway:<pinned-tag>
+INFERA_GATEWAY_IMAGE=<registry>/infera-gateway@sha256:<digest>
 INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY=<base64-encoded-32-byte-key>
 INFERA_CONTROL_STATE_DSN=postgres://...?...sslmode=require
-INFERA_WORKER_IMAGE=<registry>/infera-worker:<pinned-tag>
+INFERA_WORKER_IMAGE=<registry>/infera-worker@sha256:<digest>
 INFERA_GATEWAY_REPLICAS=1
 INFERA_AUDIT_LEDGER_BACKEND=sqlite
 # For two or more replicas:
@@ -155,7 +155,9 @@ Notes:
   opt-in for reviewed models and should not be combined with an unpinned model revision.
 - `INFERA_MODEL_CACHE_SIZE` defaults to `2` and is enforced for both startup and runtime loads.
 - Generate `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` with `openssl rand -base64 32`, store it in your secret manager, and back it up separately from the database. Losing it makes saved provider credentials unrecoverable.
-- Use non-`latest` gateway and worker image tags or full digests in production.
+- Use registry repo digests for gateway and worker images in production. Build
+  them from an explicit reviewed commit using
+  [the reproducible release procedure](docs/releases/REPRODUCIBLE_RELEASE_BUILDS.md).
 - SQLite audit/quota accounting is single-replica only. For active-active gateways, configure
   every replica with the same audit PostgreSQL DSN, the same control-state DSN, and set
   `INFERA_AUDIT_LEDGER_BACKEND=postgres`.
@@ -176,7 +178,8 @@ Notes:
 git checkout main
 git pull --ff-only origin main
 docker compose -f docker-compose.prod.yml config --quiet
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d --no-build
 docker compose -f docker-compose.prod.yml ps
 ```
 
@@ -549,8 +552,13 @@ This starts:
 
 ### Option 2: Docker Compose (Production)
 
+Build gateway and vLLM worker images from an explicit commit using
+[the reproducible release procedure](docs/releases/REPRODUCIBLE_RELEASE_BUILDS.md),
+record their registry repo digests in the production environment, then:
+
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d --no-build
 ```
 
 This starts:
@@ -561,8 +569,8 @@ This starts:
 ### Option 3: Build & Push Worker Image
 
 ```bash
-# Build the worker image
-make docker-build-worker
+# Build the worker image from an explicit reviewed commit
+make docker-build-worker REVISION="$(git rev-parse HEAD)"
 
 # Push to Docker Hub
 make docker-push DOCKER_USERNAME=your_username

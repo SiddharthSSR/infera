@@ -52,8 +52,15 @@ is missed.
 
 ## Prepare a release set
 
+Build gateway and vLLM worker images from the exact candidate commit through
+`docs/releases/REPRODUCIBLE_RELEASE_BUILDS.md`. Confirm the builder-reported
+`IMAGE_SOURCE_REVISION` equals that commit, push only through an approved
+release workflow, and replace candidate tags with registry repo digests in the
+manifest. Production Compose has no gateway build fallback; rollback pulls the
+recorded last-known-good digests and must never rebuild a mutable checkout.
+
 Copy `deploy/releases/release.manifest.example` to an incident/release workspace outside the Git
-checkout. Use exact image tags or digests built from the same reviewed commit. The manifest must not
+checkout. Use exact repo digests built from the same reviewed commit. The manifest must not
 contain DSNs, tokens, API keys, tenant identifiers, or credentials.
 
 `INFERA_RECOVERY_API_PROTOCOL_VERSION` is a required compatibility boundary between the recovery

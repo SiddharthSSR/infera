@@ -176,10 +176,14 @@ jobs:
           import sys
 
           with open(sys.argv[1], encoding="utf-8") as config_file:
-              frontend = json.load(config_file)["services"]["frontend"]
+              services = json.load(config_file)["services"]
 
-          if "build" in frontend:
-              raise SystemExit("production frontend unexpectedly has a build configuration")
+          for service_name in ("gateway", "frontend"):
+              if "build" in services[service_name]:
+                  raise SystemExit(
+                      f"production {service_name} unexpectedly has a build configuration"
+                  )
+          frontend = services["frontend"]
           if frontend.get("image") != "infera-frontend:ci-test":
               raise SystemExit(f"unexpected production frontend image: {frontend.get('image')}")
           PY
@@ -187,6 +191,7 @@ jobs:
       - name: Test deployment recovery behavior
         run: |
           bash ./scripts/test-build-reviewed-frontend.sh
+          bash ./scripts/test-build-reviewed-release-images.sh
           bash ./scripts/test-release-recovery.sh
           bash ./scripts/test-production-recovery-adapters.sh
           bash ./scripts/test-last-known-good-drift.sh
@@ -220,6 +225,7 @@ jobs:
           INFERA_WORKER_IMAGE: ghcr.io/example/infera-worker:test
           INFERA_FRONTEND_IMAGE: infera-frontend:smoke
           SMOKE_FRONTEND_REVISION: ${{ github.sha }}
+          SMOKE_GATEWAY_REVISION: ${{ github.sha }}
           GRAFANA_ADMIN_USER: admin
           GRAFANA_ADMIN_PASSWORD: test-grafana-password
           ALERT_EMAIL_TO: alerts@example.com

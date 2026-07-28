@@ -7,6 +7,7 @@ REGISTRY="${DOCKER_REGISTRY:-docker.io}"
 NAMESPACE="${DOCKER_NAMESPACE:-infera}"
 VERSION="${VERSION:-latest}"
 FRONTEND_REVISION="${FRONTEND_REVISION:-}"
+RELEASE_REVISION="${RELEASE_REVISION:-}"
 
 # Colors
 RED='\033[0;31m'
@@ -36,6 +37,25 @@ build_image() {
     
     echo -e "${YELLOW}Building $name...${NC}"
     docker build "$@" -t "$tag" -f "$dockerfile" "$context"
+    echo -e "${GREEN}✓ Built $tag${NC}"
+    echo ""
+}
+
+build_reviewed_image() {
+    local component=$1
+    local name=$2
+    local tag="$REGISTRY/$NAMESPACE/$name:$VERSION"
+
+    if [[ ! "$RELEASE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+        echo -e "${RED}Error: RELEASE_REVISION must be an explicit lowercase full Git commit for $name${NC}"
+        exit 1
+    fi
+
+    echo -e "${YELLOW}Building reviewed $name from $RELEASE_REVISION...${NC}"
+    ./scripts/build-reviewed-release-image.sh \
+        --component "$component" \
+        --revision "$RELEASE_REVISION" \
+        --tag "$tag"
     echo -e "${GREEN}✓ Built $tag${NC}"
     echo ""
 }
@@ -129,6 +149,7 @@ while [[ $# -gt 0 ]]; do
             echo "  WORKER_SGLANG_PACKAGE  SGLang package spec (default: sglang)"
             echo "  WORKER_TENSORRT_LLM_BASE_IMAGE  Official NVIDIA TensorRT-LLM base image"
             echo "  FRONTEND_REVISION  Explicit reviewed Git revision (required for frontend)"
+            echo "  RELEASE_REVISION   Full reviewed commit (required for gateway and vLLM worker)"
             exit 0
             ;;
         *)
@@ -151,7 +172,7 @@ cd "$(dirname "$0")/.."
 
 # Build images
 if $BUILD_GATEWAY; then
-    build_image "gateway" "deploy/docker/Dockerfile.gateway" "."
+    build_reviewed_image "gateway" "gateway"
 fi
 
 if $BUILD_WORKER; then
@@ -159,7 +180,7 @@ if $BUILD_WORKER; then
 fi
 
 if $BUILD_WORKER_VLLM; then
-    build_image "worker-vllm" "deploy/docker/Dockerfile.worker.vllm" "."
+    build_reviewed_image "worker-vllm" "worker-vllm"
 fi
 
 if $BUILD_WORKER_SGLANG; then

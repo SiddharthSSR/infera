@@ -190,13 +190,15 @@ docker-build:
 	docker-compose build
 
 docker-build-worker:
-	docker build -t infera-worker:latest -f python/Dockerfile python/
+	@test -n "$(REVISION)" || (echo "REVISION=<full-commit-sha> is required" >&2; exit 2)
+	./scripts/build-reviewed-release-image.sh --component worker-vllm --revision "$(REVISION)" --tag infera-worker:latest
 
 docker-build-worker-light:
 	docker build -t infera-worker:light -f python/Dockerfile.light python/
 
 docker-build-gateway:
-	docker build -t infera-gateway:latest -f deploy/docker/Dockerfile.gateway .
+	@test -n "$(REVISION)" || (echo "REVISION=<full-commit-sha> is required" >&2; exit 2)
+	./scripts/build-reviewed-release-image.sh --component gateway --revision "$(REVISION)" --tag infera-gateway:latest
 
 # Push to Docker Hub (requires DOCKER_USERNAME)
 docker-push:

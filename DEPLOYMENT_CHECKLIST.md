@@ -61,10 +61,11 @@ mkdir -p data
 docker compose -f docker-compose.prod.yml down --remove-orphans
 ```
 
-- [ ] Build and start:
+- [ ] Pull and start the reviewed image digests without a local build:
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build --force-recreate
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d --no-build --force-recreate
 ```
 
 - [ ] Confirm services are up:
@@ -178,13 +179,13 @@ docker compose -f docker-compose.prod.yml ps
 docker compose -f docker-compose.prod.yml logs <service> --tail=300
 ```
 
-3. [ ] Roll back to last known good commit:
+3. [ ] Roll back to the last-known-good image digests:
 
 ```bash
-git log --oneline -n 10
-git checkout <known-good-commit>
 docker compose -f docker-compose.prod.yml down --remove-orphans
-docker compose -f docker-compose.prod.yml up -d --build --force-recreate
+# Restore the recorded INFERA_GATEWAY_IMAGE and INFERA_WORKER_IMAGE repo digests.
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d --no-build --force-recreate
 ```
 
 ## 6. Known Failure Patterns

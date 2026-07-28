@@ -1,13 +1,20 @@
-# Stage 1: Build
-FROM golang:1.22-alpine3.19 AS builder
-RUN apk add --no-cache gcc musl-dev
+# linux/amd64 child manifests, reviewed in docs/releases/REPRODUCIBLE_RELEASE_BUILDS.md.
+FROM golang:1.22-alpine3.19@sha256:364133ae013cea7fbeb56f93ab38e01085d1bf87cf1b85d56c8598976c043530 AS builder
+RUN apk add --no-cache \
+    gcc=13.2.1_git20231014-r0 \
+    musl-dev=1.2.4_git20230717-r6
 WORKDIR /app
 COPY go/ ./go/
-RUN cd go && CGO_ENABLED=1 go build -o /gateway ./cmd/gateway
+RUN cd go && \
+    CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -buildvcs=false -ldflags="-buildid=" -o /gateway ./cmd/gateway
 
-# Stage 2: Run
-FROM alpine:3.19
-RUN apk add --no-cache ca-certificates wget
+FROM alpine:3.19@sha256:b58899f069c47216f6002a6850143dc6fae0d35eb8b0df9300bbe6327b9c2171
+RUN apk add --no-cache \
+    ca-certificates=20250911-r0 \
+    wget=1.21.4-r0
+ARG SOURCE_REVISION
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
 COPY --from=builder /gateway /usr/local/bin/gateway
 RUN addgroup -S gateway \
     && adduser -S -G gateway gateway \
