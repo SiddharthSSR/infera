@@ -39,10 +39,11 @@ The coordinated recovery contract currently versions gateway and worker images o
   revision or asset fingerprint.
 
 Consequently, a gateway/worker recovery rollout can pass while leaving an older healthy frontend
-container in place. Frontend rollback is also not immutable: `docker-compose.prod.yml` builds the
-frontend locally and does not name a pinned frontend image. Adding a frontend image/revision to the
-manifest, coordinated promotion/rollback, and automated identity verification should be reviewed
-as a release-contract change before it is used in production.
+container in place. Frontend rollback was also not immutable at the time of the audit:
+`docker-compose.prod.yml` built the frontend locally and did not name a pinned frontend image.
+Adding a frontend image/revision to the manifest, coordinated promotion/rollback, and automated
+identity verification should be reviewed as a release-contract change before it is used in
+production.
 
 ## Baseline for follow-up frontend work
 
@@ -72,6 +73,10 @@ the working directory and cannot enter the reviewed build.
 The script reports the resolved source revision, context file count and size, local image ID, and
 the verified `org.opencontainers.image.revision` label. Missing or invalid revisions fail before
 Docker runs.
+
+Production Compose defines the frontend as image-only and requires `INFERA_FRONTEND_IMAGE`.
+It intentionally has no frontend build configuration, so Compose cannot rebuild or retag the
+frontend from a mutable production checkout.
 
 ## Safe preview procedure
 

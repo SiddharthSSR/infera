@@ -166,7 +166,26 @@ jobs:
             exit 1
           fi
           grep -F "INFERA_FRONTEND_IMAGE is required" "${error_output}"
-          docker compose --env-file /dev/null -f docker-compose.prod.yml config
+          rendered_config="$(mktemp)"
+          build_output="$(mktemp)"
+          trap 'rm -f "${error_output}" "${rendered_config}" "${build_output}"' EXIT
+          docker compose --env-file /dev/null -f docker-compose.prod.yml \
+            config --format json >"${rendered_config}"
+          python3 - "${rendered_config}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as config_file:
+              frontend = json.load(config_file)["services"]["frontend"]
+
+          if "build" in frontend:
+              raise SystemExit("production frontend unexpectedly has a build configuration")
+          if frontend.get("image") != "infera-frontend:ci-test":
+              raise SystemExit(f"unexpected production frontend image: {frontend.get('image')}")
+          PY
+          docker compose --env-file /dev/null -f docker-compose.prod.yml \
+            build frontend >"${build_output}" 2>&1
+          grep -F "No services to build" "${build_output}"
 
       - name: Test deployment recovery behavior
         run: |
@@ -203,6 +222,7 @@ jobs:
           INFERA_GATEWAY_IMAGE: ghcr.io/example/infera-gateway:test
           INFERA_WORKER_IMAGE: ghcr.io/example/infera-worker:test
           INFERA_FRONTEND_IMAGE: infera-frontend:smoke
+          SMOKE_FRONTEND_REVISION: ${{ github.sha }}
           GRAFANA_ADMIN_USER: admin
           GRAFANA_ADMIN_PASSWORD: test-grafana-password
           ALERT_EMAIL_TO: alerts@example.com
