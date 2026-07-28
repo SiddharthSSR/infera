@@ -1,4 +1,8 @@
-# Infera Worker - vLLM Inference Engine
+# Infera Worker - legacy vLLM development image
+#
+# Release candidates must use deploy/docker/Dockerfile.worker.vllm through
+# scripts/build-reviewed-release-image.sh. This mutable resolver is not a
+# production release path.
 #
 # Build strategy:
 # - Use RunPod's CUDA 12.4 base for Python 3.11 + system deps

@@ -7,7 +7,7 @@
 # The reviewed engine-phase2 runtime is itself derived from the RunPod
 # 2.4.0/Python 3.11/CUDA 12.4.1 image. Its content digest locks the complete
 # known-compatible vLLM/PyTorch/CUDA dependency environment.
-FROM --platform=linux/amd64 docker.io/codingtensor/worker-vllm:engine-phase2@sha256:e3f6253d4c767d815fd6809b99d1f22fe24469472c53d3945ba8ec7f71d52331
+FROM docker.io/codingtensor/worker-vllm:engine-phase2@sha256:e3f6253d4c767d815fd6809b99d1f22fe24469472c53d3945ba8ec7f71d52331
 
 WORKDIR /app
 
