@@ -182,7 +182,9 @@ explicit operator step and must not be inferred from a successful gateway recove
    privately renders it with the repository project directory and `ENV_FILE` (default `.env`),
    rejects a dirty or unavailable source, a mutable image, a frontend `build` field, or an image
    mismatch, pulls the exact digest, proves its OCI revision label equals the requested source, and
-   recreates only `frontend` with `--no-build --no-deps`:
+   recreates only `frontend` with `--no-build --no-deps`. It reports success only after the
+   recreated container's configured digest, actual image ID, and OCI revision match those reviewed
+   inputs:
 
    ```bash
    ./scripts/frontend-compose-action.sh candidate \

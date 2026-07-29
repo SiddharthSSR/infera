@@ -163,8 +163,46 @@ if ! image_revision="$(docker image inspect \
   echo "ERROR: frontend image OCI revision does not equal the requested source revision" >&2
   exit 1
 fi
+if ! expected_image_id="$(docker image inspect --format '{{.Id}}' "${frontend_image}")" ||
+  [[ ! "${expected_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "ERROR: unable to establish the requested frontend image ID" >&2
+  exit 1
+fi
 
 docker compose "${compose_args[@]}" up \
   -d --no-build --no-deps --force-recreate frontend
+
+frontend_ids=()
+if ! frontend_ids_output="$(docker compose "${compose_args[@]}" ps -q frontend)"; then
+  echo "ERROR: unable to identify the recreated frontend container" >&2
+  exit 1
+fi
+while IFS= read -r frontend_id; do
+  [[ -n "${frontend_id}" ]] && frontend_ids+=("${frontend_id}")
+done <<<"${frontend_ids_output}"
+if [[ "${#frontend_ids[@]}" -ne 1 ]]; then
+  echo "ERROR: expected exactly one recreated frontend container" >&2
+  exit 1
+fi
+frontend_id="${frontend_ids[0]}"
+
+if ! runtime_configured_image="$(docker inspect --format '{{.Config.Image}}' "${frontend_id}")" ||
+  [[ "${runtime_configured_image}" != "${frontend_image}" ]]; then
+  echo "ERROR: recreated frontend container does not reference the requested digest" >&2
+  exit 1
+fi
+if ! runtime_image_id="$(docker inspect --format '{{.Image}}' "${frontend_id}")" ||
+  [[ "${runtime_image_id}" != "${expected_image_id}" ]]; then
+  echo "ERROR: recreated frontend container does not use the requested image ID" >&2
+  exit 1
+fi
+if ! runtime_image_revision="$(docker image inspect \
+  --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+  "${runtime_image_id}")" ||
+  [[ "${runtime_image_revision}" != "${source_revision}" ]]; then
+  echo "ERROR: recreated frontend image OCI revision does not equal the requested source revision" >&2
+  exit 1
+fi
+
 printf 'Frontend %s completed from reviewed source %s with an immutable image digest.\n' \
   "${action}" "${source_revision}"

@@ -18,8 +18,9 @@ failures, and the database owner approves ledger restore or point-in-time recove
   `scripts/frontend-compose-action.sh` with the recorded full source commit and immutable frontend
   repo digest. The guard obtains Compose from that exact Git object, proves the rendered frontend
   has no `build` field and resolves to the requested digest, verifies the digest's OCI revision
-  label equals the requested source, and fixes the action scope to `frontend` with `--no-build
-  --no-deps`. Never trust an arbitrary on-host Compose file, including
+  label equals the requested source, fixes the action scope to `frontend` with `--no-build
+  --no-deps`, and verifies the recreated container still uses that digest, image ID, and revision
+  before reporting success. Never trust an arbitrary on-host Compose file, including
   `/opt/infera/docker-compose.prod.yml`, as an action source, even when the checkout is clean.
 - Stop/drain old workers before changing the gateway. Workers register only when their release and
   control-plane protocol match the gateway; a mismatch is not an acceptable rolling state.

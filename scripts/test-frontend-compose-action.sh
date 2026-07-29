@@ -62,7 +62,23 @@ if [[ "${1:-}" == pull ]]; then
   exit 0
 fi
 if [[ "${1:-} ${2:-}" == "image inspect" ]]; then
-  printf '%s\n' "${TEST_IMAGE_REVISION:-}"
+  if [[ "$*" == *"'{{.Id}}'"* || "$*" == *"{{.Id}}"* ]]; then
+    printf '%s\n' "${TEST_EXPECTED_IMAGE_ID:-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}"
+  elif [[ "${!#}" == sha256:* ]]; then
+    printf '%s\n' "${TEST_RUNTIME_IMAGE_REVISION-${TEST_IMAGE_REVISION:-}}"
+  else
+    printf '%s\n' "${TEST_IMAGE_REVISION:-}"
+  fi
+  exit 0
+fi
+if [[ "${1:-}" == inspect ]]; then
+  if [[ "$*" == *".Config.Image"* ]]; then
+    printf '%s\n' "${TEST_RUNTIME_CONFIG_IMAGE:-${INFERA_FRONTEND_IMAGE}}"
+  elif [[ "$*" == *".Image"* ]]; then
+    printf '%s\n' "${TEST_RUNTIME_IMAGE_ID:-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}"
+  else
+    exit 1
+  fi
   exit 0
 fi
 [[ "${1:-}" == compose ]] || exit 1
@@ -89,6 +105,15 @@ PY
       exit 0
       ;;
     up)
+      exit 0
+      ;;
+    ps)
+      case "${TEST_RUNTIME_CONTAINER_MODE:-one}" in
+        one) printf '%s\n' frontend-container ;;
+        none) ;;
+        multiple) printf '%s\n' frontend-container frontend-container-2 ;;
+        *) exit 1 ;;
+      esac
       exit 0
       ;;
     *)
@@ -142,6 +167,40 @@ fi
 if grep -q ' up ' "${calls}"; then
   fail "image source revision/digest mismatch reached a recreate"
 fi
+
+: >"${calls}"
+if TEST_RUNTIME_CONFIG_IMAGE=infera-frontend run_action candidate \
+  --source-revision "${good_revision}" --image "${image}" >/dev/null 2>&1; then
+  fail "successful recreate with a mutable runtime image reference unexpectedly succeeded"
+fi
+grep -q -- ' up -d --no-build --no-deps --force-recreate frontend$' "${calls}" ||
+  fail "mutable runtime identity case did not reach the recreate"
+
+: >"${calls}"
+if TEST_RUNTIME_IMAGE_REVISION='' run_action candidate \
+  --source-revision "${good_revision}" --image "${image}" >/dev/null 2>&1; then
+  fail "successful recreate with a missing runtime revision unexpectedly succeeded"
+fi
+
+: >"${calls}"
+if TEST_RUNTIME_IMAGE_REVISION="${stale_revision}" run_action candidate \
+  --source-revision "${good_revision}" --image "${image}" >/dev/null 2>&1; then
+  fail "successful recreate with a wrong runtime revision unexpectedly succeeded"
+fi
+
+: >"${calls}"
+if TEST_RUNTIME_IMAGE_ID=sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+  run_action candidate --source-revision "${good_revision}" --image "${image}" >/dev/null 2>&1; then
+  fail "successful recreate with a mismatched runtime image ID unexpectedly succeeded"
+fi
+
+for container_mode in none multiple; do
+  : >"${calls}"
+  if TEST_RUNTIME_CONTAINER_MODE="${container_mode}" run_action candidate \
+    --source-revision "${good_revision}" --image "${image}" >/dev/null 2>&1; then
+    fail "successful recreate with ${container_mode} frontend containers unexpectedly succeeded"
+  fi
+done
 
 if run_action candidate --source-revision "${good_revision}" \
   --image registry.example.invalid/infera-frontend:mutable >/dev/null 2>&1; then
