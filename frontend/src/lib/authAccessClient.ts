@@ -20,7 +20,7 @@ export async function createSession(apiKey: string): Promise<SessionInfo> {
   });
   if (!response.ok) {
     if (response.status === 401) throw new Error(await readResponseMessage(response, 'Invalid API key'));
-    if (response.status === 403) throw new Error(await readResponseMessage(response, 'Admin access required'));
+    if (response.status === 403) throw new Error(await readResponseMessage(response, 'Dashboard access required'));
     throw new Error(await readResponseError(response, 'Login failed'));
   }
   return parseSessionResponse(await response.json());

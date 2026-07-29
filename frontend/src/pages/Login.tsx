@@ -13,7 +13,7 @@ const sessionSafeguards = [
   {
     index: '01',
     label: 'Auth boundary',
-    value: 'Admin access only',
+    value: 'Human dashboard access',
   },
   {
     index: '02',
@@ -43,7 +43,7 @@ export function Login({ onAuthenticated }: LoginProps) {
     event.preventDefault();
 
     if (!key.trim()) {
-      setError('Enter an admin key to continue.');
+      setError('Enter a human dashboard key to continue.');
       focusKeyInput();
       return;
     }
@@ -59,9 +59,14 @@ export function Login({ onAuthenticated }: LoginProps) {
     } catch (err) {
       if (err instanceof Error) {
         if (err.message.includes('Invalid API key')) {
-          setError('Invalid admin key. Check your key and try again.');
-        } else if (err.message.includes('Admin access required')) {
-          setError('Admin access required. Only admin keys can access the dashboard.');
+          setError('Invalid human dashboard key. Check your key and try again.');
+        } else if (err.message.includes('Service accounts cannot create dashboard sessions')) {
+          setError('Dashboard access requires a human key. Service-account keys are for API and automation use.');
+        } else if (
+          err.message.includes('Dashboard access required')
+          || err.message.includes('Admin access required')
+        ) {
+          setError('Dashboard access required. Use an active human key with dashboard access; inference-only keys cannot sign in.');
         } else {
           setError('Could not connect to the gateway. Check its availability and try again.');
         }
@@ -83,12 +88,12 @@ export function Login({ onAuthenticated }: LoginProps) {
         <section className="login-form-panel" aria-labelledby="login-title">
           <div className="login-form-card">
             <div className="login-session-scope mono" aria-label="Session scope">
-              Admin session / Workspace scoped
+              Human dashboard session / Workspace scoped
             </div>
 
             <div className="login-form-copy">
               <LabelText as="div">Connect</LabelText>
-              <h1 id="login-title" className="login-form-title">Sign in with an admin key</h1>
+              <h1 id="login-title" className="login-form-title">Sign in with a human dashboard key</h1>
               <p className="login-form-description">
                 Open your workspace console to manage models, nodes, access, and usage.
               </p>
@@ -103,14 +108,14 @@ export function Login({ onAuthenticated }: LoginProps) {
             >
               <div className="login-field">
                 <div className="login-field-header">
-                  <LabelText as="label" htmlFor="login-admin-key">Admin key</LabelText>
+                  <LabelText as="label" htmlFor="login-dashboard-key">Human dashboard key</LabelText>
                   <div className="mono login-field-meta">POST /api/auth/session</div>
                 </div>
                 <div className="login-input-shell">
                   <ControlInput
                     ref={keyInputRef}
-                    id="login-admin-key"
-                    name="admin-key"
+                    id="login-dashboard-key"
+                    name="dashboard-key"
                     type={showKey ? 'text' : 'password'}
                     className="login-key-input"
                     placeholder="inf_..."
@@ -131,8 +136,8 @@ export function Login({ onAuthenticated }: LoginProps) {
                       setShowKey((visible) => !visible);
                       focusKeyInput();
                     }}
-                    aria-label={showKey ? 'Hide admin key' : 'Show admin key'}
-                    aria-controls="login-admin-key"
+                    aria-label={showKey ? 'Hide human dashboard key' : 'Show human dashboard key'}
+                    aria-controls="login-dashboard-key"
                   >
                     {showKey ? 'Hide' : 'Show'}
                   </button>
@@ -175,7 +180,7 @@ export function Login({ onAuthenticated }: LoginProps) {
               Operator access,<br />without the noise.
             </h2>
             <p className="login-brand-subtitle">
-              Use an admin key issued by your gateway administrator to open the workspace console.
+              Use an active human key with dashboard access to open the workspace console for your assigned role.
             </p>
           </div>
 

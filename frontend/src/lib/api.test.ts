@@ -94,9 +94,9 @@ describe('API Functions', () => {
       await expect(createSession('inf_bad')).rejects.toThrow('Invalid API key')
     })
 
-    it('createSession returns admin-required message for 403', async () => {
+    it('createSession returns dashboard-required message for 403', async () => {
       mockFetch.mockResolvedValueOnce({ ok: false, status: 403 })
-      await expect(createSession('inf_user')).rejects.toThrow('Admin access required')
+      await expect(createSession('inf_user')).rejects.toThrow('Dashboard access required')
     })
 
     it('getSession returns null when unauthenticated', async () => {

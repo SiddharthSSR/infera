@@ -47,9 +47,9 @@ describe('Login', () => {
 
     expect(screen.getByText('INFERA.AI')).toBeInTheDocument()
     expect(screen.getByText('OPEN INFERENCE CONTROL PLANE')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Sign in with an admin key' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Admin key')).toHaveAttribute('type', 'password')
-    expect(screen.getByText('Admin access only')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Sign in with a human dashboard key' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Human dashboard key')).toHaveAttribute('type', 'password')
+    expect(screen.getByText('Human dashboard access')).toBeInTheDocument()
     expect(screen.getByText('Stored server-side')).toBeInTheDocument()
     expect(screen.getByText('Bound to the key workspace')).toBeInTheDocument()
     expect(screen.queryByText(/workers connected/i)).not.toBeInTheDocument()
@@ -58,11 +58,11 @@ describe('Login', () => {
 
   it('shows an accessible error and focuses the field on empty submit', async () => {
     renderLogin(mockOnAuthenticated)
-    const input = screen.getByLabelText('Admin key')
+    const input = screen.getByLabelText('Human dashboard key')
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Enter an admin key to continue.')
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a human dashboard key to continue.')
     expect(input).toHaveFocus()
     expect(input).toHaveAttribute('aria-invalid', 'true')
     expect(input).toHaveAttribute('aria-describedby', 'login-key-help login-key-error')
@@ -72,45 +72,64 @@ describe('Login', () => {
 
   it('reveals and hides the key while preserving input focus', () => {
     renderLogin(mockOnAuthenticated)
-    const input = screen.getByLabelText('Admin key')
+    const input = screen.getByLabelText('Human dashboard key')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show admin key' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show human dashboard key' }))
     expect(input).toHaveAttribute('type', 'text')
     expect(input).toHaveFocus()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hide admin key' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Hide human dashboard key' }))
     expect(input).toHaveAttribute('type', 'password')
     expect(input).toHaveFocus()
   })
 
-  it('shows the admin-specific invalid-key message and returns focus to the field', async () => {
+  it('shows the human-dashboard invalid-key message and returns focus to the field', async () => {
     mockCreateSession.mockRejectedValueOnce(new Error('Invalid API key'))
     renderLogin(mockOnAuthenticated)
-    const input = screen.getByLabelText('Admin key')
+    const input = screen.getByLabelText('Human dashboard key')
     fireEvent.change(input, { target: { value: 'inf_badkey123' } })
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(
-        'Invalid admin key. Check your key and try again.',
+        'Invalid human dashboard key. Check your key and try again.',
       )
     })
     expect(input).toHaveFocus()
   })
 
-  it('explains when a non-admin key is rejected', async () => {
-    mockCreateSession.mockRejectedValueOnce(new Error('Admin access required'))
+  it.each(['Dashboard access required', 'Admin access required'])(
+    'explains dashboard access requirements without preserving legacy admin-only copy for %s',
+    async (gatewayMessage) => {
+      mockCreateSession.mockRejectedValueOnce(new Error(gatewayMessage))
+      renderLogin(mockOnAuthenticated)
+      fireEvent.change(screen.getByLabelText('Human dashboard key'), {
+        target: { value: 'inf_userkey123' },
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toHaveTextContent(
+          'Dashboard access required. Use an active human key with dashboard access; inference-only keys cannot sign in.',
+        )
+      })
+    },
+  )
+
+  it('keeps service-account keys on the machine API path', async () => {
+    mockCreateSession.mockRejectedValueOnce(new Error('Service accounts cannot create dashboard sessions.'))
     renderLogin(mockOnAuthenticated)
-    fireEvent.change(screen.getByLabelText('Admin key'), {
-      target: { value: 'inf_userkey123' },
+    fireEvent.change(screen.getByLabelText('Human dashboard key'), {
+      target: { value: 'inf_servicekey123' },
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(
-        'Admin access required. Only admin keys can access the dashboard.',
+        'Dashboard access requires a human key. Service-account keys are for API and automation use.',
       )
     })
   })
@@ -123,7 +142,7 @@ describe('Login', () => {
     }
     mockCreateSession.mockResolvedValueOnce(session)
     renderLogin(mockOnAuthenticated)
-    fireEvent.change(screen.getByLabelText('Admin key'), {
+    fireEvent.change(screen.getByLabelText('Human dashboard key'), {
       target: { value: '  inf_validkey123  ' },
     })
 
@@ -146,7 +165,7 @@ describe('Login', () => {
   it('shows a useful gateway error for an unknown failure', async () => {
     mockCreateSession.mockRejectedValueOnce(new Error('Network error'))
     renderLogin(mockOnAuthenticated)
-    fireEvent.change(screen.getByLabelText('Admin key'), {
+    fireEvent.change(screen.getByLabelText('Human dashboard key'), {
       target: { value: 'inf_somekey123' },
     })
 
@@ -161,7 +180,7 @@ describe('Login', () => {
 
   it('clears validation state as the user edits the key', () => {
     renderLogin(mockOnAuthenticated)
-    const input = screen.getByLabelText('Admin key')
+    const input = screen.getByLabelText('Human dashboard key')
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
     expect(screen.getByRole('alert')).toBeInTheDocument()
 

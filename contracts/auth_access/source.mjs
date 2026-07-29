@@ -176,6 +176,12 @@ export const fixtures = {
       message: 'Invalid or revoked API key.',
     },
   },
+  'auth_error_dashboard_access_required.json': {
+    error: {
+      type: 'authorization_error',
+      message: 'Dashboard access required.',
+    },
+  },
   'auth_error_key_management_access_required.json': {
     error: {
       type: 'authorization_error',
