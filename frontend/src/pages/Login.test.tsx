@@ -1,7 +1,7 @@
 /// <reference types="vitest/globals" />
 /// <reference types="@testing-library/jest-dom" />
 import React from 'react'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Login } from './Login'
@@ -23,10 +23,10 @@ import { createSession } from '../lib/authAccessClient'
 
 const mockCreateSession = createSession as ReturnType<typeof vi.fn>
 
-function renderLogin(onAuthenticated = vi.fn()) {
+function renderLogin(onAuthenticated = vi.fn(), intakeEndpoint = '') {
   return render(
     <MemoryRouter>
-      <Login onAuthenticated={onAuthenticated} />
+      <Login onAuthenticated={onAuthenticated} intakeEndpoint={intakeEndpoint} />
     </MemoryRouter>,
   )
 }
@@ -56,16 +56,29 @@ describe('Login', () => {
     expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
   })
 
-  it('explains how approved visitors and invitation holders get a human dashboard key', () => {
+  it('fails closed to evaluation while preserving the invitation path when access intake is unconfigured', () => {
     renderLogin(mockOnAuthenticated)
 
-    expect(screen.getByRole('heading', { name: 'Don’t have a dashboard key?' })).toBeInTheDocument()
-    expect(screen.getByText(/Access is approved before sign-in/)).toHaveTextContent(
+    const guidance = screen.getByRole('region', { name: 'Don’t have a dashboard key?' })
+    expect(within(guidance).getByText(/Access is approved before sign-in/)).toHaveTextContent(
       'After approval, a workspace admin issues an active human dashboard key.',
     )
-    expect(screen.getByText(/Service-account and inference keys cannot start/)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /Request access/ })).toHaveAttribute('href', '/request-access')
-    expect(screen.getByRole('link', { name: /Accept a workspace invitation/ })).toHaveAttribute('href', '/accept-invite')
+    expect(within(guidance).getByText(/Service-account and inference keys cannot start/)).toHaveTextContent(
+      'New access requests are not open right now.',
+    )
+    expect(within(guidance).queryByRole('link', { name: /Request access/ })).not.toBeInTheDocument()
+    expect(within(guidance).getByRole('link', { name: /Evaluate deployment fit/ })).toHaveAttribute('href', '/evaluation')
+    expect(within(guidance).getByRole('link', { name: /Accept a workspace invitation/ })).toHaveAttribute('href', '/accept-invite')
+  })
+
+  it('offers request access while preserving the invitation path when access intake is configured', () => {
+    renderLogin(mockOnAuthenticated, '/api/design-partner-request')
+
+    const guidance = screen.getByRole('region', { name: 'Don’t have a dashboard key?' })
+    expect(within(guidance).queryByText(/New access requests are not open/)).not.toBeInTheDocument()
+    expect(within(guidance).getByRole('link', { name: /Request access/ })).toHaveAttribute('href', '/request-access')
+    expect(within(guidance).queryByRole('link', { name: /Evaluate deployment fit/ })).not.toBeInTheDocument()
+    expect(within(guidance).getByRole('link', { name: /Accept a workspace invitation/ })).toHaveAttribute('href', '/accept-invite')
   })
 
   it('shows an accessible error and focuses the field on empty submit', async () => {

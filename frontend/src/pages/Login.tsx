@@ -1,6 +1,10 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createSession } from '../lib/authAccessClient';
+import {
+  designPartnerRequestEndpoint,
+  getPublicAcquisitionTarget,
+} from '../lib/designPartnerRequest';
 import { publicAnalytics } from '../lib/publicAnalytics';
 import {
   ActionButton,
@@ -14,6 +18,7 @@ import type { SessionInfo } from '../types';
 
 interface LoginProps {
   onAuthenticated: (session: SessionInfo) => void;
+  intakeEndpoint?: string;
 }
 
 const sessionSafeguards = [
@@ -34,7 +39,12 @@ const sessionSafeguards = [
   },
 ];
 
-export function Login({ onAuthenticated }: LoginProps) {
+export function Login({
+  onAuthenticated,
+  intakeEndpoint = designPartnerRequestEndpoint,
+}: LoginProps) {
+  const acquisition = getPublicAcquisitionTarget(intakeEndpoint);
+  const accessRequestsOpen = acquisition.path === '/request-access';
   const [key, setKey] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -89,7 +99,11 @@ export function Login({ onAuthenticated }: LoginProps) {
   return (
     <AppShell variant="public" className="login-page">
       <a className="public-skip-link" href="#login-form">Skip to sign in</a>
-      <PublicNav title="OPEN INFERENCE CONTROL PLANE" className="login-public-nav" />
+      <PublicNav
+        title="OPEN INFERENCE CONTROL PLANE"
+        className="login-public-nav"
+        intakeEndpoint={intakeEndpoint}
+      />
 
       <main className="login-shell" id="main-content">
         <section className="login-form-panel" aria-labelledby="login-title">
@@ -175,12 +189,18 @@ export function Login({ onAuthenticated }: LoginProps) {
               <p>
                 Access is approved before sign-in. After approval, a workspace admin issues an
                 active human dashboard key. Service-account and inference keys cannot start a
-                dashboard session.
+                dashboard session. {!accessRequestsOpen ? 'New access requests are not open right now.' : null}
               </p>
               <div className="login-access-actions">
-                <Link className="login-access-link" to="/request-access">
-                  <span className="login-access-link-title">Request access</span>
-                  <span>New to Infera? Start with access review.</span>
+                <Link className="login-access-link" to={acquisition.path}>
+                  <span className="login-access-link-title">
+                    {accessRequestsOpen ? 'Request access' : 'Evaluate deployment fit'}
+                  </span>
+                  <span>
+                    {accessRequestsOpen
+                      ? 'New to Infera? Start with access review.'
+                      : 'Review the public evaluation guide while access requests are closed.'}
+                  </span>
                 </Link>
                 <Link className="login-access-link" to="/accept-invite">
                   <span className="login-access-link-title">Accept a workspace invitation</span>
