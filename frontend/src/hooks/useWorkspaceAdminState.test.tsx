@@ -69,7 +69,11 @@ describe('useWorkspaceAdminState', () => {
       updated_at: '2026-04-01T00:00:00Z',
     });
     apiMocks.fetchAuditUsage.mockResolvedValue({
+      bucket: 'day',
+      start: '2026-04-01T00:00:00Z',
+      end: '2026-04-02T00:00:00Z',
       rows: [{ bucket_start: '2026-04-01T00:00:00Z', bucket_end: '2026-04-02T00:00:00Z', requests: 12, tokens: 2400, successes: 11, errors: 1 }],
+      reconciliation: { status: 'ok', discrepancies: [] },
     });
     apiMocks.fetchWorkspaceMembers.mockResolvedValue([
       { id: 'member-1', workspace_id: 'ws_test', email: 'admin@example.com', display_name: 'Admin', role: 'admin', created_at: '2026-04-01T00:00:00Z' },
@@ -112,6 +116,8 @@ describe('useWorkspaceAdminState', () => {
       expect(result.current.serviceAccounts).toHaveLength(1);
       expect(result.current.providerConfigs).toHaveLength(1);
       expect(result.current.providerStatuses).toHaveLength(1);
+      expect(result.current.usage?.reconciliation?.status).toBe('ok');
+      expect(result.current.usage?.start).toBe('2026-04-01T00:00:00Z');
       expect(result.current.usageRows).toHaveLength(1);
       expect(result.current.memberRoles['member-1']).toBe('admin');
     });

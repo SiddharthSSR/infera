@@ -87,6 +87,15 @@ function validateProviderConfigDraft(
 // formatDate in WorkspaceAdmin uses datetime format — alias for backwards compat
 const formatDate = formatDateTime;
 
+function formatUSD(value: number, maximumFractionDigits = 9): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits,
+  }).format(value);
+}
+
 export function WorkspaceAdmin() {
   const { session } = useAuthSession();
   const navigate = useNavigate();
@@ -129,6 +138,7 @@ export function WorkspaceAdmin() {
     serviceAccounts,
     providerConfigs,
     providerStatuses,
+    usage,
     usageRows,
     memberRoles,
     savingQuota,
@@ -172,6 +182,12 @@ export function WorkspaceAdmin() {
     let estimatedTokens = 0;
     let successes = 0;
     let errors = 0;
+    let costUSD = 0;
+    let costedRequests = 0;
+    let costedTokens = 0;
+    let exactCostRequests = 0;
+    let estimatedCostRequests = 0;
+    let unavailableCostRequests = 0;
 
     for (const row of usageRows) {
       requests += row.requests;
@@ -181,6 +197,12 @@ export function WorkspaceAdmin() {
       estimatedTokens += row.estimated_tokens ?? 0;
       successes += row.successes;
       errors += row.errors;
+      costUSD += row.cost?.cost_usd ?? 0;
+      costedRequests += row.cost?.costed_requests ?? 0;
+      costedTokens += row.cost?.costed_tokens ?? 0;
+      exactCostRequests += row.cost?.exact_requests ?? 0;
+      estimatedCostRequests += row.cost?.estimated_requests ?? 0;
+      unavailableCostRequests += row.cost?.unavailable_requests ?? 0;
 
       const day = row.bucket_start.slice(0, 10);
       const dayTotals = byDay.get(day) || { requests: 0, tokens: 0 };
@@ -207,7 +229,26 @@ export function WorkspaceAdmin() {
       .slice(0, 5)
       .map(([keyId, totals]) => ({ keyId, ...totals }));
 
-    return { requests, attempts, tokens, exactTokens, estimatedTokens, successes, errors, dailyTrend, topKeys };
+    return {
+      requests,
+      attempts,
+      tokens,
+      exactTokens,
+      estimatedTokens,
+      successes,
+      errors,
+      costUSD,
+      costedRequests,
+      costedTokens,
+      exactCostRequests,
+      estimatedCostRequests,
+      unavailableCostRequests,
+      costPerRequestUSD: costedRequests > 0 ? costUSD / costedRequests : null,
+      costPerTokenUSD: costedTokens > 0 ? costUSD / costedTokens : null,
+      costPer1MTokensUSD: costedTokens > 0 ? (costUSD / costedTokens) * 1_000_000 : null,
+      dailyTrend,
+      topKeys,
+    };
   }, [usageRows]);
 
   const requestUsageRatio = usageRatio(usageSummary.requests, quota?.monthly_request_limit);
@@ -496,7 +537,7 @@ export function WorkspaceAdmin() {
                   <div style={{ fontSize: '2rem', marginTop: '0.5rem' }}>{formatCount(usageSummary.tokens)}</div>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
                     {usageSummary.estimatedTokens > 0
-                      ? `${formatCount(usageSummary.exactTokens)} exact / ${formatCount(usageSummary.estimatedTokens)} estimated or mixed`
+                      ? `${formatCount(usageSummary.exactTokens)} exact / ${formatCount(usageSummary.estimatedTokens)} estimated, mixed, or unknown`
                       : usageSummary.exactTokens > 0 && usageSummary.exactTokens === usageSummary.tokens
                         ? 'All metered tokens reported as exact'
                         : usageSummary.tokens > 0
@@ -572,6 +613,108 @@ export function WorkspaceAdmin() {
           ) : (
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
               Usage visibility is restricted for this role.
+            </div>
+          )}
+        </Cell>
+      </GridRow>
+      )}
+
+      {settingsTab === 'usage' && (
+      <GridRow>
+        <Cell span={2}>
+          <h2 className="label-text" id="usage-cost-heading" style={{ marginBottom: '1rem' }}>ATTRIBUTED REQUEST COST</h2>
+          {canViewUsage ? (
+            !usage ? (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.6 }}>
+                Cost evidence is unavailable because the usage summary could not be loaded.
+              </div>
+            ) : usageSummary.costedRequests > 0 ? (
+              <section aria-labelledby="usage-cost-heading">
+                <div style={{ fontSize: '2rem' }}>{formatUSD(usageSummary.costUSD)}</div>
+                <dl className="metadata-list" style={{ marginTop: '1rem' }}>
+                  <div>
+                    <dt>Cost per attributed request</dt>
+                    <dd>{formatUSD(usageSummary.costPerRequestUSD ?? 0, 12)} USD/request</dd>
+                  </div>
+                  <div>
+                    <dt>Cost per attributed token</dt>
+                    <dd>{formatUSD(usageSummary.costPerTokenUSD ?? 0, 12)} USD/token</dd>
+                  </div>
+                  <div>
+                    <dt>Cost per 1M attributed tokens</dt>
+                    <dd>{formatUSD(usageSummary.costPer1MTokensUSD ?? 0, 6)} USD/1M tokens</dd>
+                  </div>
+                  <div>
+                    <dt>Cost accuracy</dt>
+                    <dd>
+                      {formatCount(usageSummary.exactCostRequests)} exact /{' '}
+                      {formatCount(usageSummary.estimatedCostRequests)} estimated /{' '}
+                      {formatCount(usageSummary.unavailableCostRequests)} unavailable attempts
+                    </dd>
+                  </div>
+                </dl>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.6, marginTop: '1rem' }}>
+                  Provider price-version metadata is retained by the ledger but is not exposed by this summary contract.
+                </p>
+              </section>
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.6 }}>
+                Cost is unavailable because this range has no cost-attributed requests. Missing price evidence is not shown as zero cost.
+              </div>
+            )
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Cost visibility is restricted for this role.
+            </div>
+          )}
+        </Cell>
+
+        <Cell span={2} bg="var(--bg-accent)">
+          <h2 className="label-text" id="usage-reconciliation-heading" style={{ marginBottom: '1rem' }}>LEDGER RECONCILIATION</h2>
+          {canViewUsage ? (
+            <section aria-labelledby="usage-reconciliation-heading" aria-live="polite">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <StatusDot
+                  tone={
+                    !usage || usageRows.length === 0 || !usage.reconciliation
+                      ? 'warning'
+                      : usage.reconciliation.status === 'ok'
+                        ? 'success'
+                        : 'error'
+                  }
+                />
+                <Badge>
+                  {!usage
+                    ? 'UNAVAILABLE'
+                    : usageRows.length === 0
+                    ? 'NO DATA'
+                    : usage.reconciliation?.status === 'ok'
+                      ? 'RECONCILED'
+                      : usage.reconciliation?.status === 'mismatch'
+                        ? 'MISMATCH'
+                        : 'UNAVAILABLE'}
+                </Badge>
+              </div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: 1.6, marginTop: '1rem' }}>
+                {!usage
+                  ? 'The usage summary could not be loaded, so no reconciliation claim is made.'
+                  : usageRows.length === 0
+                  ? 'No ledger rows were returned for this range, so no reconciliation claim is made.'
+                  : usage.reconciliation?.status === 'ok'
+                    ? 'Attempts, outcomes, billable requests, token accuracy, and cost accuracy reconcile across the full queried range.'
+                    : usage.reconciliation?.status === 'mismatch'
+                      ? `Ledger mismatch: ${usage.reconciliation.discrepancies.join(', ')}.`
+                      : 'Reconciliation metadata is unavailable for this range.'}
+              </p>
+              {usage?.start && usage?.end ? (
+                <p className="mono" style={{ fontSize: '0.78rem', lineHeight: 1.6, marginTop: '1rem', overflowWrap: 'anywhere' }}>
+                  Half-open UTC range [<time dateTime={usage.start}>{usage.start}</time>, <time dateTime={usage.end}>{usage.end}</time>)
+                </p>
+              ) : null}
+            </section>
+          ) : (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Reconciliation visibility is restricted for this role.
             </div>
           )}
         </Cell>

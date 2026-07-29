@@ -30,7 +30,7 @@ import type {
   WorkspaceProviderConfigRecord,
   WorkspaceQuotaRecord,
 } from '../types';
-import type { AuditUsageRow } from '../lib/apiCore';
+import type { AuditUsageResponse, AuditUsageRow } from '../lib/apiCore';
 
 function buildMemberRoleMap(members: WorkspaceMemberRecord[]): Record<string, string> {
   return members.reduce<Record<string, string>>((acc, record) => {
@@ -60,6 +60,7 @@ export function useWorkspaceAdminState({
   const [serviceAccounts, setServiceAccounts] = useState<ApiKeyRecord[]>([]);
   const [providerConfigs, setProviderConfigs] = useState<WorkspaceProviderConfigRecord[]>([]);
   const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
+  const [usage, setUsage] = useState<AuditUsageResponse | null>(null);
   const [usageRows, setUsageRows] = useState<AuditUsageRow[]>([]);
   const [memberRoles, setMemberRoles] = useState<Record<string, string>>({});
   const [savingQuota, setSavingQuota] = useState(false);
@@ -119,6 +120,7 @@ export function useWorkspaceAdminState({
       setServiceAccounts([]);
       setProviderConfigs([]);
       setProviderStatuses([]);
+      setUsage(null);
       setUsageRows([]);
       setMemberRoles({});
       return () => { cancelled = true; };
@@ -147,14 +149,21 @@ export function useWorkspaceAdminState({
         const { start, end } = monthRange();
         tasks.push(
           fetchAuditUsage({ start, end, bucket: 'day', workspace_id: workspaceId })
-            .then((usage) => {
-              if (!cancelled) setUsageRows(usage.rows);
+            .then((nextUsage) => {
+              if (!cancelled) {
+                setUsage(nextUsage);
+                setUsageRows(nextUsage.rows);
+              }
             })
             .catch(() => {
-              if (!cancelled) setUsageRows([]);
+              if (!cancelled) {
+                setUsage(null);
+                setUsageRows([]);
+              }
             }),
         );
       } else {
+        setUsage(null);
         setUsageRows([]);
       }
 
@@ -442,6 +451,7 @@ export function useWorkspaceAdminState({
     serviceAccounts,
     providerConfigs,
     providerStatuses,
+    usage,
     usageRows,
     memberRoles,
     savingQuota,
