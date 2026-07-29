@@ -20,7 +20,11 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var ErrWorkspaceProviderConfigNotFound = errors.New("workspace provider config not found")
+var (
+	ErrWorkspaceProviderConfigNotFound = errors.New("workspace provider config not found")
+	ErrWorkspaceNotFound               = errors.New("workspace not found")
+	ErrDefaultWorkspaceDeactivation    = errors.New("default workspace cannot be deactivated")
+)
 
 // authMigrations defines the versioned schema for the auth database.
 var authMigrations = []migrate.Migration{
@@ -271,9 +275,11 @@ type Store struct {
 var bootstrapKeyPattern = regexp.MustCompile(`^inf_[0-9a-fA-F]{48}$`)
 
 const (
-	DefaultWorkspaceID   = "ws_default"
-	DefaultWorkspaceSlug = "default"
-	DefaultWorkspaceName = "Default Workspace"
+	DefaultWorkspaceID         = "ws_default"
+	DefaultWorkspaceSlug       = "default"
+	DefaultWorkspaceName       = "Default Workspace"
+	WorkspaceStatusActive      = "active"
+	WorkspaceStatusDeactivated = "deactivated"
 )
 
 // NewStore opens a SQLite database and runs migrations.
@@ -293,7 +299,10 @@ func NewStoreWithProviderCredentialEncryption(dbPath, encodedKey string) (*Store
 }
 
 func newStore(dbPath string, credentialCipher *providerCredentialCipher) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	// Immediate transactions acquire SQLite's database-wide writer boundary
+	// before lifecycle reads. This serializes multi-statement mutations across
+	// independent Store instances and gateway processes.
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open auth database: %w", err)
 	}
@@ -397,13 +406,22 @@ func (s *Store) CreateKeyWithPrincipalInWorkspace(workspaceID, name, role, princ
 	id := uuid.New().String()
 	now := time.Now()
 
-	_, err = s.db.Exec(`
+	result, err := s.db.Exec(`
 		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, principal_type, membership_id, created_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'active')`,
-		id, workspace.ID, hash, prefix, name, role, principalType, now,
+		SELECT ?, w.id, ?, ?, ?, ?, ?, NULL, ?, 'active'
+		FROM workspaces w
+		WHERE w.id = ? AND w.status = ?`,
+		id, hash, prefix, name, role, principalType, now, workspace.ID, WorkspaceStatusActive,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to store key: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to confirm key creation: %w", err)
+	}
+	if rows != 1 {
+		return "", nil, fmt.Errorf("active workspace is required")
 	}
 
 	record := &KeyRecord{
@@ -434,8 +452,11 @@ func (s *Store) ValidateKey(rawKey string) (*KeyRecord, error) {
 		FROM api_keys k
 		JOIN workspaces w ON w.id = k.workspace_id
 		LEFT JOIN workspace_memberships m ON m.id = k.membership_id
-		WHERE k.key_hash = ? AND k.status = 'active'`,
-		hash,
+		WHERE k.key_hash = ?
+		  AND k.status = 'active'
+		  AND w.status = ?
+		  AND (k.membership_id IS NULL OR m.status = 'active')`,
+		hash, WorkspaceStatusActive,
 	)
 
 	record := &KeyRecord{}
@@ -620,13 +641,22 @@ func (s *Store) CreateKeyFromRawWithPrincipalInWorkspace(workspaceID, fullKey, n
 	id := uuid.New().String()
 	now := time.Now()
 
-	_, err = s.db.Exec(`
+	result, err := s.db.Exec(`
 		INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, role, principal_type, membership_id, created_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'active')`,
-		id, workspace.ID, hash, prefix, name, role, principalType, now,
+		SELECT ?, w.id, ?, ?, ?, ?, ?, NULL, ?, 'active'
+		FROM workspaces w
+		WHERE w.id = ? AND w.status = ?`,
+		id, hash, prefix, name, role, principalType, now, workspace.ID, WorkspaceStatusActive,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store key: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to confirm key creation: %w", err)
+	}
+	if rows != 1 {
+		return nil, fmt.Errorf("active workspace is required")
 	}
 
 	return &KeyRecord{
@@ -668,13 +698,27 @@ func (s *Store) CreateSession(keyID string) (string, *SessionRecord, error) {
 	now := time.Now()
 	expiresAt := now.Add(sessionDuration)
 
-	_, err := s.db.Exec(`
+	result, err := s.db.Exec(`
 		INSERT INTO sessions (id, key_id, token_hash, created_at, expires_at, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		id, keyID, tokenHash, now, expiresAt, now,
+		SELECT ?, k.id, ?, ?, ?, ?
+		FROM api_keys k
+		JOIN workspaces w ON w.id = k.workspace_id
+		LEFT JOIN workspace_memberships m ON m.id = k.membership_id
+		WHERE k.id = ?
+		  AND k.status = 'active'
+		  AND w.status = ?
+		  AND (k.membership_id IS NULL OR m.status = 'active')`,
+		id, tokenHash, now, expiresAt, now, keyID, WorkspaceStatusActive,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create session: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to confirm session creation: %w", err)
+	}
+	if rows != 1 {
+		return "", nil, fmt.Errorf("active key in an active workspace is required")
 	}
 
 	return rawToken, &SessionRecord{
@@ -700,8 +744,12 @@ func (s *Store) ValidateSession(rawToken string) (*SessionRecord, *KeyRecord, er
 		JOIN api_keys k ON s.key_id = k.id
 		JOIN workspaces w ON w.id = k.workspace_id
 		LEFT JOIN workspace_memberships m ON m.id = k.membership_id
-		WHERE s.token_hash = ? AND s.expires_at > ? AND k.status = 'active'`,
-		tokenHash, time.Now(),
+		WHERE s.token_hash = ?
+		  AND s.expires_at > ?
+		  AND k.status = 'active'
+		  AND w.status = ?
+		  AND (k.membership_id IS NULL OR m.status = 'active')`,
+		tokenHash, time.Now(), WorkspaceStatusActive,
 	)
 
 	session := &SessionRecord{}
@@ -788,11 +836,129 @@ func (s *Store) CreateWorkspace(name string) (*WorkspaceRecord, error) {
 	}, nil
 }
 
+// DeactivateWorkspace makes a non-default workspace permanently unusable while
+// retaining its identity and historical records. The cleanup is deliberately
+// idempotent so an interrupted administrative request can be retried safely.
+func (s *Store) DeactivateWorkspace(workspaceID string) (*WorkspaceRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil, fmt.Errorf("workspace id is required")
+	}
+	if workspaceID == DefaultWorkspaceID {
+		return nil, ErrDefaultWorkspaceDeactivation
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin workspace deactivation transaction: %w", err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	workspace, err := s.deactivateWorkspaceTx(tx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit workspace deactivation: %w", err)
+	}
+	tx = nil
+	workspace.Status = WorkspaceStatusDeactivated
+	return workspace, nil
+}
+
+func (s *Store) deactivateWorkspaceTx(tx *sql.Tx, workspaceID string) (*WorkspaceRecord, error) {
+	workspace := &WorkspaceRecord{}
+	err := tx.QueryRow(`
+		SELECT id, slug, name, created_at, status
+		FROM workspaces
+		WHERE id = ?`,
+		workspaceID,
+	).Scan(&workspace.ID, &workspace.Slug, &workspace.Name, &workspace.CreatedAt, &workspace.Status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", ErrWorkspaceNotFound, workspaceID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to load workspace for deactivation: %w", err)
+	}
+	if workspace.Status != WorkspaceStatusActive && workspace.Status != WorkspaceStatusDeactivated {
+		return nil, fmt.Errorf("workspace %s has unsupported status %q", workspaceID, workspace.Status)
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE workspaces
+		SET status = ?
+		WHERE id = ? AND status = ?`,
+		WorkspaceStatusDeactivated, workspaceID, WorkspaceStatusActive,
+	); err != nil {
+		return nil, fmt.Errorf("failed to deactivate workspace: %w", err)
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM sessions
+		WHERE key_id IN (SELECT id FROM api_keys WHERE workspace_id = ?)`,
+		workspaceID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to invalidate workspace sessions: %w", err)
+	}
+	if _, err := tx.Exec(`
+		UPDATE api_keys
+		SET status = 'revoked'
+		WHERE workspace_id = ? AND status = 'active'`,
+		workspaceID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to revoke workspace keys: %w", err)
+	}
+	if _, err := tx.Exec(`
+		UPDATE workspace_invitations
+		SET status = 'revoked'
+		WHERE workspace_id = ? AND status = 'pending'`,
+		workspaceID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to revoke workspace invitations: %w", err)
+	}
+	if _, err := tx.Exec(`
+		UPDATE workspace_memberships
+		SET status = 'removed'
+		WHERE workspace_id = ? AND status = 'active'`,
+		workspaceID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to deactivate workspace memberships: %w", err)
+	}
+	now := time.Now()
+	if _, err := tx.Exec(`
+		INSERT INTO workspace_quotas (
+			workspace_id, monthly_request_limit, monthly_token_limit, enforce_hard_limits, updated_at
+		)
+		VALUES (?, 0, 0, 1, ?)
+		ON CONFLICT(workspace_id) DO UPDATE SET
+			monthly_request_limit = 0,
+			monthly_token_limit = 0,
+			enforce_hard_limits = 1,
+			updated_at = excluded.updated_at`,
+		workspaceID, now,
+	); err != nil {
+		return nil, fmt.Errorf("failed to enforce zero workspace quota: %w", err)
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM workspace_provider_configs
+		WHERE workspace_id = ?`,
+		workspaceID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to remove workspace provider configs: %w", err)
+	}
+
+	return workspace, nil
+}
+
 func (s *Store) ListWorkspaces() ([]*WorkspaceRecord, error) {
 	rows, err := s.db.Query(`
 		SELECT id, slug, name, created_at, status
 		FROM workspaces
-		ORDER BY created_at ASC`)
+		WHERE status = ?
+		ORDER BY created_at ASC`, WorkspaceStatusActive)
 	if err != nil {
 		return nil, err
 	}
@@ -829,8 +995,9 @@ func (s *Store) ListAccessibleWorkspaces(record *KeyRecord) ([]*WorkspaceRecord,
 				  AND m.status = 'active'
 				  AND k.status = 'active'
 				  AND k.principal_type = ?
+				  AND w.status = ?
 				ORDER BY w.created_at ASC`,
-				identityID, PrincipalHuman,
+				identityID, PrincipalHuman, WorkspaceStatusActive,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("failed to list accessible workspaces: %w", err)
@@ -904,8 +1071,33 @@ func (s *Store) SwitchSessionWorkspace(rawToken, workspaceID string) (*SessionRe
 		return nil, nil, err
 	}
 
-	if _, err := s.db.Exec(`UPDATE sessions SET key_id = ?, last_seen = ? WHERE id = ?`, targetKeyID, time.Now(), session.ID); err != nil {
+	result, err := s.db.Exec(`
+		UPDATE sessions
+		SET key_id = ?, last_seen = ?
+		WHERE id = ?
+		  AND EXISTS (
+			SELECT 1
+			FROM api_keys k
+			JOIN workspaces w ON w.id = k.workspace_id
+			LEFT JOIN workspace_memberships m ON m.id = k.membership_id
+			WHERE k.id = ?
+			  AND k.workspace_id = ?
+			  AND k.status = 'active'
+			  AND w.status = ?
+			  AND (k.membership_id IS NULL OR m.status = 'active')
+		  )`,
+		targetKeyID, time.Now(), session.ID,
+		targetKeyID, workspaceID, WorkspaceStatusActive,
+	)
+	if err != nil {
 		return nil, nil, fmt.Errorf("failed to switch session workspace: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to confirm session workspace switch: %w", err)
+	}
+	if rows != 1 {
+		return nil, nil, fmt.Errorf("session or target workspace is no longer active")
 	}
 
 	return s.ValidateSession(rawToken)
@@ -923,14 +1115,16 @@ func (s *Store) findSwitchableWorkspaceKeyID(identityID, workspaceID string) (st
 		SELECT k.id
 		FROM workspace_memberships m
 		JOIN api_keys k ON k.membership_id = m.id
+		JOIN workspaces w ON w.id = m.workspace_id
 		WHERE m.workspace_id = ?
 		  AND m.human_identity_id = ?
 		  AND m.status = 'active'
 		  AND k.status = 'active'
 		  AND k.principal_type = ?
+		  AND w.status = ?
 		ORDER BY k.created_at ASC
 		LIMIT 1`,
-		workspaceID, identityID, PrincipalHuman,
+		workspaceID, identityID, PrincipalHuman, WorkspaceStatusActive,
 	).Scan(&keyID)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -952,22 +1146,32 @@ func (s *Store) UpsertWorkspaceQuota(workspaceID string, monthlyRequestLimit, mo
 	}
 
 	now := time.Now()
-	_, err := s.db.Exec(`
+	result, err := s.db.Exec(`
 		INSERT INTO workspace_quotas (workspace_id, monthly_request_limit, monthly_token_limit, enforce_hard_limits, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		SELECT w.id, ?, ?, ?, ?
+		FROM workspaces w
+		WHERE w.id = ? AND w.status = ?
 		ON CONFLICT(workspace_id) DO UPDATE SET
 			monthly_request_limit = excluded.monthly_request_limit,
 			monthly_token_limit = excluded.monthly_token_limit,
 			enforce_hard_limits = excluded.enforce_hard_limits,
 			updated_at = excluded.updated_at`,
-		workspaceID,
 		toNullableInt64(monthlyRequestLimit),
 		toNullableInt64(monthlyTokenLimit),
 		boolToInt(enforceHardLimits),
 		now,
+		workspaceID,
+		WorkspaceStatusActive,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update workspace quota: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to confirm workspace quota update: %w", err)
+	}
+	if rows != 1 {
+		return nil, fmt.Errorf("active workspace is required")
 	}
 	return s.GetWorkspaceQuota(workspaceID)
 }
@@ -1097,16 +1301,17 @@ func (s *Store) UpsertWorkspaceProviderConfig(workspaceID, provider, apiKey, api
 		return nil, fmt.Errorf("failed to encode workspace provider options: %w", err)
 	}
 	now := time.Now()
-	_, err = s.db.Exec(`
+	result, err := s.db.Exec(`
 		INSERT INTO workspace_provider_configs (workspace_id, provider, api_key, api_secret, endpoint, options_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		SELECT w.id, ?, ?, ?, ?, ?, ?, ?
+		FROM workspaces w
+		WHERE w.id = ? AND w.status = ?
 		ON CONFLICT(workspace_id, provider) DO UPDATE SET
 			api_key = excluded.api_key,
 			api_secret = excluded.api_secret,
 			endpoint = excluded.endpoint,
 			options_json = excluded.options_json,
 			updated_at = excluded.updated_at`,
-		workspaceID,
 		provider,
 		apiKey,
 		apiSecret,
@@ -1114,9 +1319,18 @@ func (s *Store) UpsertWorkspaceProviderConfig(workspaceID, provider, apiKey, api
 		optionsJSON,
 		now,
 		now,
+		workspaceID,
+		WorkspaceStatusActive,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update workspace provider config: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to confirm workspace provider config update: %w", err)
+	}
+	if rows != 1 {
+		return nil, fmt.Errorf("active workspace is required")
 	}
 	return s.GetWorkspaceProviderConfig(workspaceID, provider)
 }
@@ -1216,8 +1430,8 @@ func (s *Store) getWorkspace(id string) (*WorkspaceRecord, error) {
 	row := s.db.QueryRow(`
 		SELECT id, slug, name, created_at, status
 		FROM workspaces
-		WHERE id = ? AND status = 'active'`,
-		id,
+		WHERE id = ? AND status = ?`,
+		id, WorkspaceStatusActive,
 	)
 	w := &WorkspaceRecord{}
 	if err := row.Scan(&w.ID, &w.Slug, &w.Name, &w.CreatedAt, &w.Status); err != nil {
@@ -1444,13 +1658,28 @@ func (s *Store) CreateWorkspaceInvitation(workspaceID, email, displayName, role,
 	id := "inv_" + uuid.New().String()
 	now := time.Now()
 
-	_, err := s.db.Exec(`
+	result, err := s.db.Exec(`
 		INSERT INTO workspace_invitations (id, workspace_id, email, display_name, role, invite_token_hash, invited_by_key_id, created_at, expires_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-		id, workspaceID, email, displayName, role, tokenHash, invitedByKeyID, now, expiresAt,
+		SELECT ?, w.id, ?, ?, ?, ?, ?, ?, ?, 'pending'
+		FROM workspaces w
+		WHERE w.id = ? AND w.status = ?
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM workspace_memberships m
+			WHERE m.workspace_id = w.id AND m.email = ? AND m.status = 'active'
+		  )`,
+		id, email, displayName, role, tokenHash, invitedByKeyID, now, expiresAt,
+		workspaceID, WorkspaceStatusActive, email,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create workspace invitation: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to confirm workspace invitation creation: %w", err)
+	}
+	if rows != 1 {
+		return "", nil, fmt.Errorf("active workspace without an existing membership is required")
 	}
 
 	return rawToken, &WorkspaceInvitationRecord{
@@ -1584,6 +1813,16 @@ func (s *Store) acceptWorkspaceInvitation(rawToken, displayName, humanIdentityID
 	if humanIdentityID == "" {
 		humanIdentityID = "usr_" + uuid.New().String()
 	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("failed to begin accept invitation transaction: %w", err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
 	now := time.Now()
 
 	type inviteRow struct {
@@ -1596,12 +1835,27 @@ func (s *Store) acceptWorkspaceInvitation(rawToken, displayName, humanIdentityID
 		ExpiresAt   time.Time
 	}
 	var invite inviteRow
-	err := s.db.QueryRow(`
-		SELECT id, workspace_id, email, display_name, role, status, expires_at
-		FROM workspace_invitations
-		WHERE invite_token_hash = ?`,
+	var workspace WorkspaceRecord
+	err = tx.QueryRow(`
+		SELECT wi.id, wi.workspace_id, wi.email, wi.display_name, wi.role, wi.status, wi.expires_at,
+		       w.slug, w.name, w.created_at, w.status
+		FROM workspace_invitations wi
+		JOIN workspaces w ON w.id = wi.workspace_id
+		WHERE wi.invite_token_hash = ?`,
 		tokenHash,
-	).Scan(&invite.ID, &invite.WorkspaceID, &invite.Email, &invite.DisplayName, &invite.Role, &invite.Status, &invite.ExpiresAt)
+	).Scan(
+		&invite.ID,
+		&invite.WorkspaceID,
+		&invite.Email,
+		&invite.DisplayName,
+		&invite.Role,
+		&invite.Status,
+		&invite.ExpiresAt,
+		&workspace.Slug,
+		&workspace.Name,
+		&workspace.CreatedAt,
+		&workspace.Status,
+	)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, "", nil, fmt.Errorf("invalid invitation")
@@ -1614,26 +1868,16 @@ func (s *Store) acceptWorkspaceInvitation(rawToken, displayName, humanIdentityID
 	if now.After(invite.ExpiresAt) {
 		return nil, "", nil, fmt.Errorf("invitation has expired")
 	}
+	if workspace.Status != WorkspaceStatusActive {
+		return nil, "", nil, fmt.Errorf("active workspace is required")
+	}
+	workspace.ID = invite.WorkspaceID
 	if displayName == "" {
 		displayName = invite.DisplayName
 	}
 	if displayName == "" {
 		displayName = invite.Email
 	}
-	workspace, err := s.getWorkspace(invite.WorkspaceID)
-	if err != nil {
-		return nil, "", nil, err
-	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return nil, "", nil, fmt.Errorf("failed to begin accept invitation transaction: %w", err)
-	}
-	defer func() {
-		if tx != nil {
-			_ = tx.Rollback()
-		}
-	}()
 
 	var existing int
 	if err := tx.QueryRow(`SELECT COUNT(1) FROM workspace_memberships WHERE workspace_id = ? AND (email = ? OR human_identity_id = ?) AND status = 'active'`, invite.WorkspaceID, invite.Email, humanIdentityID).Scan(&existing); err != nil {
@@ -1732,8 +1976,21 @@ func (s *Store) acceptWorkspaceInvitation(rawToken, displayName, humanIdentityID
 		return nil, "", nil, fmt.Errorf("failed to create key for invited member: %w", err)
 	}
 
-	if _, err := tx.Exec(`UPDATE workspace_invitations SET status = 'accepted' WHERE id = ?`, invite.ID); err != nil {
+	result, err := tx.Exec(`
+		UPDATE workspace_invitations
+		SET status = 'accepted'
+		WHERE id = ? AND status = 'pending'`,
+		invite.ID,
+	)
+	if err != nil {
 		return nil, "", nil, fmt.Errorf("failed to update invitation status: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("failed to confirm invitation status update: %w", err)
+	}
+	if rows != 1 {
+		return nil, "", nil, fmt.Errorf("invitation is no longer pending")
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, "", nil, fmt.Errorf("failed to commit invitation acceptance: %w", err)

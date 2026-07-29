@@ -69,7 +69,11 @@ func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 2 {
+	if len(parts) == 1 {
+		if r.Method == http.MethodDelete {
+			h.handleDeactivateWorkspace(w, r, strings.TrimSpace(parts[0]))
+			return
+		}
 		writeNotFoundError(w, "Not found")
 		return
 	}
@@ -110,6 +114,38 @@ func (h *Handler) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeNotFoundError(w, "Not found")
 	}
+}
+
+func (h *Handler) handleDeactivateWorkspace(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if workspaceID == "" {
+		writeInvalidRequestError(w, "Workspace ID required")
+		return
+	}
+	if !h.requirePermission(w, r, PermissionManageWorkspaces, "Workspace management access required.") {
+		return
+	}
+	current := KeyFromContext(r.Context())
+	if current == nil || current.WorkspaceID != DefaultWorkspaceID {
+		writeAuthorizationError(w, "Only platform admins can deactivate workspaces.")
+		return
+	}
+
+	workspace, err := h.store.DeactivateWorkspace(workspaceID)
+	switch {
+	case errors.Is(err, ErrDefaultWorkspaceDeactivation):
+		writeInvalidRequestError(w, err.Error())
+		return
+	case errors.Is(err, ErrWorkspaceNotFound):
+		writeNotFoundError(w, err.Error())
+		return
+	case err != nil:
+		writeInternalError(w, "Failed to deactivate workspace.")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"workspace": workspace,
+	})
 }
 
 func (h *Handler) handleWorkspaceProviders(w http.ResponseWriter, r *http.Request, workspaceID string) {
