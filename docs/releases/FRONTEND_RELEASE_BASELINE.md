@@ -141,14 +141,19 @@ explicit operator step and must not be inferred from a successful gateway recove
 
 1. Approve a specific full commit SHA and retain the successful tests, reviewed-build output,
    source label, context count/size, and generated JS/CSS asset names from the preview.
-2. Before changing a production-like canary, capture both the running frontend image ID and the
-   Compose image reference. Restoring that recorded reference with `--no-build` is the rollback
-   path:
+2. Before changing a production-like canary, capture the running frontend image ID, immutable repo
+   digest, and full source revision label. All three are required for rollback:
 
    ```bash
    FRONTEND_CONTAINER_ID="$(docker compose -f docker-compose.prod.yml ps -q frontend)"
    PREVIOUS_FRONTEND_IMAGE_ID="$(docker inspect --format '{{.Image}}' "${FRONTEND_CONTAINER_ID}")"
    PREVIOUS_FRONTEND_IMAGE_REF="$(docker inspect --format '{{.Config.Image}}' "${FRONTEND_CONTAINER_ID}")"
+   PREVIOUS_FRONTEND_SOURCE_REVISION="$(docker image inspect --format \
+     '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+     "${PREVIOUS_FRONTEND_IMAGE_ID}")"
+   ./scripts/validate-worker-image-pin.sh \
+     "${PREVIOUS_FRONTEND_IMAGE_REF}" PREVIOUS_FRONTEND_IMAGE_REF --require-digest
+   [[ "${PREVIOUS_FRONTEND_SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
    docker image inspect "${PREVIOUS_FRONTEND_IMAGE_ID}" "${PREVIOUS_FRONTEND_IMAGE_REF}" >/dev/null
    ```
 
@@ -172,18 +177,26 @@ explicit operator step and must not be inferred from a successful gateway recove
    printf 'source=%s\nimage=%s\n' "${REVIEWED_REVISION}" "${FRONTEND_REPO_DIGEST}"
    ```
 
-4. Render the real Compose configuration with that immutable digest and recreate only the frontend
-   without allowing Compose to rebuild from the checkout:
+4. Run the checked-in exact-source guard with the same approved full revision and immutable digest.
+   The guard reads `docker-compose.prod.yml` from that Git object rather than the working tree,
+   privately renders it with the repository project directory and `ENV_FILE` (default `.env`),
+   rejects a dirty or unavailable source, a mutable image, a frontend `build` field, or an image
+   mismatch, pulls the exact digest, proves its OCI revision label equals the requested source, and
+   recreates only `frontend` with `--no-build --no-deps`. It reports success only after the
+   recreated container's configured digest, actual image ID, and OCI revision match those reviewed
+   inputs:
 
    ```bash
-   INFERA_FRONTEND_IMAGE="${FRONTEND_REPO_DIGEST}" \
-     docker compose -f docker-compose.prod.yml config --quiet
-   INFERA_FRONTEND_IMAGE="${FRONTEND_REPO_DIGEST}" \
-     docker compose -f docker-compose.prod.yml up \
-       -d --no-build --no-deps --force-recreate frontend
+   ./scripts/frontend-compose-action.sh candidate \
+     --source-revision "${REVIEWED_REVISION}" \
+     --image "${FRONTEND_REPO_DIGEST}"
    INFERA_FRONTEND_IMAGE="${FRONTEND_REPO_DIGEST}" \
      docker compose -f docker-compose.prod.yml ps frontend
    ```
+
+   Never use an on-host `docker-compose.prod.yml`—including
+   `/opt/infera/docker-compose.prod.yml`—as release evidence or an unverified action source. A clean
+   checkout may still be stale. The explicit source revision is the contract.
 
 5. Fetch the canary root document, confirm that its JS/CSS asset names exactly match the approved
    preview, exercise public/login routes, and run normal release verification with the required
@@ -201,14 +214,18 @@ state unchanged:
 
 ```bash
 docker image inspect "${PREVIOUS_FRONTEND_IMAGE_ID}" "${PREVIOUS_FRONTEND_IMAGE_REF}" >/dev/null
-INFERA_FRONTEND_IMAGE="${PREVIOUS_FRONTEND_IMAGE_REF}" \
-  docker compose -f docker-compose.prod.yml up \
-    -d --no-build --no-deps --force-recreate frontend
+./scripts/frontend-compose-action.sh rollback \
+  --source-revision "${PREVIOUS_FRONTEND_SOURCE_REVISION}" \
+  --image "${PREVIOUS_FRONTEND_IMAGE_REF}"
 ```
 
 Run the same root fingerprint and health checks after rollback. Stop and escalate if the recorded
 image ID is missing or the Compose image reference cannot be established; do not rebuild a guessed
-revision during an incident.
+revision during an incident. Configuration or host recovery uses the identical guard with the
+`restore` action, the recorded full source revision, and recorded digest. After the service is
+stable, reconcile the operator checkout to the reviewed revision through the normal reviewed
+checkout/update procedure; checkout reconciliation is follow-up hygiene and never a substitute for
+the exact-source guard.
 
 ## Pinned base images
 

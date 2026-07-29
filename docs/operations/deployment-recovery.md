@@ -14,6 +14,14 @@ failures, and the database owner approves ledger restore or point-in-time recove
   containing frontend changes, use the separately recorded frontend canary and promotion procedure
   in `docs/releases/FRONTEND_RELEASE_BASELINE.md`; do not infer frontend identity from the gateway
   release ID.
+- Every frontend candidate, rollback, or configuration restore must run
+  `scripts/frontend-compose-action.sh` with the recorded full source commit and immutable frontend
+  repo digest. The guard obtains Compose from that exact Git object, proves the rendered frontend
+  has no `build` field and resolves to the requested digest, verifies the digest's OCI revision
+  label equals the requested source, fixes the action scope to `frontend` with `--no-build
+  --no-deps`, and verifies the recreated container still uses that digest, image ID, and revision
+  before reporting success. Never trust an arbitrary on-host Compose file, including
+  `/opt/infera/docker-compose.prod.yml`, as an action source, even when the checkout is clean.
 - Stop/drain old workers before changing the gateway. Workers register only when their release and
   control-plane protocol match the gateway; a mismatch is not an acceptable rolling state.
 - The active ledger writer protocol must match both candidate and rollback manifests before any
@@ -87,12 +95,22 @@ passes.
 
 Back up required configuration as a release bundle before rollout: the candidate and last-known-good
 manifests, the production `.env` template containing secret *names* only, and the selected immutable
-secret-manager version IDs. Store the bundle in the restricted operations vault and record its
+secret-manager version IDs. For a frontend-bearing release, also record its full source revision and
+immutable frontend repo digest. Store the bundle in the restricted operations vault and record its
 SHA-256 checksum. Do not export secret values into the bundle. To drill configuration restore, copy
 the bundle to a clean operator host, verify its checksum, select the recorded secret versions, run
-`./scripts/validate-prod-env.sh`, and render `docker compose -f docker-compose.prod.yml config
---quiet`. The drill passes only when both commands succeed without substituting defaults or printing
-secret values.
+`./scripts/validate-prod-env.sh`, then run:
+
+```bash
+./scripts/frontend-compose-action.sh restore \
+  --source-revision "${RECORDED_FRONTEND_SOURCE_REVISION}" \
+  --image "${RECORDED_FRONTEND_IMAGE_DIGEST}"
+```
+
+The drill passes only when validation and the guarded exact-source restore succeed without
+substituting defaults or printing secret values. After recovery is stable, reconcile the operator
+checkout through the normal reviewed update procedure. Do not use checkout reconciliation in place
+of the exact-source action.
 
 Provider-specific executables receive one manifest path and must be idempotent. The checked-in
 RunPod and Caddy adapters are suitable for the production Compose topology:
@@ -505,6 +523,7 @@ Run the deterministic failure-injection suite on the reviewed commit:
 ```bash
 bash ./scripts/test-release-recovery.sh
 bash ./scripts/test-production-recovery-adapters.sh
+bash ./scripts/test-frontend-compose-action.sh
 bash -n ./scripts/release-recovery.sh ./scripts/compose-release-driver.sh \
   ./scripts/verify-release-manifest.sh ./scripts/audit-ledger-recovery-drill.sh \
   ./scripts/runpod-stop-workers.sh ./scripts/runpod-deploy-workers.sh \

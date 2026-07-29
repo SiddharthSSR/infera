@@ -191,6 +191,7 @@ jobs:
       - name: Test deployment recovery behavior
         run: |
           bash ./scripts/test-build-reviewed-frontend.sh
+          bash ./scripts/test-frontend-compose-action.sh
           bash ./scripts/test-build-reviewed-release-images.sh
           bash ./scripts/test-release-recovery.sh
           bash ./scripts/test-production-recovery-adapters.sh
