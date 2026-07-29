@@ -70,9 +70,11 @@ cat >"${TMP_DIR}/bin/curl" <<'EOF'
 set -eu
 printf 'curl:%s\n' "$*" >>"${TEST_CALLS}"
 output_file=""
+request_data=""
 previous=""
 for arg in "$@"; do
   if [[ "${previous}" == "--output" ]]; then output_file="${arg}"; fi
+  if [[ "${previous}" == "--data" ]]; then request_data="${arg}"; fi
   previous="${arg}"
 done
 if [[ "$*" == *"api.runpod.io/graphql"* ]]; then
@@ -107,6 +109,15 @@ fi
 case "$*" in
   *"-X POST"*)
     [[ "$*" == *'"name": "infera-release-release-1"'* ]]
+    python3 - "${request_data}" "${INFERA_RECOVERY_WORKER_MAX_COST_HOUR:?}" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+expected = float(sys.argv[2])
+if payload.get("max_cost_hour") != expected:
+    raise SystemExit(f"provisioning payload omitted the reviewed max-cost cap: {payload!r}")
+PY
     count=0
     [[ ! -f "${TEST_POST_COUNT}" ]] || count="$(cat "${TEST_POST_COUNT}")"
     count=$((count + 1))
@@ -237,6 +248,7 @@ export COMPOSE_FILE="docker-compose.prod.yml"
 export INFERA_BASE_URL="https://inferai.co.in"
 export INFERA_DASHBOARD_URL="https://dashboard.inferai.co.in"
 export INFERA_RECOVERY_WORKER_MODEL="Qwen/Qwen2.5-7B-Instruct"
+export INFERA_RECOVERY_WORKER_MAX_COST_HOUR="3.5"
 
 # A standalone adapter derives one fixed deadline instead of extending its
 # budget on every remaining-time query.
@@ -306,6 +318,53 @@ run_fallback_case() {
   TEST_MODE=deploy TEST_PROVISION_MODE="${mode}" "$@"
 }
 
+# A missing or invalid cap must stop before even reconciling an existing
+# release-owned provider pod, and therefore before every provider mutation.
+assert_invalid_max_cost_stops_before_provider_mutation() {
+  local configured="${1-__missing__}"
+  printf '%s\n' '[{"id":"orphan-1","name":"infera-release-release-1","desiredStatus":"RUNNING"}]' >"${TEST_RUNPOD_STATE}"
+  rm -f "${TEST_POST_COUNT}"
+  : >"${TEST_CALLS}"
+  if [[ "${configured}" == "__missing__" ]]; then
+    if env -u INFERA_RECOVERY_WORKER_MAX_COST_HOUR TEST_MODE=deploy \
+      "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
+      echo "missing recovery max-cost cap must fail closed" >&2
+      exit 1
+    fi
+  elif INFERA_RECOVERY_WORKER_MAX_COST_HOUR="${configured}" TEST_MODE=deploy \
+    "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"; then
+    echo "invalid recovery max-cost cap must fail closed: ${configured}" >&2
+    exit 1
+  fi
+  [[ ! -e "${TEST_POST_COUNT}" ]]
+  [[ "$(cat "${TEST_RUNPOD_STATE}")" == '[{"id":"orphan-1","name":"infera-release-release-1","desiredStatus":"RUNNING"}]' ]]
+  if grep -q 'api.runpod.io/graphql\|api/instances/provision\|curl-graphql:podTerminate' "${TEST_CALLS}"; then
+    echo "invalid recovery max-cost cap reached a provider operation" >&2
+    exit 1
+  fi
+}
+
+assert_invalid_max_cost_stops_before_provider_mutation
+invalid_max_cost_hours=(
+  ""
+  "0"
+  "-1"
+  "+1"
+  "NaN"
+  "Infinity"
+  "1e0"
+  " 1"
+  "1 "
+  "01"
+  "1."
+  "invalid"
+  "9223372036.854776"
+  "9999999999999999999999999999999999999999999999999999999999999999"
+)
+for invalid_max_cost_hour in "${invalid_max_cost_hours[@]}"; do
+  assert_invalid_max_cost_stops_before_provider_mutation "${invalid_max_cost_hour}"
+done
+
 EVIDENCE_FILE="${TMP_DIR}/worker-evidence.log"
 : >"${EVIDENCE_FILE}"
 chmod 0600 "${EVIDENCE_FILE}"
@@ -316,6 +375,7 @@ run_fallback_case capacity_then_success env \
   INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \
   "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
 [[ "$(cat "${TEST_POST_COUNT}")" == "2" ]]
+[[ "$(grep -c '"max_cost_hour": 3.5' "${TEST_CALLS}")" == "2" ]]
 first_gpu_line="$(grep -n 'gpu_type.*RTX_4090' "${TEST_CALLS}" | head -1 | cut -d: -f1)"
 second_gpu_line="$(grep -n 'gpu_type.*A100_80GB' "${TEST_CALLS}" | head -1 | cut -d: -f1)"
 [[ "${first_gpu_line}" -lt "${second_gpu_line}" ]]
@@ -327,6 +387,7 @@ run_fallback_case legacy_capacity_then_success env \
   INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \
   "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
 [[ "$(cat "${TEST_POST_COUNT}")" == "2" ]]
+[[ "$(grep -c '"max_cost_hour": 3.5' "${TEST_CALLS}")" == "2" ]]
 
 run_fallback_case capacity_with_orphan env \
   INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \

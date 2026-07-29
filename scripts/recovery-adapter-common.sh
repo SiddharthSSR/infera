@@ -115,6 +115,29 @@ recovery_env_value() {
   awk -F= -v wanted="${key}" '$1 == wanted { count++; value=substr($0, index($0, "=") + 1) } END { if (count != 1 || value == "") exit 1; print value }' "${env_file}"
 }
 
+recovery_max_cost_hour() {
+  local configured
+  configured="$(recovery_env_value INFERA_RECOVERY_WORKER_MAX_COST_HOUR)" || return 1
+  python3 - "${configured}" <<'PY'
+import json
+import math
+import re
+import sys
+
+raw = sys.argv[1]
+if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", raw):
+    raise SystemExit(1)
+price = float(raw)
+# Match the RunPod provider's existing maxSupportedHourlyPrice/validHourlyPrice
+# contract: a positive finite price whose nano-USD representation stays below
+# the signed int64 boundary.
+max_supported_hourly_price = float((2**63) - 2) / 1_000_000_000
+if not math.isfinite(price) or price <= 0 or price >= max_supported_hourly_price:
+    raise SystemExit(1)
+print(json.dumps(price, allow_nan=False))
+PY
+}
+
 recovery_configured_gateway_replicas() {
   if [[ -n "${INFERA_GATEWAY_REPLICAS:-}" ]]; then
     printf '%s\n' "${INFERA_GATEWAY_REPLICAS}"

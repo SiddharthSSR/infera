@@ -128,6 +128,7 @@ export INFERA_SMOKE_API_KEY="$(secret-tool lookup service infera-smoke)"
 export INFERA_SMOKE_MODEL=Qwen/Qwen2.5-7B-Instruct
 export INFERA_RECOVERY_WORKER_MODEL=Qwen/Qwen2.5-7B-Instruct
 export INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB,H100
+export INFERA_RECOVERY_WORKER_MAX_COST_HOUR=<reviewed-positive-usd-per-hour-cap>
 export INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=180
 export INFERA_RECOVERY_POST_201_CLEANUP_SECONDS=60
 export INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS=60
@@ -168,7 +169,12 @@ the complete verifier process, so a slow or hung inference continues to fail int
 than extending the recovery window.
 
 The RunPod deployment adapter requires an explicit reviewed `INFERA_RECOVERY_WORKER_MODEL`; it does
-not select a model implicitly. It defaults to one `RTX_4090` vLLM worker. Set the ordered,
+not select a model implicitly. It also requires
+`INFERA_RECOVERY_WORKER_MAX_COST_HOUR` as a positive finite decimal below the gateway provider's
+existing supported hourly-price bound. Missing, zero, signed, exponent-form, non-finite, malformed,
+or out-of-range values fail recovery preflight, before traffic or provider mutation. The canonical
+numeric value is serialized as `max_cost_hour` on every provisioning request, including every
+capacity-only GPU fallback attempt. The adapter defaults to one `RTX_4090` vLLM worker. Set the ordered,
 comma-separated `INFERA_RECOVERY_WORKER_GPU_TYPES` to at most five reviewed values from
 `RTX_4090`, `RTX_4080`, `A100_40GB`, `A100_80GB`, `H100`, and `L40S`. The legacy singleton
 `INFERA_RECOVERY_WORKER_GPU_TYPE` remains supported when the ordered variable is unset; setting both

@@ -9,6 +9,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/recovery-adapter-common.sh"
 
 RELEASE_ID="$(recovery_manifest_value "${MANIFEST}" INFERA_RELEASE_ID)"
+if ! MAX_COST_HOUR="$(recovery_max_cost_hour)"; then
+  echo "ERROR: INFERA_RECOVERY_WORKER_MAX_COST_HOUR must be a positive finite decimal within the supported hourly price range" >&2
+  exit 2
+fi
 ADMIN_KEY="$(recovery_env_value INFERA_ADMIN_KEY)"
 RUNPOD_KEY="$(recovery_env_value RUNPOD_API_KEY)"
 ADMIN_CONFIG=""
@@ -231,7 +235,8 @@ for gpu in "${GPU_CANDIDATES[@]}"; do
   fi
   record_evidence reconcile pass "${gpu}" "${attempt}" none
 
-  PAYLOAD="$(RELEASE_ID="${RELEASE_ID}" MODEL="${MODEL}" GPU_TYPE="${gpu}" ENGINE="${ENGINE}" python3 - <<'PY'
+  PAYLOAD="$(RELEASE_ID="${RELEASE_ID}" MODEL="${MODEL}" GPU_TYPE="${gpu}" ENGINE="${ENGINE}" \
+    MAX_COST_HOUR="${MAX_COST_HOUR}" python3 - <<'PY'
 import json
 import os
 
@@ -241,6 +246,7 @@ print(json.dumps({
     "engine": os.environ["ENGINE"],
     "gpu_type": os.environ["GPU_TYPE"],
     "gpu_count": 1,
+    "max_cost_hour": json.loads(os.environ["MAX_COST_HOUR"]),
     "models": [os.environ["MODEL"]],
 }))
 PY
