@@ -346,9 +346,23 @@ export AWS_CLI_AUTO_PROMPT=off
 : "${INFERA_PROVIDER_KEY_CURRENT_VERSION_ID:?explicit version ID is required}"
 : "${INFERA_RUNTIME_ENV_FILE:?root-only runtime environment path is required}"
 
+test "${EUID}" -eq 0
 test -f "${INFERA_RUNTIME_ENV_FILE}"
 test ! -L "${INFERA_RUNTIME_ENV_FILE}"
+test "$(stat -c '%u' "${INFERA_RUNTIME_ENV_FILE}")" = 0
 test "$(stat -c '%a' "${INFERA_RUNTIME_ENV_FILE}")" = 600
+
+recovered_key=
+runtime_key=
+cleanup_provider_key_memory() {
+  unset recovered_key runtime_key
+}
+exit_provider_key_recovery() {
+  cleanup_provider_key_memory
+  exit 1
+}
+trap cleanup_provider_key_memory EXIT
+trap exit_provider_key_recovery HUP INT TERM
 
 recovered_key="$(
   aws secretsmanager get-secret-value \
@@ -364,7 +378,6 @@ recovered_key="$(
 }
 test -n "${recovered_key}"
 
-runtime_key=
 IFS= read -r -d '' runtime_key < <(
   set +x
   set +a
@@ -394,6 +407,14 @@ separately approved root-only environment update mechanism to set the existing
 not authorize a new file, a new application AWS integration, or automatic synchronization from
 Secrets Manager. Preserve the existing root-only runtime environment permissions and unset
 `recovered_key` immediately after injection.
+
+Only after the approved injection reports success in the same shell, explicitly clear both key
+variables and remove the traps:
+
+```bash
+cleanup_provider_key_memory
+trap - EXIT HUP INT TERM
+```
 
 ### Safe PITR ordering and validation
 
