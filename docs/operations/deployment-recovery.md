@@ -279,6 +279,198 @@ five-minute RPO. Run the drill validation against it, start exactly one gateway 
 DSN, verify health and a one-slot quota test, then atomically rotate all gateways to that DSN. Do not
 restore only one table, reuse a pre-cutover SQLite file, or overlap different writer protocols.
 
+## Provider-credential encryption-key recovery
+
+PostgreSQL backup and PITR preserve encrypted provider and worker credentials, but they do not
+preserve `INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY`. A restored database is unusable if the gateway
+does not receive the matching key. The independent recovery copy is operator-managed in AWS Secrets
+Manager; the application does not read AWS automatically.
+
+The approved recovery secret must retain two distinct version IDs for the same approved key
+revision. After the establishment drill, `AWSCURRENT` identifies the first version and
+`AWSPREVIOUS` identifies the second. Both explicit-version reads must compare equal to the existing
+production value. Do not infer a value from a label alone, and never replace the production runtime
+key merely because an AWS request succeeded.
+
+### Prerequisites and authorization
+
+The incident commander must approve the database restore point, the recorded secret version, and
+the production environment change. The database owner restores PITR to a new isolated database.
+The platform operator works from the designated production host as root with AWS CLI v2, TLS
+certificate validation enabled, and short-lived credentials issued in the configured AWS Region.
+Set these resource identifiers from the restricted incident inventory, outside the Git checkout:
+
+- `AWS_REGION`
+- `INFERA_PROVIDER_KEY_SECRET_ID`
+- `INFERA_PROVIDER_KEY_CURRENT_VERSION_ID`
+- `INFERA_PROVIDER_KEY_PREVIOUS_VERSION_ID`
+- `INFERA_RUNTIME_ENV_FILE`
+
+Do not put resolved secret IDs, account identifiers, ARNs, principals, host addresses, version IDs,
+or credentials in this repository, tickets, evidence, or terminal transcripts. Refuse an unset or
+unexpected Region or resource identifier; do not discover a replacement by listing account-wide
+secrets.
+
+Use separate short-lived permissions:
+
+- A creator, needed only when establishing the recovery secret, has
+  `secretsmanager:CreateSecret` for the approved name pattern and Region.
+- The exact-secret operator has only `secretsmanager:PutSecretValue`,
+  `secretsmanager:DescribeSecret`, `secretsmanager:ListSecretVersionIds`,
+  `secretsmanager:GetSecretValue`, and `secretsmanager:UpdateSecretVersionStage`.
+- A separate auditor may have regional `cloudtrail:LookupEvents`.
+
+Do not grant `SecretsManagerReadWrite`, administrator access, deletion, rotation, replication,
+resource-policy, or account-wide listing permissions. Use the AWS-managed `aws/secretsmanager` KMS
+key for same-account recovery. It needs no explicit `kms:*` permission. A customer-managed KMS key
+is a separate recovery dependency and change requiring its own approval, key policy, runbook, and
+drill.
+
+### Root-only explicit-version retrieval
+
+Start a fresh, non-recorded root shell on the production host. The following pattern fails closed,
+keeps the value out of arguments and stdout, and emits only a boolean. Do not run it with shell or
+AWS debug tracing, through a task runner that records commands, or from a developer machine.
+
+```bash
+set -euo pipefail
+set +x
+set +o history
+HISTFILE=/dev/null
+umask 077
+export AWS_PAGER=''
+export AWS_CLI_AUTO_PROMPT=off
+
+: "${AWS_REGION:?approved AWS Region is required}"
+: "${INFERA_PROVIDER_KEY_SECRET_ID:?approved secret ID is required}"
+: "${INFERA_PROVIDER_KEY_CURRENT_VERSION_ID:?explicit version ID is required}"
+: "${INFERA_RUNTIME_ENV_FILE:?root-only runtime environment path is required}"
+
+test -f "${INFERA_RUNTIME_ENV_FILE}"
+test ! -L "${INFERA_RUNTIME_ENV_FILE}"
+test "$(stat -c '%a' "${INFERA_RUNTIME_ENV_FILE}")" = 600
+
+recovered_key="$(
+  aws secretsmanager get-secret-value \
+    --region "${AWS_REGION}" \
+    --secret-id "${INFERA_PROVIDER_KEY_SECRET_ID}" \
+    --version-id "${INFERA_PROVIDER_KEY_CURRENT_VERSION_ID}" \
+    --version-stage AWSCURRENT \
+    --query SecretString \
+    --output text 2>/dev/null
+)" || {
+  printf '%s\n' 'provider_key_retrieved=false'
+  exit 1
+}
+test -n "${recovered_key}"
+
+runtime_key=
+IFS= read -r -d '' runtime_key < <(
+  set +x
+  set +a
+  . "${INFERA_RUNTIME_ENV_FILE}"
+  printf '%s\0' "${INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY-}"
+)
+
+if [[ -n "${runtime_key}" && "${recovered_key}" == "${runtime_key}" ]]; then
+  printf '%s\n' 'provider_key_matches_runtime=true'
+else
+  printf '%s\n' 'provider_key_matches_runtime=false'
+  unset recovered_key runtime_key
+  exit 1
+fi
+unset runtime_key
+```
+
+The value may exist only in root shell memory, an anonymous pipe, AWS CLI memory, TLS, Secrets
+Manager, and the approved runtime secret-injection path. Never print, encode, hash, checksum, copy,
+or paste it. Never put it in a command argument, history, log, evidence file, clipboard, temporary
+file, repository, task output, or developer machine. Suppress raw AWS errors because they may expose
+resource or principal metadata; record only the operation name and a success boolean.
+
+Recovery is operator-mediated. After the equality gate passes, use the production platform's
+separately approved root-only environment update mechanism to set the existing
+`INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY` runtime variable from `recovered_key`. This runbook does
+not authorize a new file, a new application AWS integration, or automatic synchronization from
+Secrets Manager. Preserve the existing root-only runtime environment permissions and unset
+`recovered_key` immediately after injection.
+
+### Safe PITR ordering and validation
+
+1. Drain customer traffic and stop all gateways that could write to the control-state database.
+2. Restore PostgreSQL PITR to a new database. Never overwrite the active database in place.
+3. Select the explicit key version recorded for that restore point. Retrieve it on the production
+   host and pass the boolean equality gate above before changing any runtime environment.
+4. Inject the recovered key through the existing root-only runtime mechanism, then start exactly
+   one isolated gateway against the restored DSN.
+5. Require gateway startup, health, and an authorized provider-credential decryption smoke check to
+   pass. Evidence may contain only booleans and safe timing/status fields; never provider
+   credentials, tenant data, request payloads, DSNs, or raw errors.
+6. Only after database and key validation passes, atomically rotate all gateways to the restored
+   DSN and matching key, run release verification, and restore traffic.
+
+If the explicit key does not validate the restored ciphertext, stop with traffic drained. Do not
+try versions against the live database, rotate the encryption key, delete encrypted records,
+disable provider authentication, or fall back to plaintext credentials. Page the incident
+commander, database owner, and security owner.
+
+### Version-label rollback
+
+First retrieve both candidate versions with their explicit version IDs and expected stages, compare
+each in memory to the approved runtime value, and emit only:
+
+```text
+current_equals_runtime=true|false
+previous_equals_runtime=true|false
+explicit_versions_equal=true|false
+```
+
+Stop unless all required comparisons are true. To roll `AWSCURRENT` back to the previously recorded
+version, keep all identifiers in the non-recorded root shell and suppress command output:
+
+```bash
+: "${INFERA_PROVIDER_KEY_CURRENT_VERSION_ID:?current version ID is required}"
+: "${INFERA_PROVIDER_KEY_PREVIOUS_VERSION_ID:?previous version ID is required}"
+test "${INFERA_PROVIDER_KEY_CURRENT_VERSION_ID}" != \
+  "${INFERA_PROVIDER_KEY_PREVIOUS_VERSION_ID}"
+
+aws secretsmanager update-secret-version-stage \
+  --region "${AWS_REGION}" \
+  --secret-id "${INFERA_PROVIDER_KEY_SECRET_ID}" \
+  --version-stage AWSCURRENT \
+  --move-to-version-id "${INFERA_PROVIDER_KEY_PREVIOUS_VERSION_ID}" \
+  --remove-from-version-id "${INFERA_PROVIDER_KEY_CURRENT_VERSION_ID}" \
+  >/dev/null 2>&1 || {
+    printf '%s\n' 'provider_key_label_rollback=false'
+    exit 1
+  }
+```
+
+Poll bounded explicit-version reads until the moved-to version resolves with `AWSCURRENT` and the
+moved-from version resolves with `AWSPREVIOUS`. Compare both payloads in memory again and emit only
+`rollback_labels_ok`, `current_equals_runtime`, and `previous_equals_runtime` booleans. Label
+convergence is not proof of value equality. Do not alter the production runtime or database during a
+label-only drill.
+
+### Cleanup, audit, and escalation
+
+Unset every value and credential variable, destroy root-only temporary AWS configuration, terminate
+the root shell, and prove that no temporary IAM user, access key, role, or credential file remains.
+Retain the recovery secret and its two labeled versions. Do not delete a version during incident
+cleanup.
+
+Verify sanitized CloudTrail evidence for `CreateSecret`, `PutSecretValue`, `GetSecretValue`, and
+`UpdateSecretVersionStage`. CloudTrail Event History is regional, retains only 90 days, and is not a
+durable incident archive. If the security or compliance retention requirement exceeds 90 days,
+open a follow-up to create and validate a durable trail or event data store, including its
+S3/IAM/KMS, retention, access-control, and cost boundaries.
+
+The recovery passes only when explicit-version equality, label placement, isolated gateway startup,
+provider-credential decryption, cleanup, and sanitized audit checks all pass. On any false or
+unknown result, keep traffic drained, preserve the isolated database and secret versions, avoid raw
+evidence export, and escalate to the incident commander, database owner, platform owner, and
+security owner.
+
 ## Pilot-readiness evidence
 
 Run the deterministic failure-injection suite on the reviewed commit:
