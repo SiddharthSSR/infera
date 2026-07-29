@@ -263,13 +263,15 @@ type WorkspaceProviderConfigRecord struct {
 
 // Store is a SQLite-backed API key store.
 type Store struct {
-	db                       *sql.DB
-	providerCredentialCipher *providerCredentialCipher
-	lastUsedCh               chan string
-	lastSeenCh               chan string
-	shutdownCh               chan struct{}
-	wg                       sync.WaitGroup
-	closeOnce                sync.Once
+	db                          *sql.DB
+	providerCredentialCipher    *providerCredentialCipher
+	lastUsedCh                  chan string
+	lastSeenCh                  chan string
+	shutdownCh                  chan struct{}
+	wg                          sync.WaitGroup
+	closeOnce                   sync.Once
+	workspaceLifecycleMu        sync.RWMutex
+	workspaceMutationLockedHook func()
 }
 
 var bootstrapKeyPattern = regexp.MustCompile(`^inf_[0-9a-fA-F]{48}$`)
@@ -348,6 +350,14 @@ func (s *Store) migrate() error {
 	return migrate.Run(s.db, authMigrations)
 }
 
+func (s *Store) beginWorkspaceMutation() func() {
+	s.workspaceLifecycleMu.RLock()
+	if s.workspaceMutationLockedHook != nil {
+		s.workspaceMutationLockedHook()
+	}
+	return s.workspaceLifecycleMu.RUnlock
+}
+
 // CreateKey generates a new API key and stores its hash.
 // Returns the full key (only shown once) and the record.
 func (s *Store) CreateKey(name, role string) (string, *KeyRecord, error) {
@@ -384,6 +394,9 @@ func (s *Store) CreateKeyWithPrincipalInWorkspace(workspaceID, name, role, princ
 	if !IsValidPrincipalType(principalType) {
 		return "", nil, fmt.Errorf("invalid principal_type %q", principalType)
 	}
+	unlock := s.beginWorkspaceMutation()
+	defer unlock()
+
 	workspace, err := s.getWorkspace(workspaceID)
 	if err != nil {
 		return "", nil, err
@@ -618,6 +631,9 @@ func (s *Store) CreateKeyFromRawWithPrincipalInWorkspace(workspaceID, fullKey, n
 	if !IsValidPrincipalType(principalType) {
 		return nil, fmt.Errorf("invalid principal_type %q", principalType)
 	}
+	unlock := s.beginWorkspaceMutation()
+	defer unlock()
+
 	workspace, err := s.getWorkspace(workspaceID)
 	if err != nil {
 		return nil, err
@@ -666,6 +682,9 @@ const sessionDuration = 24 * time.Hour
 // CreateSession creates a new session for the given key ID.
 // Returns the raw token (to be set as cookie) and the session record.
 func (s *Store) CreateSession(keyID string) (string, *SessionRecord, error) {
+	unlock := s.beginWorkspaceMutation()
+	defer unlock()
+
 	rawBytes := make([]byte, 32)
 	if _, err := rand.Read(rawBytes); err != nil {
 		return "", nil, fmt.Errorf("failed to generate session token: %w", err)
@@ -827,6 +846,12 @@ func (s *Store) DeactivateWorkspace(workspaceID string) (*WorkspaceRecord, error
 		return nil, ErrDefaultWorkspaceDeactivation
 	}
 
+	s.workspaceLifecycleMu.Lock()
+	defer s.workspaceLifecycleMu.Unlock()
+	return s.deactivateWorkspaceLocked(workspaceID)
+}
+
+func (s *Store) deactivateWorkspaceLocked(workspaceID string) (*WorkspaceRecord, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin workspace deactivation transaction: %w", err)
@@ -1022,6 +1047,8 @@ func (s *Store) SwitchSessionWorkspace(rawToken, workspaceID string) (*SessionRe
 	if workspaceID == "" {
 		return nil, nil, fmt.Errorf("workspace id is required")
 	}
+	unlock := s.beginWorkspaceMutation()
+	defer unlock()
 
 	session, currentKey, err := s.ValidateSession(rawToken)
 	if err != nil {
@@ -1087,6 +1114,9 @@ func (s *Store) UpsertWorkspaceQuota(workspaceID string, monthlyRequestLimit, mo
 	if workspaceID == "" {
 		return nil, fmt.Errorf("workspace id is required")
 	}
+	unlock := s.beginWorkspaceMutation()
+	defer unlock()
+
 	if _, err := s.getWorkspace(workspaceID); err != nil {
 		return nil, err
 	}
@@ -1213,6 +1243,9 @@ func (s *Store) UpsertWorkspaceProviderConfig(workspaceID, provider, apiKey, api
 	if workspaceID == "" || provider == "" {
 		return nil, fmt.Errorf("workspace id and provider are required")
 	}
+	unlock := s.beginWorkspaceMutation()
+	defer unlock()
+
 	if _, err := s.getWorkspace(workspaceID); err != nil {
 		return nil, err
 	}
@@ -1560,6 +1593,9 @@ func (s *Store) CreateWorkspaceInvitation(workspaceID, email, displayName, role,
 	if displayName == "" {
 		displayName = email
 	}
+	unlock := s.beginWorkspaceMutation()
+	defer unlock()
+
 	if _, err := s.getWorkspace(workspaceID); err != nil {
 		return "", nil, err
 	}
@@ -1718,6 +1754,9 @@ func (s *Store) AcceptWorkspaceInvitationForIdentity(rawToken, displayName strin
 }
 
 func (s *Store) acceptWorkspaceInvitation(rawToken, displayName, humanIdentityID string) (*WorkspaceMembershipRecord, string, *KeyRecord, error) {
+	unlock := s.beginWorkspaceMutation()
+	defer unlock()
+
 	tokenHash := hashKey(strings.TrimSpace(rawToken))
 	displayName = strings.TrimSpace(displayName)
 	humanIdentityID = strings.TrimSpace(humanIdentityID)

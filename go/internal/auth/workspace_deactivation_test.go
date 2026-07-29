@@ -209,6 +209,240 @@ func TestDeactivateWorkspaceRejectsDefault(t *testing.T) {
 	}
 }
 
+func TestDeactivateWorkspaceSerializesRacingMutators(t *testing.T) {
+	store := newTestStore(t)
+
+	_, platformAdmin, err := store.CreateKey("platform-admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey platform admin: %v", err)
+	}
+	target, err := store.CreateWorkspace("Concurrent Cleanup Target")
+	if err != nil {
+		t.Fatalf("CreateWorkspace target: %v", err)
+	}
+	_, targetKey, err := store.CreateKeyInWorkspace(target.ID, "target-key", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace target: %v", err)
+	}
+	invitationToken, invitation, err := store.CreateWorkspaceInvitation(
+		target.ID, "racing@example.com", "Racing Member", RoleDeveloper, platformAdmin.ID, time.Now().Add(24*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation racing member: %v", err)
+	}
+
+	nonzeroRequests := int64(999)
+	nonzeroTokens := int64(9999)
+	mutations := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "accept invitation",
+			run: func() error {
+				_, _, _, err := store.AcceptWorkspaceInvitation(invitationToken, "Racing Member")
+				return err
+			},
+		},
+		{
+			name: "create key",
+			run: func() error {
+				_, _, err := store.CreateKeyInWorkspace(target.ID, "late-key", RoleDeveloper)
+				return err
+			},
+		},
+		{
+			name: "create invitation",
+			run: func() error {
+				_, _, err := store.CreateWorkspaceInvitation(
+					target.ID, "late@example.com", "Late Member", RoleDeveloper, platformAdmin.ID, time.Now().Add(24*time.Hour),
+				)
+				return err
+			},
+		},
+		{
+			name: "write quota",
+			run: func() error {
+				_, err := store.UpsertWorkspaceQuota(target.ID, &nonzeroRequests, &nonzeroTokens, false)
+				return err
+			},
+		},
+		{
+			name: "write provider config",
+			run: func() error {
+				_, err := store.UpsertWorkspaceProviderConfig(
+					target.ID, "runpod", "late-api-key", "late-api-secret", "https://example.invalid", nil,
+				)
+				return err
+			},
+		},
+		{
+			name: "create session",
+			run: func() error {
+				_, _, err := store.CreateSession(targetKey.ID)
+				return err
+			},
+		},
+	}
+
+	locked := make(chan struct{}, len(mutations))
+	releaseMutations := make(chan struct{})
+	store.workspaceMutationLockedHook = func() {
+		locked <- struct{}{}
+		<-releaseMutations
+	}
+
+	type mutationResult struct {
+		name string
+		err  error
+	}
+	results := make(chan mutationResult, len(mutations))
+
+	// Hold every mutator after it has acquired the shared lifecycle boundary.
+	// DeactivateWorkspace must wait for all of them to finish, then its cleanup
+	// must remove every operational record they created.
+	for _, mutation := range mutations {
+		mutation := mutation
+		go func() {
+			results <- mutationResult{name: mutation.name, err: mutation.run()}
+		}()
+	}
+	for range mutations {
+		select {
+		case <-locked:
+		case result := <-results:
+			t.Fatalf("%s returned before the lifecycle boundary was released: %v", result.name, result.err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for racing mutators to acquire the workspace lifecycle boundary")
+		}
+	}
+
+	type deactivationResult struct {
+		workspace *WorkspaceRecord
+		err       error
+	}
+	deactivationStarted := make(chan struct{})
+	deactivationDone := make(chan deactivationResult, 1)
+	go func() {
+		close(deactivationStarted)
+		workspace, err := store.DeactivateWorkspace(target.ID)
+		deactivationDone <- deactivationResult{workspace: workspace, err: err}
+	}()
+	<-deactivationStarted
+	close(releaseMutations)
+
+	for range mutations {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("%s failed before deactivation: %v", result.name, result.err)
+		}
+	}
+	store.workspaceMutationLockedHook = nil
+
+	deactivation := <-deactivationDone
+	if deactivation.err != nil {
+		t.Fatalf("DeactivateWorkspace: %v", deactivation.err)
+	}
+	deactivated := deactivation.workspace
+	if deactivated.Status != WorkspaceStatusDeactivated {
+		t.Fatalf("expected deactivated status, got %+v", deactivated)
+	}
+
+	// The same writes queued after the lifecycle transition must all fail and
+	// cannot recreate any operational state after DeactivateWorkspace returns.
+	lateResults := make(chan mutationResult, len(mutations))
+	for _, mutation := range mutations {
+		mutation := mutation
+		go func() {
+			lateResults <- mutationResult{name: mutation.name, err: mutation.run()}
+		}()
+	}
+	for range mutations {
+		result := <-lateResults
+		if result.err == nil {
+			t.Fatalf("%s unexpectedly succeeded after deactivation", result.name)
+		}
+	}
+
+	var activeKeys, activeMemberships, pendingInvitations, acceptedInvitations, sessions, providerConfigs int
+	if err := store.db.QueryRow(`
+		SELECT COUNT(*) FROM api_keys
+		WHERE workspace_id = ? AND status = 'active'`, target.ID).Scan(&activeKeys); err != nil {
+		t.Fatalf("count active keys: %v", err)
+	}
+	if err := store.db.QueryRow(`
+		SELECT COUNT(*) FROM workspace_memberships
+		WHERE workspace_id = ? AND status = 'active'`, target.ID).Scan(&activeMemberships); err != nil {
+		t.Fatalf("count active memberships: %v", err)
+	}
+	if err := store.db.QueryRow(`
+		SELECT COUNT(*) FROM workspace_invitations
+		WHERE workspace_id = ? AND status = 'pending'`, target.ID).Scan(&pendingInvitations); err != nil {
+		t.Fatalf("count pending invitations: %v", err)
+	}
+	if err := store.db.QueryRow(`
+		SELECT COUNT(*) FROM workspace_invitations
+		WHERE workspace_id = ? AND status = 'accepted'`, target.ID).Scan(&acceptedInvitations); err != nil {
+		t.Fatalf("count accepted invitations: %v", err)
+	}
+	if err := store.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM sessions s
+		JOIN api_keys k ON k.id = s.key_id
+		WHERE k.workspace_id = ?`, target.ID).Scan(&sessions); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if err := store.db.QueryRow(`
+		SELECT COUNT(*) FROM workspace_provider_configs
+		WHERE workspace_id = ?`, target.ID).Scan(&providerConfigs); err != nil {
+		t.Fatalf("count provider configs: %v", err)
+	}
+	if activeKeys != 0 || activeMemberships != 0 || pendingInvitations != 0 || sessions != 0 || providerConfigs != 0 {
+		t.Fatalf(
+			"deactivation invariant violated: keys=%d memberships=%d invitations=%d sessions=%d providers=%d",
+			activeKeys, activeMemberships, pendingInvitations, sessions, providerConfigs,
+		)
+	}
+	if acceptedInvitations != 1 {
+		t.Fatalf("expected one preserved pre-deactivation accepted invitation, got %d", acceptedInvitations)
+	}
+
+	var requestLimit, tokenLimit int64
+	var enforceHardLimits int
+	if err := store.db.QueryRow(`
+		SELECT monthly_request_limit, monthly_token_limit, enforce_hard_limits
+		FROM workspace_quotas
+		WHERE workspace_id = ?`, target.ID).Scan(&requestLimit, &tokenLimit, &enforceHardLimits); err != nil {
+		t.Fatalf("load quota invariant: %v", err)
+	}
+	if requestLimit != 0 || tokenLimit != 0 || enforceHardLimits != 1 {
+		t.Fatalf("expected zero hard quota, got requests=%d tokens=%d hard=%d", requestLimit, tokenLimit, enforceHardLimits)
+	}
+
+	var invitationStatus, lateInvitationStatus, keyStatus string
+	if err := store.db.QueryRow(`SELECT status FROM workspace_invitations WHERE id = ?`, invitation.ID).Scan(&invitationStatus); err != nil {
+		t.Fatalf("load retained invitation: %v", err)
+	}
+	if err := store.db.QueryRow(`
+		SELECT status FROM workspace_invitations
+		WHERE workspace_id = ? AND email = ?`, target.ID, "late@example.com").Scan(&lateInvitationStatus); err != nil {
+		t.Fatalf("load racing pending invitation: %v", err)
+	}
+	if err := store.db.QueryRow(`SELECT status FROM api_keys WHERE id = ?`, targetKey.ID).Scan(&keyStatus); err != nil {
+		t.Fatalf("load retained key: %v", err)
+	}
+	if invitationStatus != "accepted" || lateInvitationStatus != "revoked" || keyStatus != "revoked" {
+		t.Fatalf(
+			"unexpected retained history: accepted_invitation=%q pending_invitation=%q key=%q",
+			invitationStatus, lateInvitationStatus, keyStatus,
+		)
+	}
+
+	if _, err := store.DeactivateWorkspace(target.ID); err != nil {
+		t.Fatalf("idempotent DeactivateWorkspace retry: %v", err)
+	}
+}
+
 func TestHandleDeactivateWorkspaceAuthorizationAndRetry(t *testing.T) {
 	_, store, mux := newTestHandlerWithRoutes(t)
 	platformAdminKey, _, err := store.CreateKey("platform-admin", RoleAdmin)
