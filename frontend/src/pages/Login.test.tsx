@@ -56,6 +56,18 @@ describe('Login', () => {
     expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
   })
 
+  it('explains how approved visitors and invitation holders get a human dashboard key', () => {
+    renderLogin(mockOnAuthenticated)
+
+    expect(screen.getByRole('heading', { name: 'Don’t have a dashboard key?' })).toBeInTheDocument()
+    expect(screen.getByText(/Access is approved before sign-in/)).toHaveTextContent(
+      'After approval, a workspace admin issues an active human dashboard key.',
+    )
+    expect(screen.getByText(/Service-account and inference keys cannot start/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Request access/ })).toHaveAttribute('href', '/request-access')
+    expect(screen.getByRole('link', { name: /Accept a workspace invitation/ })).toHaveAttribute('href', '/accept-invite')
+  })
+
   it('shows an accessible error and focuses the field on empty submit', async () => {
     renderLogin(mockOnAuthenticated)
     const input = screen.getByLabelText('Human dashboard key')

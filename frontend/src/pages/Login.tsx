@@ -2,7 +2,14 @@ import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createSession } from '../lib/authAccessClient';
 import { publicAnalytics } from '../lib/publicAnalytics';
-import { ActionButton, ControlInput, LabelText, PublicNav, StatusDot } from '../components/shared';
+import {
+  ActionButton,
+  AppShell,
+  ControlInput,
+  LabelText,
+  PublicNav,
+  StatusDot,
+} from '../components/shared';
 import type { SessionInfo } from '../types';
 
 interface LoginProps {
@@ -80,7 +87,7 @@ export function Login({ onAuthenticated }: LoginProps) {
   };
 
   return (
-    <div className="login-page">
+    <AppShell variant="public" className="login-page">
       <a className="public-skip-link" href="#login-form">Skip to sign in</a>
       <PublicNav title="OPEN INFERENCE CONTROL PLANE" className="login-public-nav" />
 
@@ -163,6 +170,25 @@ export function Login({ onAuthenticated }: LoginProps) {
               </ActionButton>
             </form>
 
+            <section className="login-access-guidance" aria-labelledby="login-access-title">
+              <h2 id="login-access-title">Don’t have a dashboard key?</h2>
+              <p>
+                Access is approved before sign-in. After approval, a workspace admin issues an
+                active human dashboard key. Service-account and inference keys cannot start a
+                dashboard session.
+              </p>
+              <div className="login-access-actions">
+                <Link className="login-access-link" to="/request-access">
+                  <span className="login-access-link-title">Request access</span>
+                  <span>New to Infera? Start with access review.</span>
+                </Link>
+                <Link className="login-access-link" to="/accept-invite">
+                  <span className="login-access-link-title">Accept a workspace invitation</span>
+                  <span>Use the token from your workspace admin.</span>
+                </Link>
+              </div>
+            </section>
+
             <div className="login-help">
               <p id="login-key-help" className="login-help-note">
                 Your key is validated by the gateway. The browser receives a workspace-scoped,
@@ -196,6 +222,6 @@ export function Login({ onAuthenticated }: LoginProps) {
           <Link className="login-back-link" to="/">← Back to product</Link>
         </section>
       </main>
-    </div>
+    </AppShell>
   );
 }
