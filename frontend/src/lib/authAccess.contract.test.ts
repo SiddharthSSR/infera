@@ -90,6 +90,13 @@ describe('auth access contract fixtures', () => {
         status: 403,
         statusText: 'Forbidden',
         headers: { get: () => 'application/json' },
+        json: async () => loadJSONFixture('auth_error_dashboard_access_required.json'),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        headers: { get: () => 'application/json' },
         json: async () => loadJSONFixture('auth_error_workspace_access_required.json'),
       })
       .mockResolvedValueOnce({
@@ -116,6 +123,9 @@ describe('auth access contract fixtures', () => {
 
     await expect(createSession('inf_fixture_service')).rejects.toThrow(
       'Service accounts cannot create dashboard sessions.',
+    );
+    await expect(createSession('inf_fixture_inference_only')).rejects.toThrow(
+      'Dashboard access required.',
     );
     await expect(fetchWorkspaces()).rejects.toThrow(
       'Failed to fetch workspaces (403 Forbidden): Workspace access required.',

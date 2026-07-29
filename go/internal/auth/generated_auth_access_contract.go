@@ -8,6 +8,7 @@ const (
 	AuthAccessFixtureApiKeyCreateRequest                     = "api_key_create_request.json"
 	AuthAccessFixtureApiKeyCreateResponse                    = "api_key_create_response.json"
 	AuthAccessFixtureApiKeysListResponse                     = "api_keys_list_response.json"
+	AuthAccessFixtureAuthErrorDashboardAccessRequired        = "auth_error_dashboard_access_required.json"
 	AuthAccessFixtureAuthErrorInvalidApiKey                  = "auth_error_invalid_api_key.json"
 	AuthAccessFixtureAuthErrorKeyManagementAccessRequired    = "auth_error_key_management_access_required.json"
 	AuthAccessFixtureAuthErrorMethodNotAllowed               = "auth_error_method_not_allowed.json"

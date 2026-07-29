@@ -305,6 +305,29 @@ func TestHandleCreateSessionServiceAccountForbiddenMatchesSharedErrorFixture(t *
 	assertAuthAccessFixtureEqual(t, AuthAccessFixtureAuthErrorServiceAccountSessionForbidden, rec.Body.Bytes(), "")
 }
 
+func TestHandleCreateSessionInferenceOnlyForbiddenMatchesSharedErrorFixture(t *testing.T) {
+	_, store, mux := newTestHandlerWithRoutes(t)
+	userKey, _, err := store.CreateKey("inference-only", RoleUser)
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/session",
+		strings.NewReader(string(loadAuthAccessSessionCreateRequestBody(t, userKey))),
+	)
+	req.Header.Set("Content-Type", "application/json")
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertAuthAccessFixtureEqual(t, AuthAccessFixtureAuthErrorDashboardAccessRequired, rec.Body.Bytes(), "")
+}
+
 func TestHandleGetSessionNoCookieMatchesSharedErrorFixture(t *testing.T) {
 	_, _, mux := newTestHandlerWithRoutes(t)
 
