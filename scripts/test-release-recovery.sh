@@ -419,7 +419,9 @@ if (
   INFERA_RECOVERY_VERIFIER="${TMP_DIR}/verifier" \
   INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL=2 \
   INFERA_RECOVERY_STATE_DIR="${TMP_DIR}/state" \
+  INFERA_RECOVERY_CONTROLLER_SCOPE=designated-single-controller \
   INFERA_RECOVERY_EVIDENCE_DIR="${TMP_DIR}/evidence" \
+  INFERA_RECOVERY_WORKER_MAX_COST_HOUR=3.5 \
   INFERA_STOP_WORKERS_EXECUTABLE="${TMP_DIR}/adapter-spy" \
   INFERA_DEPLOY_WORKERS_EXECUTABLE="${TMP_DIR}/adapter-spy" \
   INFERA_DRAIN_TRAFFIC_EXECUTABLE="${TMP_DIR}/adapter-spy" \
@@ -430,6 +432,32 @@ if (
   exit 1
 fi
 [[ ! -e "${TMP_DIR}/calls" ]] || { echo "adapter ran after incomplete preflight" >&2; exit 1; }
+
+rm -f "${TMP_DIR}/calls"
+if (
+  unset INFERA_RECOVERY_WORKER_MAX_COST_HOUR
+  TEST_CALLS="${TMP_DIR}/calls" \
+  INFERA_RECOVERY_DRIVER="${REPO_ROOT}/scripts/compose-release-driver.sh" \
+  INFERA_RECOVERY_VERIFIER="${TMP_DIR}/verifier" \
+  INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL=2 \
+  INFERA_ENV_FILE=/dev/null \
+  INFERA_RECOVERY_STATE_DIR="${TMP_DIR}/state" \
+  INFERA_RECOVERY_CONTROLLER_SCOPE=designated-single-controller \
+  INFERA_RECOVERY_EVIDENCE_DIR="${TMP_DIR}/evidence" \
+  INFERA_STOP_WORKERS_EXECUTABLE="${TMP_DIR}/adapter-spy" \
+  INFERA_DEPLOY_WORKERS_EXECUTABLE="${TMP_DIR}/adapter-spy" \
+  INFERA_DRAIN_TRAFFIC_EXECUTABLE="${TMP_DIR}/adapter-spy" \
+  INFERA_RESTORE_TRAFFIC_EXECUTABLE="${TMP_DIR}/adapter-spy" \
+  "${REPO_ROOT}/scripts/release-recovery.sh" deploy \
+    "${TMP_DIR}/candidate.manifest" "${TMP_DIR}/stable.manifest"
+); then
+  echo "expected missing recovery max-cost cap to fail coordinated preflight" >&2
+  exit 1
+fi
+[[ ! -e "${TMP_DIR}/calls" ]] || {
+  echo "recovery adapter ran after missing max-cost cap failed preflight" >&2
+  exit 1
+}
 
 mkdir -p "${TMP_DIR}/bin" "${TMP_DIR}/ledger-evidence"
 cat >"${TMP_DIR}/bin/pg_dump" <<'EOF'

@@ -6,6 +6,9 @@ set -euo pipefail
 ACTION="${1:?usage: compose-release-driver.sh <action> <release.manifest>}"
 MANIFEST="${2:?usage: compose-release-driver.sh <action> <release.manifest>}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=recovery-adapter-common.sh
+source "${SCRIPT_DIR}/recovery-adapter-common.sh"
 
 value() {
   awk -F= -v wanted="$2" '$1 == wanted { count++; value=substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$1"
@@ -58,6 +61,10 @@ case "${ACTION}" in
         exit 2
       }
     done
+    recovery_max_cost_hour >/dev/null || {
+      echo "ERROR: INFERA_RECOVERY_WORKER_MAX_COST_HOUR must be a positive finite decimal within the supported hourly price range" >&2
+      exit 2
+    }
     "$(dirname "$0")/validate-prod-env.sh"
     docker compose -f "${COMPOSE_FILE}" config --quiet
     ;;
@@ -83,8 +90,6 @@ case "${ACTION}" in
         [[ "${status}" == "healthy" ]] && healthy=$((healthy + 1))
       done
       if [[ "${healthy}" == "${replicas}" ]]; then
-        # shellcheck source=recovery-adapter-common.sh
-        source "$(dirname "$0")/recovery-adapter-common.sh"
         recovery_assert_gateway_identity "${MANIFEST}" && exit 0
         exit 1
       fi
