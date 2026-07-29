@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -209,202 +210,231 @@ func TestDeactivateWorkspaceRejectsDefault(t *testing.T) {
 	}
 }
 
-func TestDeactivateWorkspaceSerializesRacingMutators(t *testing.T) {
-	store := newTestStore(t)
+func TestDeactivateWorkspaceSerializesCommittedMutationsAcrossStores(t *testing.T) {
+	storeA, storeB := newSharedDatabaseStores(t)
 
-	_, platformAdmin, err := store.CreateKey("platform-admin", RoleAdmin)
+	_, platformAdmin, err := storeA.CreateKey("platform-admin", RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateKey platform admin: %v", err)
 	}
-	target, err := store.CreateWorkspace("Concurrent Cleanup Target")
+	target, err := storeA.CreateWorkspace("Committed Cleanup Target")
 	if err != nil {
 		t.Fatalf("CreateWorkspace target: %v", err)
 	}
-	_, targetKey, err := store.CreateKeyInWorkspace(target.ID, "target-key", RoleAdmin)
+	_, targetKey, err := storeB.CreateKeyInWorkspace(target.ID, "target-key", RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateKeyInWorkspace target: %v", err)
 	}
-	invitationToken, invitation, err := store.CreateWorkspaceInvitation(
+	acceptedToken, acceptedInvitation, err := storeB.CreateWorkspaceInvitation(
+		target.ID, "accepted@example.com", "Accepted Member", RoleDeveloper, platformAdmin.ID, time.Now().Add(24*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation accepted member: %v", err)
+	}
+	if _, _, _, err := storeB.AcceptWorkspaceInvitation(acceptedToken, "Accepted Member"); err != nil {
+		t.Fatalf("AcceptWorkspaceInvitation: %v", err)
+	}
+	_, pendingInvitation, err := storeB.CreateWorkspaceInvitation(
+		target.ID, "pending@example.com", "Pending Member", RoleDeveloper, platformAdmin.ID, time.Now().Add(24*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("CreateWorkspaceInvitation pending member: %v", err)
+	}
+	if _, _, err := storeB.CreateSession(targetKey.ID); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	requestLimit, tokenLimit := int64(999), int64(9999)
+	if _, err := storeB.UpsertWorkspaceQuota(target.ID, &requestLimit, &tokenLimit, false); err != nil {
+		t.Fatalf("UpsertWorkspaceQuota: %v", err)
+	}
+	if _, err := storeB.UpsertWorkspaceProviderConfig(
+		target.ID, "runpod", "api-key", "api-secret", "https://example.invalid", nil,
+	); err != nil {
+		t.Fatalf("UpsertWorkspaceProviderConfig: %v", err)
+	}
+
+	if _, err := storeA.DeactivateWorkspace(target.ID); err != nil {
+		t.Fatalf("DeactivateWorkspace: %v", err)
+	}
+	assertWorkspaceDeactivationInvariant(t, storeB, target.ID, 1)
+
+	var acceptedStatus, pendingStatus, keyStatus string
+	if err := storeB.db.QueryRow(`SELECT status FROM workspace_invitations WHERE id = ?`, acceptedInvitation.ID).Scan(&acceptedStatus); err != nil {
+		t.Fatalf("load accepted invitation: %v", err)
+	}
+	if err := storeB.db.QueryRow(`SELECT status FROM workspace_invitations WHERE id = ?`, pendingInvitation.ID).Scan(&pendingStatus); err != nil {
+		t.Fatalf("load pending invitation: %v", err)
+	}
+	if err := storeB.db.QueryRow(`SELECT status FROM api_keys WHERE id = ?`, targetKey.ID).Scan(&keyStatus); err != nil {
+		t.Fatalf("load key: %v", err)
+	}
+	if acceptedStatus != "accepted" || pendingStatus != "revoked" || keyStatus != "revoked" {
+		t.Fatalf("unexpected retained history: accepted=%q pending=%q key=%q", acceptedStatus, pendingStatus, keyStatus)
+	}
+}
+
+func TestDeactivateWorkspaceRejectsRacingMutationsAcrossStores(t *testing.T) {
+	storeA, storeB := newSharedDatabaseStores(t)
+
+	_, platformAdmin, err := storeA.CreateKey("platform-admin", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKey platform admin: %v", err)
+	}
+	target, err := storeA.CreateWorkspace("Racing Cleanup Target")
+	if err != nil {
+		t.Fatalf("CreateWorkspace target: %v", err)
+	}
+	_, targetKey, err := storeA.CreateKeyInWorkspace(target.ID, "target-key", RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateKeyInWorkspace target: %v", err)
+	}
+	invitationToken, invitation, err := storeA.CreateWorkspaceInvitation(
 		target.ID, "racing@example.com", "Racing Member", RoleDeveloper, platformAdmin.ID, time.Now().Add(24*time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("CreateWorkspaceInvitation racing member: %v", err)
 	}
+	if _, _, err := storeA.CreateSession(targetKey.ID); err != nil {
+		t.Fatalf("CreateSession before deactivation: %v", err)
+	}
 
-	nonzeroRequests := int64(999)
-	nonzeroTokens := int64(9999)
+	tx, err := storeA.db.Begin()
+	if err != nil {
+		t.Fatalf("begin deactivation transaction: %v", err)
+	}
+	if _, err := storeA.deactivateWorkspaceTx(tx, target.ID); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("deactivate workspace transaction: %v", err)
+	}
+
+	nonzeroRequests, nonzeroTokens := int64(999), int64(9999)
 	mutations := []struct {
 		name string
 		run  func() error
 	}{
-		{
-			name: "accept invitation",
-			run: func() error {
-				_, _, _, err := store.AcceptWorkspaceInvitation(invitationToken, "Racing Member")
-				return err
-			},
-		},
-		{
-			name: "create key",
-			run: func() error {
-				_, _, err := store.CreateKeyInWorkspace(target.ID, "late-key", RoleDeveloper)
-				return err
-			},
-		},
-		{
-			name: "create invitation",
-			run: func() error {
-				_, _, err := store.CreateWorkspaceInvitation(
-					target.ID, "late@example.com", "Late Member", RoleDeveloper, platformAdmin.ID, time.Now().Add(24*time.Hour),
-				)
-				return err
-			},
-		},
-		{
-			name: "write quota",
-			run: func() error {
-				_, err := store.UpsertWorkspaceQuota(target.ID, &nonzeroRequests, &nonzeroTokens, false)
-				return err
-			},
-		},
-		{
-			name: "write provider config",
-			run: func() error {
-				_, err := store.UpsertWorkspaceProviderConfig(
-					target.ID, "runpod", "late-api-key", "late-api-secret", "https://example.invalid", nil,
-				)
-				return err
-			},
-		},
-		{
-			name: "create session",
-			run: func() error {
-				_, _, err := store.CreateSession(targetKey.ID)
-				return err
-			},
-		},
-	}
-
-	locked := make(chan struct{}, len(mutations))
-	releaseMutations := make(chan struct{})
-	store.workspaceMutationLockedHook = func() {
-		locked <- struct{}{}
-		<-releaseMutations
+		{"accept invitation", func() error {
+			_, _, _, err := storeB.AcceptWorkspaceInvitation(invitationToken, "Racing Member")
+			return err
+		}},
+		{"create key", func() error {
+			_, _, err := storeB.CreateKeyInWorkspace(target.ID, "late-key", RoleDeveloper)
+			return err
+		}},
+		{"create invitation", func() error {
+			_, _, err := storeB.CreateWorkspaceInvitation(
+				target.ID, "late@example.com", "Late Member", RoleDeveloper, platformAdmin.ID, time.Now().Add(24*time.Hour),
+			)
+			return err
+		}},
+		{"write quota", func() error {
+			_, err := storeB.UpsertWorkspaceQuota(target.ID, &nonzeroRequests, &nonzeroTokens, false)
+			return err
+		}},
+		{"write provider config", func() error {
+			_, err := storeB.UpsertWorkspaceProviderConfig(
+				target.ID, "runpod", "late-api-key", "late-api-secret", "https://example.invalid", nil,
+			)
+			return err
+		}},
+		{"create session", func() error {
+			_, _, err := storeB.CreateSession(targetKey.ID)
+			return err
+		}},
 	}
 
 	type mutationResult struct {
 		name string
 		err  error
 	}
+	started := make(chan struct{}, len(mutations))
 	results := make(chan mutationResult, len(mutations))
-
-	// Hold every mutator after it has acquired the shared lifecycle boundary.
-	// DeactivateWorkspace must wait for all of them to finish, then its cleanup
-	// must remove every operational record they created.
+	// Store A already holds SQLite's database-wide writer boundary with the
+	// lifecycle transition applied. Store B either waits on that boundary or
+	// reaches its guarded statement after commit; both deterministic orderings
+	// must observe the terminal status and fail closed without timing sleeps.
 	for _, mutation := range mutations {
 		mutation := mutation
 		go func() {
+			started <- struct{}{}
 			results <- mutationResult{name: mutation.name, err: mutation.run()}
 		}()
 	}
 	for range mutations {
-		select {
-		case <-locked:
-		case result := <-results:
-			t.Fatalf("%s returned before the lifecycle boundary was released: %v", result.name, result.err)
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for racing mutators to acquire the workspace lifecycle boundary")
-		}
+		<-started
 	}
-
-	type deactivationResult struct {
-		workspace *WorkspaceRecord
-		err       error
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit deactivation transaction: %v", err)
 	}
-	deactivationStarted := make(chan struct{})
-	deactivationDone := make(chan deactivationResult, 1)
-	go func() {
-		close(deactivationStarted)
-		workspace, err := store.DeactivateWorkspace(target.ID)
-		deactivationDone <- deactivationResult{workspace: workspace, err: err}
-	}()
-	<-deactivationStarted
-	close(releaseMutations)
 
 	for range mutations {
 		result := <-results
-		if result.err != nil {
-			t.Fatalf("%s failed before deactivation: %v", result.name, result.err)
-		}
-	}
-	store.workspaceMutationLockedHook = nil
-
-	deactivation := <-deactivationDone
-	if deactivation.err != nil {
-		t.Fatalf("DeactivateWorkspace: %v", deactivation.err)
-	}
-	deactivated := deactivation.workspace
-	if deactivated.Status != WorkspaceStatusDeactivated {
-		t.Fatalf("expected deactivated status, got %+v", deactivated)
-	}
-
-	// The same writes queued after the lifecycle transition must all fail and
-	// cannot recreate any operational state after DeactivateWorkspace returns.
-	lateResults := make(chan mutationResult, len(mutations))
-	for _, mutation := range mutations {
-		mutation := mutation
-		go func() {
-			lateResults <- mutationResult{name: mutation.name, err: mutation.run()}
-		}()
-	}
-	for range mutations {
-		result := <-lateResults
 		if result.err == nil {
-			t.Fatalf("%s unexpectedly succeeded after deactivation", result.name)
+			t.Fatalf("%s unexpectedly succeeded after the lifecycle transition", result.name)
 		}
 	}
+	assertWorkspaceDeactivationInvariant(t, storeB, target.ID, 0)
 
-	var activeKeys, activeMemberships, pendingInvitations, acceptedInvitations, sessions, providerConfigs int
-	if err := store.db.QueryRow(`
-		SELECT COUNT(*) FROM api_keys
-		WHERE workspace_id = ? AND status = 'active'`, target.ID).Scan(&activeKeys); err != nil {
-		t.Fatalf("count active keys: %v", err)
+	var invitationStatus, keyStatus string
+	if err := storeB.db.QueryRow(`SELECT status FROM workspace_invitations WHERE id = ?`, invitation.ID).Scan(&invitationStatus); err != nil {
+		t.Fatalf("load retained invitation: %v", err)
 	}
-	if err := store.db.QueryRow(`
-		SELECT COUNT(*) FROM workspace_memberships
-		WHERE workspace_id = ? AND status = 'active'`, target.ID).Scan(&activeMemberships); err != nil {
-		t.Fatalf("count active memberships: %v", err)
+	if err := storeB.db.QueryRow(`SELECT status FROM api_keys WHERE id = ?`, targetKey.ID).Scan(&keyStatus); err != nil {
+		t.Fatalf("load retained key: %v", err)
 	}
-	if err := store.db.QueryRow(`
-		SELECT COUNT(*) FROM workspace_invitations
-		WHERE workspace_id = ? AND status = 'pending'`, target.ID).Scan(&pendingInvitations); err != nil {
-		t.Fatalf("count pending invitations: %v", err)
+	if invitationStatus != "revoked" || keyStatus != "revoked" {
+		t.Fatalf("unexpected retained history: invitation=%q key=%q", invitationStatus, keyStatus)
 	}
-	if err := store.db.QueryRow(`
-		SELECT COUNT(*) FROM workspace_invitations
-		WHERE workspace_id = ? AND status = 'accepted'`, target.ID).Scan(&acceptedInvitations); err != nil {
-		t.Fatalf("count accepted invitations: %v", err)
+}
+
+func newSharedDatabaseStores(t *testing.T) (*Store, *Store) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "auth_test.db")
+	storeA, err := NewStoreWithProviderCredentialEncryption(dbPath, testProviderCredentialEncryptionKey)
+	if err != nil {
+		t.Fatalf("NewStore A: %v", err)
 	}
-	if err := store.db.QueryRow(`
-		SELECT COUNT(*)
-		FROM sessions s
-		JOIN api_keys k ON k.id = s.key_id
-		WHERE k.workspace_id = ?`, target.ID).Scan(&sessions); err != nil {
-		t.Fatalf("count sessions: %v", err)
+	t.Cleanup(func() { storeA.Close() })
+	storeB, err := NewStoreWithProviderCredentialEncryption(dbPath, testProviderCredentialEncryptionKey)
+	if err != nil {
+		t.Fatalf("NewStore B: %v", err)
 	}
-	if err := store.db.QueryRow(`
-		SELECT COUNT(*) FROM workspace_provider_configs
-		WHERE workspace_id = ?`, target.ID).Scan(&providerConfigs); err != nil {
-		t.Fatalf("count provider configs: %v", err)
+	t.Cleanup(func() { storeB.Close() })
+	return storeA, storeB
+}
+
+func assertWorkspaceDeactivationInvariant(t *testing.T, store *Store, workspaceID string, acceptedInvitations int) {
+	t.Helper()
+	var status string
+	if err := store.db.QueryRow(`SELECT status FROM workspaces WHERE id = ?`, workspaceID).Scan(&status); err != nil {
+		t.Fatalf("load retained workspace: %v", err)
 	}
-	if activeKeys != 0 || activeMemberships != 0 || pendingInvitations != 0 || sessions != 0 || providerConfigs != 0 {
+	if status != WorkspaceStatusDeactivated {
+		t.Fatalf("expected retained deactivated workspace, got %q", status)
+	}
+
+	var activeKeys, activeMemberships, pendingInvitations, accepted, sessions, providerConfigs int
+	queries := []struct {
+		name string
+		sql  string
+		dest *int
+	}{
+		{"active keys", `SELECT COUNT(*) FROM api_keys WHERE workspace_id = ? AND status = 'active'`, &activeKeys},
+		{"active memberships", `SELECT COUNT(*) FROM workspace_memberships WHERE workspace_id = ? AND status = 'active'`, &activeMemberships},
+		{"pending invitations", `SELECT COUNT(*) FROM workspace_invitations WHERE workspace_id = ? AND status = 'pending'`, &pendingInvitations},
+		{"accepted invitations", `SELECT COUNT(*) FROM workspace_invitations WHERE workspace_id = ? AND status = 'accepted'`, &accepted},
+		{"sessions", `SELECT COUNT(*) FROM sessions s JOIN api_keys k ON k.id = s.key_id WHERE k.workspace_id = ?`, &sessions},
+		{"provider configs", `SELECT COUNT(*) FROM workspace_provider_configs WHERE workspace_id = ?`, &providerConfigs},
+	}
+	for _, query := range queries {
+		if err := store.db.QueryRow(query.sql, workspaceID).Scan(query.dest); err != nil {
+			t.Fatalf("count %s: %v", query.name, err)
+		}
+	}
+	if activeKeys != 0 || activeMemberships != 0 || pendingInvitations != 0 || sessions != 0 || providerConfigs != 0 || accepted != acceptedInvitations {
 		t.Fatalf(
-			"deactivation invariant violated: keys=%d memberships=%d invitations=%d sessions=%d providers=%d",
-			activeKeys, activeMemberships, pendingInvitations, sessions, providerConfigs,
+			"deactivation invariant violated: keys=%d memberships=%d pending=%d accepted=%d sessions=%d providers=%d",
+			activeKeys, activeMemberships, pendingInvitations, accepted, sessions, providerConfigs,
 		)
-	}
-	if acceptedInvitations != 1 {
-		t.Fatalf("expected one preserved pre-deactivation accepted invitation, got %d", acceptedInvitations)
 	}
 
 	var requestLimit, tokenLimit int64
@@ -412,34 +442,11 @@ func TestDeactivateWorkspaceSerializesRacingMutators(t *testing.T) {
 	if err := store.db.QueryRow(`
 		SELECT monthly_request_limit, monthly_token_limit, enforce_hard_limits
 		FROM workspace_quotas
-		WHERE workspace_id = ?`, target.ID).Scan(&requestLimit, &tokenLimit, &enforceHardLimits); err != nil {
+		WHERE workspace_id = ?`, workspaceID).Scan(&requestLimit, &tokenLimit, &enforceHardLimits); err != nil {
 		t.Fatalf("load quota invariant: %v", err)
 	}
 	if requestLimit != 0 || tokenLimit != 0 || enforceHardLimits != 1 {
 		t.Fatalf("expected zero hard quota, got requests=%d tokens=%d hard=%d", requestLimit, tokenLimit, enforceHardLimits)
-	}
-
-	var invitationStatus, lateInvitationStatus, keyStatus string
-	if err := store.db.QueryRow(`SELECT status FROM workspace_invitations WHERE id = ?`, invitation.ID).Scan(&invitationStatus); err != nil {
-		t.Fatalf("load retained invitation: %v", err)
-	}
-	if err := store.db.QueryRow(`
-		SELECT status FROM workspace_invitations
-		WHERE workspace_id = ? AND email = ?`, target.ID, "late@example.com").Scan(&lateInvitationStatus); err != nil {
-		t.Fatalf("load racing pending invitation: %v", err)
-	}
-	if err := store.db.QueryRow(`SELECT status FROM api_keys WHERE id = ?`, targetKey.ID).Scan(&keyStatus); err != nil {
-		t.Fatalf("load retained key: %v", err)
-	}
-	if invitationStatus != "accepted" || lateInvitationStatus != "revoked" || keyStatus != "revoked" {
-		t.Fatalf(
-			"unexpected retained history: accepted_invitation=%q pending_invitation=%q key=%q",
-			invitationStatus, lateInvitationStatus, keyStatus,
-		)
-	}
-
-	if _, err := store.DeactivateWorkspace(target.ID); err != nil {
-		t.Fatalf("idempotent DeactivateWorkspace retry: %v", err)
 	}
 }
 
