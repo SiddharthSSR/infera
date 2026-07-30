@@ -160,6 +160,16 @@ describe('Dashboard', () => {
     expect(screen.getByText('7')).toBeInTheDocument()
   })
 
+  it('does not present an unavailable cost read as zero spend', () => {
+    mocks.costs = { data: undefined, isLoading: false, isError: true }
+
+    render(<Dashboard />)
+
+    expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0)
+    expect(screen.getByText('Cost data is unavailable')).toBeInTheDocument()
+    expect(screen.getByText(/shared cost ledger could not be read or reconciled/i)).toBeInTheDocument()
+  })
+
   it('shows a prominent zero-worker warning', () => {
     mocks.workers = { data: [], isLoading: false, isError: false }
     mocks.stats = {

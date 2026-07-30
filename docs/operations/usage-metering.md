@@ -49,3 +49,39 @@ The gateway serializes usage writes through a per-process writer. Request comple
 Migration version 3 removes duplicate legacy rows by retaining the newest row for each workspace/request pair before creating the unique idempotency index. Legacy successful events remain billable and are classified as having unknown accuracy.
 
 PostgreSQL enforces first-write semantics with a unique `(workspace_id, request_id)` key. Quota reservation retries are keyed by execution ID, and transaction-scoped advisory locks serialize each execution and workspace quota period before committed plus in-flight usage is evaluated.
+
+## Cost summary read view
+
+`GET /api/costs` reads provider-infrastructure spend from a shared cost-session
+ledger without changing its response shape. Each session is keyed by workspace,
+instance, and UTC start time, and stores the immutable v1 provider price
+snapshot in integer nano-USD per hour. Identical lifecycle retries are
+idempotent; conflicting starts or stops fail reconciliation.
+
+Every request first reconciles the tenant's durable managed-instance state with
+the shared sessions, then calculates:
+
+- `current_hourly`, `by_provider`, and `by_gpu` from active durable instances;
+- `today_total` and `month_total` by splitting session overlap across UTC
+  half-open windows; and
+- `projected_month` from the current UTC month total and day.
+
+This ledger preserves provider-infrastructure semantics, including paid idle
+capacity. It is intentionally separate from request-attributed
+`inference_audit.cost_nano`, so token/cost accuracy classifications and
+first-write inference identities remain unchanged.
+
+The endpoint returns `503` when durable instance state or the shared ledger is
+unavailable, when lifecycle evidence conflicts, or when the requested month
+predates the shared ledger's coverage marker. Consumers must show the result as
+unavailable rather than converting it to zero.
+
+Migration version 7 creates the shared session schema and coverage marker. It
+does not import legacy `costs.db` rows: those floating-point stop-date
+aggregates lack lifecycle identities, UTC interval boundaries, and reliable
+cross-replica deduplication. Production historical repair therefore requires a
+separately reviewed, stop-the-world export and import with backups,
+deterministic tenant-scoped deduplication, interval reconstruction, and
+post-import reconciliation. Until that repair is approved, pre-cutover month
+queries fail closed. Do not merge replica-local ledgers or repair production
+rows in place.

@@ -319,6 +319,7 @@ export function useDashboardViewState({
   stats,
   instances,
   costs,
+  errorCosts = false,
   models,
   providers,
   deploymentAttempts,
@@ -334,6 +335,7 @@ export function useDashboardViewState({
   stats: Stats | undefined;
   instances: Instance[] | undefined;
   costs: { current_hourly: number; today_total: number; by_provider: Record<string, number> } | undefined;
+  errorCosts?: boolean;
   models: Model[] | undefined;
   providers: ProviderStatus[] | undefined;
   deploymentAttempts: DeploymentAttemptRecord[];
@@ -369,6 +371,14 @@ export function useDashboardViewState({
     const latestVerification = deploymentSummaries.find((summary) => Boolean(summary.attempt.inference_verification));
 
     const billingAttention = buildBillingAttentionQueue(quota, usageRows, costs);
+    const costStateAttention = errorCosts ? [{
+      id: 'cost-state-unavailable',
+      severity: 'warning' as const,
+      title: 'Cost data is unavailable',
+      detail: 'The shared cost ledger could not be read or reconciled, so no spend total is shown.',
+      actionLabel: 'OPEN WORKSPACE',
+      action: 'open_workspace' as const,
+    }] : [];
     const operationalAttentionQueue = buildOperationalAttentionQueue(
       deploymentSummaries,
       connectedProviders.length,
@@ -378,7 +388,7 @@ export function useDashboardViewState({
       servingUnverifiedCount,
       providerGatewayMismatch,
     );
-    const attentionQueue = [...operationalAttentionQueue, ...billingAttention].slice(0, 6);
+    const attentionQueue = [...operationalAttentionQueue, ...costStateAttention, ...billingAttention].slice(0, 6);
 
     const deploymentTrendRecent = deploymentSummaries.slice(0, 6);
     const deploymentTrend = {
@@ -482,9 +492,11 @@ export function useDashboardViewState({
     const deploymentHistoryPreview = deploymentTrend.recent.slice(0, 3);
     const hiddenDeploymentHistoryCount = Math.max(deploymentTrend.recent.length - deploymentHistoryPreview.length, 0);
     const recentActivity = deploymentSummaries.slice(0, 4);
+    const currentHourlyCost = errorCosts ? 'Unavailable' : `$${costs?.current_hourly?.toFixed(2) || '0.00'}`;
+    const todayCost = errorCosts ? 'Unavailable' : `$${costs?.today_total?.toFixed(2) || '0.00'}`;
     const nodeOverviewRows = [
       { label: 'Active Instances', value: String(activeInstances.length), secondary: `${instances?.length || 0} total` },
-      { label: 'Cost / Hour', value: `$${costs?.current_hourly?.toFixed(2) || '0.00'}`, secondary: `$${costs?.today_total?.toFixed(2) || '0.00'} today` },
+      { label: 'Cost / Hour', value: currentHourlyCost, secondary: errorCosts ? 'shared ledger unavailable' : `${todayCost} today` },
       { label: 'Queue Depth', value: String(stats?.requests?.queue_depth || 0), secondary: 'pending' },
       { label: 'Avg GPU Util', value: stats?.gpu?.avg_utilization != null ? `${Math.round(stats.gpu.avg_utilization)}%` : '-', secondary: 'across workers' },
       { label: 'Memory Usage', value: stats?.memory?.total_bytes ? `${((stats.memory.used_bytes / stats.memory.total_bytes) * 100).toFixed(0)}%` : '-', secondary: stats?.memory?.total_bytes ? `${(stats.memory.used_bytes / (1024 ** 3)).toFixed(1)} / ${(stats.memory.total_bytes / (1024 ** 3)).toFixed(1)} GB` : '-' },
@@ -494,8 +506,8 @@ export function useDashboardViewState({
       { label: 'SERVING VERIFIED', value: String(servingVerifiedCount), mono: true },
       { label: 'VERIFY PENDING', value: String(servingUnverifiedCount), mono: true },
       { label: 'QUEUE DEPTH', value: String(stats?.requests?.queue_depth || 0), mono: true },
-      { label: 'CURRENT HOURLY', value: `$${costs?.current_hourly?.toFixed(2) || '0.00'}`, mono: true },
-      { label: 'TODAY TOTAL', value: `$${costs?.today_total?.toFixed(2) || '0.00'}`, mono: true },
+      { label: 'CURRENT HOURLY', value: currentHourlyCost, mono: true },
+      { label: 'TODAY TOTAL', value: todayCost, mono: true },
     ] as const;
     const liveOperationsItems = [
       { label: 'ACTIVE SERVING MODELS', value: String(liveWorkspaceOperations.activeServingModels), mono: true },
@@ -569,6 +581,7 @@ export function useDashboardViewState({
     };
   }, [
     costs,
+    errorCosts,
     deploymentAttempts,
     errorStats,
     errorWorkers,

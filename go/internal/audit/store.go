@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/infera/infera/go/internal/migrate"
+	"github.com/infera/infera/go/internal/providers"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -149,6 +150,38 @@ var auditMigrations = []migrate.Migration{
 		ALTER TABLE inference_audit ADD COLUMN cost_attribution_method TEXT NOT NULL DEFAULT '';
 		ALTER TABLE inference_audit ADD COLUMN cost_observed_concurrency INTEGER NOT NULL DEFAULT 0;`,
 	},
+	{
+		Version:     7,
+		Description: "add shared infrastructure cost sessions",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS infrastructure_cost_metadata (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+		INSERT OR IGNORE INTO infrastructure_cost_metadata (key, value)
+			VALUES (
+				'coverage_start_ms',
+				CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 1
+			);
+		CREATE TABLE IF NOT EXISTS infrastructure_cost_sessions (
+			workspace_id TEXT NOT NULL,
+			instance_id TEXT NOT NULL,
+			started_at_ms INTEGER NOT NULL,
+			stopped_at_ms INTEGER,
+			provider TEXT NOT NULL,
+			gpu_type TEXT NOT NULL,
+			price_snapshot_version TEXT NOT NULL,
+			price_amount_nano INTEGER NOT NULL,
+			price_currency TEXT NOT NULL,
+			price_time_unit TEXT NOT NULL,
+			PRIMARY KEY (workspace_id, instance_id, started_at_ms)
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_infrastructure_cost_open_instance
+			ON infrastructure_cost_sessions(workspace_id, instance_id)
+			WHERE stopped_at_ms IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_infrastructure_cost_workspace_window
+			ON infrastructure_cost_sessions(workspace_id, started_at_ms, stopped_at_ms);`,
+	},
 }
 
 var ErrQuotaExceeded = errors.New("workspace quota exceeded")
@@ -175,7 +208,7 @@ const (
 )
 
 const (
-	postgresSchemaVersion  = "6"
+	postgresSchemaVersion  = "7"
 	postgresWriterProtocol = "2"
 )
 
@@ -208,6 +241,7 @@ type Ledger interface {
 	ReserveQuota(QuotaReservation) error
 	UsageSummary(UsageSummaryQuery) (*UsageSummary, error)
 	UsageByKey(UsageQuery) ([]UsageRow, error)
+	providers.InfrastructureCostLedger
 	Close() error
 }
 
@@ -500,6 +534,31 @@ func migratePostgres(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_quota_reservations_workspace_period ON quota_reservations(workspace_id, period_start_ms, period_end_ms);
 		CREATE INDEX IF NOT EXISTS idx_quota_reservations_expiry ON quota_reservations(expires_at_ms);
+		CREATE TABLE IF NOT EXISTS infrastructure_cost_metadata (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+		INSERT INTO infrastructure_cost_metadata (key, value)
+			VALUES ('coverage_start_ms', CEIL(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000)::BIGINT::TEXT)
+			ON CONFLICT (key) DO NOTHING;
+		CREATE TABLE IF NOT EXISTS infrastructure_cost_sessions (
+			workspace_id TEXT NOT NULL,
+			instance_id TEXT NOT NULL,
+			started_at_ms BIGINT NOT NULL,
+			stopped_at_ms BIGINT,
+			provider TEXT NOT NULL,
+			gpu_type TEXT NOT NULL,
+			price_snapshot_version TEXT NOT NULL,
+			price_amount_nano BIGINT NOT NULL,
+			price_currency TEXT NOT NULL,
+			price_time_unit TEXT NOT NULL,
+			PRIMARY KEY (workspace_id, instance_id, started_at_ms)
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_infrastructure_cost_open_instance
+			ON infrastructure_cost_sessions(workspace_id, instance_id)
+			WHERE stopped_at_ms IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_infrastructure_cost_workspace_window
+			ON infrastructure_cost_sessions(workspace_id, started_at_ms, stopped_at_ms);
 	`
 	for _, statement := range strings.Split(ddl, ";") {
 		if strings.TrimSpace(statement) == "" {

@@ -43,7 +43,9 @@ digest_queries() {
   printf '%s\n' \
     "SELECT 'metadata:' || md5(COALESCE(string_agg(md5(to_jsonb(row_data)::text), '' ORDER BY key), '')) FROM audit_ledger_metadata row_data;" \
     "SELECT 'audit:' || md5(COALESCE(string_agg(md5(to_jsonb(row_data)::text), '' ORDER BY workspace_id, request_id), '')) FROM inference_audit row_data;" \
-    "SELECT 'reservations:' || md5(COALESCE(string_agg(md5(to_jsonb(row_data)::text), '' ORDER BY workspace_id, execution_id), '')) FROM quota_reservations row_data;"
+    "SELECT 'reservations:' || md5(COALESCE(string_agg(md5(to_jsonb(row_data)::text), '' ORDER BY workspace_id, execution_id), '')) FROM quota_reservations row_data;" \
+    "SELECT 'cost-metadata:' || md5(COALESCE(string_agg(md5(to_jsonb(row_data)::text), '' ORDER BY key), '')) FROM infrastructure_cost_metadata row_data;" \
+    "SELECT 'cost-sessions:' || md5(COALESCE(string_agg(md5(to_jsonb(row_data)::text), '' ORDER BY workspace_id, instance_id, started_at_ms), '')) FROM infrastructure_cost_sessions row_data;"
 }
 
 content_digest() {
@@ -82,7 +84,7 @@ record "PASS distinct-database-identities"
 psql "${INFERA_AUDIT_LEDGER_SOURCE_DSN}" -X -q -A -t -v ON_ERROR_STOP=1 >"${LOCK_LOG}" 2>&1 <<SQL &
 BEGIN ISOLATION LEVEL REPEATABLE READ;
 SET LOCAL lock_timeout = '30s';
-LOCK TABLE audit_ledger_metadata, inference_audit, quota_reservations IN SHARE MODE;
+LOCK TABLE audit_ledger_metadata, inference_audit, quota_reservations, infrastructure_cost_metadata, infrastructure_cost_sessions IN SHARE MODE;
 \o '${SNAPSHOT_FILE}'
 SELECT pg_export_snapshot();
 \o

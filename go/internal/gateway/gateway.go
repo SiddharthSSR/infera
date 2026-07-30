@@ -191,6 +191,9 @@ func (g *Gateway) SetVaultHandler(h *vault.Handler) {
 // SetAuditStore sets the inference audit store and starts the serialized writer.
 func (g *Gateway) SetAuditStore(s auditUsageStore) {
 	g.auditStore = s
+	if g.instanceHandlers != nil {
+		g.instanceHandlers.SetAuditStore(s)
+	}
 	g.auditCh = make(chan auditWriteRequest, 1024)
 	g.auditWg.Add(1)
 	go g.runAuditWriter()
