@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/deployments"
 	"github.com/infera/infera/go/internal/providers"
@@ -27,7 +28,27 @@ func setupTestHandlers(t *testing.T) *InstanceHandlers {
 		t.Fatalf("failed to create manager: %v", err)
 	}
 	mgr.RegisterProvider(mock.New())
-	return NewInstanceHandlers(mgr)
+	h := NewInstanceHandlers(mgr)
+	store, err := audit.NewStore(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatalf("failed to create audit store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	h.SetAuditStore(store)
+	setCostReadTimeAfterCoverage(t, h, store)
+	return h
+}
+
+func setCostReadTimeAfterCoverage(t *testing.T, h *InstanceHandlers, store *audit.Store) {
+	t.Helper()
+	coverageStart, err := store.InfrastructureCostCoverageStart()
+	if err != nil {
+		t.Fatalf("read infrastructure cost coverage: %v", err)
+	}
+	costReadTime := time.Date(
+		coverageStart.Year(), coverageStart.Month()+1, 1, 1, 0, 0, 0, time.UTC,
+	)
+	h.now = func() time.Time { return costReadTime }
 }
 
 func newTestDeploymentStore(t *testing.T) *deployments.Store {

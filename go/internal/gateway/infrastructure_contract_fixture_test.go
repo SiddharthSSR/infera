@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infera/infera/go/internal/audit"
 	"github.com/infera/infera/go/internal/auth"
 	"github.com/infera/infera/go/internal/providers"
 )
@@ -104,7 +105,15 @@ func newInfrastructureFixtureHandlers(t *testing.T, withInstance bool) *Instance
 		}
 	}
 
-	return NewInstanceHandlers(manager)
+	h := NewInstanceHandlers(manager)
+	store, err := audit.NewStore(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatalf("create audit store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	h.SetAuditStore(store)
+	setCostReadTimeAfterCoverage(t, h, store)
+	return h
 }
 
 type infrastructureFixtureProvider struct {

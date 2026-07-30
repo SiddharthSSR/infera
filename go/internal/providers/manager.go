@@ -21,11 +21,12 @@ import (
 
 // Manager orchestrates multiple GPU providers.
 type Manager struct {
-	providers       map[ProviderType]Provider
-	instances       instanceStore
-	costs           *CostTracker
-	mu              sync.RWMutex
-	workerBindingMu sync.Mutex
+	providers           map[ProviderType]Provider
+	instances           instanceStore
+	costs               *CostTracker
+	infrastructureCosts InfrastructureCostLedger
+	mu                  sync.RWMutex
+	workerBindingMu     sync.Mutex
 
 	// Configuration
 	defaultProvider           ProviderType
@@ -378,6 +379,9 @@ func (m *Manager) finalizeLifecycle(instanceID string, claimedVersion int64, act
 	if !updated {
 		return fmt.Errorf("provider %s succeeded but lifecycle finalization lost its claim: %w", action, ErrLifecycleConflict)
 	}
+	if err := m.syncInfrastructureCostByID(instanceID); err != nil {
+		return fmt.Errorf("provider %s succeeded but shared cost reconciliation failed: %w", action, err)
+	}
 	return nil
 }
 
@@ -624,6 +628,9 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 			Code:     ProviderErrorNotFound,
 			Message:  "instance can no longer be started because the provider no longer reports it",
 		}
+	}
+	if err := m.syncInfrastructureCostInstance(instance); err != nil {
+		return fmt.Errorf("reconcile prior infrastructure cost session: %w", err)
 	}
 
 	provider, err := m.resolveProvider(instance.WorkspaceID, instance.Provider)
@@ -933,6 +940,16 @@ func (m *Manager) GetCostSummary() *CostSummary {
 
 func (m *Manager) GetCostSummaryForWorkspace(workspaceID string) *CostSummary {
 	return m.costs.GetSummaryByWorkspace(workspaceID)
+}
+
+func instanceAccruesHourlyCost(status InstanceStatus) bool {
+	switch status {
+	case InstanceStatusPending, InstanceStatusProvisioning, InstanceStatusRunning,
+		InstanceStatusStopping, InstanceStatusTerminating:
+		return true
+	default:
+		return false
+	}
 }
 
 // LinkWorker associates a worker with an instance.

@@ -75,7 +75,7 @@ export function Dashboard() {
   const { data: workers, isLoading: loadingWorkers, isError: errorWorkers } = useWorkers(workspaceID);
   const { data: stats, isLoading: loadingStats, isError: errorStats } = useStats();
   const { data: instances, isLoading: loadingInstances } = useInstances();
-  const { data: costs, isLoading: loadingCosts } = useCosts();
+  const { data: costs, isLoading: loadingCosts, isError: errorCosts } = useCosts();
   const { data: models, isLoading: loadingModels } = useModels();
   const { data: providers, isLoading: loadingProviders } = useProviders();
   const { data: deploymentAttempts = [] } = useDeploymentAttempts(workspaceID);
@@ -137,6 +137,7 @@ export function Dashboard() {
     stats,
     instances,
     costs,
+    errorCosts,
     models,
     providers,
     deploymentAttempts,

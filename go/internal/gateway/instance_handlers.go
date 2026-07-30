@@ -19,12 +19,20 @@ type InstanceHandlers struct {
 	manager          *providers.Manager
 	deploymentStore  deploymentHistoryStore
 	benchmarkService BenchmarkService
+	now              func() time.Time
 }
 
 func NewInstanceHandlers(manager *providers.Manager) *InstanceHandlers {
 	return &InstanceHandlers{
 		manager:          manager,
 		benchmarkService: defaultBenchmarkService{},
+		now:              time.Now,
+	}
+}
+
+func (h *InstanceHandlers) SetAuditStore(store auditUsageStore) {
+	if ledger, ok := store.(providers.InfrastructureCostLedger); ok {
+		h.manager.SetInfrastructureCostLedger(ledger)
 	}
 }
 
@@ -447,10 +455,15 @@ func (h *InstanceHandlers) handleCosts(w http.ResponseWriter, r *http.Request) {
 	if !requireGatewayPermission(w, r, auth.PermissionViewUsage, "Usage access required") {
 		return
 	}
-	summary := h.manager.GetCostSummary()
-	current := auth.KeyFromContext(r.Context())
-	if current != nil && effectiveWorkspaceID(current) != auth.DefaultWorkspaceID {
-		summary = h.manager.GetCostSummaryForWorkspace(effectiveWorkspaceID(current))
+
+	summary, err := h.manager.GetSharedCostSummary(currentWorkspaceID(r), h.now())
+	if err != nil {
+		errorType := "cost_state_unavailable"
+		if errors.Is(err, providers.ErrCostHistoryIncomplete) {
+			errorType = "cost_history_incomplete"
+		}
+		writeError(w, http.StatusServiceUnavailable, errorType, "Cost state is temporarily unavailable")
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{

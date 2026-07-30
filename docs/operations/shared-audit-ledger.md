@@ -1,8 +1,9 @@
 # Shared audit and quota ledger operations
 
-PostgreSQL is the production multi-replica source of truth for inference audit events and quota
-reservations. SQLite is supported only when `INFERA_GATEWAY_REPLICAS=1`; a shared filesystem does
-not make SQLite safe for active-active gateways.
+PostgreSQL is the production multi-replica source of truth for inference audit events, quota
+reservations, and infrastructure-cost sessions. SQLite is supported only when
+`INFERA_GATEWAY_REPLICAS=1`; a shared filesystem does not make SQLite safe for active-active
+gateways.
 
 ## Invariants
 
@@ -10,6 +11,8 @@ not make SQLite safe for active-active gateways.
 - A quota decision locks the execution ID and workspace billing period in one transaction, then
   evaluates committed audit usage plus non-expired reservations before inserting a reservation.
 - `(workspace_id, request_id)` preserves the first terminal audit event. Replays must match it.
+- `(workspace_id, instance_id, started_at_ms)` preserves the first provider-price snapshot and the
+  first stop timestamp for each infrastructure-cost session. Conflicting retries fail closed.
 - Writing a terminal audit event and releasing its reservation happen in one transaction.
 - PostgreSQL unavailability fails quota-controlled requests closed and production startup fails if
   the required ledger cannot be opened.
@@ -40,7 +43,11 @@ supported because they have no common quota serialization point.
    migrations, or create/update migration tracking metadata. It fails clearly if the source lacks
    the current audit columns; never let a cutover tool upgrade the evidence copy in place. The tool
    migrates immutable audit history and verifies conflicting first writes. It does not copy
-   transient reservations, so all gateways must remain drained while it runs.
+   transient reservations or infrastructure-cost sessions, so all gateways must remain drained
+   while it runs. If the SQLite ledger has accepted infrastructure-cost sessions, preserve its
+   coverage metadata and session tables in the immutable backup and use a separately reviewed,
+   idempotent cost-session importer before switching traffic. The new PostgreSQL coverage marker
+   otherwise starts at cutover and `/api/costs` fails closed for an earlier requested month.
 4. Set `INFERA_AUDIT_LEDGER_BACKEND=postgres`, the same secret
    `INFERA_AUDIT_LEDGER_DSN` on every replica, and the intended `INFERA_GATEWAY_REPLICAS` value.
    Run `./scripts/validate-prod-env.sh` before starting any gateway.
@@ -51,20 +58,23 @@ supported because they have no common quota serialization point.
 
 Use managed snapshots/PITR or `pg_dump --format=custom` against a transactionally consistent
 snapshot. Restore into a new database, run the gateway once against it to apply compatible schema
-migrations, validate per-workspace counts and token sums, then atomically rotate every replica to
-the restored DSN. Never restore only `quota_reservations` or only `inference_audit`; they form one
-accounting state.
+migrations, validate per-workspace counts, token sums, infrastructure-cost coverage metadata, and
+cost-session totals, then atomically rotate every replica to the restored DSN. Never restore only
+one of `quota_reservations`, `inference_audit`, `infrastructure_cost_metadata`, or
+`infrastructure_cost_sessions`; together they form one accounting state.
 
 Use `scripts/audit-ledger-recovery-drill.sh` and the RPO/RTO and sanitized-evidence procedure in
 `docs/operations/deployment-recovery.md` for the reproducible restore drill.
 
 ## Rollback
 
-Application rollback is safe only to a release that supports PostgreSQL writer protocol `2`.
-Rollback all replicas together and leave them on the same PostgreSQL ledger. Returning to SQLite
-requires a full outage and a separately reviewed PostgreSQL-to-SQLite export; this release does not
-provide that lossy reverse migration. Do not re-enable the pre-cutover SQLite copy after PostgreSQL
-has accepted writes.
+Application rollback is safe only to a release that supports PostgreSQL writer protocol `2` and
+the shared infrastructure-cost read view. Rollback all replicas together and leave them on the same
+PostgreSQL ledger. A protocol-2 release that still reads process-local cost history would regress
+`/api/costs` to replica-dependent results and is not a compatible rollback target. Returning to
+SQLite requires a full outage and a separately reviewed PostgreSQL-to-SQLite export; this release
+does not provide that lossy reverse migration. Do not re-enable the pre-cutover SQLite copy after
+PostgreSQL has accepted writes.
 
 ## Mixed-version behavior
 
@@ -73,4 +83,7 @@ protocol. Protocol `2` scopes reservation identities by workspace; protocol `1` 
 fully drained before the schema upgrade because they assume globally unique execution IDs.
 Pre-INF-42 gateways never connect to this ledger and therefore must not overlap: drain and stop them
 before migration. Schema changes that alter reservation or idempotency semantics must introduce a
-new writer protocol and use a coordinated, non-mixed rollout.
+new writer protocol and use a coordinated, non-mixed rollout. The infrastructure-cost tables are
+an additive protocol-2 migration, but replicas that serve the old process-local cost view must
+still be drained before the first upgraded gateway starts. All replicas must switch to the shared
+cost read view together so a load balancer cannot mix local and durable totals.

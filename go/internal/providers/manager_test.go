@@ -24,6 +24,72 @@ func newTestManager(t *testing.T, config ManagerConfig) *Manager {
 	return mgr
 }
 
+type testInfrastructureCostLedger struct {
+	mu       sync.Mutex
+	coverage time.Time
+	sessions map[string]InfrastructureCostSession
+}
+
+func newTestInfrastructureCostLedger(coverage time.Time) *testInfrastructureCostLedger {
+	return &testInfrastructureCostLedger{
+		coverage: coverage.UTC(),
+		sessions: make(map[string]InfrastructureCostSession),
+	}
+}
+
+func (l *testInfrastructureCostLedger) InfrastructureCostCoverageStart() (time.Time, error) {
+	return l.coverage, nil
+}
+
+func (l *testInfrastructureCostLedger) EnsureInfrastructureCostSession(session InfrastructureCostSession) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	key := fmt.Sprintf("%s/%s/%d", session.WorkspaceID, session.InstanceID, session.StartedAt.UnixMilli())
+	if existing, ok := l.sessions[key]; ok {
+		if existing.WorkspaceID != session.WorkspaceID || existing.InstanceID != session.InstanceID ||
+			existing.Provider != session.Provider || existing.GPUType != session.GPUType ||
+			existing.PriceAmountNano != session.PriceAmountNano || existing.PriceSnapshotVersion != session.PriceSnapshotVersion ||
+			existing.PriceCurrency != session.PriceCurrency || existing.PriceTimeUnit != session.PriceTimeUnit {
+			return errors.New("conflicting cost session")
+		}
+		return nil
+	}
+	l.sessions[key] = session
+	return nil
+}
+
+func (l *testInfrastructureCostLedger) CloseInfrastructureCostSession(workspaceID, instanceID string, startedAt, stoppedAt time.Time) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	key := fmt.Sprintf("%s/%s/%d", workspaceID, instanceID, startedAt.UnixMilli())
+	session, ok := l.sessions[key]
+	if !ok {
+		return errors.New("cost session not found")
+	}
+	if session.StoppedAt != nil && !session.StoppedAt.Equal(stoppedAt) {
+		return errors.New("conflicting stop time")
+	}
+	stoppedAt = stoppedAt.UTC()
+	session.StoppedAt = &stoppedAt
+	l.sessions[key] = session
+	return nil
+}
+
+func (l *testInfrastructureCostLedger) ListInfrastructureCostSessions(workspaceID string, start, end time.Time) ([]InfrastructureCostSession, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var sessions []InfrastructureCostSession
+	for _, session := range l.sessions {
+		if workspaceID != "" && session.WorkspaceID != workspaceID {
+			continue
+		}
+		if session.StartedAt.Before(end) && (session.StoppedAt == nil || session.StoppedAt.After(start)) {
+			sessions = append(sessions, session)
+		}
+	}
+	return sessions, nil
+}
+
 // mockTestProvider is a simple mock for testing the manager
 type mockTestProvider struct {
 	instances map[string]*Instance
@@ -1941,6 +2007,67 @@ func TestManagerGetCostSummary(t *testing.T) {
 	// With 3 instances at $1/hr each, current hourly should be $3
 	if summary.CurrentHourly < 0 {
 		t.Error("CurrentHourly should not be negative")
+	}
+}
+
+func TestManagerCurrentCostSummaryUsesSharedInstanceStore(t *testing.T) {
+	store := newInMemoryInstanceStore()
+	now := time.Date(2026, time.August, 2, 1, 0, 0, 0, time.UTC)
+	ledger := newTestInfrastructureCostLedger(time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC))
+	replicaA, err := NewManagerWithStore(ManagerConfig{Now: func() time.Time { return now }}, store)
+	if err != nil {
+		t.Fatalf("create replica A: %v", err)
+	}
+	t.Cleanup(func() { _ = replicaA.Close() })
+	replicaB, err := NewManagerWithStore(ManagerConfig{Now: func() time.Time { return now }}, store)
+	if err != nil {
+		t.Fatalf("create replica B: %v", err)
+	}
+	t.Cleanup(func() { _ = replicaB.Close() })
+
+	replicaA.SetInfrastructureCostLedger(ledger)
+	replicaB.SetInfrastructureCostLedger(ledger)
+	startedAt := now.Add(-time.Hour)
+	if err := store.put(&Instance{
+		ID: "inst-a", WorkspaceID: "ws_alpha", Provider: ProviderRunPod,
+		GPUType: GPUH100, Status: InstanceStatusRunning, CostPerHour: 2.5,
+		CreatedAt: startedAt, StartedAt: &startedAt,
+	}); err != nil {
+		t.Fatalf("seed active instance: %v", err)
+	}
+	if err := store.put(&Instance{
+		ID: "inst-b", WorkspaceID: "ws_beta", Provider: ProviderVastAI,
+		GPUType: GPUL40S, Status: InstanceStatusRunning, CostPerHour: 9,
+		CreatedAt: startedAt, StartedAt: &startedAt,
+	}); err != nil {
+		t.Fatalf("seed other workspace: %v", err)
+	}
+	stoppedAt := startedAt.Add(30 * time.Minute)
+	if err := store.put(&Instance{
+		ID: "inst-stopped", WorkspaceID: "ws_alpha", Provider: ProviderRunPod,
+		GPUType: GPUH100, Status: InstanceStatusStopped, CostPerHour: 1,
+		CreatedAt: startedAt, StartedAt: &startedAt, StoppedAt: &stoppedAt,
+	}); err != nil {
+		t.Fatalf("seed stopped instance: %v", err)
+	}
+
+	summaryA, err := replicaA.GetSharedCostSummary("ws_alpha", now)
+	if err != nil {
+		t.Fatalf("replica A summary: %v", err)
+	}
+	summaryB, err := replicaB.GetSharedCostSummary("ws_alpha", now)
+	if err != nil {
+		t.Fatalf("replica B summary: %v", err)
+	}
+	if summaryA.CurrentHourly != 2.5 || summaryA.TodayTotal != 3 ||
+		summaryB.CurrentHourly != summaryA.CurrentHourly || summaryB.TodayTotal != summaryA.TodayTotal {
+		t.Fatalf("replicas disagree: A=%+v B=%+v", summaryA, summaryB)
+	}
+	if summaryA.ByProvider[string(ProviderRunPod)] != 2.5 || summaryA.ByGPU[string(GPUH100)] != 2.5 {
+		t.Fatalf("unexpected live breakdown: %+v", summaryA)
+	}
+	if _, ok := summaryA.ByProvider[string(ProviderVastAI)]; ok {
+		t.Fatalf("cross-tenant provider cost leaked: %+v", summaryA)
 	}
 }
 

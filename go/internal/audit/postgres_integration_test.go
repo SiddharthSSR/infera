@@ -13,7 +13,127 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/infera/infera/go/internal/providers"
 )
+
+func TestPostgresInfrastructureCostSessionsAreSharedAcrossReplicas(t *testing.T) {
+	dsn := os.Getenv("INFERA_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("INFERA_TEST_POSTGRES_DSN is not configured")
+	}
+	replicaA, err := NewPostgresStore(dsn)
+	if err != nil {
+		t.Fatalf("open replica A: %v", err)
+	}
+	defer replicaA.Close()
+	replicaB, err := NewPostgresStore(dsn)
+	if err != nil {
+		t.Fatalf("open replica B: %v", err)
+	}
+	defer replicaB.Close()
+
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	workspaceID := "ws_cost_replica_" + suffix
+	concurrentWorkspaceID := workspaceID + "_concurrent"
+	session := providers.InfrastructureCostSession{
+		WorkspaceID: workspaceID, InstanceID: "instance-" + suffix,
+		Provider: string(providers.ProviderRunPod), GPUType: string(providers.GPUH100),
+		PriceSnapshotVersion: providers.PriceSnapshotVersionV1,
+		PriceAmountNano:      2_000_000_000,
+		PriceCurrency:        providers.PriceCurrencyUSD,
+		PriceTimeUnit:        providers.PriceTimeUnitHour,
+		StartedAt:            time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond),
+	}
+	defer func() {
+		_, _ = replicaA.db.Exec(
+			`DELETE FROM infrastructure_cost_sessions WHERE workspace_id IN ($1, $2)`,
+			workspaceID, concurrentWorkspaceID,
+		)
+	}()
+
+	if err := replicaA.EnsureInfrastructureCostSession(session); err != nil {
+		t.Fatalf("replica A ensure: %v", err)
+	}
+	if err := replicaB.EnsureInfrastructureCostSession(session); err != nil {
+		t.Fatalf("replica B identical retry: %v", err)
+	}
+	stoppedAt := session.StartedAt.Add(30 * time.Minute)
+	if err := replicaB.CloseInfrastructureCostSession(
+		session.WorkspaceID, session.InstanceID, session.StartedAt, stoppedAt,
+	); err != nil {
+		t.Fatalf("replica B close: %v", err)
+	}
+	sessions, err := replicaA.ListInfrastructureCostSessions(
+		workspaceID, session.StartedAt, stoppedAt.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("replica A list: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].StoppedAt == nil ||
+		!sessions[0].StoppedAt.Equal(stoppedAt) {
+		t.Fatalf("replica A did not observe replica B state: %+v", sessions)
+	}
+
+	concurrentA := session
+	concurrentA.WorkspaceID = concurrentWorkspaceID
+	concurrentA.InstanceID = "concurrent-" + suffix
+	concurrentA.StartedAt = time.Now().UTC().Truncate(time.Millisecond)
+	concurrentB := concurrentA
+	concurrentB.PriceAmountNano++
+	errA, errB := runConcurrentCostMutations(
+		func() error { return replicaA.EnsureInfrastructureCostSession(concurrentA) },
+		func() error { return replicaB.EnsureInfrastructureCostSession(concurrentB) },
+	)
+	assertExactlyOneConcurrentCostWinner(t, errA, errB)
+	startErrB := errB
+
+	stopA := concurrentA.StartedAt.Add(30 * time.Minute)
+	stopB := stopA.Add(time.Millisecond)
+	errA, errB = runConcurrentCostMutations(
+		func() error {
+			return replicaA.CloseInfrastructureCostSession(
+				concurrentWorkspaceID, concurrentA.InstanceID, concurrentA.StartedAt, stopA,
+			)
+		},
+		func() error {
+			return replicaB.CloseInfrastructureCostSession(
+				concurrentWorkspaceID, concurrentA.InstanceID, concurrentA.StartedAt, stopB,
+			)
+		},
+	)
+	assertExactlyOneConcurrentCostWinner(t, errA, errB)
+
+	concurrentSessions, err := replicaA.ListInfrastructureCostSessions(
+		concurrentWorkspaceID, concurrentA.StartedAt, stopB.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("list concurrent durable winner: %v", err)
+	}
+	if len(concurrentSessions) != 1 || concurrentSessions[0].StoppedAt == nil {
+		t.Fatalf("unexpected concurrent durable winner: %+v", concurrentSessions)
+	}
+	expectedPrice := concurrentA.PriceAmountNano
+	if startErrB == nil {
+		expectedPrice = concurrentB.PriceAmountNano
+	}
+	if concurrentSessions[0].PriceAmountNano != expectedPrice {
+		t.Fatalf(
+			"durable concurrent price does not match successful writer: got=%d want=%d",
+			concurrentSessions[0].PriceAmountNano, expectedPrice,
+		)
+	}
+	expectedStop := stopA
+	if errB == nil {
+		expectedStop = stopB
+	}
+	if !concurrentSessions[0].StoppedAt.Equal(expectedStop) {
+		t.Fatalf(
+			"durable concurrent stop does not match successful writer: got=%s want=%s",
+			concurrentSessions[0].StoppedAt, expectedStop,
+		)
+	}
+}
 
 func TestPostgresCrossProcessQuotaAdmission(t *testing.T) {
 	dsn := os.Getenv("INFERA_TEST_POSTGRES_DSN")
