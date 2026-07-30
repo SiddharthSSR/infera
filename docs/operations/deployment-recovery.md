@@ -144,6 +144,32 @@ Delete the external export through its approved cleanup workflow. Keep validatio
 sanitized recovery evidence in root-only locations (directories mode 0700, files mode 0600), and
 never attach the runtime file or raw command tracing as evidence.
 
+The complete export's recovery API protocol comes only from the canonical
+`.infera-recovery/last-known-good.manifest`. Before copying that non-secret field into an approved
+export, require one private, exact-schema, immutable manifest and verify its protocol field against
+every live gateway. A live release/image mismatch with the rollback manifest is a separate
+deployment gate; it does not authorize deriving or changing the protocol. Do not derive the
+protocol from an image digest. The
+authoritative temporary-worker price ceiling is versioned in
+`deploy/production/infera-production-recovery-policy`; it applies to future recovery provisioning
+and does not authorize a provider action.
+
+Before and after materialization, compare metadata-only runtime snapshots with
+`scripts/production-recovery-verifier.py verify`. Keep snapshots and the expectations document
+root-only and free of runtime environments. The verifier reports every immutable Compose label and
+path condition separately, requires strict service cardinality and checked-in mounts, preserves
+container/image/start-time/restart-count identity, and compares mount sets after canonical ordering.
+Any false result blocks materialization or follow-on runtime action.
+
+```bash
+python3 scripts/production-recovery-verifier.py verify \
+  --before "${PRIVATE_BEFORE_METADATA}" \
+  --after "${PRIVATE_AFTER_METADATA}" \
+  --expectations "${PRIVATE_RUNTIME_EXPECTATIONS}" \
+  --manifest .infera-recovery/last-known-good.manifest \
+  --policy deploy/production/infera-production-recovery-policy
+```
+
 ## Prepare a release set
 
 Build gateway and vLLM worker images from the exact candidate commit through
@@ -235,7 +261,8 @@ export INFERA_SMOKE_API_KEY="$(secret-tool lookup service infera-smoke)"
 export INFERA_SMOKE_MODEL=Qwen/Qwen2.5-7B-Instruct
 export INFERA_RECOVERY_WORKER_MODEL=Qwen/Qwen2.5-7B-Instruct
 export INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB,H100
-export INFERA_RECOVERY_WORKER_MAX_COST_HOUR=<reviewed-positive-usd-per-hour-cap>
+. deploy/production/infera-production-recovery-policy
+export INFERA_RECOVERY_WORKER_MAX_COST_HOUR
 export INFERA_RECOVERY_REGISTRATION_ATTEMPT_SECONDS=180
 export INFERA_RECOVERY_POST_201_CLEANUP_SECONDS=60
 export INFERA_RECOVERY_SMOKE_TIMEOUT_SECONDS=60
@@ -276,12 +303,13 @@ the complete verifier process, so a slow or hung inference continues to fail int
 than extending the recovery window.
 
 The RunPod deployment adapter requires an explicit reviewed `INFERA_RECOVERY_WORKER_MODEL`; it does
-not select a model implicitly. It also requires
-`INFERA_RECOVERY_WORKER_MAX_COST_HOUR` as a positive finite decimal below the gateway provider's
-existing supported hourly-price bound. Missing, zero, signed, exponent-form, non-finite, malformed,
-or out-of-range values fail recovery preflight, before traffic or provider mutation. The canonical
-numeric value is serialized as `max_cost_hour` on every provisioning request, including every
-capacity-only GPU fallback attempt. The adapter defaults to one `RTX_4090` vLLM worker. Set the ordered,
+not select a model implicitly. It also requires the versioned
+`INFERA_RECOVERY_WORKER_MAX_COST_HOUR` policy as a positive finite decimal no greater than
+`$1.00/hour` and below the gateway provider's existing supported hourly-price bound. Missing, zero,
+signed, exponent-form, non-finite, malformed, or out-of-range values fail recovery preflight,
+before traffic or provider mutation. The canonical numeric value is serialized as `max_cost_hour`
+on every provisioning request, including every capacity-only GPU fallback attempt. The adapter
+defaults to one `RTX_4090` vLLM worker. Set the ordered,
 comma-separated `INFERA_RECOVERY_WORKER_GPU_TYPES` to at most five reviewed values from
 `RTX_4090`, `RTX_4080`, `A100_40GB`, `A100_80GB`, `H100`, and `L40S`. The legacy singleton
 `INFERA_RECOVERY_WORKER_GPU_TYPE` remains supported when the ordered variable is unset; setting both

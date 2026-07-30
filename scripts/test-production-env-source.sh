@@ -37,7 +37,7 @@ values.update(
         "INFERA_GATEWAY_REPLICAS": "2",
         "INFERA_AUDIT_LEDGER_BACKEND": "postgres",
         "INFERA_AUDIT_LEDGER_DSN": "postgresql://approved.invalid/infera",
-        "INFERA_RECOVERY_WORKER_MAX_COST_HOUR": "3.5",
+        "INFERA_RECOVERY_WORKER_MAX_COST_HOUR": "1.00",
     }
 )
 with open(output_path, "w", encoding="utf-8") as output:
@@ -128,6 +128,19 @@ assert_rejected conflicting-name run_validator "${CONFLICTING_NAME}"
 if grep -Fq 'SUPER_SECRET_CONFLICTING_VALUE' "${TEST_ROOT}/conflicting-name.output"; then
   fail_test "conflicting-name leaked the conflicting value"
 fi
+
+INVALID_RECOVERY_PROTOCOL="${TEST_ROOT}/invalid-recovery-protocol.env"
+sed 's/^INFERA_RECOVERY_API_PROTOCOL_VERSION=.*/INFERA_RECOVERY_API_PROTOCOL_VERSION=invalid protocol/' \
+  "${SOURCE}" >"${INVALID_RECOVERY_PROTOCOL}"
+chmod 0600 "${INVALID_RECOVERY_PROTOCOL}"
+assert_rejected invalid-recovery-protocol run_validator \
+  "${INVALID_RECOVERY_PROTOCOL}"
+
+OVER_POLICY_COST="${TEST_ROOT}/over-policy-cost.env"
+sed 's/^INFERA_RECOVERY_WORKER_MAX_COST_HOUR=.*/INFERA_RECOVERY_WORKER_MAX_COST_HOUR=1.01/' \
+  "${SOURCE}" >"${OVER_POLICY_COST}"
+chmod 0600 "${OVER_POLICY_COST}"
+assert_rejected over-policy-cost run_validator "${OVER_POLICY_COST}"
 
 SPECIAL_VALUES="${TEST_ROOT}/special-values.env"
 cp "${SOURCE}" "${SPECIAL_VALUES}"
