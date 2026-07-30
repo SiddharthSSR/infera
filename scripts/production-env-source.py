@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
 import shutil
 import stat
 import sys
@@ -58,28 +57,121 @@ class ContractError(Exception):
     pass
 
 
+def parse_quoted_value(raw_value: str, name: str) -> str:
+    quote = raw_value[0]
+    if len(raw_value) < 2 or raw_value[-1] != quote:
+        raise ContractError(f"invalid quoted value syntax for {name}")
+    content = raw_value[1:-1]
+    if quote == "'":
+        if "'" in content or "\\" in content:
+            raise ContractError(f"ambiguous single-quoted value syntax for {name}")
+        return content
+
+    value: list[str] = []
+    escapes = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\", '"': '"'}
+    index = 0
+    while index < len(content):
+        character = content[index]
+        if character == "$":
+            raise ContractError(f"interpolation is not allowed for {name}")
+        if character == '"':
+            raise ContractError(f"ambiguous double-quoted value syntax for {name}")
+        if character != "\\":
+            value.append(character)
+            index += 1
+            continue
+        index += 1
+        if index >= len(content) or content[index] not in escapes:
+            raise ContractError(f"ambiguous double-quoted escape syntax for {name}")
+        value.append(escapes[content[index]])
+        index += 1
+    return "".join(value)
+
+
 def parse_assignment(raw_line: str, line_number: int) -> tuple[str, str] | None:
-    line = raw_line.strip()
-    if not line or line.startswith("#"):
+    if not raw_line.strip() or raw_line.lstrip().startswith("#"):
         return None
-    if line.startswith("export "):
-        line = line[len("export ") :].strip()
-    if "=" not in line:
+    if raw_line != raw_line.strip() or any(
+        ord(character) < 32 or ord(character) == 127 for character in raw_line
+    ):
+        raise ContractError(f"ambiguous whitespace or control syntax on line {line_number}")
+    if "=" not in raw_line:
         raise ContractError(f"invalid assignment on line {line_number}")
-    name, raw_value = line.split("=", 1)
-    name = name.strip()
-    if not name or not (name[0].isalpha() or name[0] == "_"):
+    name, raw_value = raw_line.split("=", 1)
+    if not name or not (
+        name[0].isascii() and (name[0].isalpha() or name[0] == "_")
+    ):
         raise ContractError(f"invalid variable name on line {line_number}")
-    if any(not (character.isalnum() or character == "_") for character in name):
+    if any(
+        not (character.isascii() and (character.isalnum() or character == "_"))
+        for character in name
+    ):
         raise ContractError(f"invalid variable name on line {line_number}")
-    raw_value = raw_value.strip()
+    if not raw_value:
+        return name, ""
+    if raw_value[0] in {"'", '"'}:
+        return name, parse_quoted_value(raw_value, name)
+    if any(
+        character.isspace() or character in {"#", "$", "'", '"', "\\"}
+        for character in raw_value
+    ):
+        raise ContractError(f"ambiguous unquoted value syntax for {name}")
+    return name, raw_value
+
+
+def validate_directory(info: os.stat_result, expected_uid: int, private: bool) -> None:
+    if not stat.S_ISDIR(info.st_mode):
+        raise ContractError("production environment source parent must be a directory")
+    allowed_owners = {0, expected_uid}
+    if info.st_uid not in allowed_owners:
+        raise ContractError("production environment source directory chain has the wrong owner")
+    mode = stat.S_IMODE(info.st_mode)
+    writable_by_others = mode & 0o022
+    safe_sticky_root = (
+        expected_uid != 0 and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
+    )
+    if writable_by_others and not safe_sticky_root:
+        raise ContractError("production environment source directory chain is writable")
+    if private and (info.st_uid != expected_uid or mode & 0o077):
+        raise ContractError("production environment source parent must be owner-only")
+
+
+def open_source_descriptor(path: Path, expected_uid: int) -> int:
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ContractError("no-follow directory traversal is required")
+    components = path.parts[1:]
+    if not components:
+        raise ContractError("production environment source path is incomplete")
+
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    )
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    directory_descriptor = -1
     try:
-        parts = shlex.split(raw_value, comments=True, posix=True)
-    except ValueError as error:
-        raise ContractError(f"invalid value syntax for {name}") from error
-    if len(parts) > 1:
-        raise ContractError(f"ambiguous value syntax for {name}")
-    return name, parts[0] if parts else ""
+        directory_descriptor = os.open("/", directory_flags)
+        validate_directory(
+            os.fstat(directory_descriptor), expected_uid, private=len(components) == 1
+        )
+        for index, component in enumerate(components[:-1]):
+            next_descriptor = os.open(
+                component, directory_flags, dir_fd=directory_descriptor
+            )
+            os.close(directory_descriptor)
+            directory_descriptor = next_descriptor
+            validate_directory(
+                os.fstat(directory_descriptor),
+                expected_uid,
+                private=index == len(components) - 2,
+            )
+        return os.open(components[-1], file_flags, dir_fd=directory_descriptor)
+    except OSError as error:
+        raise ContractError(
+            "production environment source path is unavailable or unsafe"
+        ) from error
+    finally:
+        if directory_descriptor >= 0:
+            os.close(directory_descriptor)
 
 
 def open_validated_source(expected_uid: int) -> dict[str, str]:
@@ -91,15 +183,13 @@ def open_validated_source(expected_uid: int) -> dict[str, str]:
     path = Path(configured)
     if not path.is_absolute():
         raise ContractError("INFERA_PRODUCTION_ENV_FILE must be absolute")
+    if (
+        configured != os.path.normpath(configured)
+        or path.anchor != os.path.sep
+    ):
+        raise ContractError("INFERA_PRODUCTION_ENV_FILE must be a normalized absolute path")
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    if not hasattr(os, "O_NOFOLLOW"):
-        raise ContractError("O_NOFOLLOW is required")
-    flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        raise ContractError("production environment source is unavailable or unsafe") from error
+    descriptor = open_source_descriptor(path, expected_uid)
 
     try:
         info = os.fstat(descriptor)

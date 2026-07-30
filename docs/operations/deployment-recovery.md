@@ -11,10 +11,18 @@ failures, and the database owner approves ledger restore or point-in-time recove
   ID, one worker protocol, and one audit-ledger writer protocol. Never mix fields from two manifests.
 - Every production deployment, recovery, provider, and Prometheus adapter gets runtime configuration
   from the one explicit `INFERA_PRODUCTION_ENV_FILE` source. The path must be absolute and name a
-  root-owned regular file with no group/world access; symlinks, legacy env selectors, duplicate
-  names, missing required names, and ambient production variables fail closed. Adapters never
-  reconstruct credentials from containers or process environments. Compose always receives the
-  exact validated source and only release-manifest identity/image fields may override it.
+  root-owned, single-linked regular file with mode 0400 or 0600. Every component is opened without
+  following symlinks; the directory chain must be root-owned and non-writable by other users, and
+  the immediate parent must be owner-only. Symlinks, legacy env selectors, duplicate names, missing
+  required names, and ambient production variables fail closed. Adapters never reconstruct
+  credentials from containers or process environments. Compose always receives the exact validated
+  source and only release-manifest identity/image fields may override it.
+- The source uses a deliberately restricted Compose dotenv subset: assignments have no surrounding
+  whitespace; unquoted values cannot contain whitespace, quotes, backslashes, `#`, or `$`;
+  single-quoted values are literal and cannot contain a quote or backslash; and double-quoted values
+  allow only `\n`, `\r`, `\t`, `\\`, and `\"` escapes and cannot contain `$`. Put literal `#`,
+  whitespace, `$`, or `${...}` in single quotes. Inline comments and interpolation are rejected so
+  validation, value lookup, and Compose cannot assign different values.
 - The current immutable release set does not include the Compose frontend image. A coordinated
   gateway/worker rollout therefore does not promote or roll back frontend source. For a release
   containing frontend changes, use the separately recorded frontend canary and promotion procedure
@@ -81,7 +89,9 @@ the complete production dotenv document; never reconstruct it from containers, `
 
 From the exact reviewed checkout, in a fresh non-recorded root shell, set
 `APPROVED_ENV_EXPORT` to the absolute root-only file materialized by the approved external secret
-workflow. Do not put values in the command line:
+workflow. That workflow must place the export beneath a root-owned, non-writable directory chain
+with an owner-only immediate parent; no component may be a symlink. The export must already use the
+restricted dotenv syntax above. Do not put values in the command line:
 
 ```bash
 set -euo pipefail

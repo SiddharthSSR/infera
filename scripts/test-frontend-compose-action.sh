@@ -11,7 +11,8 @@ fail() {
   exit 1
 }
 
-test_root="$(mktemp -d "${TMPDIR:-/tmp}/infera-frontend-compose-test.XXXXXX")"
+root_test_base="$(python3 -c 'import os, pwd; print(os.path.realpath(pwd.getpwuid(0).pw_dir))')"
+test_root="$(mktemp -d "${root_test_base}/.infera-frontend-compose-test.XXXXXX")"
 cleanup() {
   rm -rf -- "${test_root}"
 }

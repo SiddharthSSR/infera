@@ -8,7 +8,8 @@ if [[ "$(id -u)" -ne 0 ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TMP_DIR="$(mktemp -d)"
+ROOT_TEST_BASE="$(python3 -c 'import os, pwd; print(os.path.realpath(pwd.getpwuid(0).pw_dir))')"
+TMP_DIR="$(mktemp -d "${ROOT_TEST_BASE}/.infera-recovery-test.XXXXXX")"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 mkdir -p "${TMP_DIR}/bin"
 

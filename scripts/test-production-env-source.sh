@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TEST_ROOT="$(mktemp -d)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+TEST_ROOT="$(mktemp -d "${REPO_ROOT}/.production-env-test.XXXXXX")"
 trap 'rm -rf "${TEST_ROOT}"' EXIT
 
 EXPECTED_UID="$(id -u)"
@@ -85,6 +87,19 @@ ln -s "${SOURCE}" "${TEST_ROOT}/source-link"
 assert_rejected symlink-source run_validator "${TEST_ROOT}/source-link"
 assert_rejected non-regular-source run_validator "${TEST_ROOT}"
 
+mkdir "${TEST_ROOT}/real-parent"
+chmod 0700 "${TEST_ROOT}/real-parent"
+write_valid_source "${TEST_ROOT}/real-parent/production.env"
+ln -s "${TEST_ROOT}/real-parent" "${TEST_ROOT}/linked-parent"
+assert_rejected symlink-parent run_validator \
+  "${TEST_ROOT}/linked-parent/production.env"
+
+mkdir "${TEST_ROOT}/unsafe-parent"
+chmod 0750 "${TEST_ROOT}/unsafe-parent"
+write_valid_source "${TEST_ROOT}/unsafe-parent/production.env"
+assert_rejected unsafe-parent-mode run_validator \
+  "${TEST_ROOT}/unsafe-parent/production.env"
+
 UNSAFE_MODE="${TEST_ROOT}/unsafe-mode.env"
 cp "${SOURCE}" "${UNSAFE_MODE}"
 chmod 0640 "${UNSAFE_MODE}"
@@ -113,6 +128,49 @@ assert_rejected conflicting-name run_validator "${CONFLICTING_NAME}"
 if grep -Fq 'SUPER_SECRET_CONFLICTING_VALUE' "${TEST_ROOT}/conflicting-name.output"; then
   fail_test "conflicting-name leaked the conflicting value"
 fi
+
+SPECIAL_VALUES="${TEST_ROOT}/special-values.env"
+cp "${SOURCE}" "${SPECIAL_VALUES}"
+printf '%s\n' \
+  'TEST_UNQUOTED=safe-._~:/?@!%+=,' \
+  'TEST_SINGLE='\''literal # $ ${NOT_EXPANDED} with spaces'\''' \
+  'TEST_DOUBLE="double # value with spaces and \"quotes\" and \\slash"' \
+  >>"${SPECIAL_VALUES}"
+chmod 0600 "${SPECIAL_VALUES}"
+run_validator "${SPECIAL_VALUES}" >/dev/null
+[[ "$(
+  INFERA_PRODUCTION_ENV_FILE="${SPECIAL_VALUES}" \
+    "${VALIDATOR[@]}" value TEST_UNQUOTED --expected-uid "${EXPECTED_UID}"
+)" == 'safe-._~:/?@!%+=,' ]]
+[[ "$(
+  INFERA_PRODUCTION_ENV_FILE="${SPECIAL_VALUES}" \
+    "${VALIDATOR[@]}" value TEST_SINGLE --expected-uid "${EXPECTED_UID}"
+)" == 'literal # $ ${NOT_EXPANDED} with spaces' ]]
+[[ "$(
+  INFERA_PRODUCTION_ENV_FILE="${SPECIAL_VALUES}" \
+    "${VALIDATOR[@]}" value TEST_DOUBLE --expected-uid "${EXPECTED_UID}"
+)" == 'double # value with spaces and "quotes" and \slash' ]]
+
+UNQUOTED_INTERPOLATION="${TEST_ROOT}/unquoted-interpolation.env"
+cp "${SOURCE}" "${UNQUOTED_INTERPOLATION}"
+printf '%s\n' 'TEST_EXPANSION=${SUPER_SECRET_MUST_NOT_LEAK}' \
+  >>"${UNQUOTED_INTERPOLATION}"
+chmod 0600 "${UNQUOTED_INTERPOLATION}"
+assert_rejected unquoted-interpolation run_validator "${UNQUOTED_INTERPOLATION}"
+
+DOUBLE_INTERPOLATION="${TEST_ROOT}/double-interpolation.env"
+cp "${SOURCE}" "${DOUBLE_INTERPOLATION}"
+printf '%s\n' 'TEST_EXPANSION="${SUPER_SECRET_MUST_NOT_LEAK}"' \
+  >>"${DOUBLE_INTERPOLATION}"
+chmod 0600 "${DOUBLE_INTERPOLATION}"
+assert_rejected double-interpolation run_validator "${DOUBLE_INTERPOLATION}"
+
+AMBIGUOUS_COMMENT="${TEST_ROOT}/ambiguous-comment.env"
+cp "${SOURCE}" "${AMBIGUOUS_COMMENT}"
+printf '%s\n' 'TEST_COMMENT=SUPER_SECRET_MUST_NOT_LEAK # comment' \
+  >>"${AMBIGUOUS_COMMENT}"
+chmod 0600 "${AMBIGUOUS_COMMENT}"
+assert_rejected ambiguous-inline-comment run_validator "${AMBIGUOUS_COMMENT}"
 
 mkdir "${TEST_ROOT}/bin"
 cat >"${TEST_ROOT}/bin/docker" <<'EOF'

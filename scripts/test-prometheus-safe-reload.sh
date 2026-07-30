@@ -8,7 +8,8 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-TEST_ROOT="$(mktemp -d)"
+ROOT_TEST_BASE="$(python3 -c 'import os, pwd; print(os.path.realpath(pwd.getpwuid(0).pw_dir))')"
+TEST_ROOT="$(mktemp -d "${ROOT_TEST_BASE}/.infera-prometheus-test.XXXXXX")"
 trap 'rm -rf "${TEST_ROOT}"' EXIT
 python3 "${REPO_ROOT}/scripts/write-production-env-test-fixture.py" \
   "${TEST_ROOT}/production.env" --gateway-replicas 2
