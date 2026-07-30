@@ -408,7 +408,7 @@ export function WorkspaceAdmin() {
   if (loading) return <WorkspaceSkeleton />;
 
   return (
-    <div className="workspace-page animate-fade-in">
+    <main className="workspace-page animate-fade-in">
       {createdInviteToken && (
         <div style={{
           padding: '1.25rem 2rem',
@@ -927,6 +927,6 @@ export function WorkspaceAdmin() {
         </div>
       </GridRow>
       )}
-    </div>
+    </main>
   );
 }

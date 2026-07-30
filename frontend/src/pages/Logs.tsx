@@ -20,33 +20,6 @@ const LEVEL_COLORS: Record<LogLevel, string> = {
   debug: 'var(--text-secondary)',
 };
 
-function generateMockLog(): LogEntry {
-  const levels: LogEntry['level'][] = ['info', 'info', 'info', 'debug', 'warn', 'error'];
-  const sources = ['GATEWAY-01', 'WORKER-02', 'SCHEDULER', 'AUTOSCALER', 'INFERENCE-01', 'NODE-MANAGER'];
-  const messages = [
-    'Request accepted: model inference [req_9a2b8c]',
-    'KV Cache hit rate: 0.92 for block 8410',
-    'Streaming response completed in 412ms',
-    'Health check passed. Latency stable.',
-    'Prefill phase latency: 12ms | Decoding: 40 tokens/sec',
-    'New configuration applied: Max Batch Size = 64',
-    'Worker heartbeat received',
-    'GPU utilization: 65%',
-    'Rate limit warning: 90% capacity',
-    'Node approaching thermal threshold (82C)',
-    'CUDA_OUT_OF_MEMORY: Failed to allocate attention_mask',
-    'Re-routing pending tasks to cluster-us-east-b',
-  ];
-
-  return {
-    id: Math.random().toString(36).slice(2),
-    timestamp: new Date(),
-    level: levels[Math.floor(Math.random() * levels.length)],
-    source: sources[Math.floor(Math.random() * sources.length)],
-    message: messages[Math.floor(Math.random() * messages.length)],
-  };
-}
-
 /* ------------------------------------------------------------------ */
 /*  Search highlight                                                    */
 /* ------------------------------------------------------------------ */
@@ -148,51 +121,16 @@ function useVirtualScroll(containerRef: React.RefObject<HTMLDivElement | null>, 
 /*  Logs page                                                           */
 /* ------------------------------------------------------------------ */
 
-const REFRESH_OPTIONS = [
-  { label: '1s', ms: 1000 },
-  { label: '5s', ms: 5000 },
-  { label: '10s', ms: 10000 },
-  { label: '30s', ms: 30000 },
-] as const;
-
 export function Logs() {
   const isMobile = useIsMobile(900);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [isStreaming, setIsStreaming] = useState(true);
-  const [refreshInterval, setRefreshInterval] = useState(5000);
+  const isStreaming = false;
   const [activeLevels, setActiveLevels] = useState<Set<LogLevel>>(new Set(LOG_LEVELS));
   const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
-  const [newLogIds, setNewLogIds] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    const initial = Array.from({ length: 50 }, generateMockLog);
-    setLogs(initial);
-  }, []);
-
-  useEffect(() => {
-    if (!isStreaming) return;
-    const interval = setInterval(() => {
-      const entry = generateMockLog();
-      setNewLogIds(prev => {
-        const next = new Set(prev);
-        next.add(entry.id);
-        return next;
-      });
-      setLogs(prev => [...prev, entry].slice(-10000));
-      // Clear the animation flag after it completes
-      setTimeout(() => {
-        setNewLogIds(prev => {
-          const next = new Set(prev);
-          next.delete(entry.id);
-          return next;
-        });
-      }, 350);
-    }, refreshInterval);
-    return () => clearInterval(interval);
-  }, [isStreaming, refreshInterval]);
+  const newLogIds = useMemo(() => new Set<string>(), []);
 
   // Auto-scroll when streaming and user is at the bottom
   useEffect(() => {
@@ -254,7 +192,7 @@ export function Logs() {
   };
 
   return (
-    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: isMobile ? 'calc(100vh - 124px)' : 'calc(100vh - 160px)', overflow: 'hidden' }}>
+    <main className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: isMobile ? 'calc(100vh - 124px)' : 'calc(100vh - 160px)', overflow: 'hidden' }}>
       {/* Filter Bar */}
       <div style={{
         backgroundColor: 'var(--bg-accent)',
@@ -307,40 +245,17 @@ export function Logs() {
           </div>
           <div style={{ display: 'grid', gap: '0.35rem' }}>
             <LabelText as="div">STREAM</LabelText>
-            <button
-              type="button"
-              className="log-stream-toggle"
-              onClick={() => setIsStreaming(v => !v)}
-            >
+            <div className="log-stream-toggle" role="status">
               <span
                 className="log-stream-dot"
                 style={{
-                  background: isStreaming ? 'var(--color-success)' : 'var(--border-color)',
-                  animation: isStreaming ? 'status-pulse 1.5s ease-in-out infinite' : 'none',
+                  background: 'var(--border-color)',
+                  animation: 'none',
                 }}
               />
-              <span style={{ color: isStreaming ? 'var(--color-success)' : 'var(--text-secondary)', fontWeight: 600 }}>
-                {isStreaming ? 'LIVE' : 'PAUSED'}
+              <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                UNAVAILABLE
               </span>
-            </button>
-          </div>
-          <div style={{ display: 'grid', gap: '0.35rem' }}>
-            <LabelText as="div">INTERVAL</LabelText>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              {REFRESH_OPTIONS.map(opt => (
-                <button
-                  key={opt.ms}
-                  type="button"
-                  className="log-interval-btn"
-                  style={{
-                    color: refreshInterval === opt.ms ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    borderBottomColor: refreshInterval === opt.ms ? 'var(--text-primary)' : 'transparent',
-                  }}
-                  onClick={() => setRefreshInterval(opt.ms)}
-                >
-                  {opt.label}
-                </button>
-              ))}
             </div>
           </div>
         </div>
@@ -349,7 +264,12 @@ export function Logs() {
       {/* Log Table */}
       {isMobile ? (
         <div ref={logsContainerRef} aria-live="polite" style={{ flexGrow: 1, overflowY: 'auto', minHeight: 0, padding: '1rem' }}>
-          <div style={{ height: totalHeight, position: 'relative' }}>
+          <div style={{ height: filteredLogs.length === 0 ? 'auto' : totalHeight, position: 'relative' }}>
+            {filteredLogs.length === 0 && (
+              <div className="empty-state-copy" role="status">
+                No runtime log source is connected. This page does not generate sample events.
+              </div>
+            )}
             <div style={{ position: 'absolute', top: offsetY, left: 0, right: 0 }}>
               {visibleRows.map(log => (
                 <div
@@ -382,21 +302,28 @@ export function Logs() {
           <table className="responsive-scroll-x-content" style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
             <thead>
               <tr>
-                <th scope="col" className="label-text" style={{ textAlign: 'left', padding: '1rem 2rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)', zIndex: 1 }}>
+                <th scope="col" className="log-table-heading" style={{ textAlign: 'left', padding: '1rem 2rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)', zIndex: 1 }}>
                   Timestamp
                 </th>
-                <th scope="col" className="label-text" style={{ textAlign: 'left', padding: '1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)', zIndex: 1 }}>
+                <th scope="col" className="log-table-heading" style={{ textAlign: 'left', padding: '1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)', zIndex: 1 }}>
                   Level
                 </th>
-                <th scope="col" className="label-text" style={{ textAlign: 'left', padding: '1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)', zIndex: 1 }}>
+                <th scope="col" className="log-table-heading" style={{ textAlign: 'left', padding: '1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)', zIndex: 1 }}>
                   Source
                 </th>
-                <th scope="col" className="label-text" style={{ textAlign: 'left', padding: '1rem 2rem 1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)', zIndex: 1 }}>
+                <th scope="col" className="log-table-heading" style={{ textAlign: 'left', padding: '1rem 2rem 1rem 0.5rem', borderBottom: 'var(--grid-line)', position: 'sticky', top: 0, background: 'var(--bg-paper)', zIndex: 1 }}>
                   Message
                 </th>
               </tr>
             </thead>
             <tbody aria-live="polite">
+              {filteredLogs.length === 0 && (
+                <tr>
+                  <td colSpan={4} style={{ padding: '2rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                    No runtime log source is connected. This page does not generate sample events.
+                  </td>
+                </tr>
+              )}
               {/* Spacer for rows above visible range */}
               {startIndex > 0 && (
                 <tr aria-hidden="true">
@@ -439,23 +366,18 @@ export function Logs() {
       {/* Footer */}
       <GridRow style={{ borderTop: 'var(--grid-line)' }}>
         <Cell>
-          <LabelText as="div">LIVE STATUS</LabelText>
+          <LabelText as="div">SOURCE STATUS</LabelText>
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span
               className="log-stream-dot"
               style={{
-                background: isStreaming ? 'var(--color-success)' : 'var(--border-color)',
-                animation: isStreaming ? 'status-pulse 1.5s ease-in-out infinite' : 'none',
+                background: 'var(--border-color)',
+                animation: 'none',
               }}
             />
-            <span style={{ fontWeight: 600, color: isStreaming ? 'var(--color-success)' : 'var(--text-secondary)' }}>
-              {isStreaming ? 'LIVE' : 'PAUSED'}
+            <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+              UNAVAILABLE
             </span>
-            {isStreaming && (
-              <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>
-                every {REFRESH_OPTIONS.find(o => o.ms === refreshInterval)?.label}
-              </span>
-            )}
           </div>
         </Cell>
         <Cell>
@@ -467,14 +389,11 @@ export function Logs() {
         <Cell span={2}>
           <LabelText as="div">LOGGING CONTROLS</LabelText>
           <div style={{ marginTop: '0.5rem', display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
-            <ActionButton onClick={() => setIsStreaming(!isStreaming)}>
-              {isStreaming ? 'PAUSE STREAM' : 'RESUME STREAM'}
-            </ActionButton>
             <ActionButton onClick={() => setLogs([])}>CLEAR SCREEN</ActionButton>
-            <ActionButton onClick={handleExport}>EXPORT .TSV</ActionButton>
+            <ActionButton onClick={handleExport} disabled={filteredLogs.length === 0}>EXPORT .TSV</ActionButton>
           </div>
         </Cell>
       </GridRow>
-    </div>
+    </main>
   );
 }

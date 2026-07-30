@@ -3,6 +3,8 @@ import { cn } from '../../lib/utils';
 
 export interface DisplayHeaderProps {
   children: ReactNode;
+  /** Semantic element — defaults to header for backward compatibility */
+  as?: 'header' | 'h1' | 'div';
   /** Override the default clamp font size */
   fontSize?: string;
   /** Text alignment — defaults to 'center' per design system */
@@ -17,6 +19,7 @@ export interface DisplayHeaderProps {
 
 export function DisplayHeader({
   children,
+  as: Component = 'header',
   fontSize,
   align,
   noBorder,
@@ -31,11 +34,11 @@ export function DisplayHeader({
   if (padding) overrides.padding = padding;
 
   return (
-    <header
+    <Component
       className={cn('display-text', className)}
       style={{ ...overrides, ...style }}
     >
       {children}
-    </header>
+    </Component>
   );
 }

@@ -589,7 +589,7 @@ export function Models() {
   if (modelsLoading) return <ModelsSkeleton />;
 
   return (
-    <div className="models-page animate-fade-in">
+    <main className="models-page animate-fade-in">
       <ModelsOverviewSection
         searchQuery={searchQuery}
         onSearchQueryChange={setSearchQuery}
@@ -659,6 +659,6 @@ export function Models() {
           />
         );
       })()}
-    </div>
+    </main>
   );
 }

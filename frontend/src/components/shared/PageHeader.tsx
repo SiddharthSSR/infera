@@ -15,7 +15,7 @@ export function PageHeader({ eyebrow, title, description, className }: PageHeade
   return (
     <header className={cn('page-header', className)}>
       <div className="page-header-eyebrow">{eyebrow}</div>
-      <div className="page-header-title">{title}</div>
+      <h1 className="page-header-title">{title}</h1>
       <p className="page-header-description">{description}</p>
     </header>
   );

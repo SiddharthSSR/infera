@@ -1230,6 +1230,15 @@ h1, h2, h3, h4 {
   outline-offset: 2px;
 }
 
+.log-table-heading {
+  color: var(--text-secondary);
+  font-family: var(--font-main);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
 /* Table Styles */
 .data-table {
   width: 100%;
@@ -4735,6 +4744,23 @@ a {
 }
 
 @media (max-width: 600px) {
+  .section-header-actions {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .section-header-actions .action-group {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .section-header-actions .action-group > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
   .grid-row {
     display: flex;
     flex-direction: column;

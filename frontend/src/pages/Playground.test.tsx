@@ -519,4 +519,28 @@ describe('Playground agent mode', () => {
     expect(screen.getByText('vision_analyze')).toBeInTheDocument();
     expect(screen.queryByText('web_search')).not.toBeInTheDocument();
   });
+
+  it('blocks chat inference when no model is serving', () => {
+    hookMocks.useModels.mockReturnValue({
+      data: [
+        {
+          id: 'Qwen/Qwen2.5-7B-Instruct',
+          object: 'model',
+          created: 0,
+          owned_by: 'infera',
+          loaded: false,
+        },
+      ],
+    });
+
+    render(
+      <PlaygroundProvider>
+        <Playground />
+      </PlaygroundProvider>,
+    );
+
+    expect(screen.getByRole('heading', { level: 1, name: 'PLAYGROUND' })).toBeInTheDocument();
+    expect(screen.getByText('no serving model available')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'RUN INFERENCE' })).toBeDisabled();
+  });
 });

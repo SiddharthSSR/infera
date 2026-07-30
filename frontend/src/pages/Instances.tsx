@@ -129,7 +129,7 @@ export function Instances() {
   if (isLoading) return <InstancesSkeleton />;
 
   return (
-    <div className="instances-page animate-fade-in">
+    <main className="instances-page animate-fade-in">
       {latestDeployment && (
         <LatestDeploymentBanner
           latestDeployment={latestDeployment}
@@ -324,6 +324,6 @@ export function Instances() {
           configuredProviders={configuredProviders}
         />
       </Suspense>
-    </div>
+    </main>
   );
 }

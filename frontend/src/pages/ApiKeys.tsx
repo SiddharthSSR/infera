@@ -267,7 +267,7 @@ export function ApiKeys() {
   if (loading) return <ApiKeysSkeleton />;
 
   return (
-    <div className="animate-fade-in api-keys-page">
+    <main className="animate-fade-in api-keys-page">
       {createdKey && (
         <>
           <div className="key-modal-backdrop" onClick={() => setCreatedKey(null)} aria-hidden="true" />
@@ -573,6 +573,6 @@ export function ApiKeys() {
           </div>
         </Cell>
       </GridRow>
-    </div>
+    </main>
   );
 }
