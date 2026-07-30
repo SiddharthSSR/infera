@@ -26,6 +26,14 @@ portable_mode() {
   fi
 }
 
+portable_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
 write_state() {
   printf '%s\n' "$1" >"${MOCK_STATE_DIR}/state"
 }
@@ -325,19 +333,19 @@ assert_evidence_private() {
 }
 
 assert_forward_files() {
-  [[ "$(/sbin/sha256sum "${FIXTURE}/rules/infera-alerts.yml" | awk '{print $1}')" == "${ALERTS_SHA}" ]] ||
+  [[ "$(portable_sha256 "${FIXTURE}/rules/infera-alerts.yml")" == "${ALERTS_SHA}" ]] ||
     fail_test "forward alert rules were not restored"
-  [[ "$(/sbin/sha256sum "${FIXTURE}/rules/infera-slo-v1.yml" | awk '{print $1}')" == "${SLO_SHA}" ]] ||
+  [[ "$(portable_sha256 "${FIXTURE}/rules/infera-slo-v1.yml")" == "${SLO_SHA}" ]] ||
     fail_test "forward SLO rules were not restored"
 }
 
 assert_retained_rollback_files() {
-  [[ "$(/sbin/sha256sum "${FIXTURE}/rules/infera-alerts.yml" | awk '{print $1}')" == "${ROLLBACK_SHA}" ]] ||
+  [[ "$(portable_sha256 "${FIXTURE}/rules/infera-alerts.yml")" == "${ROLLBACK_SHA}" ]] ||
     fail_test "reviewed prior alert rules were not retained"
   [[ ! -e "${FIXTURE}/rules/infera-slo-v1.yml" ]] ||
     fail_test "candidate SLO rules remained in the active glob"
   local retained="${FIXTURE}/rules/rollback/infera-slo-v1.candidate.disabled"
-  [[ "$(/sbin/sha256sum "${retained}" | awk '{print $1}')" == "${SLO_SHA}" ]] ||
+  [[ "$(portable_sha256 "${retained}")" == "${SLO_SHA}" ]] ||
     fail_test "candidate SLO rules were not retained exactly outside the active glob"
   [[ "$(portable_mode "${retained}")" == "600" ]] ||
     fail_test "retained candidate SLO rules are not mode 0600"
