@@ -6,8 +6,90 @@ import type {
   WorkspaceRecord,
   WorkspacesResponse,
 } from '../types';
+import type { AuthErrorType } from '../types/generated/authAccess';
 
 type JSONRecord = Record<string, unknown>;
+
+export type SessionCreateErrorCode =
+  | 'invalid_credentials'
+  | 'service_account_forbidden'
+  | 'dashboard_access_forbidden'
+  | 'gateway_response_error';
+
+interface ParsedAuthError {
+  type?: AuthErrorType;
+  message?: string;
+}
+
+export class SessionCreateError extends Error {
+  constructor(
+    readonly code: SessionCreateErrorCode,
+    readonly status: number,
+    readonly errorType?: AuthErrorType,
+  ) {
+    super('Dashboard session request rejected');
+    this.name = 'SessionCreateError';
+  }
+}
+
+export function parseAuthErrorResponse(value: unknown): ParsedAuthError {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const record = value as JSONRecord;
+  const nestedError = record.error;
+  if (nestedError != null && typeof nestedError === 'object' && !Array.isArray(nestedError)) {
+    const error = nestedError as JSONRecord;
+    return {
+      type: isAuthErrorType(error.type) ? error.type : undefined,
+      message: typeof error.message === 'string' ? error.message : undefined,
+    };
+  }
+
+  return {
+    message:
+      typeof record.message === 'string'
+        ? record.message
+        : typeof nestedError === 'string'
+          ? nestedError
+          : undefined,
+  };
+}
+
+export function classifySessionCreateError(status: number, error: ParsedAuthError): SessionCreateError {
+  if (status === 401) {
+    return new SessionCreateError('invalid_credentials', status, error.type);
+  }
+  if (status === 403) {
+    const message = error.message?.toLowerCase() ?? '';
+    const code = message.includes('service account')
+      ? 'service_account_forbidden'
+      : 'dashboard_access_forbidden';
+    return new SessionCreateError(code, status, error.type);
+  }
+  return new SessionCreateError('gateway_response_error', status, error.type);
+}
+
+export function getSessionSignInGuidance(error: unknown): string {
+  if (error instanceof SessionCreateError) {
+    switch (error.code) {
+      case 'invalid_credentials':
+        return 'Invalid or revoked human dashboard key. Check your key and try again.';
+      case 'service_account_forbidden':
+        return 'Dashboard access requires a human key. Service-account keys are for API and automation use.';
+      case 'dashboard_access_forbidden':
+        return 'Dashboard access required. Use an active human key with dashboard access; inference-only keys cannot sign in.';
+      case 'gateway_response_error':
+        return 'Sign-in is temporarily unavailable. Try again in a moment.';
+    }
+  }
+
+  if (isNetworkError(error)) {
+    return 'Could not connect to the gateway. Check its availability and try again.';
+  }
+  return 'Could not complete sign-in. Try again.';
+}
 
 export function getInvitationRecoveryGuidance(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : '';
@@ -27,6 +109,27 @@ export function getInvitationRecoveryGuidance(error: unknown): string {
     return 'Check your connection and retry. Your invitation token remains in the field.';
   }
   return 'Retry once. If the problem continues, ask the workspace admin to confirm the invitation is still active.';
+}
+
+function isAuthErrorType(value: unknown): value is AuthErrorType {
+  return value === 'authentication_error'
+    || value === 'authorization_error'
+    || value === 'invalid_request_error'
+    || value === 'not_found_error'
+    || value === 'internal_error';
+}
+
+function isNetworkError(error: unknown): boolean {
+  if (error instanceof TypeError) {
+    return true;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes('network')
+    || message.includes('failed to fetch')
+    || message.includes('load failed');
 }
 
 function expectRecord(value: unknown, label: string): JSONRecord {

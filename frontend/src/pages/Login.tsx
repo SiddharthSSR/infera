@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createSession } from '../lib/authAccessClient';
+import { getSessionSignInGuidance } from '../lib/authAccess';
 import {
   designPartnerRequestEndpoint,
   getPublicAcquisitionTarget,
@@ -74,22 +75,7 @@ export function Login({
       setConnected(true);
       setTimeout(() => onAuthenticated(session), 500);
     } catch (err) {
-      if (err instanceof Error) {
-        if (err.message.includes('Invalid API key')) {
-          setError('Invalid human dashboard key. Check your key and try again.');
-        } else if (err.message.includes('Service accounts cannot create dashboard sessions')) {
-          setError('Dashboard access requires a human key. Service-account keys are for API and automation use.');
-        } else if (
-          err.message.includes('Dashboard access required')
-          || err.message.includes('Admin access required')
-        ) {
-          setError('Dashboard access required. Use an active human key with dashboard access; inference-only keys cannot sign in.');
-        } else {
-          setError('Could not connect to the gateway. Check its availability and try again.');
-        }
-      } else {
-        setError('Could not connect to the gateway. Check its availability and try again.');
-      }
+      setError(getSessionSignInGuidance(err));
       focusKeyInput();
     } finally {
       setLoading(false);

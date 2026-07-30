@@ -89,14 +89,20 @@ describe('API Functions', () => {
       expect(result).toEqual(payload)
     })
 
-    it('createSession returns invalid-key message for 401', async () => {
+    it('createSession classifies 401 as invalid credentials', async () => {
       mockFetch.mockResolvedValueOnce({ ok: false, status: 401 })
-      await expect(createSession('inf_bad')).rejects.toThrow('Invalid API key')
+      await expect(createSession('inf_bad')).rejects.toMatchObject({
+        code: 'invalid_credentials',
+        status: 401,
+      })
     })
 
-    it('createSession returns dashboard-required message for 403', async () => {
+    it('createSession classifies 403 as missing dashboard access', async () => {
       mockFetch.mockResolvedValueOnce({ ok: false, status: 403 })
-      await expect(createSession('inf_user')).rejects.toThrow('Dashboard access required')
+      await expect(createSession('inf_user')).rejects.toMatchObject({
+        code: 'dashboard_access_forbidden',
+        status: 403,
+      })
     })
 
     it('getSession returns null when unauthenticated', async () => {

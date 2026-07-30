@@ -20,6 +20,7 @@ vi.mock('../lib/publicAnalytics', () => ({
 }))
 
 import { createSession } from '../lib/authAccessClient'
+import { SessionCreateError } from '../lib/authAccess'
 
 const mockCreateSession = createSession as ReturnType<typeof vi.fn>
 
@@ -109,7 +110,7 @@ describe('Login', () => {
   })
 
   it('shows the human-dashboard invalid-key message and returns focus to the field', async () => {
-    mockCreateSession.mockRejectedValueOnce(new Error('Invalid API key'))
+    mockCreateSession.mockRejectedValueOnce(new SessionCreateError('invalid_credentials', 401, 'authentication_error'))
     renderLogin(mockOnAuthenticated)
     const input = screen.getByLabelText('Human dashboard key')
     fireEvent.change(input, { target: { value: 'inf_badkey123' } })
@@ -118,7 +119,7 @@ describe('Login', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(
-        'Invalid human dashboard key. Check your key and try again.',
+        'Invalid or revoked human dashboard key. Check your key and try again.',
       )
     })
     expect(input).toHaveFocus()
@@ -126,8 +127,10 @@ describe('Login', () => {
 
   it.each(['Dashboard access required', 'Admin access required'])(
     'explains dashboard access requirements without preserving legacy admin-only copy for %s',
-    async (gatewayMessage) => {
-      mockCreateSession.mockRejectedValueOnce(new Error(gatewayMessage))
+    async () => {
+      mockCreateSession.mockRejectedValueOnce(
+        new SessionCreateError('dashboard_access_forbidden', 403, 'authorization_error'),
+      )
       renderLogin(mockOnAuthenticated)
       fireEvent.change(screen.getByLabelText('Human dashboard key'), {
         target: { value: 'inf_userkey123' },
@@ -144,7 +147,9 @@ describe('Login', () => {
   )
 
   it('keeps service-account keys on the machine API path', async () => {
-    mockCreateSession.mockRejectedValueOnce(new Error('Service accounts cannot create dashboard sessions.'))
+    mockCreateSession.mockRejectedValueOnce(
+      new SessionCreateError('service_account_forbidden', 403, 'authorization_error'),
+    )
     renderLogin(mockOnAuthenticated)
     fireEvent.change(screen.getByLabelText('Human dashboard key'), {
       target: { value: 'inf_servicekey123' },
@@ -201,6 +206,25 @@ describe('Login', () => {
         'Could not connect to the gateway. Check its availability and try again.',
       )
     })
+  })
+
+  it('does not describe a gateway HTTP failure as a connectivity failure or expose server detail', async () => {
+    mockCreateSession.mockRejectedValueOnce(
+      new SessionCreateError('gateway_response_error', 500, 'internal_error'),
+    )
+    renderLogin(mockOnAuthenticated)
+    fireEvent.change(screen.getByLabelText('Human dashboard key'), {
+      target: { value: 'inf_somekey123' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Sign-in is temporarily unavailable. Try again in a moment.',
+      )
+    })
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Could not connect')
   })
 
   it('clears validation state as the user edits the key', () => {
