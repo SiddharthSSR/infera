@@ -44,6 +44,8 @@ cp .dockerignore "$fixture/"
 cp deploy/docker/Dockerfile.frontend deploy/docker/nginx.conf "$fixture/deploy/docker/"
 printf '%s\n' CLEAN_TRACKED > "$fixture/frontend/index.html"
 printf '%s\n' CLEAN_STAGED > "$fixture/frontend/src/staged.txt"
+printf '%s\n' '#!/usr/bin/env sh' 'exit 0' > "$fixture/frontend/build-helper.sh"
+chmod +x "$fixture/frontend/build-helper.sh"
 printf '%s\n' '{"scripts":{"build":"true"}}' > "$fixture/frontend/package.json"
 printf '%s\n' '{"lockfileVersion":3}' > "$fixture/frontend/package-lock.json"
 
@@ -99,6 +101,16 @@ if [[ "$1" == build ]]; then
                 ;;
         esac
     done
+    find "$context/deploy/docker/nginx.conf" -perm -004 -print -quit | grep -q . ||
+        {
+            echo "tracked 0644 file is not world-readable in build context" >&2
+            exit 43
+        }
+    find "$context/frontend/build-helper.sh" -perm -111 -print -quit | grep -q . ||
+        {
+            echo "tracked executable file is not executable in build context" >&2
+            exit 44
+        }
     cp -R "$context" "$CAPTURE_ROOT/context"
     printf '%s\n' "$source_revision" > "$CAPTURE_ROOT/source-revision"
     if [[ "${FAIL_DOCKER_BUILD:-0}" == 1 ]]; then
@@ -118,13 +130,15 @@ exit 1
 EOF
 chmod +x "$fake_bin/docker" "$fixture/scripts/build-reviewed-frontend.sh"
 
-PATH="$fake_bin:$PATH" \
-CAPTURE_ROOT="$capture" \
-TMPDIR="$contexts" \
-    "$fixture/scripts/build-reviewed-frontend.sh" \
-    --revision "$reviewed_revision" \
-    --tag infera-frontend:test \
-    > "$test_root/build-output"
+(
+    umask 0077
+    PATH="$fake_bin:$PATH" \
+    CAPTURE_ROOT="$capture" \
+    TMPDIR="$contexts" \
+        "$fixture/scripts/build-reviewed-frontend.sh" \
+        --revision "$reviewed_revision" \
+        --tag infera-frontend:test
+) > "$test_root/build-output"
 
 assert_file_content "$capture/context/frontend/index.html" CLEAN_TRACKED
 assert_file_content "$capture/context/frontend/src/staged.txt" CLEAN_STAGED
@@ -207,5 +221,6 @@ if find "$contexts" -maxdepth 1 -name 'infera-frontend-context.*' -print -quit |
 fi
 
 echo "PASS: reviewed frontend context ignores dirty, staged, and untracked workspace inputs"
+echo "PASS: reviewed frontend context preserves Git file modes under a restrictive umask"
 echo "PASS: reviewed frontend builds reject every non-linux/amd64 platform before Docker"
 echo "PASS: invalid/missing revisions fail and temporary contexts are cleaned"

@@ -132,8 +132,12 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-git -C "$repository_root" archive --format=tar "$source_revision" -- "${required_paths[@]}" |
-    tar -xf - -C "$build_context"
+(
+    # Git archives encode tracked regular files as 0644 and executables as 0755.
+    umask 0022
+    git -C "$repository_root" archive --format=tar "$source_revision" -- "${required_paths[@]}" |
+        tar -xf - -C "$build_context"
+)
 
 context_file_count=$(find "$build_context" -type f | wc -l | tr -d '[:space:]')
 context_size_kib=$(du -sk "$build_context" | awk '{print $1}')
