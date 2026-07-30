@@ -153,7 +153,9 @@ recovery_gateway_urls() {
   local gateway_ip
   local gateway_ids_output
   local gateway_ips_output
+  local gateway_url
   local expected_replicas
+  local index
   local gateway_ids=()
   local gateway_ips=()
   local gateway_urls=()
@@ -172,23 +174,44 @@ recovery_gateway_urls() {
     done <<<"${gateway_ips_output}"
     [[ "${#gateway_ips[@]}" -eq 1 ]] || return 1
     gateway_ip="${gateway_ips[0]}"
-    python3 - "${gateway_ip}" <<'PY' >/dev/null || return 1
+    gateway_ip="$(python3 - "${gateway_ip}" <<'PY'
 import ipaddress
 import sys
 
 address = ipaddress.ip_address(sys.argv[1])
-allowed = (
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("fc00::/7"),
+# Docker bridge pools are not limited to RFC 1918/ULA ranges. Accept other
+# non-public endpoint space while still rejecting addresses that could escape
+# the host-local container network or cannot identify a usable replica.
+documentation = (
+    ipaddress.ip_network("192.0.2.0/24"),
+    ipaddress.ip_network("198.51.100.0/24"),
+    ipaddress.ip_network("203.0.113.0/24"),
+    ipaddress.ip_network("2001:db8::/32"),
 )
-if not any(address in network for network in allowed):
+if (
+    address.is_global
+    or address.is_unspecified
+    or address.is_loopback
+    or address.is_link_local
+    or address.is_multicast
+    or address.is_reserved
+    or any(
+        address.version == network.version and address in network
+        for network in documentation
+    )
+):
     raise SystemExit(1)
+print(address.compressed)
 PY
+)" || return 1
     [[ "${gateway_ip}" == *:* ]] && gateway_ip="[${gateway_ip}]"
-    gateway_urls[${#gateway_urls[@]}]="http://${gateway_ip}:8080"
+    gateway_url="http://${gateway_ip}:8080"
+    for ((index = 0; index < ${#gateway_urls[@]}; index++)); do
+      [[ "${gateway_urls[${index}]}" != "${gateway_url}" ]] || return 1
+    done
+    gateway_urls[${#gateway_urls[@]}]="${gateway_url}"
   done
+  [[ "${#gateway_urls[@]}" -eq "${expected_replicas}" ]] || return 1
   printf '%s\n' "${gateway_urls[@]}"
 }
 
