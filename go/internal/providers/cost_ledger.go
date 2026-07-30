@@ -182,7 +182,10 @@ func reconcileInfrastructureCostInstance(ledger InfrastructureCostLedger, instan
 		stopped := instance.StoppedAt.UTC()
 		stoppedAt = &stopped
 	}
-	if !startedAt.Before(now) || (stoppedAt != nil && !startedAt.Before(*stoppedAt)) {
+	// An active provider may report the same clock tick used for immediate
+	// reconciliation. Persist that zero-age interval now; it begins accruing
+	// on subsequent reads. Only a genuinely future start is invalid here.
+	if startedAt.After(now) || (stoppedAt != nil && !startedAt.Before(*stoppedAt)) {
 		return nil
 	}
 	if !validHourlyPrice(instance.CostPerHour) {

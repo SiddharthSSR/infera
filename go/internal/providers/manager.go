@@ -300,9 +300,17 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	instance.WorkerCredential = req.WorkerToken
 	instance.WorkerCredentialHash = credentialHash
 
-	// Track instance and begin the worker-registration deadline.
+	// Persist the provider resource in an inactive lifecycle state first. A
+	// worker may receive its callback credential before Provision returns, so
+	// the credential must not become usable until the shared cost session is
+	// durable.
 	m.initializeWorkerRegistration(instance, m.now())
-	if err := m.putTrackedInstance(instance); err != nil {
+	activeInstance := cloneInstance(instance)
+	trackedInstance := cloneInstance(instance)
+	trackedInstance.Status = InstanceStatusStarting
+	claimedAt := m.now()
+	trackedInstance.LifecycleClaimedAt = &claimedAt
+	if err := m.putTrackedInstance(trackedInstance); err != nil {
 		// A provider resource without its credential record cannot safely join
 		// the control plane. Best-effort cleanup avoids leaving a paid orphan.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), m.providerCleanupTimeout)
@@ -315,13 +323,96 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 		return nil, persistErr
 	}
 
-	// Start cost tracking
+	persistedInstance, found, err := m.getTrackedInstance(instance.ID)
+	if err != nil || !found {
+		if err == nil {
+			err = errors.New("managed instance disappeared after persistence")
+		}
+		return nil, m.abortProvisionedInstance(
+			provider,
+			trackedInstance,
+			fmt.Errorf("load persisted managed instance: %w", err),
+		)
+	}
+	trackedInstance = persistedInstance
+	if err := m.syncInfrastructureCostInstance(activeInstance); err != nil {
+		return nil, m.abortProvisionedInstance(
+			provider,
+			trackedInstance,
+			fmt.Errorf("persist shared infrastructure cost session: %w", err),
+		)
+	}
+	updated, err := m.instances.updateIfLifecycleVersion(instance.ID, trackedInstance.LifecycleVersion, func(stored *Instance) {
+		stored.Status = activeInstance.Status
+		stored.LifecycleClaimedAt = nil
+	})
+	if err != nil || !updated {
+		if err == nil {
+			err = ErrLifecycleConflict
+		}
+		return nil, m.abortProvisionedInstance(
+			provider,
+			trackedInstance,
+			fmt.Errorf("activate cost-accounted managed instance: %w", err),
+		)
+	}
+	activeInstance.LifecycleVersion = trackedInstance.LifecycleVersion + 1
+	activeInstance.LifecycleClaimedAt = nil
+	instance = activeInstance
+
+	// The process-local tracker remains operational telemetry only. Starting it
+	// after durable activation prevents it from masking a shared-ledger failure.
 	m.costs.StartTracking(instance)
 
 	return instance, nil
 }
 
 var ErrLifecycleConflict = errors.New("provider instance lifecycle changed concurrently")
+
+func (m *Manager) abortProvisionedInstance(provider Provider, instance *Instance, cause error) error {
+	if instance == nil {
+		return cause
+	}
+	updated, transitionErr := m.instances.updateIfLifecycleVersion(instance.ID, instance.LifecycleVersion, func(stored *Instance) {
+		stored.Status = InstanceStatusTerminating
+		now := m.now()
+		stored.LifecycleClaimedAt = &now
+	})
+	claimedVersion := instance.LifecycleVersion + 1
+	if transitionErr == nil && !updated {
+		transitionErr = ErrLifecycleConflict
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), m.providerCleanupTimeout)
+	cleanupErr := provider.Terminate(cleanupCtx, instance.ProviderID)
+	cancel()
+	if cleanupErr != nil && !providerInstanceNotFound(cleanupErr) {
+		errs := []error{cause, fmt.Errorf("terminate failed provision provider instance: %w", cleanupErr)}
+		if transitionErr != nil {
+			errs = append(errs, fmt.Errorf("deactivate failed provision: %w", transitionErr))
+		}
+		return errors.Join(errs...)
+	}
+	if transitionErr != nil {
+		stopped := cloneInstance(instance)
+		stopped.Status = InstanceStatusTerminated
+		now := m.now()
+		stopped.StoppedAt = &now
+		closeErr := m.syncInfrastructureCostInstance(stopped)
+		errs := []error{cause, fmt.Errorf("deactivate failed provision: %w", transitionErr)}
+		if closeErr != nil {
+			errs = append(errs, fmt.Errorf("close failed provision cost session: %w", closeErr))
+		}
+		return errors.Join(errs...)
+	}
+	finalizeErr := m.finalizeLifecycle(instance.ID, claimedVersion, "failed provision cleanup", func(stored *Instance) {
+		stored.Status = InstanceStatusTerminated
+		now := m.now()
+		stored.StoppedAt = &now
+		m.clearWorkerRegistration(stored)
+	})
+	return errors.Join(cause, finalizeErr)
+}
 
 func lifecycleTransitionInProgress(status InstanceStatus) bool {
 	switch status {

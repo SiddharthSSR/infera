@@ -25,9 +25,15 @@ func newTestManager(t *testing.T, config ManagerConfig) *Manager {
 }
 
 type testInfrastructureCostLedger struct {
-	mu       sync.Mutex
-	coverage time.Time
-	sessions map[string]InfrastructureCostSession
+	mu                      sync.Mutex
+	coverage                time.Time
+	coverageErr             error
+	ensureErr               error
+	ensureErrOnceAfterWrite bool
+	ensureCalls             int
+	closeCalls              int
+	closeMutations          int
+	sessions                map[string]InfrastructureCostSession
 }
 
 func newTestInfrastructureCostLedger(coverage time.Time) *testInfrastructureCostLedger {
@@ -38,12 +44,18 @@ func newTestInfrastructureCostLedger(coverage time.Time) *testInfrastructureCost
 }
 
 func (l *testInfrastructureCostLedger) InfrastructureCostCoverageStart() (time.Time, error) {
-	return l.coverage, nil
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.coverage, l.coverageErr
 }
 
 func (l *testInfrastructureCostLedger) EnsureInfrastructureCostSession(session InfrastructureCostSession) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.ensureCalls++
+	if l.ensureErr != nil && !l.ensureErrOnceAfterWrite {
+		return l.ensureErr
+	}
 	key := fmt.Sprintf("%s/%s/%d", session.WorkspaceID, session.InstanceID, session.StartedAt.UnixMilli())
 	if existing, ok := l.sessions[key]; ok {
 		if existing.WorkspaceID != session.WorkspaceID || existing.InstanceID != session.InstanceID ||
@@ -52,15 +64,28 @@ func (l *testInfrastructureCostLedger) EnsureInfrastructureCostSession(session I
 			existing.PriceCurrency != session.PriceCurrency || existing.PriceTimeUnit != session.PriceTimeUnit {
 			return errors.New("conflicting cost session")
 		}
+		if l.ensureErrOnceAfterWrite {
+			err := l.ensureErr
+			l.ensureErr = nil
+			l.ensureErrOnceAfterWrite = false
+			return err
+		}
 		return nil
 	}
 	l.sessions[key] = session
+	if l.ensureErrOnceAfterWrite {
+		err := l.ensureErr
+		l.ensureErr = nil
+		l.ensureErrOnceAfterWrite = false
+		return err
+	}
 	return nil
 }
 
 func (l *testInfrastructureCostLedger) CloseInfrastructureCostSession(workspaceID, instanceID string, startedAt, stoppedAt time.Time) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.closeCalls++
 	key := fmt.Sprintf("%s/%s/%d", workspaceID, instanceID, startedAt.UnixMilli())
 	session, ok := l.sessions[key]
 	if !ok {
@@ -70,6 +95,9 @@ func (l *testInfrastructureCostLedger) CloseInfrastructureCostSession(workspaceI
 		return errors.New("conflicting stop time")
 	}
 	stoppedAt = stoppedAt.UTC()
+	if session.StoppedAt == nil {
+		l.closeMutations++
+	}
 	session.StoppedAt = &stoppedAt
 	l.sessions[key] = session
 	return nil
@@ -90,12 +118,23 @@ func (l *testInfrastructureCostLedger) ListInfrastructureCostSessions(workspaceI
 	return sessions, nil
 }
 
+func (l *testInfrastructureCostLedger) snapshot() ([]InfrastructureCostSession, int, int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	sessions := make([]InfrastructureCostSession, 0, len(l.sessions))
+	for _, session := range l.sessions {
+		sessions = append(sessions, session)
+	}
+	return sessions, l.ensureCalls, l.closeMutations
+}
+
 // mockTestProvider is a simple mock for testing the manager
 type mockTestProvider struct {
-	instances map[string]*Instance
-	lastReq   *ProvisionRequest
-	started   []string
-	stopped   []string
+	instances  map[string]*Instance
+	lastReq    *ProvisionRequest
+	started    []string
+	stopped    []string
+	terminated []string
 }
 
 type workspaceConfiguredProvider struct {
@@ -113,6 +152,22 @@ func (r workspaceConfiguredProviderResolver) ResolveProviderConfig(workspaceID s
 type instanceAwareStartProvider struct {
 	*mockTestProvider
 	startedWithInstance []string
+}
+
+type fixedProvisionTimeProvider struct {
+	*mockTestProvider
+	now time.Time
+}
+
+func (p *fixedProvisionTimeProvider) Provision(ctx context.Context, req *ProvisionRequest) (*Instance, error) {
+	instance, err := p.mockTestProvider.Provision(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	startedAt := p.now
+	instance.CreatedAt = startedAt
+	instance.StartedAt = &startedAt
+	return instance, nil
 }
 
 type delayedRefreshProvider struct {
@@ -662,6 +717,12 @@ func TestManagerMarksStaleWorkerHeartbeatUnhealthy(t *testing.T) {
 }
 
 func (p *mockTestProvider) Terminate(ctx context.Context, instanceID string) error {
+	p.terminated = append(p.terminated, instanceID)
+	if inst := p.findInstance(instanceID); inst != nil {
+		inst.Status = InstanceStatusTerminated
+		now := time.Now()
+		inst.StoppedAt = &now
+	}
 	return nil
 }
 
@@ -2068,6 +2129,240 @@ func TestManagerCurrentCostSummaryUsesSharedInstanceStore(t *testing.T) {
 	}
 	if _, ok := summaryA.ByProvider[string(ProviderVastAI)]; ok {
 		t.Fatalf("cross-tenant provider cost leaked: %+v", summaryA)
+	}
+}
+
+func TestManagerProvisionPersistsSharedCostSessionBeforeSuccess(t *testing.T) {
+	now := time.Now().UTC()
+	coverage := now.Add(-24 * time.Hour)
+	ledger := newTestInfrastructureCostLedger(coverage)
+	provider := &fixedProvisionTimeProvider{mockTestProvider: newMockTestProvider(), now: now}
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock, Now: func() time.Time { return now }})
+	mgr.SetInfrastructureCostLedger(ledger)
+	mgr.RegisterProvider(provider)
+
+	instance, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name:        "durable-cost-on-provision",
+		WorkspaceID: "ws_alpha",
+		GPUType:     GPUH100,
+	})
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	sessions, ensureCalls, _ := ledger.snapshot()
+	if len(sessions) != 1 || ensureCalls != 1 {
+		t.Fatalf("provision returned without exactly one durable session: sessions=%+v ensure_calls=%d", sessions, ensureCalls)
+	}
+	session := sessions[0]
+	if session.WorkspaceID != instance.WorkspaceID || session.InstanceID != instance.ID ||
+		session.Provider != string(instance.Provider) || session.GPUType != string(instance.GPUType) ||
+		session.PriceSnapshotVersion != PriceSnapshotVersionV1 ||
+		session.PriceAmountNano != int64(math.Round(instance.CostPerHour*1_000_000_000)) ||
+		session.PriceCurrency != PriceCurrencyUSD || session.PriceTimeUnit != PriceTimeUnitHour ||
+		instance.StartedAt == nil || !session.StartedAt.Equal(instance.StartedAt.UTC()) || session.StoppedAt != nil {
+		t.Fatalf("durable session does not preserve provider snapshot: instance=%+v session=%+v", instance, session)
+	}
+	if authenticated, found, err := mgr.AuthenticateWorkerToken(instance.WorkerCredential); err != nil || !found || authenticated.ID != instance.ID {
+		t.Fatalf("cost-accounted instance credential not active after success: found=%v err=%v instance=%+v", found, err, authenticated)
+	}
+}
+
+func TestManagerProvisionSharedCostIsVisibleAcrossReplicas(t *testing.T) {
+	store := newInMemoryInstanceStore()
+	now := time.Now().UTC().Add(time.Hour)
+	coverage := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	ledger := newTestInfrastructureCostLedger(coverage)
+	config := ManagerConfig{DefaultProvider: ProviderMock, Now: func() time.Time { return now }}
+	replicaA, err := NewManagerWithStore(config, store)
+	if err != nil {
+		t.Fatalf("create replica A: %v", err)
+	}
+	t.Cleanup(func() { _ = replicaA.Close() })
+	replicaB, err := NewManagerWithStore(config, store)
+	if err != nil {
+		t.Fatalf("create replica B: %v", err)
+	}
+	t.Cleanup(func() { _ = replicaB.Close() })
+	replicaA.SetInfrastructureCostLedger(ledger)
+	replicaB.SetInfrastructureCostLedger(ledger)
+	replicaA.RegisterProvider(newMockTestProvider())
+
+	instance, err := replicaA.Provision(context.Background(), &ProvisionRequest{
+		Name:        "cross-replica-cost",
+		WorkspaceID: "ws_alpha",
+		GPUType:     GPUL40S,
+	})
+	if err != nil {
+		t.Fatalf("provision on replica A: %v", err)
+	}
+	viewAt := instance.StartedAt.UTC().Add(time.Hour)
+	summaryA, err := replicaA.GetSharedCostSummary("ws_alpha", viewAt)
+	if err != nil {
+		t.Fatalf("replica A cost view: %v", err)
+	}
+	summaryB, err := replicaB.GetSharedCostSummary("ws_alpha", viewAt)
+	if err != nil {
+		t.Fatalf("replica B cost view: %v", err)
+	}
+	if summaryA.CurrentHourly != instance.CostPerHour || summaryA.TodayTotal != instance.CostPerHour ||
+		summaryB.CurrentHourly != summaryA.CurrentHourly || summaryB.TodayTotal != summaryA.TodayTotal {
+		t.Fatalf("replicas disagree on newly provisioned cost: A=%+v B=%+v instance=%+v", summaryA, summaryB, instance)
+	}
+	sessions, _, _ := ledger.snapshot()
+	if len(sessions) != 1 || sessions[0].StoppedAt != nil {
+		t.Fatalf("shared active session mismatch: %+v", sessions)
+	}
+}
+
+func TestManagerProvisionCostSynchronizationAndTerminationAreIdempotent(t *testing.T) {
+	ledger := newTestInfrastructureCostLedger(time.Now().UTC().Add(-24 * time.Hour))
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.SetInfrastructureCostLedger(ledger)
+	mgr.RegisterProvider(provider)
+
+	instance, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name:        "idempotent-cost-session",
+		WorkspaceID: "ws_alpha",
+		GPUType:     GPUA100_80,
+	})
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if err := mgr.syncInfrastructureCostByID(instance.ID); err != nil {
+		t.Fatalf("repeat active synchronization: %v", err)
+	}
+	if err := mgr.syncInfrastructureCostByID(instance.ID); err != nil {
+		t.Fatalf("second active synchronization: %v", err)
+	}
+	sessions, _, closeMutations := ledger.snapshot()
+	if len(sessions) != 1 || closeMutations != 0 {
+		t.Fatalf("repeated synchronization duplicated or closed active session: sessions=%+v close_mutations=%d", sessions, closeMutations)
+	}
+
+	if err := mgr.Terminate(context.Background(), instance.ID); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	if err := mgr.syncInfrastructureCostByID(instance.ID); err != nil {
+		t.Fatalf("repeat stopped synchronization: %v", err)
+	}
+	sessions, _, closeMutations = ledger.snapshot()
+	if len(sessions) != 1 || sessions[0].StoppedAt == nil || closeMutations != 1 {
+		t.Fatalf("termination was not idempotently closed once: sessions=%+v close_mutations=%d", sessions, closeMutations)
+	}
+}
+
+func TestManagerProvisionCostPersistenceFailureFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		terminateErr error
+		wantStatus   InstanceStatus
+	}{
+		{name: "cleanup succeeds", wantStatus: InstanceStatusTerminated},
+		{name: "cleanup fails", terminateErr: errors.New("provider cleanup unavailable"), wantStatus: InstanceStatusTerminating},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ledgerErr := errors.New("shared cost ledger unavailable")
+			ledger := newTestInfrastructureCostLedger(time.Now().UTC().Add(-24 * time.Hour))
+			ledger.ensureErr = ledgerErr
+			provider := &cleanupObservingProvider{
+				mockTestProvider: newMockTestProvider(),
+				terminateErr:     tc.terminateErr,
+				cleanup:          make(chan cleanupContextObservation, 1),
+			}
+			mgr := newTestManager(t, ManagerConfig{
+				DefaultProvider:        ProviderMock,
+				ProviderCleanupTimeout: time.Second,
+			})
+			mgr.SetInfrastructureCostLedger(ledger)
+			mgr.RegisterProvider(provider)
+			req := &ProvisionRequest{
+				Name:        "fail-closed-cost",
+				WorkspaceID: "ws_alpha",
+				GPUType:     GPURTX4090,
+			}
+
+			instance, err := mgr.Provision(context.Background(), req)
+			if instance != nil || !errors.Is(err, ledgerErr) {
+				t.Fatalf("cost persistence failure exposed success: instance=%+v err=%v", instance, err)
+			}
+			if tc.terminateErr != nil && !errors.Is(err, tc.terminateErr) {
+				t.Fatalf("cleanup failure was not retained: %v", err)
+			}
+			observation := <-provider.cleanup
+			if observation.err != nil || !observation.hasDeadline {
+				t.Fatalf("cleanup was canceled or unbounded: %+v", observation)
+			}
+			stored, readErr := mgr.instances.listByWorkspace("ws_alpha")
+			if readErr != nil || len(stored) != 1 {
+				t.Fatalf("failed provision was not durably recoverable: instances=%+v err=%v", stored, readErr)
+			}
+			if stored[0].Status != tc.wantStatus {
+				t.Fatalf("failed provision credential remained active: instances=%+v", stored)
+			}
+			if authenticated, found, authErr := mgr.AuthenticateWorkerToken(req.WorkerToken); authErr != nil || found || authenticated != nil {
+				t.Fatalf("unaccounted worker credential became usable: found=%v err=%v instance=%+v", found, authErr, authenticated)
+			}
+			sessions, _, _ := ledger.snapshot()
+			if len(sessions) != 0 {
+				t.Fatalf("persistent ledger failure created a partial session: %+v", sessions)
+			}
+		})
+	}
+}
+
+func TestManagerProvisionPartialCostWriteFailureClosesSession(t *testing.T) {
+	writeErr := errors.New("commit acknowledgement lost")
+	ledger := newTestInfrastructureCostLedger(time.Now().UTC().Add(-24 * time.Hour))
+	ledger.ensureErr = writeErr
+	ledger.ensureErrOnceAfterWrite = true
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.SetInfrastructureCostLedger(ledger)
+	mgr.RegisterProvider(provider)
+	req := &ProvisionRequest{
+		Name:        "ambiguous-cost-write",
+		WorkspaceID: "ws_alpha",
+		GPUType:     GPUH100,
+	}
+
+	instance, err := mgr.Provision(context.Background(), req)
+	if instance != nil || !errors.Is(err, writeErr) {
+		t.Fatalf("ambiguous durable write exposed success: instance=%+v err=%v", instance, err)
+	}
+	stored, readErr := mgr.instances.listByWorkspace("ws_alpha")
+	if readErr != nil || len(stored) != 1 || stored[0].Status != InstanceStatusTerminated {
+		t.Fatalf("ambiguous write cleanup was not finalized: instances=%+v err=%v", stored, readErr)
+	}
+	sessions, _, closeMutations := ledger.snapshot()
+	if len(sessions) != 1 || sessions[0].StoppedAt == nil || closeMutations != 1 {
+		t.Fatalf("partially committed session was not closed exactly once: sessions=%+v close_mutations=%d", sessions, closeMutations)
+	}
+	if authenticated, found, authErr := mgr.AuthenticateWorkerToken(req.WorkerToken); authErr != nil || found || authenticated != nil {
+		t.Fatalf("partially accounted worker credential became usable: found=%v err=%v instance=%+v", found, authErr, authenticated)
+	}
+}
+
+func TestManagerProvisionPreservesIncompleteCostHistoryFailure(t *testing.T) {
+	now := time.Now().UTC()
+	coverage := time.Date(now.Year(), now.Month(), 15, 0, 0, 0, 0, time.UTC)
+	if !coverage.Before(now) {
+		coverage = now.Add(-time.Hour)
+	}
+	ledger := newTestInfrastructureCostLedger(coverage)
+	provider := newMockTestProvider()
+	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
+	mgr.SetInfrastructureCostLedger(ledger)
+	mgr.RegisterProvider(provider)
+	if _, err := mgr.Provision(context.Background(), &ProvisionRequest{
+		Name:        "pre-coverage-history",
+		WorkspaceID: "ws_alpha",
+		GPUType:     GPUL40S,
+	}); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if _, err := mgr.GetSharedCostSummary("ws_alpha", now); !errors.Is(err, ErrCostHistoryIncomplete) {
+		t.Fatalf("pre-coverage cost view did not fail closed: %v", err)
 	}
 }
 
