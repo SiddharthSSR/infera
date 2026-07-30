@@ -2,10 +2,19 @@
 
 set -euo pipefail
 
+if [[ "$(id -u)" -ne 0 ]]; then
+  exec sudo -n bash "$0"
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TMP_DIR="$(mktemp -d)"
+ROOT_TEST_BASE="$(python3 -c 'import os, pwd; print(os.path.realpath(pwd.getpwuid(0).pw_dir))')"
+TMP_DIR="$(mktemp -d "${ROOT_TEST_BASE}/.infera-lkg-test.XXXXXX")"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 mkdir -p "${TMP_DIR}/bin"
+python3 "${REPO_ROOT}/scripts/write-production-env-test-fixture.py" "${TMP_DIR}/env-1" \
+  --gateway-replicas 1
+python3 "${REPO_ROOT}/scripts/write-production-env-test-fixture.py" "${TMP_DIR}/env-2" \
+  --gateway-replicas 2
 
 cat >"${TMP_DIR}/release.manifest" <<'EOF'
 INFERA_RELEASE_ID=release-1
@@ -53,7 +62,9 @@ EOF
 chmod +x "${TMP_DIR}/bin/curl"
 
 run_check() {
+  local env_file="${TMP_DIR}/env-${TEST_EXPECTED_GATEWAY_REPLICAS:-1}"
   PATH="${TMP_DIR}/bin:${PATH}" \
+    INFERA_PRODUCTION_ENV_FILE="${env_file}" \
     INFERA_GATEWAY_REPLICAS="${TEST_EXPECTED_GATEWAY_REPLICAS:-1}" \
     INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL="${TEST_LEDGER_PROTOCOL:-2}" \
     "${REPO_ROOT}/scripts/check-last-known-good.sh" "${TMP_DIR}/release.manifest"

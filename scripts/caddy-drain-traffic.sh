@@ -57,10 +57,10 @@ ${DASHBOARD_HOST} {
 }
 CADDY
 
-CADDY_ID="$(docker compose -f "${COMPOSE_FILE}" ps -q caddy)"
+CADDY_ID="$(production_compose -f "${COMPOSE_FILE}" ps -q caddy)"
 [[ -n "${CADDY_ID}" ]]
 docker cp "${TMP_FILE}" "${CADDY_ID}:/tmp/infera-maintenance.Caddyfile"
-docker compose -f "${COMPOSE_FILE}" exec -T caddy \
+production_compose -f "${COMPOSE_FILE}" exec -T caddy \
   caddy reload --config /tmp/infera-maintenance.Caddyfile --adapter caddyfile
 
 STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \

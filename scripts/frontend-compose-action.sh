@@ -10,7 +10,7 @@ Usage: frontend-compose-action.sh <candidate|rollback|restore> \
   --image <repository@sha256:digest>
 
 The repository must be clean. Compose is read from the exact source revision,
-rendered with the repository project directory and ENV_FILE (default: .env),
+rendered with the repository project directory and INFERA_PRODUCTION_ENV_FILE,
 and rejected unless frontend is image-only, resolves to the exact digest, and
 the pulled image's OCI revision label equals the source revision.
 EOF
@@ -77,6 +77,8 @@ command -v python3 >/dev/null 2>&1 || {
 }
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=production-env-source.sh
+source "${script_dir}/production-env-source.sh"
 repository_root="$(git -C "${script_dir}/.." rev-parse --show-toplevel)"
 
 if [[ -n "$(git -C "${repository_root}" status --porcelain=v1 --untracked-files=normal)" ]]; then
@@ -114,16 +116,10 @@ compose_args=(
   --project-directory "${repository_root}"
   -f "${compose_file}"
 )
-if [[ -n "${ENV_FILE:-}" ]]; then
-  env_file="${ENV_FILE}"
-  if [[ "${env_file}" != /* ]]; then
-    env_file="${repository_root}/${env_file}"
-  fi
-  compose_args=(--project-directory "${repository_root}" --env-file "${env_file}" -f "${compose_file}")
-fi
 
 export INFERA_FRONTEND_IMAGE="${frontend_image}"
-if ! docker compose "${compose_args[@]}" config --format json >"${rendered_file}"; then
+if ! production_compose --override INFERA_FRONTEND_IMAGE \
+  "${compose_args[@]}" config --format json >"${rendered_file}"; then
   echo "ERROR: exact-source production Compose did not render" >&2
   exit 1
 fi
@@ -169,11 +165,12 @@ if ! expected_image_id="$(docker image inspect --format '{{.Id}}' "${frontend_im
   exit 1
 fi
 
-docker compose "${compose_args[@]}" up \
+production_compose --override INFERA_FRONTEND_IMAGE "${compose_args[@]}" up \
   -d --no-build --no-deps --force-recreate frontend
 
 frontend_ids=()
-if ! frontend_ids_output="$(docker compose "${compose_args[@]}" ps -q frontend)"; then
+if ! frontend_ids_output="$(production_compose --override INFERA_FRONTEND_IMAGE \
+  "${compose_args[@]}" ps -q frontend)"; then
   echo "ERROR: unable to identify the recreated frontend container" >&2
   exit 1
 fi

@@ -2,12 +2,17 @@
 
 set -euo pipefail
 
+if [[ "$(id -u)" -ne 0 ]]; then
+  exec sudo -n bash "$0"
+fi
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
 }
 
-test_root="$(mktemp -d "${TMPDIR:-/tmp}/infera-frontend-compose-test.XXXXXX")"
+root_test_base="$(python3 -c 'import os, pwd; print(os.path.realpath(pwd.getpwuid(0).pw_dir))')"
+test_root="$(mktemp -d "${root_test_base}/.infera-frontend-compose-test.XXXXXX")"
 cleanup() {
   rm -rf -- "${test_root}"
 }
@@ -17,8 +22,12 @@ fixture="${test_root}/repository"
 fake_bin="${test_root}/bin"
 calls="${test_root}/calls"
 mkdir -p "${fixture}/scripts" "${fake_bin}"
-cp scripts/frontend-compose-action.sh "${fixture}/scripts/"
-chmod +x "${fixture}/scripts/frontend-compose-action.sh"
+cp scripts/frontend-compose-action.sh scripts/production-env-source.py \
+  scripts/production-env-source.sh "${fixture}/scripts/"
+chmod +x "${fixture}/scripts/frontend-compose-action.sh" \
+  "${fixture}/scripts/production-env-source.py" "${fixture}/scripts/production-env-source.sh"
+python3 scripts/write-production-env-test-fixture.py "${test_root}/production.env"
+export INFERA_PRODUCTION_ENV_FILE="${test_root}/production.env"
 
 git -C "${fixture}" init -q
 git -C "${fixture}" config user.email frontend-compose-test@example.invalid

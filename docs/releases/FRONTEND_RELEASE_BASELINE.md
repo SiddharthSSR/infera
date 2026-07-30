@@ -179,7 +179,8 @@ explicit operator step and must not be inferred from a successful gateway recove
 
 4. Run the checked-in exact-source guard with the same approved full revision and immutable digest.
    The guard reads `docker-compose.prod.yml` from that Git object rather than the working tree,
-   privately renders it with the repository project directory and `ENV_FILE` (default `.env`),
+   privately renders it with the repository project directory and the validated
+   `INFERA_PRODUCTION_ENV_FILE`,
    rejects a dirty or unavailable source, a mutable image, a frontend `build` field, or an image
    mismatch, pulls the exact digest, proves its OCI revision label equals the requested source, and
    recreates only `frontend` with `--no-build --no-deps`. It reports success only after the
@@ -187,11 +188,13 @@ explicit operator step and must not be inferred from a successful gateway recove
    inputs:
 
    ```bash
+   . /etc/infera/production-env-source
+   export INFERA_PRODUCTION_ENV_FILE
    ./scripts/frontend-compose-action.sh candidate \
      --source-revision "${REVIEWED_REVISION}" \
      --image "${FRONTEND_REPO_DIGEST}"
-   INFERA_FRONTEND_IMAGE="${FRONTEND_REPO_DIGEST}" \
-     docker compose -f docker-compose.prod.yml ps frontend
+   . ./scripts/production-env-source.sh
+   production_compose -f docker-compose.prod.yml ps frontend
    ```
 
    Never use an on-host `docker-compose.prod.yml`—including

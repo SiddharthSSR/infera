@@ -2,10 +2,17 @@
 
 set -euo pipefail
 
+if [[ "$(id -u)" -ne 0 ]]; then
+  exec sudo -n bash "$0"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-TEST_ROOT="$(mktemp -d)"
+ROOT_TEST_BASE="$(python3 -c 'import os, pwd; print(os.path.realpath(pwd.getpwuid(0).pw_dir))')"
+TEST_ROOT="$(mktemp -d "${ROOT_TEST_BASE}/.infera-prometheus-test.XXXXXX")"
 trap 'rm -rf "${TEST_ROOT}"' EXIT
+python3 "${REPO_ROOT}/scripts/write-production-env-test-fixture.py" \
+  "${TEST_ROOT}/production.env" --gateway-replicas 2
 
 readonly CONFIG_SHA="10b5521ca8a8f0c9c8113ed70ce6d6cf863a07619d3a4efa6f1a4072841d4b53"
 readonly ALERTS_SHA="053732934fa41f2b59cfe0b73a1a1c7fb839f46527fa4cb15d6df14c3575419f"
@@ -268,6 +275,15 @@ sleep() {
 export -f docker curl sleep read_state write_state increment_reload_count
 export -f mock_rules_json mock_targets_json
 export CONFIG_SHA ALERTS_SHA SLO_SHA ROLLBACK_SHA IMAGE_ID
+mkdir -p "${TEST_ROOT}/bin"
+{
+  printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+  declare -f docker read_state write_state increment_reload_count
+  declare -f mock_rules_json mock_targets_json
+  printf '%s\n' 'docker "$@"'
+} >"${TEST_ROOT}/bin/docker"
+chmod +x "${TEST_ROOT}/bin/docker"
+export PATH="${TEST_ROOT}/bin:${PATH}"
 
 new_fixture() {
   local name="$1"
@@ -293,6 +309,7 @@ run_wrapper() {
   source_revision="$(git -C "${FIXTURE}" rev-parse HEAD)"
   MOCK_SCENARIO="${scenario}" \
   MOCK_STATE_DIR="${FIXTURE}/state" \
+  INFERA_PRODUCTION_ENV_FILE="${TEST_ROOT}/production.env" \
   COMPOSE_FILE="${FIXTURE}/docker-compose.prod.yml" \
   INFERA_PROMETHEUS_SOURCE_ROOT="${FIXTURE}" \
   INFERA_PROMETHEUS_SOURCE_REVISION="${source_revision}" \

@@ -190,6 +190,8 @@ jobs:
 
       - name: Test deployment recovery behavior
         run: |
+          bash ./scripts/test-production-env-source.sh
+          sudo -n bash ./scripts/test-production-env-compose-values.sh
           bash ./scripts/test-build-reviewed-frontend.sh
           bash ./scripts/test-frontend-compose-action.sh
           bash ./scripts/test-build-reviewed-release-images.sh

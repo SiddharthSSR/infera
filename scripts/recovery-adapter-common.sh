@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+RECOVERY_COMMON_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=production-env-source.sh
+source "${RECOVERY_COMMON_SCRIPT_DIR}/production-env-source.sh"
+
 recovery_now_epoch() {
   date +%s
 }
@@ -107,17 +111,16 @@ recovery_manifest_value() {
 
 recovery_env_value() {
   local key="$1"
-  local env_file="${INFERA_ENV_FILE:-.env}"
-  if [[ -n "${!key:-}" ]]; then
-    printf '%s\n' "${!key}"
-    return
-  fi
-  awk -F= -v wanted="${key}" '$1 == wanted { count++; value=substr($0, index($0, "=") + 1) } END { if (count != 1 || value == "") exit 1; print value }' "${env_file}"
+  production_env_value "${key}"
 }
 
 recovery_max_cost_hour() {
   local configured
   configured="$(recovery_env_value INFERA_RECOVERY_WORKER_MAX_COST_HOUR)" || return 1
+  if [[ "${INFERA_RECOVERY_WORKER_MAX_COST_HOUR+x}" == "x" &&
+    "${INFERA_RECOVERY_WORKER_MAX_COST_HOUR}" != "${configured}" ]]; then
+    return 1
+  fi
   python3 - "${configured}" <<'PY'
 import json
 import math
@@ -139,12 +142,7 @@ PY
 }
 
 recovery_configured_gateway_replicas() {
-  if [[ -n "${INFERA_GATEWAY_REPLICAS:-}" ]]; then
-    printf '%s\n' "${INFERA_GATEWAY_REPLICAS}"
-    return
-  fi
-  local env_file="${INFERA_ENV_FILE:-.env}"
-  awk -F= '$1 == "INFERA_GATEWAY_REPLICAS" { count++; value=substr($0, index($0, "=") + 1) } END { if (count == 1 && value != "") print value; else print "1" }' "${env_file}"
+  production_env_value INFERA_GATEWAY_REPLICAS
 }
 
 recovery_gateway_urls() {
@@ -161,7 +159,7 @@ recovery_gateway_urls() {
   local gateway_urls=()
   expected_replicas="$(recovery_configured_gateway_replicas)"
   [[ "${expected_replicas}" =~ ^[1-9][0-9]*$ ]] || return 1
-  gateway_ids_output="$(docker compose -f "${compose_file}" ps -q gateway)" || return 1
+  gateway_ids_output="$(production_compose -f "${compose_file}" ps -q gateway)" || return 1
   while IFS= read -r gateway_id; do
     [[ -n "${gateway_id}" ]] && gateway_ids[${#gateway_ids[@]}]="${gateway_id}"
   done <<<"${gateway_ids_output}"

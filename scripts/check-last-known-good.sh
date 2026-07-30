@@ -68,7 +68,7 @@ recovery_assert_gateway_identity "${MANIFEST}" || {
 }
 
 gateway_ids=()
-gateway_ids_output="$(docker compose -f "${COMPOSE_FILE}" ps -q gateway)" || {
+gateway_ids_output="$(production_compose -f "${COMPOSE_FILE}" ps -q gateway)" || {
   echo "ERROR: unable to enumerate running gateway containers" >&2
   exit 1
 }

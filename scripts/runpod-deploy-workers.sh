@@ -13,6 +13,7 @@ if ! MAX_COST_HOUR="$(recovery_max_cost_hour)"; then
   echo "ERROR: INFERA_RECOVERY_WORKER_MAX_COST_HOUR must be a positive finite decimal within the supported hourly price range" >&2
   exit 2
 fi
+export INFERA_RECOVERY_WORKER_MAX_COST_HOUR="${MAX_COST_HOUR}"
 ADMIN_KEY="$(recovery_env_value INFERA_ADMIN_KEY)"
 RUNPOD_KEY="$(recovery_env_value RUNPOD_API_KEY)"
 ADMIN_CONFIG=""
