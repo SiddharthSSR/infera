@@ -45,6 +45,7 @@ const (
 	costStateConfirmedDrift      = "confirmed_price_drift"
 	costStateConfirmedNoAdvert   = "confirmed_advertised_price_unavailable"
 	insufficientMachineResources = "This machine does not have the resources to deploy your pod. Please try a different machine"
+	placementUnavailable         = "There are no longer any instances available with the requested specifications. Please refresh and try again."
 )
 
 // Provider implements the RunPod GPU provider.
@@ -1316,7 +1317,8 @@ func (p *Provider) graphQL(ctx context.Context, query string, variables map[stri
 	if len(gqlResp.Errors) > 0 {
 		message := strings.TrimSpace(gqlResp.Errors[0].Message)
 		code := providers.ProviderErrorGraphQLError
-		if strings.EqualFold(message, insufficientMachineResources) {
+		if strings.EqualFold(message, insufficientMachineResources) ||
+			strings.EqualFold(message, placementUnavailable) {
 			code = providers.ProviderErrorCapacityUnavailable
 		}
 		return nil, &providers.ProviderError{
