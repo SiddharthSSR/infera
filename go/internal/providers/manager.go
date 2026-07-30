@@ -300,9 +300,17 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 	instance.WorkerCredential = req.WorkerToken
 	instance.WorkerCredentialHash = credentialHash
 
-	// Track instance and begin the worker-registration deadline.
+	// Persist the provider resource in an inactive lifecycle state first. A
+	// worker may receive its callback credential before Provision returns, so
+	// the credential must not become usable until the shared cost session is
+	// durable.
 	m.initializeWorkerRegistration(instance, m.now())
-	if err := m.putTrackedInstance(instance); err != nil {
+	activeInstance := cloneInstance(instance)
+	trackedInstance := cloneInstance(instance)
+	trackedInstance.Status = InstanceStatusStarting
+	claimedAt := m.now()
+	trackedInstance.LifecycleClaimedAt = &claimedAt
+	if err := m.putTrackedInstance(trackedInstance); err != nil {
 		// A provider resource without its credential record cannot safely join
 		// the control plane. Best-effort cleanup avoids leaving a paid orphan.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), m.providerCleanupTimeout)
@@ -315,13 +323,106 @@ func (m *Manager) Provision(ctx context.Context, req *ProvisionRequest) (*Instan
 		return nil, persistErr
 	}
 
-	// Start cost tracking
+	persistedInstance, found, err := m.getTrackedInstance(instance.ID)
+	if err != nil || !found {
+		if err == nil {
+			err = errors.New("managed instance disappeared after persistence")
+		}
+		return nil, m.abortProvisionedInstance(
+			provider,
+			trackedInstance,
+			fmt.Errorf("load persisted managed instance: %w", err),
+		)
+	}
+	trackedInstance = persistedInstance
+	if err := m.syncInfrastructureCostInstance(activeInstance); err != nil {
+		return nil, m.abortProvisionedInstance(
+			provider,
+			trackedInstance,
+			fmt.Errorf("persist shared infrastructure cost session: %w", err),
+		)
+	}
+	updated, err := m.instances.updateIfLifecycleVersion(instance.ID, trackedInstance.LifecycleVersion, func(stored *Instance) {
+		stored.Status = activeInstance.Status
+		stored.LifecycleClaimedAt = nil
+	})
+	if err != nil || !updated {
+		if err == nil {
+			err = ErrLifecycleConflict
+		}
+		return nil, m.abortProvisionedInstance(
+			provider,
+			trackedInstance,
+			fmt.Errorf("activate cost-accounted managed instance: %w", err),
+		)
+	}
+	activeInstance.LifecycleVersion = trackedInstance.LifecycleVersion + 1
+	activeInstance.LifecycleClaimedAt = nil
+	instance = activeInstance
+
+	// The process-local tracker remains operational telemetry only. Starting it
+	// after durable activation prevents it from masking a shared-ledger failure.
 	m.costs.StartTracking(instance)
 
 	return instance, nil
 }
 
 var ErrLifecycleConflict = errors.New("provider instance lifecycle changed concurrently")
+
+func (m *Manager) abortProvisionedInstance(provider Provider, instance *Instance, cause error) error {
+	if instance == nil {
+		return cause
+	}
+	updated, transitionErr := m.instances.updateLifecycle(instance.ID, func(stored *Instance) {
+		stored.Status = InstanceStatusTerminating
+		now := m.now()
+		stored.LifecycleClaimedAt = &now
+		m.clearWorkerRegistration(stored)
+	})
+	if transitionErr == nil && !updated {
+		transitionErr = ErrLifecycleConflict
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), m.providerCleanupTimeout)
+	cleanupErr := provider.Terminate(cleanupCtx, instance.ProviderID)
+	cancel()
+	if cleanupErr != nil && !providerInstanceNotFound(cleanupErr) {
+		errs := []error{cause, fmt.Errorf("terminate failed provision provider instance: %w", cleanupErr)}
+		if transitionErr != nil {
+			errs = append(errs, fmt.Errorf("deactivate failed provision: %w", transitionErr))
+		}
+		return errors.Join(errs...)
+	}
+	finalized, finalizeErr := m.instances.updateLifecycle(instance.ID, func(stored *Instance) {
+		stored.Status = InstanceStatusTerminated
+		now := m.now()
+		stored.StoppedAt = &now
+		stored.LifecycleClaimedAt = nil
+		m.clearWorkerRegistration(stored)
+	})
+	if finalizeErr == nil && !finalized {
+		finalizeErr = ErrLifecycleConflict
+	}
+	closeErr := m.syncInfrastructureCostByID(instance.ID)
+	if finalizeErr != nil {
+		stopped := cloneInstance(instance)
+		stopped.Status = InstanceStatusTerminated
+		now := m.now()
+		stopped.StoppedAt = &now
+		closeErr = errors.Join(closeErr, m.syncInfrastructureCostInstance(stopped))
+	}
+	errs := []error{cause}
+	if transitionErr != nil {
+		errs = append(errs, fmt.Errorf("deactivate failed provision: %w", transitionErr))
+	}
+	if finalizeErr != nil {
+		errs = append(errs, fmt.Errorf("finalize failed provision cleanup: %w", finalizeErr))
+	}
+	if closeErr != nil {
+		errs = append(errs, fmt.Errorf("close failed provision cost session: %w", closeErr))
+	}
+	return errors.Join(errs...)
+}
 
 func lifecycleTransitionInProgress(status InstanceStatus) bool {
 	switch status {
@@ -385,6 +486,53 @@ func (m *Manager) finalizeLifecycle(instanceID string, claimedVersion int64, act
 	return nil
 }
 
+func (m *Manager) finalizeStartingLifecycle(instance *Instance, claimedVersion int64, action string, observed *Instance) error {
+	active := cloneInstance(instance)
+	startedAt := m.now()
+	if active.StoppedAt == nil && active.StartedAt != nil {
+		startedAt = active.StartedAt.UTC()
+	}
+	active.Status = InstanceStatusProvisioning
+	active.StartedAt = &startedAt
+	active.StoppedAt = nil
+	active.ErrorMessage = ""
+	if observed != nil {
+		active.PublicIP = observed.PublicIP
+		active.HTTPPort = observed.HTTPPort
+		active.SSHPort = observed.SSHPort
+	}
+	m.initializeWorkerRegistration(active, startedAt)
+
+	if err := m.syncInfrastructureCostInstance(active); err != nil {
+		return fmt.Errorf("provider %s succeeded but shared cost reconciliation failed; instance remains inactive: %w", action, err)
+	}
+	updated, err := m.instances.updateIfLifecycleVersion(instance.ID, claimedVersion, func(stored *Instance) {
+		stored.Status = active.Status
+		stored.PublicIP = active.PublicIP
+		stored.HTTPPort = active.HTTPPort
+		stored.SSHPort = active.SSHPort
+		stored.StartedAt = active.StartedAt
+		stored.StoppedAt = nil
+		stored.ErrorMessage = ""
+		stored.WorkerRegistrationStatus = active.WorkerRegistrationStatus
+		stored.WorkerRegistrationDeadline = active.WorkerRegistrationDeadline
+		stored.LastWorkerRegistrationError = active.LastWorkerRegistrationError
+		stored.LastWorkerRegistrationCheckAt = active.LastWorkerRegistrationCheckAt
+		stored.WorkerHealthURL = active.WorkerHealthURL
+		stored.ProviderNetworkReady = active.ProviderNetworkReady
+		stored.ProviderNetworkError = active.ProviderNetworkError
+		stored.LifecycleClaimedAt = nil
+	})
+	if err != nil {
+		return fmt.Errorf("provider %s succeeded but durable lifecycle finalization failed; instance remains inactive: %w", action, err)
+	}
+	if !updated {
+		return fmt.Errorf("provider %s succeeded but lifecycle finalization lost its claim: %w", action, ErrLifecycleConflict)
+	}
+	m.costs.StartTracking(active)
+	return nil
+}
+
 func (m *Manager) finalizeProviderMissing(instanceID string, claimedVersion int64, action string) error {
 	m.costs.StopTracking(instanceID)
 	return m.finalizeLifecycle(instanceID, claimedVersion, action, func(instance *Instance) {
@@ -431,18 +579,7 @@ func (m *Manager) reconcileTransitionalLifecycle(ctx context.Context, instance *
 	case InstanceStatusStarting:
 		switch observed.Status {
 		case InstanceStatusPending, InstanceStatusProvisioning, InstanceStatusRunning:
-			m.costs.StartTracking(instance)
-			return m.finalizeLifecycle(instance.ID, claimedVersion, "start recovery observation", func(stored *Instance) {
-				stored.Status = InstanceStatusProvisioning
-				stored.PublicIP = observed.PublicIP
-				stored.HTTPPort = observed.HTTPPort
-				stored.SSHPort = observed.SSHPort
-				startedAt := m.now()
-				stored.StartedAt = &startedAt
-				stored.StoppedAt = nil
-				stored.ErrorMessage = ""
-				m.initializeWorkerRegistration(stored, startedAt)
-			})
+			return m.finalizeStartingLifecycle(instance, claimedVersion, "start recovery observation", observed)
 		case InstanceStatusStopped:
 			// The provider confirms the original start did not take effect.
 		default:
@@ -459,15 +596,7 @@ func (m *Manager) reconcileTransitionalLifecycle(ctx context.Context, instance *
 			}
 			return nil
 		}
-		m.costs.StartTracking(instance)
-		return m.finalizeLifecycle(instance.ID, claimedVersion, "start recovery", func(stored *Instance) {
-			stored.Status = InstanceStatusProvisioning
-			startedAt := m.now()
-			stored.StartedAt = &startedAt
-			stored.StoppedAt = nil
-			stored.ErrorMessage = ""
-			m.initializeWorkerRegistration(stored, startedAt)
-		})
+		return m.finalizeStartingLifecycle(instance, claimedVersion, "start recovery", nil)
 	case InstanceStatusStopping:
 		switch observed.Status {
 		case InstanceStatusStopped:
@@ -660,18 +789,7 @@ func (m *Manager) Start(ctx context.Context, instanceID string) error {
 		}
 	}
 
-	// Resume cost tracking
-	m.costs.StartTracking(instance)
-
-	err = m.finalizeLifecycle(instanceID, claimedVersion, "start", func(instance *Instance) {
-		now := m.now()
-		instance.Status = InstanceStatusProvisioning
-		instance.StartedAt = &now
-		instance.StoppedAt = nil
-		instance.ErrorMessage = ""
-		m.initializeWorkerRegistration(instance, now)
-	})
-	return err
+	return m.finalizeStartingLifecycle(instance, claimedVersion, "start", nil)
 }
 
 // Stop stops a running instance.
