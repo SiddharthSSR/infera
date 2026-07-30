@@ -128,6 +128,26 @@ func (l *testInfrastructureCostLedger) snapshot() ([]InfrastructureCostSession, 
 	return sessions, l.ensureCalls, l.closeMutations
 }
 
+type blockingInfrastructureCostLedger struct {
+	*testInfrastructureCostLedger
+	ensureCalls       atomic.Int32
+	firstEnsure       chan struct{}
+	releaseFirst      chan struct{}
+	secondEnsureError error
+}
+
+func (l *blockingInfrastructureCostLedger) EnsureInfrastructureCostSession(session InfrastructureCostSession) error {
+	call := l.ensureCalls.Add(1)
+	if call == 1 {
+		close(l.firstEnsure)
+		<-l.releaseFirst
+	}
+	if call == 2 && l.secondEnsureError != nil {
+		return l.secondEnsureError
+	}
+	return l.testInfrastructureCostLedger.EnsureInfrastructureCostSession(session)
+}
+
 // mockTestProvider is a simple mock for testing the manager
 type mockTestProvider struct {
 	instances  map[string]*Instance
@@ -168,6 +188,14 @@ func (p *fixedProvisionTimeProvider) Provision(ctx context.Context, req *Provisi
 	instance.CreatedAt = startedAt
 	instance.StartedAt = &startedAt
 	return instance, nil
+}
+
+func (p *fixedProvisionTimeProvider) GetInstance(ctx context.Context, instanceID string) (*Instance, error) {
+	instance := p.findInstance(instanceID)
+	if instance == nil {
+		return nil, &ProviderError{Provider: ProviderMock, Code: ProviderErrorNotFound, Message: "not found"}
+	}
+	return cloneInstance(instance), nil
 }
 
 type delayedRefreshProvider struct {
@@ -2211,6 +2239,181 @@ func TestManagerProvisionSharedCostIsVisibleAcrossReplicas(t *testing.T) {
 	sessions, _, _ := ledger.snapshot()
 	if len(sessions) != 1 || sessions[0].StoppedAt != nil {
 		t.Fatalf("shared active session mismatch: %+v", sessions)
+	}
+}
+
+func TestManagerProvisionRecoveryRaceKeepsCleanupDurablyInactive(t *testing.T) {
+	startedAt := time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
+	var clock atomic.Int64
+	clock.Store(startedAt.UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()).UTC() }
+	store := newInMemoryInstanceStore()
+	ledger := &blockingInfrastructureCostLedger{
+		testInfrastructureCostLedger: newTestInfrastructureCostLedger(startedAt.Add(-time.Hour)),
+		firstEnsure:                  make(chan struct{}),
+		releaseFirst:                 make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(ledger.releaseFirst) }) }
+	t.Cleanup(release)
+	provider := &fixedProvisionTimeProvider{mockTestProvider: newMockTestProvider(), now: startedAt}
+	config := ManagerConfig{
+		DefaultProvider:           ProviderMock,
+		LifecycleOperationTimeout: 10 * time.Millisecond,
+		LifecycleReconcileLease:   50 * time.Millisecond,
+		ProviderCleanupTimeout:    time.Second,
+		Now:                       now,
+	}
+	replicaA, err := NewManagerWithStore(config, store)
+	if err != nil {
+		t.Fatalf("create replica A: %v", err)
+	}
+	t.Cleanup(func() { _ = replicaA.Close() })
+	replicaB, err := NewManagerWithStore(config, store)
+	if err != nil {
+		t.Fatalf("create replica B: %v", err)
+	}
+	t.Cleanup(func() { _ = replicaB.Close() })
+	for _, manager := range []*Manager{replicaA, replicaB} {
+		manager.SetInfrastructureCostLedger(ledger)
+		manager.RegisterProvider(provider)
+	}
+
+	type provisionResult struct {
+		instance *Instance
+		err      error
+	}
+	result := make(chan provisionResult, 1)
+	req := &ProvisionRequest{Name: "recovery-race", WorkspaceID: "ws_alpha", GPUType: GPUH100}
+	go func() {
+		instance, provisionErr := replicaA.Provision(context.Background(), req)
+		result <- provisionResult{instance: instance, err: provisionErr}
+	}()
+	<-ledger.firstEnsure
+
+	clock.Store(startedAt.Add(time.Minute).UnixNano())
+	if err := replicaB.RefreshInstances(context.Background()); err != nil {
+		t.Fatalf("recover expired provision: %v", err)
+	}
+	instances, err := store.listByWorkspace(req.WorkspaceID)
+	if err != nil || len(instances) != 1 {
+		t.Fatalf("read recovered provision: instances=%+v err=%v", instances, err)
+	}
+	stored := instances[0]
+	if stored.Status != InstanceStatusProvisioning {
+		t.Fatalf("recovery did not activate cost-accounted instance: %+v", stored)
+	}
+	sessions, _, _ := ledger.snapshot()
+	if len(sessions) != 1 || sessions[0].StoppedAt != nil || !sessions[0].StartedAt.Equal(startedAt) {
+		t.Fatalf("recovery activated before durable provider snapshot: %+v", sessions)
+	}
+	if authenticated, ok, authErr := replicaB.AuthenticateWorkerToken(req.WorkerToken); authErr != nil || !ok || authenticated.ID != stored.ID {
+		t.Fatalf("durably accounted recovery credential inactive: found=%v err=%v instance=%+v", ok, authErr, authenticated)
+	}
+
+	release()
+	provisioned := <-result
+	if provisioned.instance != nil || !errors.Is(provisioned.err, ErrLifecycleConflict) {
+		t.Fatalf("original provision did not lose stale activation claim: instance=%+v err=%v", provisioned.instance, provisioned.err)
+	}
+	stored, found, err := store.get(stored.ID)
+	if err != nil || !found || stored.Status != InstanceStatusTerminated || stored.LifecycleClaimedAt != nil {
+		t.Fatalf("lost-CAS cleanup left record active: found=%v err=%v instance=%+v", found, err, stored)
+	}
+	if authenticated, ok, authErr := replicaB.AuthenticateWorkerToken(req.WorkerToken); authErr != nil || ok || authenticated != nil {
+		t.Fatalf("lost-CAS cleanup left credential active: found=%v err=%v instance=%+v", ok, authErr, authenticated)
+	}
+	sessions, _, closeMutations := ledger.snapshot()
+	if len(sessions) != 1 || sessions[0].StoppedAt == nil || closeMutations != 1 {
+		t.Fatalf("lost-CAS cleanup did not close durable session exactly once: sessions=%+v close_mutations=%d", sessions, closeMutations)
+	}
+	if len(provider.terminated) != 1 {
+		t.Fatalf("lost-CAS cleanup did not terminate provider exactly once: %v", provider.terminated)
+	}
+}
+
+func TestManagerProvisionRecoveryLedgerFailureNeverActivatesCredential(t *testing.T) {
+	startedAt := time.Date(2026, time.August, 3, 13, 0, 0, 0, time.UTC)
+	var clock atomic.Int64
+	clock.Store(startedAt.UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()).UTC() }
+	store := newInMemoryInstanceStore()
+	ledgerErr := errors.New("recovery ledger unavailable")
+	ledger := &blockingInfrastructureCostLedger{
+		testInfrastructureCostLedger: newTestInfrastructureCostLedger(startedAt.Add(-time.Hour)),
+		firstEnsure:                  make(chan struct{}),
+		releaseFirst:                 make(chan struct{}),
+		secondEnsureError:            ledgerErr,
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(ledger.releaseFirst) }) }
+	t.Cleanup(release)
+	provider := &fixedProvisionTimeProvider{mockTestProvider: newMockTestProvider(), now: startedAt}
+	config := ManagerConfig{
+		DefaultProvider:           ProviderMock,
+		LifecycleOperationTimeout: 10 * time.Millisecond,
+		LifecycleReconcileLease:   50 * time.Millisecond,
+		ProviderCleanupTimeout:    time.Second,
+		Now:                       now,
+	}
+	replicaA, err := NewManagerWithStore(config, store)
+	if err != nil {
+		t.Fatalf("create replica A: %v", err)
+	}
+	t.Cleanup(func() { _ = replicaA.Close() })
+	replicaB, err := NewManagerWithStore(config, store)
+	if err != nil {
+		t.Fatalf("create replica B: %v", err)
+	}
+	t.Cleanup(func() { _ = replicaB.Close() })
+	for _, manager := range []*Manager{replicaA, replicaB} {
+		manager.SetInfrastructureCostLedger(ledger)
+		manager.RegisterProvider(provider)
+	}
+
+	type provisionResult struct {
+		instance *Instance
+		err      error
+	}
+	result := make(chan provisionResult, 1)
+	req := &ProvisionRequest{Name: "recovery-ledger-failure", WorkspaceID: "ws_alpha", GPUType: GPUL40S}
+	go func() {
+		instance, provisionErr := replicaA.Provision(context.Background(), req)
+		result <- provisionResult{instance: instance, err: provisionErr}
+	}()
+	<-ledger.firstEnsure
+
+	clock.Store(startedAt.Add(time.Minute).UnixNano())
+	if err := replicaB.RefreshInstances(context.Background()); !errors.Is(err, ledgerErr) {
+		t.Fatalf("recovery did not surface durable ledger failure: %v", err)
+	}
+	instances, err := store.listByWorkspace(req.WorkspaceID)
+	if err != nil || len(instances) != 1 {
+		t.Fatalf("read failed recovery: instances=%+v err=%v", instances, err)
+	}
+	stored := instances[0]
+	if stored.Status != InstanceStatusStarting || stored.LifecycleClaimedAt == nil {
+		t.Fatalf("ledger failure activated starting record: %+v", stored)
+	}
+	if authenticated, ok, authErr := replicaB.AuthenticateWorkerToken(req.WorkerToken); authErr != nil || ok || authenticated != nil {
+		t.Fatalf("ledger failure exposed credential: found=%v err=%v instance=%+v", ok, authErr, authenticated)
+	}
+	sessions, _, _ := ledger.snapshot()
+	if len(sessions) != 0 {
+		t.Fatalf("failed recovery unexpectedly persisted a session: %+v", sessions)
+	}
+
+	release()
+	provisioned := <-result
+	if provisioned.instance != nil || !errors.Is(provisioned.err, ErrLifecycleConflict) {
+		t.Fatalf("original provision did not fail after recovery claim: instance=%+v err=%v", provisioned.instance, provisioned.err)
+	}
+	stored, found, err := store.get(stored.ID)
+	if err != nil || !found || stored.Status != InstanceStatusTerminated || stored.LifecycleClaimedAt != nil {
+		t.Fatalf("post-conflict cleanup was not safely finalized: found=%v err=%v instance=%+v", found, err, stored)
+	}
+	if authenticated, ok, authErr := replicaB.AuthenticateWorkerToken(req.WorkerToken); authErr != nil || ok || authenticated != nil {
+		t.Fatalf("post-conflict cleanup left credential active: found=%v err=%v instance=%+v", ok, authErr, authenticated)
 	}
 }
 
