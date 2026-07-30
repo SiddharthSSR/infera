@@ -80,6 +80,13 @@ describe('auth access contract fixtures', () => {
     mockFetch
       .mockResolvedValueOnce({
         ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: { get: () => 'application/json' },
+        json: async () => loadJSONFixture('auth_error_invalid_api_key.json'),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
         status: 403,
         statusText: 'Forbidden',
         headers: { get: () => 'application/json' },
@@ -121,12 +128,21 @@ describe('auth access contract fixtures', () => {
         json: async () => loadJSONFixture('auth_error_method_not_allowed.json'),
       });
 
-    await expect(createSession('inf_fixture_service')).rejects.toThrow(
-      'Service accounts cannot create dashboard sessions.',
-    );
-    await expect(createSession('inf_fixture_inference_only')).rejects.toThrow(
-      'Dashboard access required.',
-    );
+    await expect(createSession('inf_fixture_invalid')).rejects.toMatchObject({
+      code: 'invalid_credentials',
+      status: 401,
+      errorType: 'authentication_error',
+    });
+    await expect(createSession('inf_fixture_service')).rejects.toMatchObject({
+      code: 'service_account_forbidden',
+      status: 403,
+      errorType: 'authorization_error',
+    });
+    await expect(createSession('inf_fixture_inference_only')).rejects.toMatchObject({
+      code: 'dashboard_access_forbidden',
+      status: 403,
+      errorType: 'authorization_error',
+    });
     await expect(fetchWorkspaces()).rejects.toThrow(
       'Failed to fetch workspaces (403 Forbidden): Workspace access required.',
     );
@@ -139,6 +155,44 @@ describe('auth access contract fixtures', () => {
     await expect(createApiKey('CI Bot', 'operator', 'service_account')).rejects.toThrow(
       'Failed to create key (405 Method Not Allowed): Method not allowed',
     );
+  });
+
+  it('classifies the production-compatible top-level 401 response as rejected credentials', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: { get: () => 'application/json' },
+      json: async () => ({ message: 'Invalid or revoked API key.' }),
+    });
+
+    await expect(createSession('inf_clearly_synthetic_invalid')).rejects.toMatchObject({
+      code: 'invalid_credentials',
+      status: 401,
+    });
+  });
+
+  it('fails a different structured 403 closed to dashboard-access guidance without exposing detail', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      headers: { get: () => 'application/json' },
+      json: async () => ({
+        error: {
+          type: 'authorization_error',
+          message: 'Unrecognized authorization policy detail.',
+        },
+      }),
+    });
+
+    const error = await createSession('inf_wrong_key_type').catch((cause: unknown) => cause);
+    expect(error).toMatchObject({
+      code: 'dashboard_access_forbidden',
+      status: 403,
+      errorType: 'authorization_error',
+    });
+    expect(error).not.toHaveProperty('message', expect.stringContaining('policy detail'));
   });
 
   it('auth API functions use the shared request and response fixtures', async () => {

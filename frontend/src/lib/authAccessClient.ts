@@ -7,9 +7,16 @@ import type {
   WorkspaceInvitationPreview,
   WorkspaceRecord,
 } from '../types';
-import { parseApiKeyCreateResponse, parseApiKeysResponse, parseSessionResponse, parseWorkspacesResponse } from './authAccess';
+import {
+  classifySessionCreateError,
+  parseApiKeyCreateResponse,
+  parseApiKeysResponse,
+  parseAuthErrorResponse,
+  parseSessionResponse,
+  parseWorkspacesResponse,
+} from './authAccess';
 import { parseWorkspaceInvitationAcceptResponse, parseWorkspaceInvitationPreviewResponse } from './workspaceAdmin';
-import { API_BASE, authFetch, readResponseError, readResponseMessage } from './apiCore';
+import { API_BASE, authFetch, readResponseError } from './apiCore';
 
 export async function createSession(apiKey: string): Promise<SessionInfo> {
   const response = await fetch(`${API_BASE}/api/auth/session`, {
@@ -19,9 +26,13 @@ export async function createSession(apiKey: string): Promise<SessionInfo> {
     body: JSON.stringify({ api_key: apiKey }),
   });
   if (!response.ok) {
-    if (response.status === 401) throw new Error(await readResponseMessage(response, 'Invalid API key'));
-    if (response.status === 403) throw new Error(await readResponseMessage(response, 'Dashboard access required'));
-    throw new Error(await readResponseError(response, 'Login failed'));
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = undefined;
+    }
+    throw classifySessionCreateError(response.status, parseAuthErrorResponse(payload));
   }
   return parseSessionResponse(await response.json());
 }
