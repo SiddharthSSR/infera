@@ -3,6 +3,10 @@
 
 set -euo pipefail
 
+if [[ "$(id -u)" -ne 0 ]]; then
+  exec sudo -n bash "$0"
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
@@ -16,7 +20,10 @@ INFERA_WORKER_PROTOCOL_VERSION=1
 INFERA_RECOVERY_API_PROTOCOL_VERSION=1
 INFERA_AUDIT_LEDGER_WRITER_PROTOCOL=2
 EOF
-printf '%s\n' 'INFERA_ADMIN_KEY=test-admin-key' 'RUNPOD_API_KEY=test-runpod-key' >"${TMP_DIR}/env"
+python3 "${REPO_ROOT}/scripts/write-production-env-test-fixture.py" "${TMP_DIR}/env-1" \
+  --gateway-replicas 1
+python3 "${REPO_ROOT}/scripts/write-production-env-test-fixture.py" "${TMP_DIR}/env-2" \
+  --gateway-replicas 2
 
 cat >"${TMP_DIR}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -243,7 +250,7 @@ export TEST_CADDY_CONFIG="${TMP_DIR}/maintenance.Caddyfile"
 export TEST_RUNPOD_STATE="${TMP_DIR}/runpod-state.json"
 export TEST_POST_COUNT="${TMP_DIR}/post-count"
 export TEST_INSTANCE_QUERY_COUNT="${TMP_DIR}/instance-query-count"
-export INFERA_ENV_FILE="${TMP_DIR}/env"
+export INFERA_PRODUCTION_ENV_FILE="${TMP_DIR}/env-1"
 export COMPOSE_FILE="docker-compose.prod.yml"
 export INFERA_BASE_URL="https://inferai.co.in"
 export INFERA_DASHBOARD_URL="https://dashboard.inferai.co.in"
@@ -344,7 +351,6 @@ assert_invalid_max_cost_stops_before_provider_mutation() {
   fi
 }
 
-assert_invalid_max_cost_stops_before_provider_mutation
 invalid_max_cost_hours=(
   ""
   "0"
@@ -525,6 +531,7 @@ fi
 
 : >"${TEST_CALLS}"
 if TEST_GATEWAY_REPLICAS=2 \
+INFERA_PRODUCTION_ENV_FILE="${TMP_DIR}/env-2" \
 INFERA_GATEWAY_REPLICAS=2 \
 INFERA_RECOVERY_WORKER_ENGINE=vllm \
 INFERA_WORKER_IMAGE_VLLM=example/stale-worker:old \
@@ -600,9 +607,9 @@ if TEST_DOCKER_INSPECT_FAIL=1 bash -c 'source "$1/scripts/recovery-adapter-commo
   echo "partial gateway inspection must fail closed" >&2
   exit 1
 fi
-gateway_urls="$(TEST_GATEWAY_REPLICAS=2 INFERA_GATEWAY_REPLICAS=2 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_urls' _ "${REPO_ROOT}")"
+gateway_urls="$(TEST_GATEWAY_REPLICAS=2 INFERA_PRODUCTION_ENV_FILE="${TMP_DIR}/env-2" bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_urls' _ "${REPO_ROOT}")"
 [[ "$(printf '%s\n' "${gateway_urls}" | wc -l | tr -d ' ')" == "2" ]]
-[[ "$(TEST_GATEWAY_REPLICAS=2 INFERA_GATEWAY_REPLICAS=2 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_url' _ "${REPO_ROOT}")" == "http://172.20.0.9:8080" ]]
+[[ "$(TEST_GATEWAY_REPLICAS=2 INFERA_PRODUCTION_ENV_FILE="${TMP_DIR}/env-2" bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_url' _ "${REPO_ROOT}")" == "http://172.20.0.9:8080" ]]
 if TEST_GATEWAY_REPLICAS=2 INFERA_GATEWAY_REPLICAS=3 bash -c 'source "$1/scripts/recovery-adapter-common.sh"; recovery_gateway_urls' _ "${REPO_ROOT}"; then
   echo "gateway replica count mismatch must fail closed" >&2
   exit 1
@@ -626,6 +633,7 @@ assert_recovery_smoke_timeouts() {
 
 : >"${TEST_CALLS}"
 TEST_GATEWAY_REPLICAS=2 \
+INFERA_PRODUCTION_ENV_FILE="${TMP_DIR}/env-2" \
 INFERA_GATEWAY_REPLICAS=2 \
 INFERA_EXPECT_TRAFFIC_DRAINED=1 \
 INFERA_SMOKE_API_KEY=test-smoke-key \
@@ -637,6 +645,7 @@ assert_recovery_smoke_timeouts 60 4
 
 : >"${TEST_CALLS}"
 TEST_GATEWAY_REPLICAS=2 \
+INFERA_PRODUCTION_ENV_FILE="${TMP_DIR}/env-2" \
 INFERA_GATEWAY_REPLICAS=2 \
 INFERA_EXPECT_TRAFFIC_DRAINED=1 \
 INFERA_SMOKE_API_KEY=test-smoke-key \
@@ -754,6 +763,7 @@ if grep -q '/internal/prometheus/worker-targets\|/v1/models\|/v1/chat/completion
 fi
 
 if TEST_GATEWAY_REPLICAS=2 \
+INFERA_PRODUCTION_ENV_FILE="${TMP_DIR}/env-2" \
 INFERA_GATEWAY_REPLICAS=2 \
 INFERA_EXPECT_TRAFFIC_DRAINED=1 \
 INFERA_GATEWAY_INTERNAL_URL=http://172.20.0.9:8080 \
@@ -784,7 +794,7 @@ if TEST_BAD_HEALTH=1 TEST_MAINTENANCE_RELOAD_FAIL=1 \
   echo "expected maintenance reload failure to fail restoration" >&2
   exit 1
 fi
-grep -q 'compose -f docker-compose.prod.yml stop caddy' "${TEST_CALLS}"
+grep -q 'compose --env-file .* -f docker-compose.prod.yml stop caddy' "${TEST_CALLS}"
 
 : >"${TEST_CALLS}"
 "${REPO_ROOT}/scripts/caddy-restore-traffic.sh" "${TMP_DIR}/release.manifest"

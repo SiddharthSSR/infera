@@ -49,18 +49,21 @@ Static build metadata is exposed via:
 - `infera_gateway_info`
 - `infera_worker_info`
 
-## Required Environment Variables
+## Production environment source
 
-Set in `.env`:
+Production commands must first load the reviewed root-only pointer:
 
-- `GRAFANA_ADMIN_USER`
-- `GRAFANA_ADMIN_PASSWORD`
-- `ALERT_EMAIL_TO`
-- `ALERT_SMTP_FROM`
-- `ALERT_SMTP_SMARTHOST`
-- `ALERT_SMTP_USERNAME`
-- `ALERT_SMTP_PASSWORD`
-- These must be set to real SMTP/email values before go-live; production compose no longer supplies placeholder defaults.
+```bash
+. /etc/infera/production-env-source
+export INFERA_PRODUCTION_ENV_FILE
+./scripts/validate-prod-env.sh
+```
+
+The pointer sets only `INFERA_PRODUCTION_ENV_FILE=/etc/infera/production.env`; it contains no
+secret values. The target must be an absolute, root-owned regular file with no group/world access.
+The shared deployment/recovery/Prometheus wrapper rejects symlinks, legacy env selectors,
+duplicates, missing names, and ambient production-variable precedence. The source must contain the
+full validator-required name set, including real Grafana and Alertmanager values, before go-live.
 
 ## Gmail SMTP Notes
 
@@ -77,9 +80,10 @@ Use an App Password (not your normal Gmail account password).
 After deploy:
 
 ```bash
-docker compose -f docker-compose.prod.yml ps
+. ./scripts/production-env-source.sh
+production_compose -f docker-compose.prod.yml ps
 curl --fail --silent --show-error --max-time 5 https://dashboard.inferai.co.in/api/health
-docker compose -f docker-compose.prod.yml logs alertmanager --tail=100
+production_compose -f docker-compose.prod.yml logs alertmanager --tail=100
 ```
 
 For local or dev deployments, you can probe Grafana directly without DNS/TLS:
@@ -113,6 +117,8 @@ Run it from the exact reviewed checkout:
 ```bash
 umask 077
 export INFERA_BASE_URL=https://inferai.co.in
+source /etc/infera/production-env-source
+export INFERA_PRODUCTION_ENV_FILE
 export INFERA_PROMETHEUS_SOURCE_REVISION=<full-reviewed-git-sha>
 export INFERA_PROMETHEUS_EVIDENCE_DIR=/secure/evidence/prometheus-reload-<utc-run-id>
 ./scripts/prometheus-safe-reload.sh

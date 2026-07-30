@@ -3,6 +3,20 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=production-env-source.sh
+source "${SCRIPT_DIR}/production-env-source.sh"
+if [[ "${INFERA_RELEASE_VERIFY_MANIFEST_IDENTITY:-0}" == "1" ]]; then
+  : "${INFERA_RELEASE_ID:?manifest release identity is required}"
+  : "${INFERA_WORKER_PROTOCOL_VERSION:?manifest worker protocol is required}"
+  : "${INFERA_RECOVERY_API_PROTOCOL_VERSION:?manifest recovery protocol is required}"
+else
+  INFERA_RELEASE_ID="$(production_env_value INFERA_RELEASE_ID)"
+  INFERA_WORKER_PROTOCOL_VERSION="$(production_env_value INFERA_WORKER_PROTOCOL_VERSION)"
+  INFERA_RECOVERY_API_PROTOCOL_VERSION="$(production_env_value INFERA_RECOVERY_API_PROTOCOL_VERSION)"
+fi
+export INFERA_RELEASE_ID INFERA_WORKER_PROTOCOL_VERSION INFERA_RECOVERY_API_PROTOCOL_VERSION
+
 BASE_URL="${1:-${INFERA_BASE_URL:-https://inferai.co.in}}"
 BASE_URL="${BASE_URL%/}"
 DASHBOARD_URL="${INFERA_DASHBOARD_URL:-https://dashboard.inferai.co.in}"
@@ -28,7 +42,7 @@ echo "  dashboard: ${DASHBOARD_URL}"
 if [[ -n "${GATEWAY_INTERNAL_URL}" ]]; then
   echo "  gateway:   ${GATEWAY_INTERNAL_URL}"
 else
-  echo "  gateway:   docker compose exec gateway"
+  echo "  gateway:   validated production Compose gateway"
 fi
 
 echo "1) Checking public ingress state"
@@ -85,7 +99,7 @@ elif [[ -n "${GATEWAY_INTERNAL_URL}" ]]; then
   WORKER_TARGETS_BODY="$(curl --fail --silent --show-error --max-time "${VERIFY_TIMEOUT}" \
     "${GATEWAY_INTERNAL_URL}/internal/prometheus/worker-targets")"
 else
-  WORKER_TARGETS_BODY="$(docker compose -f "${COMPOSE_FILE}" exec -T gateway \
+  WORKER_TARGETS_BODY="$(production_compose -f "${COMPOSE_FILE}" exec -T gateway \
     wget -qO- http://127.0.0.1:8080/internal/prometheus/worker-targets)"
 fi
 if [[ "${RELEASE_WORKER_MODE}" == "serving" ]]; then
@@ -110,12 +124,10 @@ PY
 fi
 
 echo "5) Running authenticated gateway smoke checks"
-if [[ -z "${INFERA_SMOKE_API_KEY:-}" ]]; then
-  echo "INFERA_SMOKE_API_KEY must be set to run smoke tests" >&2
-  exit 1
-fi
+INFERA_SMOKE_API_KEY="$(production_env_value INFERA_ADMIN_KEY)"
+export INFERA_SMOKE_API_KEY
 if [[ "${RELEASE_WORKER_MODE}" == "cost-saving" ]]; then
-  INFERA_SMOKE_MODEL= SKIP_CHAT_CHECKS=1 "$(dirname "$0")/smoke-test.sh" "${APP_VERIFY_URL}"
+  INFERA_SMOKE_MODEL='' SKIP_CHAT_CHECKS=1 "$(dirname "$0")/smoke-test.sh" "${APP_VERIFY_URL}"
 else
   "$(dirname "$0")/smoke-test.sh" "${APP_VERIFY_URL}"
 fi

@@ -1,6 +1,8 @@
 # Infera Observability Runbooks
 
 The versioned SLO definitions and exact/derived/unavailable measurement contract are in [SLO.md](SLO.md).
+Before any production Compose command, load `/etc/infera/production-env-source` and
+`scripts/production-env-source.sh`; use `production_compose`, never a bare Compose invocation.
 
 ## Prometheus SLO v1 safe reload
 
@@ -11,6 +13,8 @@ The versioned SLO definitions and exact/derived/unavailable measurement contract
 3. Run:
 
    ```bash
+   source /etc/infera/production-env-source
+   export INFERA_PRODUCTION_ENV_FILE
    INFERA_BASE_URL=https://inferai.co.in \
    INFERA_PROMETHEUS_SOURCE_REVISION=<full-reviewed-git-sha> \
    INFERA_PROMETHEUS_EVIDENCE_DIR=/secure/evidence/prometheus-reload-<utc-run-id> \
@@ -39,21 +43,21 @@ The versioned SLO definitions and exact/derived/unavailable measurement contract
 ## InferaGatewayDown
 
 1. Check container status:
-   - `docker compose -f docker-compose.prod.yml ps`
+   - `production_compose -f docker-compose.prod.yml ps`
 2. Check gateway logs:
-   - `docker compose -f docker-compose.prod.yml logs gateway --tail=300`
+   - `production_compose -f docker-compose.prod.yml logs gateway --tail=300`
 3. Check health from inside network:
-   - `docker compose -f docker-compose.prod.yml exec prometheus wget -qO- http://gateway:8080/health`
+   - `production_compose -f docker-compose.prod.yml exec prometheus wget -qO- http://gateway:8080/health`
 4. If restart loop persists, inspect `data/` mount and required env vars.
 
 ## InferaGatewayHigh5xxRate
 
 1. Inspect recent gateway errors:
-   - `docker compose -f docker-compose.prod.yml logs gateway --since=15m`
+   - `production_compose -f docker-compose.prod.yml logs gateway --since=15m`
 2. Check Caddy upstream errors:
-   - `docker compose -f docker-compose.prod.yml logs caddy --since=15m`
+   - `production_compose -f docker-compose.prod.yml logs caddy --since=15m`
 3. Check worker availability:
-   - `curl -H "Authorization: Bearer $INFERA_ADMIN_KEY" https://inferai.co.in/api/workers`
+   - `./scripts/release-verify.sh` (uses the validated production source for authentication)
 4. If caused by recent deploy, roll back to previous known-good commit.
 
 ## InferaGatewayP95LatencyHigh

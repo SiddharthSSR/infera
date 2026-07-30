@@ -9,6 +9,12 @@ failures, and the database owner approves ledger restore or point-in-time recove
 
 - A release set is one immutable manifest containing pinned gateway and worker images, one release
   ID, one worker protocol, and one audit-ledger writer protocol. Never mix fields from two manifests.
+- Every production deployment, recovery, provider, and Prometheus adapter gets runtime configuration
+  from the one explicit `INFERA_PRODUCTION_ENV_FILE` source. The path must be absolute and name a
+  root-owned regular file with no group/world access; symlinks, legacy env selectors, duplicate
+  names, missing required names, and ambient production variables fail closed. Adapters never
+  reconstruct credentials from containers or process environments. Compose always receives the
+  exact validated source and only release-manifest identity/image fields may override it.
 - The current immutable release set does not include the Compose frontend image. A coordinated
   gateway/worker rollout therefore does not promote or roll back frontend source. For a release
   containing frontend changes, use the separately recorded frontend canary and promotion procedure
@@ -65,6 +71,69 @@ If the configured database or secret-manager service cannot meet these targets, 
 readiness is blocked. Measure actual RPO/RTO during every drill and record a follow-up when a target
 is missed.
 
+## One-time production environment materialization
+
+This is an operator procedure, not authorization to change production. Run it only after the
+incident commander/platform owner approves the already-established external secret export and the
+runtime-environment change. Do not run it from this review. The approved export must already contain
+the complete production dotenv document; never reconstruct it from containers, `docker inspect`,
+`/proc`, service environments, shell history, or evidence.
+
+From the exact reviewed checkout, in a fresh non-recorded root shell, set
+`APPROVED_ENV_EXPORT` to the absolute root-only file materialized by the approved external secret
+workflow. Do not put values in the command line:
+
+```bash
+set -euo pipefail
+set +x
+set +o history
+HISTFILE=/dev/null
+umask 077
+: "${APPROVED_ENV_EXPORT:?approved external secret export is required}"
+test "${EUID}" -eq 0
+
+INFERA_PRODUCTION_ENV_FILE="${APPROVED_ENV_EXPORT}" \
+  ./scripts/production-env-source.py validate
+
+install -d -o root -g root -m 0700 /etc/infera
+candidate="$(mktemp /etc/infera/.production.env.XXXXXX)"
+cleanup_candidate() { rm -f -- "${candidate:-}"; }
+trap cleanup_candidate EXIT HUP INT TERM
+install -o root -g root -m 0600 -- "${APPROVED_ENV_EXPORT}" "${candidate}"
+INFERA_PRODUCTION_ENV_FILE="${candidate}" \
+  ./scripts/production-env-source.py validate
+
+if test -e /etc/infera/production.env || test -L /etc/infera/production.env; then
+  INFERA_PRODUCTION_ENV_FILE=/etc/infera/production.env \
+    ./scripts/production-env-source.py validate
+fi
+if test -f /etc/infera/production.env &&
+  cmp -s -- "${candidate}" /etc/infera/production.env; then
+  rm -f -- "${candidate}"
+else
+  mv -f -- "${candidate}" /etc/infera/production.env
+  chown root:root /etc/infera/production.env
+  chmod 0600 /etc/infera/production.env
+fi
+
+install -o root -g root -m 0600 \
+  deploy/production/infera-production-env-source \
+  /etc/infera/production-env-source
+. /etc/infera/production-env-source
+export INFERA_PRODUCTION_ENV_FILE
+./scripts/validate-prod-env.sh
+unset APPROVED_ENV_EXPORT INFERA_PRODUCTION_ENV_FILE candidate
+trap - EXIT HUP INT TERM
+```
+
+The compare-and-atomic-replace sequence is idempotent: an identical approved export leaves the
+runtime file unchanged. A managed service may persist the non-secret pointer with
+`EnvironmentFile=/etc/infera/production-env-source`; adding that unit reference and restarting or
+reloading a service are separate reviewed changes. Do not store the secret-bearing target in Git.
+Delete the external export through its approved cleanup workflow. Keep validation output and
+sanitized recovery evidence in root-only locations (directories mode 0700, files mode 0600), and
+never attach the runtime file or raw command tracing as evidence.
+
 ## Prepare a release set
 
 Build gateway and vLLM worker images from the exact candidate commit through
@@ -87,6 +156,8 @@ the previously reviewed orchestration, then record that release as the new last-
 Keep the current proven manifest at `.infera-recovery/last-known-good.manifest`. Confirm both files:
 
 ```bash
+. /etc/infera/production-env-source
+export INFERA_PRODUCTION_ENV_FILE
 diff -u .infera-recovery/last-known-good.manifest /secure/release/candidate.manifest
 INFERA_ACTIVE_AUDIT_LEDGER_WRITER_PROTOCOL=2 \
   ./scripts/check-last-known-good.sh .infera-recovery/last-known-good.manifest
@@ -101,7 +172,8 @@ the candidate only through the coordinated recovery command below after its full
 passes.
 
 Back up required configuration as a release bundle before rollout: the candidate and last-known-good
-manifests, the production `.env` template containing secret *names* only, and the selected immutable
+manifests, the production variable-name inventory (never values), the reviewed
+`deploy/production/infera-production-env-source` pointer, and the selected immutable
 secret-manager version IDs. For a frontend-bearing release, also record its full source revision and
 immutable frontend repo digest. Store the bundle in the restricted operations vault and record its
 SHA-256 checksum. Do not export secret values into the bundle. To drill configuration restore, copy
@@ -205,8 +277,8 @@ comma-separated `INFERA_RECOVERY_WORKER_GPU_TYPES` to at most five reviewed valu
 `INFERA_RECOVERY_WORKER_GPU_TYPE` remains supported when the ordered variable is unset; setting both
 is an error. `INFERA_RECOVERY_WORKER_ENGINE` selects the reviewed engine. The recovery driver pins
 the selected engine-specific gateway image variable to the manifest's worker image for both rollout
-and rollback, preventing stale `.env` values from mixing release sets. It reads the admin and RunPod
-keys from the environment or `INFERA_ENV_FILE`, places bearer headers only in mode-0600 temporary
+and rollback, preventing runtime-file values from mixing release sets. It reads the admin and RunPod
+keys only from `INFERA_PRODUCTION_ENV_FILE`, places bearer headers only in mode-0600 temporary
 curl configuration files, and waits for the gateway-managed worker to register. Before provisioning
 or stopping, it reconciles only pods whose name exactly matches `infera-release-<release ID>`; an
 orphan from an interrupted attempt is terminated before a replacement is created. A non-final GPU
@@ -335,7 +407,7 @@ Set these resource identifiers from the restricted incident inventory, outside t
 - `INFERA_PROVIDER_KEY_SECRET_ID`
 - `INFERA_PROVIDER_KEY_CURRENT_VERSION_ID`
 - `INFERA_PROVIDER_KEY_PREVIOUS_VERSION_ID`
-- `INFERA_RUNTIME_ENV_FILE`
+- `INFERA_PRODUCTION_ENV_FILE`
 
 Do not put resolved secret IDs, account identifiers, ARNs, principals, host addresses, version IDs,
 or credentials in this repository, tickets, evidence, or terminal transcripts. Refuse an unset or
@@ -375,13 +447,10 @@ export AWS_CLI_AUTO_PROMPT=off
 : "${AWS_REGION:?approved AWS Region is required}"
 : "${INFERA_PROVIDER_KEY_SECRET_ID:?approved secret ID is required}"
 : "${INFERA_PROVIDER_KEY_CURRENT_VERSION_ID:?explicit version ID is required}"
-: "${INFERA_RUNTIME_ENV_FILE:?root-only runtime environment path is required}"
+: "${INFERA_PRODUCTION_ENV_FILE:?root-only runtime environment path is required}"
 
 test "${EUID}" -eq 0
-test -f "${INFERA_RUNTIME_ENV_FILE}"
-test ! -L "${INFERA_RUNTIME_ENV_FILE}"
-test "$(stat -c '%u' "${INFERA_RUNTIME_ENV_FILE}")" = 0
-test "$(stat -c '%a' "${INFERA_RUNTIME_ENV_FILE}")" = 600
+./scripts/production-env-source.py validate
 
 recovered_key=
 runtime_key=
@@ -409,12 +478,8 @@ recovered_key="$(
 }
 test -n "${recovered_key}"
 
-IFS= read -r -d '' runtime_key < <(
-  set +x
-  set +a
-  . "${INFERA_RUNTIME_ENV_FILE}"
-  printf '%s\0' "${INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY-}"
-)
+runtime_key="$(./scripts/production-env-source.py value \
+  INFERA_PROVIDER_CREDENTIAL_ENCRYPTION_KEY)"
 
 if [[ -n "${runtime_key}" && "${recovered_key}" == "${runtime_key}" ]]; then
   printf '%s\n' 'provider_key_matches_runtime=true'
@@ -528,6 +593,7 @@ security owner.
 Run the deterministic failure-injection suite on the reviewed commit:
 
 ```bash
+bash ./scripts/test-production-env-source.sh
 bash ./scripts/test-release-recovery.sh
 bash ./scripts/test-production-recovery-adapters.sh
 bash ./scripts/test-frontend-compose-action.sh

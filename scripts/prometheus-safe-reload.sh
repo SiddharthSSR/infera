@@ -205,13 +205,13 @@ PY
 
 container_unchanged() {
   [[ "$(docker inspect --format '{{.RestartCount}}' "${PROMETHEUS_ID}")" == "${BASE_RESTART_COUNT}" ]] &&
-    [[ "$(docker compose -f "${COMPOSE_FILE}" ps -aq prometheus)" == "${PROMETHEUS_ID}" ]]
+    [[ "$(production_compose -f "${COMPOSE_FILE}" ps -aq prometheus)" == "${PROMETHEUS_ID}" ]]
 }
 
 verify_gateway_zero_workers() {
   local ids_output gateway_id body count=0
   local gateway_ids=()
-  ids_output="$(docker compose -f "${COMPOSE_FILE}" ps -q gateway)" || return 1
+  ids_output="$(production_compose -f "${COMPOSE_FILE}" ps -q gateway)" || return 1
   while IFS= read -r gateway_id; do
     [[ -n "${gateway_id}" ]] && gateway_ids[${#gateway_ids[@]}]="${gateway_id}"
   done <<<"${ids_output}"
@@ -420,7 +420,7 @@ PY
 PROMETHEUS_IDS=()
 while IFS= read -r prometheus_id; do
   [[ -n "${prometheus_id}" ]] && PROMETHEUS_IDS[${#PROMETHEUS_IDS[@]}]="${prometheus_id}"
-done < <(docker compose -f "${COMPOSE_FILE}" ps -aq prometheus)
+done < <(production_compose -f "${COMPOSE_FILE}" ps -aq prometheus)
 if [[ "${#PROMETHEUS_IDS[@]}" -ne 1 || -z "${PROMETHEUS_IDS[0]}" ]]; then
   fail preflight container_count "exactly one Prometheus Compose container is required"
   exit 1

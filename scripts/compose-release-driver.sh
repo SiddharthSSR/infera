@@ -15,18 +15,10 @@ value() {
 }
 
 configured_gateway_replicas() {
-  if [[ -n "${INFERA_GATEWAY_REPLICAS:-}" ]]; then
-    printf '%s\n' "${INFERA_GATEWAY_REPLICAS}"
-    return
-  fi
-  local env_file="${ENV_FILE:-.env}"
-  if [[ -f "${env_file}" ]]; then
-    awk -F= '$1 == "INFERA_GATEWAY_REPLICAS" { count++; value=substr($0, index($0, "=") + 1) } END { if (count == 1 && value != "") print value; else print "1" }' "${env_file}"
-    return
-  fi
-  printf '1\n'
+  production_env_value INFERA_GATEWAY_REPLICAS
 }
 
+RECOVERY_WORKER_ENGINE="${INFERA_RECOVERY_WORKER_ENGINE:-vllm}"
 INFERA_RELEASE_ID="$(value "${MANIFEST}" INFERA_RELEASE_ID)"
 INFERA_GATEWAY_IMAGE="$(value "${MANIFEST}" INFERA_GATEWAY_IMAGE)"
 INFERA_WORKER_IMAGE="$(value "${MANIFEST}" INFERA_WORKER_IMAGE)"
@@ -36,8 +28,8 @@ export INFERA_RELEASE_ID INFERA_GATEWAY_IMAGE INFERA_WORKER_IMAGE INFERA_WORKER_
 
 # The gateway selects an engine-specific worker image before provider
 # provisioning. Pin that selector to the release manifest for both rollout and
-# rollback so a value left in .env cannot cross release-set boundaries.
-case "${INFERA_RECOVERY_WORKER_ENGINE:-vllm}" in
+# rollback so a value in the runtime source cannot cross release-set boundaries.
+case "${RECOVERY_WORKER_ENGINE}" in
   vllm) export INFERA_WORKER_IMAGE_VLLM="${INFERA_WORKER_IMAGE}" ;;
   sglang) export INFERA_WORKER_IMAGE_SGLANG="${INFERA_WORKER_IMAGE}" ;;
   tensorrt_llm) export INFERA_WORKER_IMAGE_TENSORRT_LLM="${INFERA_WORKER_IMAGE}" ;;
@@ -66,7 +58,13 @@ case "${ACTION}" in
       exit 2
     }
     "$(dirname "$0")/validate-prod-env.sh"
-    docker compose -f "${COMPOSE_FILE}" config --quiet
+    production_compose \
+      --override INFERA_RELEASE_ID \
+      --override INFERA_GATEWAY_IMAGE \
+      --override INFERA_WORKER_IMAGE \
+      --override INFERA_WORKER_PROTOCOL_VERSION \
+      --override INFERA_RECOVERY_API_PROTOCOL_VERSION \
+      -f "${COMPOSE_FILE}" config --quiet
     ;;
   stop-workers)
     : "${INFERA_STOP_WORKERS_EXECUTABLE:?provider-specific stop-workers executable is required}"
@@ -76,11 +74,18 @@ case "${ACTION}" in
   deploy-gateway)
     replicas="$(configured_gateway_replicas)"
     [[ "${replicas}" =~ ^[1-9][0-9]*$ ]]
-    docker compose -f "${COMPOSE_FILE}" up -d --no-deps --scale "gateway=${replicas}" gateway
+    production_compose \
+      --override INFERA_RELEASE_ID \
+      --override INFERA_GATEWAY_IMAGE \
+      --override INFERA_WORKER_IMAGE \
+      --override INFERA_WORKER_PROTOCOL_VERSION \
+      --override INFERA_RECOVERY_API_PROTOCOL_VERSION \
+      --override "INFERA_WORKER_IMAGE_${RECOVERY_WORKER_ENGINE^^}" \
+      -f "${COMPOSE_FILE}" up -d --no-deps --scale "gateway=${replicas}" gateway
     gateway_ids=()
     while IFS= read -r gateway_id; do
       [[ -n "${gateway_id}" ]] && gateway_ids+=("${gateway_id}")
-    done < <(docker compose -f "${COMPOSE_FILE}" ps -q gateway)
+    done < <(production_compose -f "${COMPOSE_FILE}" ps -q gateway)
     [[ "${#gateway_ids[@]}" == "${replicas}" ]]
     for _ in $(seq 1 "${INFERA_GATEWAY_HEALTH_ATTEMPTS:-30}"); do
       healthy=0
