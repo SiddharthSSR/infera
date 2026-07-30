@@ -2,6 +2,30 @@
 
 The versioned SLO definitions and exact/derived/unavailable measurement contract are in [SLO.md](SLO.md).
 
+## Prometheus SLO v1 safe reload
+
+1. Keep public ingress drained. Confirm the production recovery controller is idle, both gateway
+   replicas report zero workers, and no worker/provider work is in progress.
+2. Use the exact reviewed checkout and a new empty private evidence directory. Do not override the
+   checked-in image, hashes, rule-group names, rule counts, target set, or expected firing alert.
+3. Run:
+
+   ```bash
+   INFERA_BASE_URL=https://inferai.co.in \
+   INFERA_PROMETHEUS_SOURCE_REVISION=<full-reviewed-git-sha> \
+   INFERA_PROMETHEUS_EVIDENCE_DIR=/secure/evidence/prometheus-reload-<utc-run-id> \
+     ./scripts/prometheus-safe-reload.sh
+   ```
+
+4. A zero exit is the only reload success signal. Verify the mode-0600 evidence contains
+   `event=verify result=pass reason=none` and `event=cleanup result=pass reason=none`. The wrapper
+   does not restore ingress.
+5. On a rejected reload, keep ingress drained and diagnose offline. Do not restart Prometheus.
+6. On semantic failure, the wrapper attempts exactly one rollback reload and retains the reviewed
+   pre-SLO rules on disk. Confirm `event=rollback result=pass reason=none`; absence of that record
+   is a failed rollback and must be escalated. Do not promote traffic, restart the container, or
+   retry from the modified checkout. Reconcile an exact reviewed checkout before any later attempt.
+
 ## InferaSLOAvailabilityBurn
 
 1. Select the alert's `model` and `routing_strategy` in the `Infera Overview` dashboard. Confirm request rate is non-zero; absent traffic intentionally does not page.

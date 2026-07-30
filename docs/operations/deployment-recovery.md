@@ -32,6 +32,13 @@ failures, and the database owner approves ledger restore or point-in-time recove
 - A candidate is last-known-good only after automated verification passes. Authentication, tenant
   isolation, quota enforcement, and the shared ledger must never be bypassed to make a rollout pass.
 - If candidate verification and rollback verification both fail, keep traffic drained and escalate.
+- Prometheus SLO rules are not part of automatic release rollback. While ingress is drained and
+  workers are zero, use only `scripts/prometheus-safe-reload.sh`; it proves the exact reviewed
+  image, mounted hashes, lifecycle capability, targets, groups, rules, and alert continuity before
+  and after a lifecycle reload. It never restarts Prometheus or restores ingress. A semantic
+  failure retains the reviewed pre-SLO rules on disk and requires an exact-checkout reconciliation
+  before retry. See `deploy/observability/README.md` and
+  `deploy/observability/RUNBOOKS.md`.
 - Ingress drain is a required state transition, not a log message: no release mutation may start
   until the drain adapter succeeds, and traffic returns only after release verification succeeds.
 - While ingress is drained, the only public gateway exception is worker registration and heartbeat
