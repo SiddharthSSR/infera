@@ -193,16 +193,24 @@ jobs:
           bash ./scripts/test-build-reviewed-frontend.sh
           bash ./scripts/test-frontend-compose-action.sh
           bash ./scripts/test-build-reviewed-release-images.sh
+          bash ./scripts/test-prometheus-safe-reload.sh
           bash ./scripts/test-release-recovery.sh
           bash ./scripts/test-production-recovery-adapters.sh
           bash ./scripts/test-last-known-good-drift.sh
 
       - name: Validate Prometheus SLO rules
-        run: >-
-          docker run --rm --entrypoint promtool
-          -v "$PWD/deploy/observability/prometheus:/etc/prometheus:ro"
-          prom/prometheus:v2.55.1
-          check config /etc/prometheus/prometheus.yml
+        run: |
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/deploy/observability/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v2.55.1 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/deploy/observability/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v2.55.1 \
+            check rules \
+            /etc/prometheus/rules/infera-alerts.yml \
+            /etc/prometheus/rules/infera-slo-v1.yml \
+            /etc/prometheus/rules/rollback/infera-alerts.pre-slo-v1.yml
 
   prod-smoke:
     name: Production Compose Smoke

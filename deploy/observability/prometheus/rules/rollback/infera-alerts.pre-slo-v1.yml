@@ -1,0 +1,142 @@
+groups:
+  - name: infera-gateway-alerts
+    rules:
+      - alert: InferaGatewayDown
+        expr: up{job="infera_gateway"} == 0 or absent(up{job="infera_gateway"})
+        for: 2m
+        labels:
+          severity: critical
+          service: gateway
+        annotations:
+          summary: Infera gateway is down
+          description: Gateway metrics endpoint has been unreachable for 2 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewaydown
+
+      - alert: InferaGatewayHigh5xxRate
+        expr: |
+          sum(rate(infera_gateway_http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(infera_gateway_http_requests_total[5m]))
+          > 0.05
+          and
+          sum(rate(infera_gateway_http_requests_total[5m])) > 0.033
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: High 5xx ratio on gateway
+          description: More than 5% of gateway requests are returning 5xx for 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewayhigh5xxrate
+
+      - alert: InferaGatewayP95LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(infera_gateway_http_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: Gateway p95 latency is high
+          description: Gateway p95 HTTP latency is above 2 seconds for 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewayp95latencyhigh
+
+      - alert: InferaInferenceTTFTHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, model) (rate(infera_gateway_inference_ttft_seconds_bucket[5m]))
+          ) > 2
+          and
+          sum by (model) (rate(infera_gateway_inference_ttft_seconds_count[5m])) > 0.02
+        for: 5m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: Inference TTFT is high for {{ $labels.model }}
+          description: Model {{ $labels.model }} has p95 time-to-first-token above 2 seconds for 5 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferainferencettfthigh
+
+      - alert: InferaInferenceTPOTHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, model) (rate(infera_gateway_inference_tpot_seconds_bucket[5m]))
+          ) > 0.1
+          and
+          sum by (model) (rate(infera_gateway_inference_tpot_seconds_count[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: Inference TPOT is high for {{ $labels.model }}
+          description: Model {{ $labels.model }} has p95 time-per-output-token above 100ms for 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferainferencetpothigh
+
+      - alert: InferaBatchWaitHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, model) (rate(infera_gateway_batch_wait_seconds_bucket[5m]))
+          ) > 0.2
+          and
+          sum by (model) (rate(infera_gateway_batch_size_count[5m])) > 0.02
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: Batch wait is high for {{ $labels.model }}
+          description: Model {{ $labels.model }} has p95 batch queue wait above 200ms for 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferabatchwaithigh
+
+      - alert: InferaGatewayOverloadRejections
+        expr: sum(rate(infera_gateway_inference_rejected_total{reason="overloaded"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: Gateway is shedding inference requests
+          description: Gateway max in-flight backpressure is rejecting more than 0.05 inference requests per second for 5 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferagatewayoverloadrejections
+
+      - alert: InferaWorkerHealthTransitionsHigh
+        expr: sum(increase(infera_gateway_worker_health_transitions_total[10m])) > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: Worker health transitions are elevated
+          description: More than 3 workers were marked unhealthy or removed by registry health checks in the last 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferaworkerhealthtransitionshigh
+
+      - alert: InferaZeroHealthyWorkers
+        expr: infera_healthy_workers_total == 0
+        for: 3m
+        labels:
+          severity: critical
+          service: gateway
+        annotations:
+          summary: No healthy inference workers are registered
+          description: The gateway is reachable, but inference is unavailable because no healthy workers are registered.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/docs/reliability/zero-worker-detection.md#runbook
+
+  - name: infera-worker-alerts
+    rules:
+      - alert: InferaWorkerHeartbeatAuthRejected
+        expr: sum(increase(infera_worker_gateway_heartbeats_total{status="auth_rejected"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: Worker heartbeats rejected by auth
+          description: At least one worker heartbeat was rejected by gateway auth in the last 10 minutes.
+          runbook_url: https://github.com/SiddharthSSR/infera/blob/main/deploy/observability/RUNBOOKS.md#inferaworkerheartbeatauthrejected
