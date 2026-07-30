@@ -11,14 +11,16 @@ vi.mock('../hooks/useIsMobile', () => ({
 }));
 
 describe('Logs mobile layout', () => {
-  it('renders mobile log feed cards on Logs page', () => {
+  it('renders an honest unavailable state instead of synthetic log cards', () => {
     const { container } = render(
       <MemoryRouter>
         <Logs />
       </MemoryRouter>,
     );
 
-    expect(container.querySelectorAll('.mobile-data-card').length).toBeGreaterThan(0);
+    expect(container.querySelectorAll('.mobile-data-card')).toHaveLength(0);
+    expect(container).toHaveTextContent('No runtime log source is connected');
     expect(container.textContent).not.toContain('Timestamp');
+    expect(container.textContent).not.toContain('GPU utilization');
   });
 });

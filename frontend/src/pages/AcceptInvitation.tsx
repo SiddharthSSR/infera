@@ -146,7 +146,7 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, var(--bg-paper) 0%, #f1ede7 100%)' }}>
+    <main style={{ minHeight: '100vh', background: 'linear-gradient(180deg, var(--bg-paper) 0%, #f1ede7 100%)' }}>
       <AppShell variant="bare" maxWidth={1200}>
         <PublicNav
           title="INVITATION ACCEPTANCE"
@@ -159,7 +159,7 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
 
         <GridRow columns="1fr 1fr">
           <Cell style={{ padding: '3rem 2rem' }}>
-            <DisplayHeader className="invitation-display-header" align="left" noBorder padding="0">
+            <DisplayHeader as="h1" className="invitation-display-header" align="left" noBorder padding="0">
               JOIN WORKSPACE
             </DisplayHeader>
             <p style={{ marginTop: '1rem', color: 'var(--text-secondary)', maxWidth: 620, fontSize: '1rem', lineHeight: 1.6 }}>
@@ -284,6 +284,6 @@ export function AcceptInvitation({ onAccepted }: AcceptInvitationProps) {
           </GridRow>
         )}
       </AppShell>
-    </div>
+    </main>
   );
 }

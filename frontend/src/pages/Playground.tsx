@@ -100,6 +100,9 @@ export function Playground() {
     maxTokens,
   });
   const canExecute = Boolean(canRun && (!isAgentMode || agentModeAvailable));
+  const selectedModelLoaded = Boolean(allModels.find((model) => model.id === selectedModel)?.loaded);
+  const canExecuteSelectedModel = Boolean(canExecute && (isAgentMode || selectedModelLoaded));
+  const runEnabled = Boolean(!isLoading && canExecuteSelectedModel);
   const {
     focusMode,
     isCompactDesktop,
@@ -117,7 +120,11 @@ export function Playground() {
     ? (agentDetail?.run.status
       ? `agent ${formatAgentStatus(agentDetail.run.status).toLowerCase()}`
       : (isLoading ? 'starting agent run...' : (activeAgent ? `${activeAgent.name.toLowerCase()} ready` : 'agent mode unavailable')))
-    : (isLoading ? 'generating...' : 'ready to inference');
+    : (isLoading
+      ? 'generating...'
+      : selectedModelLoaded
+        ? 'serving model selected'
+        : 'no serving model available');
 
   // Tablet (768–1024): settings/history always visible, stacked around editor
   const tabletSettingsSection = isTablet && !focusMode && (
@@ -275,7 +282,7 @@ export function Playground() {
       } : {}}
     >
       {!focusMode && (
-        <header
+        <h1
           className="display-text"
           style={{
             fontSize: isExtraSmall ? '2.4rem' : isMobile ? '3rem' : '4.2rem',
@@ -283,7 +290,7 @@ export function Playground() {
           }}
         >
           PLAYGROUND
-        </header>
+        </h1>
       )}
 
       <div
@@ -395,7 +402,7 @@ export function Playground() {
                     variant="primary"
                     style={{ flex: 1, minHeight: 44 }}
                     onClick={handleRun}
-                    disabled={isLoading || !canExecute}
+                    disabled={!runEnabled}
                   >
                     {isLoading ? (isAgentMode ? 'RUNNING...' : 'GENERATING...') : isAgentMode ? 'RUN AGENT' : 'RUN'}
                   </ActionButton>
@@ -423,7 +430,7 @@ export function Playground() {
                   {focusMode ? 'EXIT' : 'FOCUS'}
                 </button>
                 <button className="btn-secondary" onClick={handleClear}>CLEAR</button>
-                <ActionButton variant="primary" onClick={handleRun} disabled={isLoading || !canExecute}>
+                <ActionButton variant="primary" onClick={handleRun} disabled={!runEnabled}>
                   {isLoading ? (isAgentMode ? 'RUNNING AGENT...' : 'GENERATING...') : isAgentMode ? 'RUN AGENT' : 'RUN INFERENCE'}
                 </ActionButton>
               </div>
@@ -455,7 +462,8 @@ export function Playground() {
                     : 'Ask Hermes to inspect workspace health, quota pressure, deployments, or provider issues...'
                 : 'Type your instruction here...'}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && event.metaKey) {
+                if (event.key === 'Enter' && event.metaKey && runEnabled) {
+                  event.preventDefault();
                   void handleRun();
                 }
               }}

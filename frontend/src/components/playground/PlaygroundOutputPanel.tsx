@@ -216,7 +216,8 @@ export function PlaygroundOutputPanel({
             <span>{tokenUsage.promptTokens} prompt</span>
             <span>{tokenUsage.completionTokens} completion</span>
             {!isExtraSmall && <span>{tokenUsage.totalTokens} total</span>}
-            <span>{tokenUsage.tokensPerSec.toFixed(1)} tok/s</span>
+            <span>{tokenUsage.tokensPerSec.toFixed(1)} end-to-end tok/s</span>
+            <span>TTFT / TPOT unavailable</span>
           </div>
         )}
       </div>

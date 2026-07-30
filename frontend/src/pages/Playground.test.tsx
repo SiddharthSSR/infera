@@ -519,4 +519,64 @@ describe('Playground agent mode', () => {
     expect(screen.getByText('vision_analyze')).toBeInTheDocument();
     expect(screen.queryByText('web_search')).not.toBeInTheDocument();
   });
+
+  it('blocks button and Meta+Enter chat inference when no model is serving', () => {
+    hookMocks.useModels.mockReturnValue({
+      data: [
+        {
+          id: 'Qwen/Qwen2.5-7B-Instruct',
+          object: 'model',
+          created: 0,
+          owned_by: 'infera',
+          loaded: false,
+        },
+      ],
+    });
+
+    render(
+      <PlaygroundProvider>
+        <Playground />
+      </PlaygroundProvider>,
+    );
+
+    expect(screen.getByRole('heading', { level: 1, name: 'PLAYGROUND' })).toBeInTheDocument();
+    expect(screen.getByText('no serving model available')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'RUN INFERENCE' })).toBeDisabled();
+
+    const promptInput = screen.getByPlaceholderText('Type your instruction here...');
+    fireEvent.change(promptInput, { target: { value: 'Explain this model' } });
+    const shortcutEvent = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(promptInput, shortcutEvent);
+
+    expect(apiMocks.streamChatCompletion).not.toHaveBeenCalled();
+    expect(shortcutEvent.defaultPrevented).toBe(false);
+  });
+
+  it('runs eligible chat inference with Meta+Enter', async () => {
+    render(
+      <PlaygroundProvider>
+        <Playground />
+      </PlaygroundProvider>,
+    );
+
+    const promptInput = screen.getByPlaceholderText('Type your instruction here...');
+    fireEvent.change(promptInput, { target: { value: 'Explain this model' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'RUN INFERENCE' })).toBeEnabled());
+
+    const shortcutEvent = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(promptInput, shortcutEvent);
+
+    expect(shortcutEvent.defaultPrevented).toBe(true);
+    await waitFor(() => expect(apiMocks.streamChatCompletion).toHaveBeenCalledTimes(1));
+  });
 });

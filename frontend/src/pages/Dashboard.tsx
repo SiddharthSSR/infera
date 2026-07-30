@@ -168,7 +168,7 @@ export function Dashboard() {
 
   if (gatewayDown) {
     return (
-      <div className="dashboard-page animate-fade-in">
+      <main className="dashboard-page animate-fade-in">
         <GridRow>
           <Cell span={4} style={{ textAlign: 'center', padding: '4rem 2rem' }}>
             <div style={{ fontSize: '2rem', fontWeight: 700, marginBottom: '1rem', letterSpacing: '-0.02em' }}>
@@ -184,7 +184,7 @@ export function Dashboard() {
             </div>
           </Cell>
         </GridRow>
-      </div>
+      </main>
     );
   }
 
@@ -200,7 +200,7 @@ export function Dashboard() {
   /* ---------------------------------------------------------------- */
 
   return (
-    <div className="dashboard-page animate-fade-in">
+    <main className="dashboard-page animate-fade-in">
       {/* Guide callout */}
       {!guideDismissed && (
         <GridRow>
@@ -392,6 +392,6 @@ export function Dashboard() {
           </div>
         </Cell>
       </GridRow>
-    </div>
+    </main>
   );
 }

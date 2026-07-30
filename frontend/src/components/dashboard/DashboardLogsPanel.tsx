@@ -24,8 +24,8 @@ export function DashboardLogsPanel({
     <>
       <SectionHeader
         eyebrow="SYSTEM LOGS"
-        title="Live feed"
-        description="Recent runtime events from the inference gateway and workers."
+        title="Runtime log feed"
+        description="Live runtime logs are not connected to this dashboard yet."
         actions={(
           <ActionButton onClick={onOpenLogs}>OPEN FULL LOGS</ActionButton>
         )}
@@ -41,7 +41,11 @@ export function DashboardLogsPanel({
           lineHeight: 1.7,
         }}
       >
-        {dashLogs.map((entry, i) => (
+        {dashLogs.length === 0 ? (
+          <div className="empty-state-copy" role="status">
+            No runtime log source is available. Use gateway and worker logs at the deployment source; this dashboard will not synthesize operational events.
+          </div>
+        ) : dashLogs.map((entry, i) => (
           <div
             key={entry.id}
             className="dashboard-log-entry"
