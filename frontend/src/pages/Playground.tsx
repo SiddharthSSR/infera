@@ -102,6 +102,7 @@ export function Playground() {
   const canExecute = Boolean(canRun && (!isAgentMode || agentModeAvailable));
   const selectedModelLoaded = Boolean(allModels.find((model) => model.id === selectedModel)?.loaded);
   const canExecuteSelectedModel = Boolean(canExecute && (isAgentMode || selectedModelLoaded));
+  const runEnabled = Boolean(!isLoading && canExecuteSelectedModel);
   const {
     focusMode,
     isCompactDesktop,
@@ -401,7 +402,7 @@ export function Playground() {
                     variant="primary"
                     style={{ flex: 1, minHeight: 44 }}
                     onClick={handleRun}
-                    disabled={isLoading || !canExecuteSelectedModel}
+                    disabled={!runEnabled}
                   >
                     {isLoading ? (isAgentMode ? 'RUNNING...' : 'GENERATING...') : isAgentMode ? 'RUN AGENT' : 'RUN'}
                   </ActionButton>
@@ -429,7 +430,7 @@ export function Playground() {
                   {focusMode ? 'EXIT' : 'FOCUS'}
                 </button>
                 <button className="btn-secondary" onClick={handleClear}>CLEAR</button>
-                <ActionButton variant="primary" onClick={handleRun} disabled={isLoading || !canExecuteSelectedModel}>
+                <ActionButton variant="primary" onClick={handleRun} disabled={!runEnabled}>
                   {isLoading ? (isAgentMode ? 'RUNNING AGENT...' : 'GENERATING...') : isAgentMode ? 'RUN AGENT' : 'RUN INFERENCE'}
                 </ActionButton>
               </div>
@@ -461,7 +462,8 @@ export function Playground() {
                     : 'Ask Hermes to inspect workspace health, quota pressure, deployments, or provider issues...'
                 : 'Type your instruction here...'}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && event.metaKey) {
+                if (event.key === 'Enter' && event.metaKey && runEnabled) {
+                  event.preventDefault();
                   void handleRun();
                 }
               }}
