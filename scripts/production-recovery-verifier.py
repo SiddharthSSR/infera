@@ -424,8 +424,17 @@ def command_verify(args: argparse.Namespace) -> int:
         raise VerificationError("runtime metadata has the wrong shape")
     results = compare_runtime_metadata(before, after, expectations)
     results["nonsecret_contract_complete"] = True
+
+    def contract_value_matches(name: str, value: str) -> bool:
+        actual = production_values.get(name)
+        if name != POLICY_NAME:
+            return actual == value
+        if actual is None or not SAFE_DECIMAL.fullmatch(actual):
+            return False
+        return Decimal(actual) == Decimal(value)
+
     results["nonsecret_contract_matches"] = all(
-        production_values.get(name) == value
+        contract_value_matches(name, value)
         for name, value in authoritative_values.items()
     )
     for name in sorted(results):

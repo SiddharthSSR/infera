@@ -130,7 +130,7 @@ if grep -Fq 'SUPER_SECRET_CONFLICTING_VALUE' "${TEST_ROOT}/conflicting-name.outp
 fi
 
 INVALID_RECOVERY_PROTOCOL="${TEST_ROOT}/invalid-recovery-protocol.env"
-sed 's/^INFERA_RECOVERY_API_PROTOCOL_VERSION=.*/INFERA_RECOVERY_API_PROTOCOL_VERSION=invalid protocol/' \
+sed "s|^INFERA_RECOVERY_API_PROTOCOL_VERSION=.*|INFERA_RECOVERY_API_PROTOCOL_VERSION='invalid protocol'|" \
   "${SOURCE}" >"${INVALID_RECOVERY_PROTOCOL}"
 chmod 0600 "${INVALID_RECOVERY_PROTOCOL}"
 assert_rejected invalid-recovery-protocol run_validator \

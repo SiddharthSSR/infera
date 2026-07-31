@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -154,7 +155,7 @@ def run_cli(
     )
     return subprocess.run(
         [
-            "python3",
+            sys.executable,
             str(MODULE_PATH),
             "verify",
             "--before",
@@ -418,6 +419,19 @@ class RecoveryVerifierTests(unittest.TestCase):
             for value in ("0.50", "1.00"):
                 self.assertNotIn(value, result.stdout)
                 self.assertNotIn(value, result.stderr)
+
+    def test_numerically_equivalent_cost_matches(self) -> None:
+        protocol = "exact-protocol-sentinel"
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_cli(
+                Path(directory),
+                manifest_protocol=protocol,
+                production_protocol=protocol,
+                policy_cost="1.00",
+                production_cost="1.0",
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("nonsecret_contract_matches=true", result.stdout)
 
 
 if __name__ == "__main__":
