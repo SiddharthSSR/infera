@@ -159,7 +159,11 @@ Before and after materialization, compare metadata-only runtime snapshots with
 root-only and free of runtime environments. The verifier reports every immutable Compose label and
 path condition separately, requires strict service cardinality and checked-in mounts, preserves
 container/image/start-time/restart-count identity, and compares mount sets after canonical ordering.
-Any false result blocks materialization or follow-on runtime action.
+Checked-in mount expectations name their intended Compose `service` and may narrow to one
+`container_number`; duplicate, overlapping, malformed, or unknown-service expectations fail closed.
+The verifier also requires the validated production dotenv's recovery protocol and cost ceiling to
+equal the canonical LKG manifest and versioned policy without printing either value. Any false
+result blocks materialization or follow-on runtime action.
 
 ```bash
 python3 scripts/production-recovery-verifier.py verify \
@@ -167,7 +171,8 @@ python3 scripts/production-recovery-verifier.py verify \
   --after "${PRIVATE_AFTER_METADATA}" \
   --expectations "${PRIVATE_RUNTIME_EXPECTATIONS}" \
   --manifest .infera-recovery/last-known-good.manifest \
-  --policy deploy/production/infera-production-recovery-policy
+  --policy deploy/production/infera-production-recovery-policy \
+  --production-env /etc/infera/production.env
 ```
 
 ## Prepare a release set

@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
-from decimal import Decimal, InvalidOperation
+import importlib.util
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import sys
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 
@@ -171,33 +172,105 @@ def runtime_key(container: dict[str, Any]) -> tuple[str, str]:
     return service, number
 
 
+def validated_mount_expectations(
+    expected_mounts: list[dict[str, Any]], expected_services: set[str]
+) -> list[tuple[str, str | None, str, str, str]]:
+    allowed_names = {
+        "service",
+        "container_number",
+        "Type",
+        "Source",
+        "Destination",
+    }
+    validated: list[tuple[str, str | None, str, str, str]] = []
+    scopes: dict[tuple[str, str, str, str], set[str | None]] = {}
+    for mount in expected_mounts:
+        if not isinstance(mount, dict) or set(mount) - allowed_names:
+            raise VerificationError("checked-in mount expectation is malformed")
+        service = mount.get("service")
+        container_number = mount.get("container_number")
+        mount_type = mount.get("Type")
+        source = mount.get("Source")
+        destination = mount.get("Destination")
+        if (
+            not isinstance(service, str)
+            or service not in expected_services
+            or (
+                container_number is not None
+                and (
+                    not isinstance(container_number, str)
+                    or not re.fullmatch(r"[1-9][0-9]*", container_number)
+                )
+            )
+            or mount_type != "bind"
+            or not isinstance(source, str)
+            or normalized_absolute_path(source) is None
+            or not isinstance(destination, str)
+            or normalized_absolute_path(destination) is None
+        ):
+            raise VerificationError("checked-in mount expectation is malformed")
+        scope_key = (service, mount_type, source, destination)
+        scopes.setdefault(scope_key, set()).add(container_number)
+        validated.append(
+            (service, container_number, mount_type, source, destination)
+        )
+    if len(set(validated)) != len(validated) or any(
+        None in numbers and len(numbers) > 1 for numbers in scopes.values()
+    ):
+        raise VerificationError("checked-in mount expectation is ambiguous")
+    return validated
+
+
 def checked_in_mounts_present(
-    containers: list[dict[str, Any]], expected_mounts: list[dict[str, Any]]
+    containers: list[dict[str, Any]],
+    expected_mounts: list[tuple[str, str | None, str, str, str]],
 ) -> bool:
-    actual: set[tuple[str, str, str]] = set()
-    for container in containers:
-        mounts = container.get("mounts", [])
-        if not isinstance(mounts, list):
+    indexed = {runtime_key(container): container for container in containers}
+    for service, number, mount_type, source, destination in expected_mounts:
+        targets = [
+            container
+            for (actual_service, actual_number), container in indexed.items()
+            if actual_service == service
+            and (number is None or actual_number == number)
+        ]
+        if not targets:
             return False
-        for mount in mounts:
-            if not isinstance(mount, dict):
+        for container in targets:
+            mounts = container.get("mounts", [])
+            if not isinstance(mounts, list):
                 return False
-            actual.add(
+            actual = {
                 (
                     str(mount.get("Type", "")),
                     str(mount.get("Source", "")),
                     str(mount.get("Destination", "")),
                 )
-            )
-    expected = {
-        (
-            str(mount.get("Type", "")),
-            str(mount.get("Source", "")),
-            str(mount.get("Destination", "")),
-        )
-        for mount in expected_mounts
-    }
-    return expected.issubset(actual)
+                for mount in mounts
+                if isinstance(mount, dict)
+            }
+            if (mount_type, source, destination) not in actual:
+                return False
+    return True
+
+
+def load_validated_production_values(path: Path) -> dict[str, str]:
+    module_path = Path(__file__).with_name("production-env-source.py")
+    spec = importlib.util.spec_from_file_location(
+        "production_env_source", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise VerificationError("production environment validator is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        values = module.open_validated_source_path(str(path), os.geteuid())
+    except Exception as error:
+        raise VerificationError(
+            "production environment validation failed"
+        ) from error
+    if not isinstance(values, dict):
+        raise VerificationError("production environment validation failed")
+    return values
 
 
 def compare_runtime_metadata(
@@ -243,6 +316,9 @@ def compare_runtime_metadata(
         ):
             raise VerificationError("runtime service cardinality is invalid")
         expected_counts[service] = count
+    validated_expected_mounts = validated_mount_expectations(
+        expected_mounts, set(expected_counts)
+    )
 
     def cardinality(index: dict[tuple[str, str], dict[str, Any]]) -> bool:
         actual: dict[str, int] = {}
@@ -260,9 +336,11 @@ def compare_runtime_metadata(
         "restart_count_unchanged": True,
         "mount_sets_unchanged": True,
         "checked_in_mounts_before": checked_in_mounts_present(
-            before, expected_mounts
+            before, validated_expected_mounts
         ),
-        "checked_in_mounts_after": checked_in_mounts_present(after, expected_mounts),
+        "checked_in_mounts_after": checked_in_mounts_present(
+            after, validated_expected_mounts
+        ),
     }
     for check_name in (
         "label_project",
@@ -335,7 +413,8 @@ def load_json(path: Path) -> Any:
 
 
 def command_verify(args: argparse.Namespace) -> int:
-    load_nonsecret_contract(args.manifest, args.policy)
+    authoritative_values = load_nonsecret_contract(args.manifest, args.policy)
+    production_values = load_validated_production_values(args.production_env)
     before = load_json(args.before)
     after = load_json(args.after)
     expectations = load_json(args.expectations)
@@ -345,6 +424,10 @@ def command_verify(args: argparse.Namespace) -> int:
         raise VerificationError("runtime metadata has the wrong shape")
     results = compare_runtime_metadata(before, after, expectations)
     results["nonsecret_contract_complete"] = True
+    results["nonsecret_contract_matches"] = all(
+        production_values.get(name) == value
+        for name, value in authoritative_values.items()
+    )
     for name in sorted(results):
         print(f"{name}={str(results[name]).lower()}")
     return 0 if all(results.values()) else 1
@@ -358,6 +441,7 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--after", type=Path, required=True)
     verify.add_argument("--expectations", type=Path, required=True)
     verify.add_argument("--manifest", type=Path, required=True)
+    verify.add_argument("--production-env", type=Path, required=True)
     verify.add_argument(
         "--policy",
         type=Path,

@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import argparse
-from decimal import Decimal, InvalidOperation
 import os
 import re
 import shutil
 import stat
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 REQUIRED_NAMES = (
@@ -179,12 +179,9 @@ def open_source_descriptor(path: Path, expected_uid: int) -> int:
             os.close(directory_descriptor)
 
 
-def open_validated_source(expected_uid: int) -> dict[str, str]:
-    configured = os.environ.get("INFERA_PRODUCTION_ENV_FILE", "")
-    if not configured:
-        raise ContractError("INFERA_PRODUCTION_ENV_FILE is required")
-    if any(os.environ.get(name, "") for name in LEGACY_SOURCE_NAMES):
-        raise ContractError("ambiguous production environment source selectors")
+def open_validated_source_path(
+    configured: str, expected_uid: int
+) -> dict[str, str]:
     path = Path(configured)
     if not path.is_absolute():
         raise ContractError("INFERA_PRODUCTION_ENV_FILE must be absolute")
@@ -249,6 +246,15 @@ def open_validated_source(expected_uid: int) -> dict[str, str]:
     ):
         raise ContractError("production recovery worker cost ceiling exceeds policy")
     return values
+
+
+def open_validated_source(expected_uid: int) -> dict[str, str]:
+    configured = os.environ.get("INFERA_PRODUCTION_ENV_FILE", "")
+    if not configured:
+        raise ContractError("INFERA_PRODUCTION_ENV_FILE is required")
+    if any(os.environ.get(name, "") for name in LEGACY_SOURCE_NAMES):
+        raise ContractError("ambiguous production environment source selectors")
+    return open_validated_source_path(configured, expected_uid)
 
 
 def validate(expected_uid: int) -> dict[str, str]:
