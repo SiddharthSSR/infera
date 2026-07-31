@@ -256,7 +256,7 @@ export COMPOSE_FILE="docker-compose.prod.yml"
 export INFERA_BASE_URL="https://inferai.co.in"
 export INFERA_DASHBOARD_URL="https://dashboard.inferai.co.in"
 export INFERA_RECOVERY_WORKER_MODEL="Qwen/Qwen2.5-7B-Instruct"
-export INFERA_RECOVERY_WORKER_MAX_COST_HOUR="3.5"
+export INFERA_RECOVERY_WORKER_MAX_COST_HOUR="1.00"
 
 # A standalone adapter derives one fixed deadline instead of extending its
 # budget on every remaining-time query.
@@ -382,7 +382,7 @@ run_fallback_case capacity_then_success env \
   INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \
   "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
 [[ "$(cat "${TEST_POST_COUNT}")" == "2" ]]
-[[ "$(grep -c '"max_cost_hour": 3.5' "${TEST_CALLS}")" == "2" ]]
+[[ "$(grep -c '"max_cost_hour": 1.0' "${TEST_CALLS}")" == "2" ]]
 first_gpu_line="$(grep -n 'gpu_type.*RTX_4090' "${TEST_CALLS}" | head -1 | cut -d: -f1)"
 second_gpu_line="$(grep -n 'gpu_type.*A100_80GB' "${TEST_CALLS}" | head -1 | cut -d: -f1)"
 [[ "${first_gpu_line}" -lt "${second_gpu_line}" ]]
@@ -394,7 +394,7 @@ run_fallback_case legacy_capacity_then_success env \
   INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \
   "${REPO_ROOT}/scripts/runpod-deploy-workers.sh" "${TMP_DIR}/release.manifest"
 [[ "$(cat "${TEST_POST_COUNT}")" == "2" ]]
-[[ "$(grep -c '"max_cost_hour": 3.5' "${TEST_CALLS}")" == "2" ]]
+[[ "$(grep -c '"max_cost_hour": 1.0' "${TEST_CALLS}")" == "2" ]]
 
 run_fallback_case capacity_with_orphan env \
   INFERA_RECOVERY_WORKER_GPU_TYPES=RTX_4090,A100_80GB \

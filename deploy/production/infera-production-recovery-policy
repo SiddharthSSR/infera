@@ -1,0 +1,2 @@
+# Versioned non-secret production recovery policy.
+INFERA_RECOVERY_WORKER_MAX_COST_HOUR=1.00

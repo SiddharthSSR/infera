@@ -32,7 +32,7 @@ def main() -> int:
             "INFERA_GATEWAY_REPLICAS": args.gateway_replicas,
             "INFERA_AUDIT_LEDGER_BACKEND": "postgres",
             "INFERA_AUDIT_LEDGER_DSN": "postgresql://test.invalid/infera",
-            "INFERA_RECOVERY_WORKER_MAX_COST_HOUR": "3.5",
+            "INFERA_RECOVERY_WORKER_MAX_COST_HOUR": "1.00",
         }
     )
     args.output.write_text(

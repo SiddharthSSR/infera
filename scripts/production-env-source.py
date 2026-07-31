@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import stat
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 REQUIRED_NAMES = (
@@ -51,6 +53,9 @@ COMPOSE_OVERRIDE_NAMES = frozenset(
     }
 )
 AMBIENT_PREFIXES = ("INFERA_", "GRAFANA_", "ALERT_", "RUNPOD_", "VASTAI_", "HF_")
+RECOVERY_PROTOCOL_PATTERN = re.compile(r"^[A-Za-z0-9._+-]+$")
+RECOVERY_COST_PATTERN = re.compile(r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+MAX_RECOVERY_WORKER_COST_HOUR = Decimal("1.00")
 
 
 class ContractError(Exception):
@@ -174,12 +179,9 @@ def open_source_descriptor(path: Path, expected_uid: int) -> int:
             os.close(directory_descriptor)
 
 
-def open_validated_source(expected_uid: int) -> dict[str, str]:
-    configured = os.environ.get("INFERA_PRODUCTION_ENV_FILE", "")
-    if not configured:
-        raise ContractError("INFERA_PRODUCTION_ENV_FILE is required")
-    if any(os.environ.get(name, "") for name in LEGACY_SOURCE_NAMES):
-        raise ContractError("ambiguous production environment source selectors")
+def open_validated_source_path(
+    configured: str, expected_uid: int
+) -> dict[str, str]:
     path = Path(configured)
     if not path.is_absolute():
         raise ContractError("INFERA_PRODUCTION_ENV_FILE must be absolute")
@@ -224,7 +226,35 @@ def open_validated_source(expected_uid: int) -> dict[str, str]:
         missing.append("INFERA_AUDIT_LEDGER_DSN")
     if missing:
         raise ContractError("missing required production variable names: " + ", ".join(missing))
+    if not RECOVERY_PROTOCOL_PATTERN.fullmatch(
+        values["INFERA_RECOVERY_API_PROTOCOL_VERSION"]
+    ):
+        raise ContractError("invalid production recovery API protocol")
+    raw_recovery_cost = values["INFERA_RECOVERY_WORKER_MAX_COST_HOUR"]
+    if not RECOVERY_COST_PATTERN.fullmatch(raw_recovery_cost):
+        raise ContractError("invalid production recovery worker cost ceiling")
+    try:
+        recovery_cost = Decimal(raw_recovery_cost)
+    except InvalidOperation as error:
+        raise ContractError(
+            "invalid production recovery worker cost ceiling"
+        ) from error
+    if (
+        not recovery_cost.is_finite()
+        or recovery_cost <= 0
+        or recovery_cost > MAX_RECOVERY_WORKER_COST_HOUR
+    ):
+        raise ContractError("production recovery worker cost ceiling exceeds policy")
     return values
+
+
+def open_validated_source(expected_uid: int) -> dict[str, str]:
+    configured = os.environ.get("INFERA_PRODUCTION_ENV_FILE", "")
+    if not configured:
+        raise ContractError("INFERA_PRODUCTION_ENV_FILE is required")
+    if any(os.environ.get(name, "") for name in LEGACY_SOURCE_NAMES):
+        raise ContractError("ambiguous production environment source selectors")
+    return open_validated_source_path(configured, expected_uid)
 
 
 def validate(expected_uid: int) -> dict[str, str]:
