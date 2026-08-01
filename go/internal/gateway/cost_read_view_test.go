@@ -63,8 +63,12 @@ func TestCostReadViewIsReplicaConsistentAcrossUTCWindowsAndRetries(t *testing.T)
 	if gotA != gotB {
 		t.Fatalf("replicas disagree: A=%+v B=%+v", gotA, gotB)
 	}
-	if gotA.CurrentHourly != 0 || gotA.TodayTotal != 1 || gotA.MonthTotal != 2 || gotA.ProjectedMonth != 31 {
-		t.Fatalf("unexpected half-open UTC totals: %+v", gotA)
+	// ProjectedMonth = (MonthTotal / dayOfMonth) * daysInMonth = daysInMonth
+	// here, which varies by calendar month. Derive it instead of hardcoding 31,
+	// which only held when monthStart landed in a 31-day month.
+	daysInMonth := float64(time.Date(monthStart.Year(), monthStart.Month()+1, 0, 0, 0, 0, 0, time.UTC).Day())
+	if gotA.CurrentHourly != 0 || gotA.TodayTotal != 1 || gotA.MonthTotal != 2 || gotA.ProjectedMonth != daysInMonth {
+		t.Fatalf("unexpected half-open UTC totals: %+v (days in month=%v)", gotA, daysInMonth)
 	}
 }
 
