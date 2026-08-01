@@ -33,6 +33,7 @@ POLICY_NAME = "INFERA_RECOVERY_WORKER_MAX_COST_HOUR"
 SAFE_MANIFEST_VALUE = re.compile(r"^[A-Za-z0-9._:/@+-]+$")
 SAFE_DECIMAL = re.compile(r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
 MAX_RECOVERY_WORKER_COST_HOUR = Decimal("1.00")
+DEFAULT_POLICY_PATH = Path("deploy/production/infera-production-recovery-policy")
 
 LABEL_PROJECT = "com.docker.compose.project"
 LABEL_SERVICE = "com.docker.compose.service"
@@ -412,6 +413,32 @@ def load_json(path: Path) -> Any:
         raise VerificationError("runtime metadata is unavailable") from error
 
 
+def production_contract_matches(
+    authoritative_values: dict[str, str], production_values: dict[str, str]
+) -> bool:
+    def value_matches(name: str, value: str) -> bool:
+        actual = production_values.get(name)
+        if name != POLICY_NAME:
+            return actual == value
+        if actual is None or not SAFE_DECIMAL.fullmatch(actual):
+            return False
+        return Decimal(actual) == Decimal(value)
+
+    return all(
+        value_matches(name, value)
+        for name, value in authoritative_values.items()
+    )
+
+
+def command_verify_environment(args: argparse.Namespace) -> int:
+    authoritative_values = load_nonsecret_contract(args.manifest, args.policy)
+    production_values = load_validated_production_values(args.production_env)
+    matches = production_contract_matches(authoritative_values, production_values)
+    print("nonsecret_contract_complete=true")
+    print(f"nonsecret_contract_matches={str(matches).lower()}")
+    return 0 if matches else 1
+
+
 def command_verify(args: argparse.Namespace) -> int:
     authoritative_values = load_nonsecret_contract(args.manifest, args.policy)
     production_values = load_validated_production_values(args.production_env)
@@ -425,17 +452,8 @@ def command_verify(args: argparse.Namespace) -> int:
     results = compare_runtime_metadata(before, after, expectations)
     results["nonsecret_contract_complete"] = True
 
-    def contract_value_matches(name: str, value: str) -> bool:
-        actual = production_values.get(name)
-        if name != POLICY_NAME:
-            return actual == value
-        if actual is None or not SAFE_DECIMAL.fullmatch(actual):
-            return False
-        return Decimal(actual) == Decimal(value)
-
-    results["nonsecret_contract_matches"] = all(
-        contract_value_matches(name, value)
-        for name, value in authoritative_values.items()
+    results["nonsecret_contract_matches"] = production_contract_matches(
+        authoritative_values, production_values
     )
     for name in sorted(results):
         print(f"{name}={str(results[name]).lower()}")
@@ -454,9 +472,18 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "--policy",
         type=Path,
-        default=Path("deploy/production/infera-production-recovery-policy"),
+        default=DEFAULT_POLICY_PATH,
     )
     verify.set_defaults(function=command_verify)
+    verify_environment = subparsers.add_parser("verify-environment")
+    verify_environment.add_argument("--manifest", type=Path, required=True)
+    verify_environment.add_argument("--production-env", type=Path, required=True)
+    verify_environment.add_argument(
+        "--policy",
+        type=Path,
+        default=DEFAULT_POLICY_PATH,
+    )
+    verify_environment.set_defaults(function=command_verify_environment)
     return command_parser
 
 

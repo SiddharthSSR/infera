@@ -175,6 +175,53 @@ python3 scripts/production-recovery-verifier.py verify \
   --production-env /etc/infera/production.env
 ```
 
+### Frontend Compose provenance reconciliation
+
+Use `scripts/frontend-provenance-reconcile.sh` only to repair a stale frontend
+`com.docker.compose.project.config_files` label while retaining the already-promoted immutable
+frontend image. This is not a promotion path and does not weaken or replace
+`scripts/frontend-compose-action.sh`.
+
+Run it only with public ingress already in the reviewed safe-degraded state, one healthy frontend,
+an exact clean `HEAD=origin/main`, the recorded frontend digest and full OCI source revision, and
+the already validated root-only production environment target. Pass that target directly with
+`--production-env-file`; the procedure neither requires nor creates the selector pointer. It proves
+that its recovery protocol and cost ceiling exactly match the root-owned LKG manifest and versioned
+policy. It then takes the same non-expiring recovery lock used by the release controller, proves that
+the stable checked-in production Compose file is byte-identical to the source-revision blob,
+stages a second frontend with `--no-recreate`, and keeps the original running until the replacement
+image, labels, health and public routes pass. It then stops but retains the original for an isolated
+replacement-only route check, restores the original on failure, and removes it only after that
+cutover succeeds. Final success requires one healthy frontend with the original immutable identity,
+the exact checkout label, unchanged public root and read-health responses, and no temporary
+container or file residue.
+
+The separately approved invocation must name all of these inputs explicitly, even where the script
+has a fail-closed default:
+
+```text
+scripts/frontend-provenance-reconcile.sh \
+  --expected-head <approved-full-main-sha> \
+  --source-revision <frontend-full-oci-revision> \
+  --image <frontend-repository@sha256:digest> \
+  --production-env-file </absolute/root-only/production.env> \
+  --base-url <approved-https-origin> \
+  --health-attempts <approved-positive-count>
+```
+
+Before execution, privately retain the original image ID, immutable reference, source revision,
+restart count and health result as rollback metadata. Never record container identifiers,
+environment values or the prior stale path. Any unexpected cardinality, concurrent frontend,
+identity drift, route drift or cleanup failure is an incident gate; do not retry or change ingress.
+An ambiguous concurrent frontend is never deleted automatically because ownership cannot be proven;
+retain the healthy original and reconcile the extra containers under incident authority. A failed
+cutover restores and re-verifies the untouched original before deleting the known replacement; if
+original restoration cannot be proven, the healthy replacement is retained instead of risking an
+outage. Signals use the same rollback path, and the shared lock and root-only temporary files must be
+absent before a successful return.
+The exact invocation must be separately approved with the merged main revision, recorded frontend
+source revision and digest.
+
 ## Prepare a release set
 
 Build gateway and vLLM worker images from the exact candidate commit through
