@@ -22,31 +22,57 @@ import (
 )
 
 const (
-	defaultEndpoint              = "https://api.runpod.io/graphql"
-	pollInterval                 = 5 * time.Second
-	readyTimeout                 = 10 * time.Minute
-	priceReconciliationInterval  = 500 * time.Millisecond
-	priceReconciliationTimeout   = 20 * time.Second
-	provisionCleanupTimeout      = 15 * time.Second
-	workspaceMountPath           = "/workspace"
-	metadataAllowedCudaVersions  = "allowed_cuda_versions"
-	metadataCostCurrency         = "cost_evidence_currency"
-	metadataCostUnit             = "cost_evidence_unit"
-	metadataCostSource           = "cost_evidence_source"
-	metadataCostCapturedAt       = "cost_evidence_captured_at"
-	metadataCostAdvertised       = "cost_evidence_advertised_usd_per_hour"
-	metadataCostState            = "cost_evidence_state"
-	metadataCapacityState        = "capacity_evidence_state"
-	costCurrencyUSD              = "USD"
-	costUnitInstanceHour         = "instance-hour"
-	costSourceRunPodMachine      = "runpod.pod.machine.costPerHr"
-	capacityStateAdvertised      = "advertised_not_confirmed"
-	costStateConfirmed           = "confirmed"
-	costStateConfirmedDrift      = "confirmed_price_drift"
-	costStateConfirmedNoAdvert   = "confirmed_advertised_price_unavailable"
-	insufficientMachineResources = "This machine does not have the resources to deploy your pod. Please try a different machine"
-	placementUnavailable         = "There are no longer any instances available with the requested specifications. Please refresh and try again."
+	defaultEndpoint             = "https://api.runpod.io/graphql"
+	pollInterval                = 5 * time.Second
+	readyTimeout                = 10 * time.Minute
+	priceReconciliationInterval = 500 * time.Millisecond
+	priceReconciliationTimeout  = 20 * time.Second
+	provisionCleanupTimeout     = 15 * time.Second
+	workspaceMountPath          = "/workspace"
+	metadataAllowedCudaVersions = "allowed_cuda_versions"
+	metadataCostCurrency        = "cost_evidence_currency"
+	metadataCostUnit            = "cost_evidence_unit"
+	metadataCostSource          = "cost_evidence_source"
+	metadataCostCapturedAt      = "cost_evidence_captured_at"
+	metadataCostAdvertised      = "cost_evidence_advertised_usd_per_hour"
+	metadataCostState           = "cost_evidence_state"
+	metadataCapacityState       = "capacity_evidence_state"
+	costCurrencyUSD             = "USD"
+	costUnitInstanceHour        = "instance-hour"
+	costSourceRunPodMachine     = "runpod.pod.machine.costPerHr"
+	capacityStateAdvertised     = "advertised_not_confirmed"
+	costStateConfirmed          = "confirmed"
+	costStateConfirmedDrift     = "confirmed_price_drift"
+	costStateConfirmedNoAdvert  = "confirmed_advertised_price_unavailable"
 )
+
+// capacityMessageFragments are lowercase substrings RunPod uses to signal that
+// no machine currently has capacity for the requested placement. RunPod varies
+// the exact wording — trailing punctuation, "try a different machine" vs
+// "refresh and try again" — so capacity is matched by case-insensitive
+// substring rather than exact equality. Exact matching previously let a
+// reworded transient capacity shortage fall through to a terminal graphql_error,
+// which suppressed the recovery adapter's GPU fallback.
+var capacityMessageFragments = []string{
+	"does not have the resources to deploy",
+	"no longer any instances available",
+	"no instances available",
+	"no available instances",
+	"insufficient capacity",
+	"out of capacity",
+}
+
+// isCapacityMessage reports whether a RunPod GraphQL error message indicates a
+// transient placement/capacity shortage rather than a permanent failure.
+func isCapacityMessage(message string) bool {
+	lowered := strings.ToLower(message)
+	for _, fragment := range capacityMessageFragments {
+		if strings.Contains(lowered, fragment) {
+			return true
+		}
+	}
+	return false
+}
 
 // Provider implements the RunPod GPU provider.
 type Provider struct {
@@ -125,7 +151,10 @@ type graphQLRequest struct {
 type graphQLResponse struct {
 	Data   json.RawMessage `json:"data"`
 	Errors []struct {
-		Message string `json:"message"`
+		Message    string `json:"message"`
+		Extensions struct {
+			Code string `json:"code"`
+		} `json:"extensions"`
 	} `json:"errors,omitempty"`
 }
 
@@ -1317,10 +1346,19 @@ func (p *Provider) graphQL(ctx context.Context, query string, variables map[stri
 	if len(gqlResp.Errors) > 0 {
 		message := strings.TrimSpace(gqlResp.Errors[0].Message)
 		code := providers.ProviderErrorGraphQLError
-		if strings.EqualFold(message, insufficientMachineResources) ||
-			strings.EqualFold(message, placementUnavailable) {
+		if isCapacityMessage(message) {
 			code = providers.ProviderErrorCapacityUnavailable
 		}
+		// Log the provider error so operators can diagnose provisioning
+		// failures; previously only the request was logged, which made a
+		// terminal provisioning failure opaque during recovery. RunPod error
+		// messages carry no secrets.
+		slog.Warn("runpod.graphql.error",
+			slog.String("provider", string(providers.ProviderRunPod)),
+			slog.String("code", string(code)),
+			slog.String("runpod_code", gqlResp.Errors[0].Extensions.Code),
+			slog.String("message", message),
+		)
 		return nil, &providers.ProviderError{
 			Provider: providers.ProviderRunPod,
 			Code:     code,

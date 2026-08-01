@@ -128,6 +128,38 @@ func TestGraphQLMapsKnownMachineResourceExhaustionToCapacityUnavailable(t *testi
 	}
 }
 
+func TestGraphQLMapsRewordedCapacityMessageToCapacityUnavailable(t *testing.T) {
+	// RunPod varies capacity wording (case, trailing punctuation, phrasing).
+	// Exact-match classification previously treated these as terminal
+	// graphql_error and suppressed GPU fallback; substring matching keeps them
+	// classified as retryable capacity shortages.
+	for _, message := range []string{
+		"This machine does not have the resources to deploy your pod.",
+		"There are no longer any instances available with the requested specifications.",
+		"No instances available for the requested GPU type",
+	} {
+		provider, err := New(Config{APIKey: "test-key"})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		body := `{"errors":[{"message":"` + message + `","extensions":{"code":"RUNPOD"}}]}`
+		provider.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return httpResponse(http.StatusOK, body), nil
+		})
+		_, err = provider.graphQL(context.Background(), "mutation { podFindAndDeployOnDemand { id } }", nil)
+		var providerErr *providers.ProviderError
+		if !errors.As(err, &providerErr) {
+			t.Fatalf("message %q: expected ProviderError, got %T", message, err)
+		}
+		if providerErr.Code != providers.ProviderErrorCapacityUnavailable {
+			t.Fatalf("message %q: expected capacity_unavailable, got %q", message, providerErr.Code)
+		}
+		if !providerErr.IsRetryable() {
+			t.Fatalf("message %q: capacity shortage must remain retryable for fallback", message)
+		}
+	}
+}
+
 func TestGraphQLMapsKnownPlacementExhaustionToCapacityUnavailable(t *testing.T) {
 	provider, err := New(Config{APIKey: "test-key"})
 	if err != nil {
