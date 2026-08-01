@@ -19,7 +19,12 @@ func TestHandleGetAuditUsage_Success(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	now := time.Now().UTC()
+	// Anchor to noon UTC of the current date so the two seeded records
+	// (now-30m, now-20m) and the query window never straddle the UTC day
+	// boundary, which previously split them into two day buckets and returned
+	// two rows when the test ran shortly after midnight.
+	base := time.Now().UTC()
+	now := time.Date(base.Year(), base.Month(), base.Day(), 12, 0, 0, 0, time.UTC)
 	if err := store.AppendInference(audit.InferenceAuditRecord{
 		Timestamp:   now.Add(-30 * time.Minute),
 		RequestID:   "req-1",

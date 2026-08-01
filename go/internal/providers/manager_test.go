@@ -2547,11 +2547,13 @@ func TestManagerProvisionPartialCostWriteFailureClosesSession(t *testing.T) {
 }
 
 func TestManagerProvisionPreservesIncompleteCostHistoryFailure(t *testing.T) {
-	now := time.Now().UTC()
-	coverage := time.Date(now.Year(), now.Month(), 15, 0, 0, 0, 0, time.UTC)
-	if !coverage.Before(now) {
-		coverage = now.Add(-time.Hour)
-	}
+	// Fixed times keep this deterministic: the query month's start (day 1) is
+	// always before a mid-month coverage start, so the summary must fail closed
+	// as incomplete. Previously derived from time.Now(), which only produced the
+	// intended gap on days >= 15 — on earlier days the fallback pushed coverage
+	// into the prior month and the check passed with a nil error.
+	now := time.Date(2027, time.January, 20, 12, 0, 0, 0, time.UTC)
+	coverage := time.Date(2027, time.January, 15, 0, 0, 0, 0, time.UTC)
 	ledger := newTestInfrastructureCostLedger(coverage)
 	provider := newMockTestProvider()
 	mgr := newTestManager(t, ManagerConfig{DefaultProvider: ProviderMock})
