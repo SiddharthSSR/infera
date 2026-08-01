@@ -196,6 +196,19 @@ cutover succeeds. Final success requires one healthy frontend with the original 
 the exact checkout label, unchanged public root and read-health responses, and no temporary
 container or file residue.
 
+The separately approved invocation must name all of these inputs explicitly, even where the script
+has a fail-closed default:
+
+```text
+scripts/frontend-provenance-reconcile.sh \
+  --expected-head <approved-full-main-sha> \
+  --source-revision <frontend-full-oci-revision> \
+  --image <frontend-repository@sha256:digest> \
+  --production-env-file </absolute/root-only/production.env> \
+  --base-url <approved-https-origin> \
+  --health-attempts <approved-positive-count>
+```
+
 Before execution, privately retain the original image ID, immutable reference, source revision,
 restart count and health result as rollback metadata. Never record container identifiers,
 environment values or the prior stale path. Any unexpected cardinality, concurrent frontend,

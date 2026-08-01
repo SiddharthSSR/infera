@@ -33,6 +33,7 @@ POLICY_NAME = "INFERA_RECOVERY_WORKER_MAX_COST_HOUR"
 SAFE_MANIFEST_VALUE = re.compile(r"^[A-Za-z0-9._:/@+-]+$")
 SAFE_DECIMAL = re.compile(r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
 MAX_RECOVERY_WORKER_COST_HOUR = Decimal("1.00")
+DEFAULT_POLICY_PATH = Path("deploy/production/infera-production-recovery-policy")
 
 LABEL_PROJECT = "com.docker.compose.project"
 LABEL_SERVICE = "com.docker.compose.service"
@@ -471,7 +472,7 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "--policy",
         type=Path,
-        default=Path("deploy/production/infera-production-recovery-policy"),
+        default=DEFAULT_POLICY_PATH,
     )
     verify.set_defaults(function=command_verify)
     verify_environment = subparsers.add_parser("verify-environment")
@@ -480,7 +481,7 @@ def parser() -> argparse.ArgumentParser:
     verify_environment.add_argument(
         "--policy",
         type=Path,
-        default=Path("deploy/production/infera-production-recovery-policy"),
+        default=DEFAULT_POLICY_PATH,
     )
     verify_environment.set_defaults(function=command_verify_environment)
     return command_parser

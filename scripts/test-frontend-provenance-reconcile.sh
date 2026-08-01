@@ -76,8 +76,16 @@ read_state() {
   source "${TEST_STATE}"
 }
 write_state() {
+  local staged="${TEST_STATE}.$$"
   printf 'original=%q\nreplacement=%q\nintruder=%q\n' \
-    "${original}" "${replacement}" "${intruder}" >"${TEST_STATE}"
+    "${original}" "${replacement}" "${intruder}" >"${staged}" || {
+      rm -f -- "${staged}"
+      return 1
+    }
+  mv -f -- "${staged}" "${TEST_STATE}" || {
+    rm -f -- "${staged}"
+    return 1
+  }
 }
 read_state
 
@@ -190,6 +198,10 @@ case "${action}" in
     true
     ;;
   up)
+    if [[ "${TEST_NO_REPLACEMENT:-0}" == 1 ]]; then
+      write_state
+      exit 0
+    fi
     replacement=running
     write_state
     [[ "${TEST_FAIL_UP:-0}" != 1 ]] || exit 1
@@ -214,6 +226,11 @@ while [[ $# -gt 0 ]]; do
 done
 # shellcheck disable=SC1090
 source "${TEST_STATE}"
+if [[ -z "${destination}" || -z "${url}" ]]; then
+  echo "fake curl: destination and URL are required" >&2
+  exit 64
+fi
+printf 'curl %s\n' "${url}" >>"${TEST_CALLS}"
 if [[ "${TEST_CUTOVER_ROUTE_FAIL:-0}" == 1 && "${original}" == stopped ]]; then
   exit 22
 fi
@@ -230,7 +247,7 @@ chmod +x "${fake_bin}/docker" "${fake_bin}/curl"
 reset_state() {
   printf '%s\n' 'original=running' 'replacement=absent' 'intruder=absent' >"${state}"
   : >"${calls}"
-  rm -rf -- "${private_tmp:?}/"*
+  find "${private_tmp:?}" -mindepth 1 -delete
 }
 
 replace_env_value() {
@@ -250,20 +267,42 @@ PY
 }
 
 run_reconcile() {
+  local reconcile_args=(
+    --expected-head "${source_revision}"
+    --source-revision "${source_revision}"
+    --image "${image}"
+    --production-env-file "${test_root}/production.env"
+    --health-attempts "${TEST_HEALTH_ATTEMPTS:-1}"
+  )
+  if [[ "${TEST_OMIT_BASE_URL:-0}" != 1 ]]; then
+    reconcile_args+=(--base-url https://example.invalid)
+  fi
+  if [[ "${TEST_EXEC_RECONCILE:-0}" == 1 ]]; then
+    exec env PATH="${fake_bin}:${PATH}" TMPDIR="${private_tmp}" \
+      TEST_STATE="${state}" TEST_CALLS="${calls}" TEST_IMAGE="${image}" \
+      TEST_IMAGE_ID="${image_id}" TEST_IMAGE_REVISION="${TEST_IMAGE_REVISION:-${source_revision}}" \
+      TEST_COMPOSE_FILE="${fixture}/docker-compose.prod.yml" TEST_REPOSITORY="${fixture}" \
+      TEST_REPLACEMENT_HEALTH="${TEST_REPLACEMENT_HEALTH:-healthy}" \
+      "${fixture}/scripts/frontend-provenance-reconcile.sh" "${reconcile_args[@]}"
+  fi
   PATH="${fake_bin}:${PATH}" TMPDIR="${private_tmp}" \
     TEST_STATE="${state}" TEST_CALLS="${calls}" TEST_IMAGE="${image}" \
     TEST_IMAGE_ID="${image_id}" TEST_IMAGE_REVISION="${TEST_IMAGE_REVISION:-${source_revision}}" \
     TEST_COMPOSE_FILE="${fixture}/docker-compose.prod.yml" TEST_REPOSITORY="${fixture}" \
-    "${fixture}/scripts/frontend-provenance-reconcile.sh" \
-      --expected-head "${source_revision}" \
-      --source-revision "${source_revision}" \
-      --image "${image}" \
-      --production-env-file "${test_root}/production.env" \
-      --base-url https://example.invalid \
-      --health-attempts "${TEST_HEALTH_ATTEMPTS:-1}"
+    TEST_REPLACEMENT_HEALTH="${TEST_REPLACEMENT_HEALTH:-healthy}" \
+    "${fixture}/scripts/frontend-provenance-reconcile.sh" "${reconcile_args[@]}"
 }
 
 reset_state
+: >"${private_tmp}/.hidden-residue"
+reset_state
+[[ -z "$(find "${private_tmp}" -mindepth 1 -print -quit)" ]] ||
+  fail "state reset left hidden temporary residue"
+if PATH="${fake_bin}:${PATH}" TEST_STATE="${state}" TEST_CALLS="${calls}" \
+  TEST_IMAGE="${image}" curl https://example.invalid >/dev/null 2>&1; then
+  fail "fake curl accepted an invocation without --output"
+fi
+
 run_reconcile >/dev/null
 # shellcheck disable=SC1090
 source "${state}"
@@ -275,20 +314,27 @@ grep -Fq -- "-f ${fixture}/docker-compose.prod.yml up -d --no-build --no-deps --
 [[ ! -e "${fixture}/.infera-recovery/recovery.lock" ]] || fail "success left the shared recovery lock"
 
 run_reconcile >/dev/null
-up_count="$(grep -c ' up ' "${calls}")"
+up_count="$(grep -c ' up ' "${calls}" || true)"
 [[ "${up_count}" -eq 1 ]] || fail "idempotent verification created another frontend"
 
 reset_state
+# Intentional unsafe mode: prove the workflow rejects a writable state directory.
 chmod 0777 "${fixture}/.infera-recovery"
-if run_reconcile >/dev/null 2>&1; then
+chmod 0644 "${fixture}/.infera-recovery/last-known-good.manifest"
+unsafe_state_output="${test_root}/unsafe-state-output"
+if run_reconcile >"${unsafe_state_output}" 2>&1; then
   fail "writable recovery state directory unexpectedly passed"
 fi
+grep -Fq 'production recovery state directory is unsafe' "${unsafe_state_output}" ||
+  fail "recovery manifest was read before its unsafe parent was rejected"
+chmod 0600 "${fixture}/.infera-recovery/last-known-good.manifest"
 chmod 0700 "${fixture}/.infera-recovery"
 if grep -q ' up ' "${calls}"; then
   fail "unsafe recovery state reached frontend staging"
 fi
 
 reset_state
+# Intentional unsafe mode: prove the workflow rejects a writable Compose file.
 chmod 0666 "${fixture}/docker-compose.prod.yml"
 if run_reconcile >/dev/null 2>&1; then
   fail "writable checked-in Compose file unexpectedly passed"
@@ -296,6 +342,34 @@ fi
 chmod 0644 "${fixture}/docker-compose.prod.yml"
 if grep -q ' up ' "${calls}"; then
   fail "unsafe Compose metadata reached frontend staging"
+fi
+
+reset_state
+INFERA_BASE_URL=https://environment.example.invalid TEST_OMIT_BASE_URL=1 \
+  run_reconcile >/dev/null
+grep -Fq 'curl https://environment.example.invalid/' "${calls}" ||
+  fail "environment base URL was not used as the default"
+
+reset_state
+if INFERA_BASE_URL=http://unsafe.example.invalid TEST_OMIT_BASE_URL=1 \
+  run_reconcile >/dev/null 2>&1; then
+  fail "unsafe environment base URL unexpectedly passed validation"
+fi
+if grep -q ' up ' "${calls}"; then
+  fail "unsafe environment base URL reached frontend staging"
+fi
+
+reset_state
+zero_replacement_output="${test_root}/zero-replacement-output"
+if TEST_NO_REPLACEMENT=1 run_reconcile >"${zero_replacement_output}" 2>&1; then
+  fail "zero-replacement staging unexpectedly reconciled"
+fi
+source "${state}"
+[[ "${original}" == running && "${replacement}" == absent ]] ||
+  fail "zero-replacement rollback changed clean frontend state"
+if grep -Fq 'automatic frontend rollback could not be proven complete' \
+  "${zero_replacement_output}"; then
+  fail "zero-replacement staging was falsely classified as ambiguous"
 fi
 
 reset_state
@@ -313,7 +387,7 @@ fi
 source "${state}"
 [[ "${original}" == running && "${replacement}" == absent ]] ||
   fail "staging failure did not preserve the untouched original"
-if grep -q '^stop original-container$' "${calls}"; then
+if awk '$1 == "stop" { for (field_index = 2; field_index <= NF; field_index++) if ($field_index == "original-container") found = 1 } END { exit !found }' "${calls}"; then
   fail "staging failure stopped the original"
 fi
 
@@ -363,20 +437,10 @@ source "${state}"
   fail "failed stop did not restore the original and clean its replacement"
 
 reset_state
-env PATH="${fake_bin}:${PATH}" TMPDIR="${private_tmp}" \
-  TEST_STATE="${state}" TEST_CALLS="${calls}" TEST_IMAGE="${image}" \
-  TEST_IMAGE_ID="${image_id}" TEST_IMAGE_REVISION="${source_revision}" \
-  TEST_COMPOSE_FILE="${fixture}/docker-compose.prod.yml" TEST_REPOSITORY="${fixture}" \
-  TEST_REPLACEMENT_HEALTH=starting \
-  "${fixture}/scripts/frontend-provenance-reconcile.sh" \
-    --expected-head "${source_revision}" \
-    --source-revision "${source_revision}" \
-    --image "${image}" \
-    --production-env-file "${test_root}/production.env" \
-    --base-url https://example.invalid \
-    --health-attempts 30 >/dev/null 2>&1 &
+TEST_EXEC_RECONCILE=1 TEST_REPLACEMENT_HEALTH=starting TEST_HEALTH_ATTEMPTS=30 \
+  run_reconcile >/dev/null 2>&1 &
 signal_pid=$!
-for _ in $(seq 1 100); do
+for _ in $(seq 1 1500); do
   grep -q '^replacement=running$' "${state}" && break
   sleep 0.01
 done

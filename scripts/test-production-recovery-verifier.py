@@ -479,6 +479,7 @@ class RecoveryVerifierTests(unittest.TestCase):
                 production_protocol=canonical,
             )
             self.assertEqual(exact.returncode, 0)
+            self.assertIn("nonsecret_contract_complete=true", exact.stdout)
             self.assertIn("nonsecret_contract_matches=true", exact.stdout)
 
             protocol_failure = run_environment_cli(
@@ -500,9 +501,39 @@ class RecoveryVerifierTests(unittest.TestCase):
             self.assertEqual(cost_failure.returncode, 1)
             self.assertIn("nonsecret_contract_matches=false", cost_failure.stdout)
 
+            unsafe_manifest = root / "manifest"
+            unsafe_manifest.chmod(0o644)
+            unsafe_input = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "verify-environment",
+                    "--manifest",
+                    str(unsafe_manifest),
+                    "--policy",
+                    str(root / "policy"),
+                    "--production-env",
+                    str(root / "production.env"),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(unsafe_input.returncode, 2)
+            self.assertEqual(unsafe_input.stdout, "")
+            self.assertIn(
+                "ERROR: production recovery verification failed",
+                unsafe_input.stderr,
+            )
+
             combined = "".join(
                 result.stdout + result.stderr
-                for result in (exact, protocol_failure, cost_failure)
+                for result in (
+                    exact,
+                    protocol_failure,
+                    cost_failure,
+                    unsafe_input,
+                )
             )
             for sentinel in (canonical, mismatch, "0.50", "1.00"):
                 self.assertNotIn(sentinel, combined)

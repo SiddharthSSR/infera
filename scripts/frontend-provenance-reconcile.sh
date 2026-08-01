@@ -25,7 +25,7 @@ expected_head=
 source_revision=
 frontend_image=
 production_env_file=
-base_url=https://inferai.co.in
+base_url="${INFERA_BASE_URL:-https://inferai.co.in}"
 health_attempts=30
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -142,13 +142,6 @@ production_env_validate >/dev/null || {
   echo "ERROR: production environment frontend identity differs" >&2
   exit 2
 }
-if ! python3 "${script_dir}/production-recovery-verifier.py" verify-environment \
-  --manifest "${recovery_manifest}" \
-  --policy "${recovery_policy}" \
-  --production-env "${production_env_file}" >/dev/null; then
-  echo "ERROR: production environment semantic contract differs" >&2
-  exit 2
-fi
 [[ "$(python3 - "${recovery_state_dir}" <<'PY'
 import os, stat, sys
 path = sys.argv[1]
@@ -160,7 +153,6 @@ else:
     print(str(
         stat.S_ISDIR(info.st_mode)
         and info.st_uid == 0
-        and not stat.S_ISLNK(info.st_mode)
         and not stat.S_IMODE(info.st_mode) & 0o022
         and os.path.realpath(path) == path
     ).lower())
@@ -169,6 +161,13 @@ PY
   echo "ERROR: production recovery state directory is unsafe" >&2
   exit 2
 }
+if ! python3 "${script_dir}/production-recovery-verifier.py" verify-environment \
+  --manifest "${recovery_manifest}" \
+  --policy "${recovery_policy}" \
+  --production-env "${production_env_file}" >/dev/null; then
+  echo "ERROR: production environment semantic contract differs" >&2
+  exit 2
+fi
 
 private_dir="$(mktemp -d "${TMPDIR:-/tmp}/infera-frontend-provenance.XXXXXX")"
 chmod 0700 "${private_dir}"
@@ -417,7 +416,11 @@ for candidate_id in "${staged_ids[@]}"; do
   [[ "${candidate_id}" == "${original_id}" ]] || new_ids+=("${candidate_id}")
 done
 if [[ "${#staged_ids[@]}" -ne 2 || "${#new_ids[@]}" -ne 1 ]]; then
-  replacement_ownership_ambiguous=true
+  if [[ "${#new_ids[@]}" -gt 1 ]]; then
+    replacement_ownership_ambiguous=true
+  else
+    replacement_ids=("${new_ids[@]}")
+  fi
   echo "ERROR: replacement staging cardinality is invalid" >&2
   exit 1
 fi
