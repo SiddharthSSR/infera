@@ -177,6 +177,41 @@ def run_cli(
     )
 
 
+def run_environment_cli(
+    root: Path,
+    *,
+    manifest_protocol: str,
+    production_protocol: str,
+    policy_cost: str = "1.00",
+    production_cost: str = "1.00",
+) -> subprocess.CompletedProcess[str]:
+    root = root.resolve()
+    manifest = root / "manifest"
+    policy = root / "policy"
+    production_env = root / "production.env"
+    write_manifest(manifest, protocol=manifest_protocol)
+    policy.write_text(f"{module.POLICY_NAME}={policy_cost}\n", encoding="utf-8")
+    write_production_env(
+        production_env, protocol=production_protocol, cost=production_cost
+    )
+    return subprocess.run(
+        [
+            sys.executable,
+            str(MODULE_PATH),
+            "verify-environment",
+            "--manifest",
+            str(manifest),
+            "--policy",
+            str(policy),
+            "--production-env",
+            str(production_env),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 class RecoveryVerifierTests(unittest.TestCase):
     def test_correct_service_with_reordered_identical_mounts_pass(self) -> None:
         first = mount("/opt/infera/deploy/caddy/Caddyfile", "/etc/caddy/Caddyfile")
@@ -432,6 +467,45 @@ class RecoveryVerifierTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0)
             self.assertIn("nonsecret_contract_matches=true", result.stdout)
+
+    def test_environment_only_cli_enforces_both_values_without_leaking(self) -> None:
+        canonical = "canonical-environment-protocol-sentinel"
+        mismatch = "mismatched-environment-protocol-sentinel"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exact = run_environment_cli(
+                root,
+                manifest_protocol=canonical,
+                production_protocol=canonical,
+            )
+            self.assertEqual(exact.returncode, 0)
+            self.assertIn("nonsecret_contract_matches=true", exact.stdout)
+
+            protocol_failure = run_environment_cli(
+                root,
+                manifest_protocol=canonical,
+                production_protocol=mismatch,
+            )
+            self.assertEqual(protocol_failure.returncode, 1)
+            self.assertIn(
+                "nonsecret_contract_matches=false", protocol_failure.stdout
+            )
+
+            cost_failure = run_environment_cli(
+                root,
+                manifest_protocol=canonical,
+                production_protocol=canonical,
+                production_cost="0.50",
+            )
+            self.assertEqual(cost_failure.returncode, 1)
+            self.assertIn("nonsecret_contract_matches=false", cost_failure.stdout)
+
+            combined = "".join(
+                result.stdout + result.stderr
+                for result in (exact, protocol_failure, cost_failure)
+            )
+            for sentinel in (canonical, mismatch, "0.50", "1.00"):
+                self.assertNotIn(sentinel, combined)
 
 
 if __name__ == "__main__":
