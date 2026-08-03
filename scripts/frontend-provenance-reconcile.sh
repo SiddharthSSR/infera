@@ -239,10 +239,25 @@ import sys
 
 
 def stable_health(path):
+    def unique_object(pairs):
+        payload = {}
+        for key, value in pairs:
+            if key in payload:
+                raise ValueError("duplicate health key")
+            payload[key] = value
+        return payload
+
+    def reject_nonstandard_constant(_value):
+        raise ValueError("nonstandard JSON constant")
+
     try:
         with open(path, encoding="utf-8") as source:
-            payload = json.load(source)
-    except (OSError, UnicodeError, json.JSONDecodeError):
+            payload = json.load(
+                source,
+                object_pairs_hook=unique_object,
+                parse_constant=reject_nonstandard_constant,
+            )
+    except (OSError, UnicodeError, ValueError):
         raise SystemExit(1)
     if not isinstance(payload, dict):
         raise SystemExit(1)

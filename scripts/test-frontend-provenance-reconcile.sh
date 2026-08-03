@@ -249,8 +249,13 @@ case "${url}" in
     elif [[ "${TEST_DYNAMIC_HEALTH_UPTIME:-0}" == 1 ]]; then
       uptime_seconds_json="$(grep -c 'curl .*/health$' "${TEST_CALLS}" || true)"
     fi
-    printf '{"status":"%s","uptime_seconds":%s}' \
-      "${health_status}" "${uptime_seconds_json}" >"${destination}"
+    if [[ "${TEST_DUPLICATE_HEALTH_KEY:-0}" == 1 ]]; then
+      printf '{"status":"%s","status":"duplicate","uptime_seconds":%s}' \
+        "${health_status}" "${uptime_seconds_json}" >"${destination}"
+    else
+      printf '{"status":"%s","uptime_seconds":%s}' \
+        "${health_status}" "${uptime_seconds_json}" >"${destination}"
+    fi
     ;;
   *) printf '%s' '<html>safe frontend</html>' >"${destination}" ;;
 esac
@@ -346,6 +351,14 @@ if TEST_INVALID_HEALTH_UPTIME=1 run_reconcile >/dev/null 2>&1; then
 fi
 if grep -q ' up ' "${calls}"; then
   fail "invalid health uptime reached frontend staging"
+fi
+
+reset_state
+if TEST_DUPLICATE_HEALTH_KEY=1 run_reconcile >/dev/null 2>&1; then
+  fail "duplicate health key unexpectedly reconciled"
+fi
+if grep -q ' up ' "${calls}"; then
+  fail "duplicate health key reached frontend staging"
 fi
 
 run_reconcile >/dev/null
