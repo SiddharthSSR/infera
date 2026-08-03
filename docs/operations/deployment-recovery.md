@@ -193,8 +193,11 @@ stages a second frontend with `--no-recreate`, and keeps the original running un
 image, labels, health and public routes pass. It then stops but retains the original for an isolated
 replacement-only route check, restores the original on failure, and removes it only after that
 cutover succeeds. Final success requires one healthy frontend with the original immutable identity,
-the exact checkout label, unchanged public root and read-health responses, and no temporary
-container or file residue.
+the exact checkout label, byte-identical public root responses, and semantically unchanged public
+read-health JSON. The read-health comparison requires valid JSON objects with a non-negative integer
+`uptime_seconds`; that single volatile field may vary, while every other key and value must match the
+baseline exactly. Any other response drift fails closed. No temporary container or file residue may
+remain.
 
 The separately approved invocation must name all of these inputs explicitly, even where the script
 has a fail-closed default:

@@ -16,7 +16,8 @@ This is a dedicated, frontend-only provenance repair. It validates the direct
 root-only production environment source, proves the checked-in Compose bytes
 equal the frontend image's exact source revision, stages a second healthy
 frontend without recreating the original, and removes the original only after
-an isolated public-route cutover succeeds.
+an isolated public-route cutover succeeds. Public root bytes must remain exact;
+public health JSON may differ only in its non-negative integer uptime_seconds.
 EOF
   exit 2
 }
@@ -230,6 +231,52 @@ probe() {
     --output "${destination}" "${base_url}${suffix}" 2>>"${compose_log}"
 }
 
+health_matches_baseline() {
+  local baseline="$1" candidate="$2"
+  python3 - "${baseline}" "${candidate}" <<'PY'
+import json
+import sys
+
+
+def stable_health(path):
+    def unique_object(pairs):
+        payload = {}
+        for key, value in pairs:
+            if key in payload:
+                raise ValueError("duplicate health key")
+            payload[key] = value
+        return payload
+
+    def reject_nonstandard_constant(_value):
+        raise ValueError("nonstandard JSON constant")
+
+    try:
+        with open(path, encoding="utf-8") as source:
+            payload = json.load(
+                source,
+                object_pairs_hook=unique_object,
+                parse_constant=reject_nonstandard_constant,
+            )
+    except (OSError, UnicodeError, ValueError):
+        raise SystemExit(1)
+    if not isinstance(payload, dict):
+        raise SystemExit(1)
+    uptime = payload.pop("uptime_seconds", None)
+    if type(uptime) is not int or uptime < 0:
+        raise SystemExit(1)
+    return json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+raise SystemExit(0 if stable_health(sys.argv[1]) == stable_health(sys.argv[2]) else 1)
+PY
+}
+
 routes_match_baseline() {
   local candidate_root="${private_dir}/candidate-root"
   local candidate_health="${private_dir}/candidate-health"
@@ -238,7 +285,7 @@ routes_match_baseline() {
   chmod 0600 "${candidate_root}" "${candidate_health}"
   probe / "${candidate_root}" && probe /health "${candidate_health}" &&
     cmp -s "${baseline_root}" "${candidate_root}" &&
-    cmp -s "${baseline_health}" "${candidate_health}"
+    health_matches_baseline "${baseline_health}" "${candidate_health}"
 }
 
 verify_identity() {
@@ -382,7 +429,8 @@ wait_healthy "${original_id}" || {
   echo "ERROR: current frontend is not healthy" >&2
   exit 1
 }
-if ! probe / "${baseline_root}" || ! probe /health "${baseline_health}"; then
+if ! probe / "${baseline_root}" || ! probe /health "${baseline_health}" ||
+  ! health_matches_baseline "${baseline_health}" "${baseline_health}"; then
   echo "ERROR: public route baseline failed" >&2
   exit 1
 fi

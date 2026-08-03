@@ -238,7 +238,29 @@ if [[ "${TEST_STAGE_ROUTE_FAIL:-0}" == 1 && "${replacement}" != absent ]]; then
   exit 22
 fi
 case "${url}" in
-  */health) printf '%s' '{"status":"safe"}' >"${destination}" ;;
+  */health)
+    health_status=safe
+    if [[ "${TEST_HEALTH_STATUS_DRIFT:-0}" == 1 && "${replacement}" != absent ]]; then
+      health_status=changed
+    fi
+    workers_json=1
+    if [[ "${TEST_HEALTH_SCALAR_TYPE_DRIFT:-0}" == 1 && "${replacement}" != absent ]]; then
+      workers_json=1.0
+    fi
+    uptime_seconds_json=1
+    if [[ "${TEST_INVALID_HEALTH_UPTIME:-0}" == 1 ]]; then
+      uptime_seconds_json='"unknown"'
+    elif [[ "${TEST_DYNAMIC_HEALTH_UPTIME:-0}" == 1 ]]; then
+      uptime_seconds_json="$(grep -c 'curl .*/health$' "${TEST_CALLS}" || true)"
+    fi
+    if [[ "${TEST_DUPLICATE_HEALTH_KEY:-0}" == 1 ]]; then
+      printf '{"status":"%s","status":"duplicate","uptime_seconds":%s,"workers":%s}' \
+        "${health_status}" "${uptime_seconds_json}" "${workers_json}" >"${destination}"
+    else
+      printf '{"status":"%s","uptime_seconds":%s,"workers":%s}' \
+        "${health_status}" "${uptime_seconds_json}" "${workers_json}" >"${destination}"
+    fi
+    ;;
   *) printf '%s' '<html>safe frontend</html>' >"${destination}" ;;
 esac
 EOF
@@ -316,6 +338,44 @@ grep -Fq -- "-f ${fixture}/docker-compose.prod.yml up -d --no-build --no-deps --
 run_reconcile >/dev/null
 up_count="$(grep -c ' up ' "${calls}" || true)"
 [[ "${up_count}" -eq 1 ]] || fail "idempotent verification created another frontend"
+
+reset_state
+TEST_DYNAMIC_HEALTH_UPTIME=1 run_reconcile >/dev/null
+source "${state}"
+[[ "${original}" == absent && "${replacement}" == running && "${intruder}" == absent ]] ||
+  fail "dynamic health uptime prevented safe reconciliation"
+
+reset_state
+if TEST_HEALTH_STATUS_DRIFT=1 run_reconcile >/dev/null 2>&1; then
+  fail "non-uptime health drift unexpectedly reconciled"
+fi
+source "${state}"
+[[ "${original}" == running && "${replacement}" == absent ]] ||
+  fail "non-uptime health drift did not preserve the original"
+
+reset_state
+if TEST_INVALID_HEALTH_UPTIME=1 run_reconcile >/dev/null 2>&1; then
+  fail "invalid health uptime unexpectedly reconciled"
+fi
+if grep -q ' up ' "${calls}"; then
+  fail "invalid health uptime reached frontend staging"
+fi
+
+reset_state
+if TEST_DUPLICATE_HEALTH_KEY=1 run_reconcile >/dev/null 2>&1; then
+  fail "duplicate health key unexpectedly reconciled"
+fi
+if grep -q ' up ' "${calls}"; then
+  fail "duplicate health key reached frontend staging"
+fi
+
+reset_state
+if TEST_HEALTH_SCALAR_TYPE_DRIFT=1 run_reconcile >/dev/null 2>&1; then
+  fail "health scalar-type drift unexpectedly reconciled"
+fi
+source "${state}"
+[[ "${original}" == running && "${replacement}" == absent ]] ||
+  fail "health scalar-type drift did not preserve the original"
 
 reset_state
 # Intentional unsafe mode: prove the workflow rejects a writable state directory.
