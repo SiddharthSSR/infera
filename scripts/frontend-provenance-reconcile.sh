@@ -264,7 +264,13 @@ def stable_health(path):
     uptime = payload.pop("uptime_seconds", None)
     if type(uptime) is not int or uptime < 0:
         raise SystemExit(1)
-    return payload
+    return json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 raise SystemExit(0 if stable_health(sys.argv[1]) == stable_health(sys.argv[2]) else 1)
